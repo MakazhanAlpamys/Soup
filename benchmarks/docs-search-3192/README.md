@@ -68,7 +68,8 @@ rebuild script, evaluation script and candidate source hashes. Candidate
 were committed and pushed in `a5ab5484`, then declared in PR #3242 at
 2026-11-24 09:13:47 UTC before either baseline or candidate was scored on v1.
 `pinned_docs_v1-execution.json` records the declaration identity and first-run
-start/end times. No locked file changed after the declaration or scoring.
+start/end times. The scored inputs remain unchanged; the later permission-only
+metadata amendment is recorded below without changing the pre-scoring lock.
 `candidate.json` remains the original development-freeze record, including the
 historical provenance status at that time.
 
@@ -101,7 +102,9 @@ gate result does not satisfy the separate fresh-query Hit@5 requirement.
 
 ## Reproduce the separate current-section and development comparisons
 
-From this revision, in a base Soup environment:
+Use the exact `d6422869d54e624b6b0e7cd8fe5fd7fbe245e82c` checkout in a base
+Soup environment (see the isolated worktree steps in the friend-set section).
+Newer docs are intentionally rejected by these frozen comparisons:
 
 ```bash
 python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/maintainer_dev.json
@@ -212,7 +215,8 @@ was frozen before these questions were received. The fixture and lock were
 committed and pushed in `fe823e9d`, then declared in PR #3242 at
 `2026-11-24T09:49:48Z` before either arm was scored.
 `friend30-execution.json` records the declaration and first-run identities.
-No locked file changed after scoring.
+The scored inputs remain unchanged; the later permission-only metadata
+amendment is recorded below without changing the pre-scoring lock.
 
 The maintainer's fresh-query requirement is a strict Hit@5 gain, with the
 original-28 option B gate kept separate. The existing command below also checks
@@ -261,6 +265,27 @@ its second target also enters the top five. `friend30-results.json` stores all
 30 rows and both top-ten rankings. The original-28 pinned-docs v1 gate remains
 passing. Exact metrics and the complete loss list were recalculated from saved
 rows without rerunning ranking; candidate, questions and labels remain frozen.
+
+## Reproduction terms for external questions
+
+On November 24, the project author confirmed that all original question
+contributors and the annotation owner, and the friend who supplied the 30,
+authorize reproduction of their questions and annotations/target descriptions
+in Soup under Apache-2.0. Personal identifiers are omitted. The confirmation
+is recorded beside the authorship provenance in `original28-source.json` and
+`friend30.json`, under `reproduction_terms`.
+
+The public prototype snapshot did not contain a repository-wide licence file;
+the permission statement records the author's explicit confirmation rather than
+inferring terms from the repository being public. Its Soup documentation
+attribution remains separate.
+
+These are post-scoring permission metadata additions only.
+`reproduction-permissions.json` records each original locked hash and its
+amended metadata hash. Removing only `reproduction_terms` recovers the exact
+original bytes, checked by tests. The pre-scoring locks, questions, labels,
+corpora, candidate and saved ranking outputs are unchanged. The original
+historical scores remain labelled historical.
 
 ## Historical corpus provenance and the approved rebuild
 

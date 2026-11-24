@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-24",
+  "reason": "Maintainer PR comment 7132570346 requested explicit terms beside external-material provenance.",
+  "authorization": "User confirmed that all original contributors, annotation owner and friend authorize reproduction under Apache-2.0. Personal identifiers withheld.",
+  "scope": "Post-scoring permission metadata only; pre-scoring locks and historical results remain unchanged. Remove only reproduction_terms and serialize with the original JSON formatting to recover the frozen bytes.",
+  "files": {
+    "tests/fixtures/docs_search/original28-source.json": {
+      "pre_scoring_lock": "benchmarks/docs-search-3192/pinned_docs_v1-lock.json",
+      "pre_scoring_sha256": "b485ae32a0142ec6958080d838302feb0c9563d2acf2c7cb18b56f41974193c4",
+      "permission_metadata_sha256": "bf4a333a389d6ebe065b9c70325ff29f508b9202b5c0d5f2f2cd8565815dfd22",
+      "only_added_field": "reproduction_terms"
+    },
+    "tests/fixtures/docs_search/friend30.json": {
+      "pre_scoring_lock": "benchmarks/docs-search-3192/friend30-lock.json",
+      "pre_scoring_sha256": "c7720c6e08a4bb7ebefe58c04cbab6e57f1dbb1a2d0782245516234cdb22948b",
+      "permission_metadata_sha256": "9151f28e149527afed4f4c0af006ab5cdb3c952f46ecb173225d73342fdedd8d",
+      "only_added_field": "reproduction_terms"
+    }
+  }
+}

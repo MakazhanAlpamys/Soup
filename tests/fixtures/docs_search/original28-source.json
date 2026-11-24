@@ -11,6 +11,12 @@
     "data/corpus.jsonl": "d787703e048a641884274e57f5802e328e43c637a0971217601e6a37128393e3"
   },
   "authorship_declaration": "Attestation by project author: manually written by three external contributors; individual attribution unavailable to preserve privacy",
+  "reproduction_terms": {
+    "license": "Apache-2.0",
+    "permission_statement": "The project author confirms that all original question contributors and the annotation owner authorize reproducing the original 28 questions and annotations in Soup under the Apache License, Version 2.0.",
+    "permission_evidence": "The project author confirmed authorization for both sets in the project chat on 2026-11-24: \"yes all authorize\".",
+    "personal_identifiers": "Omitted; permission is recorded without naming contributors."
+  },
   "ai_assistance_declaration": "Project author attestation: manual authorship; absence of AI assistance not independently verified",
   "documents": {
     "README.md": "c5660c2bcd78a71601d973d82f4aa0519bdce7405cca1ba65ae932b5a0e1887c",

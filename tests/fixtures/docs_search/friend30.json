@@ -3,6 +3,12 @@
   "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
   "received_date": "2026-11-24",
   "authorship": "User attestation: these 30 questions and intended targets were supplied by a friend outside the project/tuning work. Individual attribution not supplied; attestation not independently verified.",
+  "reproduction_terms": {
+    "license": "Apache-2.0",
+    "permission_statement": "The project author confirms that the friend who supplied these 30 questions authorizes reproducing the questions and target descriptions in Soup under the Apache License, Version 2.0.",
+    "permission_evidence": "The project author confirmed authorization for both sets in the project chat on 2026-11-24: \"yes all authorize\".",
+    "personal_identifiers": "Omitted; permission is recorded without naming contributors."
+  },
   "writing_assistance": "Not specified; no claim of absence of assistance.",
   "scoring_status": "Frozen before first local baseline or candidate scoring; execution state recorded separately.",
   "target_mapping_policy": "All supplied questions and target descriptions unchanged. Map the supplied guide/section to its existing frozen owning section; preserve both supplied sections for FR13. No result-based target additions or query exclusions.",

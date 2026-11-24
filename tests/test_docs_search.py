@@ -320,7 +320,12 @@ def test_rebuilt_fixture_lock_and_complete_label_migration():
     audit = json.loads((fixtures / "pinned_docs_v1-migration.json").read_bytes())
     lock = json.loads((root / "benchmarks/docs-search-3192/pinned_docs_v1-lock.json").read_bytes())
     for name, expected in lock["files"].items():
-        assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected, name
+        data = (root / name).read_bytes()
+        if name == "tests/fixtures/docs_search/original28-source.json":
+            frozen = json.loads(data)
+            frozen.pop("reproduction_terms", None)
+            data = (json.dumps(frozen, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        assert hashlib.sha256(data).hexdigest() == expected, name
     assert [(q["id"], q["query"]) for q in fixture["queries"]] == [
         (q["query_id"], q["query"]) for q in source["queries"]
     ]
@@ -331,8 +336,10 @@ def test_rebuilt_fixture_lock_and_complete_label_migration():
         assert old["query_id"] == migrated["id"] == new["id"]
         assert old["status"] == migrated["old_status"] == migrated["new_status"] == "resolved"
         assert old["relevant_chunk_ids"] == migrated["old_targets"]
-        assert migrated["new_targets"] == new["targets"] == sorted(
-            {audit["passage_mapping"][target] for target in old["relevant_chunk_ids"]}
+        assert (
+            migrated["new_targets"]
+            == new["targets"]
+            == sorted({audit["passage_mapping"][target] for target in old["relevant_chunk_ids"]})
         )
     assert {p["old_chunk_id"] for p in audit["disputed_passages"]} == set(
         source["disputed_passages"]
@@ -341,6 +348,25 @@ def test_rebuilt_fixture_lock_and_complete_label_migration():
         not row["old_target_queries"] and not row["new_target_queries"]
         for row in audit["disputed_passages"]
     )
+
+
+@pytest.mark.parametrize("name", ["original28-source.json", "friend30.json"])
+def test_reproduction_permission_adds_only_terms_to_frozen_metadata(name):
+    root = Path(__file__).parents[1]
+    path = f"tests/fixtures/docs_search/{name}"
+    record = json.loads(
+        (root / "benchmarks/docs-search-3192/reproduction-permissions.json").read_bytes()
+    )["files"][path]
+    data = (root / path).read_bytes()
+    assert hashlib.sha256(data).hexdigest() == record["permission_metadata_sha256"]
+    metadata = json.loads(data)
+    assert record["only_added_field"] == "reproduction_terms"
+    terms = metadata.pop(record["only_added_field"])
+    assert terms["license"] == "Apache-2.0"
+    assert terms["permission_statement"] and terms["permission_evidence"]
+    frozen = (json.dumps(metadata, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    expected = json.loads((root / record["pre_scoring_lock"]).read_bytes())["files"][path]
+    assert hashlib.sha256(frozen).hexdigest() == record["pre_scoring_sha256"] == expected
 
 
 def test_ranking_gate_command_exit_codes_and_json(tmp_path):
