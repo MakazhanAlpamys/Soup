@@ -601,7 +601,7 @@ def hf_space(
         console.print(
             "[yellow]ZeroGPU custom template:[/] use Gradio, include spaces in your "
             "requirements, and decorate GPU-dependent functions with @spaces.GPU. "
-            "Soup does not add the dependency or decorator to custom templates.",
+            "Soup uploads the rendered custom template as-is.",
             emoji=False,
         )
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,21 +11,21 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.deploy import render_space_template
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _CUSTOM_ZEROGPU_NOTICE = (
     "ZeroGPU custom template: use Gradio, include spaces in your requirements, and "
-    "decorate GPU-dependent functions with @spaces.GPU. Soup does not add the "
-    "dependency or decorator to custom templates."
+    "decorate GPU-dependent functions with @spaces.GPU. "
+    "Soup uploads the rendered custom template as-is."
 )
 
 
 def _plain(text: str) -> str:
-    return " ".join(_ANSI_RE.sub("", text or "").split())
+    return " ".join(strip_ansi(text).split())
 
 
-def _deploy(monkeypatch, tmp_path, *arguments: str, api=None):
+def _deploy(monkeypatch, tmp_path, *arguments: str, api=None, answer=None):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HF_TOKEN", "test-token")
     if api is None:
@@ -38,9 +37,10 @@ def _deploy(monkeypatch, tmp_path, *arguments: str, api=None):
             "deploy", "hf-space",
             "--model", "user/model",
             "--space", "user/space",
-            "--yes",
+            *(["--yes"] if answer is None else []),
             *arguments,
         ],
+        input=answer,
     )
     return result, api
 
@@ -164,16 +164,25 @@ def test_zerogpu_refuses_builtin_streamlit_before_any_hub_call(monkeypatch, tmp_
     api.create_commit.assert_not_called()
 
 
-@pytest.mark.parametrize("hardware", ["zero-a10g", "t4-small"])
-def test_custom_template_is_uploaded_unchanged_with_hardware(
-    monkeypatch, tmp_path, hardware: str,
+@pytest.mark.parametrize(
+    ("hardware", "sdk", "answer"),
+    [
+        ("zero-a10g", "gradio", None),
+        ("zero-a10g", "gradio", "n\n"),
+        ("zero-a10g", "streamlit", None),
+        ("t4-small", "gradio", None),
+    ],
+    ids=["zerogpu", "zerogpu-declined", "zerogpu-streamlit", "t4"],
+)
+def test_custom_template_guidance_and_upload(
+    monkeypatch, tmp_path, hardware: str, sdk: str, answer: str | None,
 ) -> None:
     template = tmp_path / "custom"
     template.mkdir()
     source_files = {
-        "app.py": "import gradio as gr\n",
-        "README.md": "---\nsdk: gradio\n---\nCustom app\n",
-        "requirements.txt": "gradio>=4\n",
+        "app.py": "# Keep this custom application unchanged.\n",
+        "README.md": "Custom app\n",
+        "requirements.txt": f"{sdk}\n",
     }
     for name, content in source_files.items():
         (template / name).write_text(content, encoding="utf-8")
@@ -183,16 +192,26 @@ def test_custom_template_is_uploaded_unchanged_with_hardware(
         tmp_path,
         "--template-dir", "custom",
         "--hardware", hardware,
+        answer=answer,
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert api.create_repo.call_args.kwargs["space_hardware"] == hardware
-    assert _uploaded_files(api) == {
-        name: content.encode("utf-8") for name, content in source_files.items()
-    }
     output = _plain(result.output)
     if hardware == "zero-a10g":
         assert _CUSTOM_ZEROGPU_NOTICE in output
         assert output.index(_CUSTOM_ZEROGPU_NOTICE) < output.index("Deploy HuggingFace Space")
     else:
         assert _CUSTOM_ZEROGPU_NOTICE not in output
+    if sdk == "streamlit":
+        assert "Hugging Face no longer creates new Streamlit Spaces" in output
+
+    if answer is not None:
+        assert output.index(_CUSTOM_ZEROGPU_NOTICE) < output.index("Create Space and upload files?")
+        api.create_repo.assert_not_called()
+        api.create_commit.assert_not_called()
+    else:
+        assert api.create_repo.call_args.kwargs["space_hardware"] == hardware
+        assert api.create_repo.call_args.kwargs["space_sdk"] == sdk
+        assert _uploaded_files(api) == {
+            name: content.encode("utf-8") for name, content in source_files.items()
+        }
