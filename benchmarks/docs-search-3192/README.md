@@ -185,6 +185,41 @@ who is not tuning the rules supply the questions. Keep the set separate and
 require a Hit@5 increase before proposing a default change. If inspected fresh
 results are used to revise the candidate, obtain another fresh set.
 
+## Friend-supplied 30: declaration before scoring
+
+On November 24 the user supplied 30 questions and target descriptions,
+attributed to a friend outside the project/tuning work. That attribution is
+user-attested; individual attribution and writing assistance were not supplied.
+All 30 questions and their supplied target descriptions are preserved exactly
+in `tests/fixtures/docs_search/friend30.json`. No question was selected or
+rewritten after inspecting a ranking.
+
+The supplied targets map to 25 existing owning sections in the unchanged
+17-guide, 702-section candidate snapshot. FR13 retains both supplied targets.
+The full mapping is in `friend30-targets.md`; it was prepared without scoring.
+This cohort is separate from both the supplemental ten and the older pinned-docs
+v1 original-28 gate. It covers 23 questions in adapters/governance, four in
+AutoDistill and three in backends/ops, and is not a representative random sample.
+No normalized literal repeat was found against the 62 questions in the original
+28, maintainer ten, supplemental ten and previously inspected 8+6 sets. Shared
+intents are not claimed to be novel.
+
+`friend30-lock.json` fixes the question/target fixture, mapping audit,
+evaluation tool and unchanged candidate source identities. Candidate `f40be434`
+was frozen before these questions were received. The fixture and lock will be
+committed, pushed and declared in PR #3242 before scoring either arm. No scores
+on these questions have been computed at this declaration.
+
+The maintainer's fresh-query requirement is a strict Hit@5 gain, with the
+original-28 option B gate kept separate. The existing command below also checks
+aggregate preservation on this fresh set. Its utility exit status and the
+maintainer's fresh Hit@5 condition will both be reported, with all metrics and
+every first-relevant-rank loss retained:
+
+```bash
+python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/friend30.json --require-hit5-gain
+```
+
 ## Historical corpus provenance and the approved rebuild
 
 The original corpus SHA-256 is

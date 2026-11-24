@@ -1,0 +1,531 @@
+{
+  "cohort": "friend30",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "received_date": "2026-11-24",
+  "authorship": "User attestation: these 30 questions and intended targets were supplied by a friend outside the project/tuning work. Individual attribution not supplied; attestation not independently verified.",
+  "writing_assistance": "Not specified; no claim of absence of assistance.",
+  "scoring_status": "Frozen before first local baseline or candidate scoring; execution state recorded separately.",
+  "target_mapping_policy": "All supplied questions and target descriptions unchanged. Map the supplied guide/section to its existing frozen owning section; preserve both supplied sections for FR13. No result-based target additions or query exclusions.",
+  "scope": "Full frozen 17-guide, 702-section candidate corpus; separate from the older pinned-docs v1 original-28 gate.",
+  "exact_repeat_check": {
+    "normalization": "casefold and collapse whitespace",
+    "compared_cohorts": {
+      "maintainer_dev.json": 10,
+      "agent_draft_review.json": 10,
+      "pinned_docs_v1.json": 28,
+      "fresh-holdout.json": 8,
+      "fresh-distinct.json": 6
+    },
+    "matches": [],
+    "note": "Known intents may overlap earlier questions; only literal normalized repeats checked."
+  },
+  "documents": {
+    "README.md": "7b4bee2682a1b873d2c3f7f4530d67cacca51fdd9139911385bffa1ddfc656c5",
+    "adapters-and-governance.md": "f2db40adaa6e3ef307e22cfd439b128ea5fd8470dadadd11442b878b5e75fb64",
+    "autodistill.md": "168415e9c3117c9d9e0f16f0b20c264e56fc3ec1d68fc5255b7c8d51d815f88b",
+    "backends-and-ops.md": "3e8553948085019257bcd16883eb7b6b9182a8f3a8e0f238ddbf8471edf0e75a",
+    "cli-reference.md": "39611b49064396f48d67bc1a59cb5a7b34d809ba280c2a8fea399714ec244dcd",
+    "commands.md": "03861e8f7d53a38ca7112eb34ee982a5b172d730b9db57b04901dfd43d9ef393",
+    "compliance.md": "96df2848b939a0e4c44e1053e9ea2390b47ae2782c42fdd41c41a95022ab74d2",
+    "config-reference.md": "df7c6d040c6f99b4ab47c81fa39d916a7983d43d38750bee18f7a97178b08243",
+    "data.md": "804ede1b804bdf9663441569da4f9751c3cd102c7d29abb0d62d0606f2235ebd",
+    "evaluation.md": "8e2e706ed56b484eeeaf681a65098f4e7b27f943650350b6537568b757fbad16",
+    "issue-difficulty.md": "e8388fc37f04c6fd7a47ba3bd5cac8528d7f242400311a9fcdc8590f37844b10",
+    "loop-formats.md": "ee9c46a9e5fbbf706921f8fa68d25a5487dafe4a826e0a919a41532c94dd76e5",
+    "models.md": "63ebf6143bd7ba6362761895aac89f78867515eacd4ddd251f1ce18b6d00b2d2",
+    "peft-and-efficiency.md": "7fc9c679593eef4df58d24de13cf1441b6df6d84f71a5c3c011f874464b7edbf",
+    "performance-and-quantization.md": "f08b6f09b63970f4e301e6ed8bf9546b43e5b6febd8f5fff997d7fab50793f7d",
+    "serving-and-export.md": "09ba86f2038d651b8f3b752adfb2fa0800866f0971233f19963ef9796701aab3",
+    "training.md": "a26bf6a3dbfdc9734a3ccf96448d39e7c1c7af742c7aa05f8691c1eee1c198d8"
+  },
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee",
+  "queries": [
+    {
+      "id": "FR01",
+      "query": "soup loop canary stuck at UNKNOWN no ratings coming in",
+      "supplied_target": "Data Flywheel → canary quality verdict / --canary-max-wait",
+      "targets": [
+        "3"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "3",
+          "doc_name": "adapters-and-governance",
+          "section": "Data Flywheel (`soup loop`)",
+          "heading_prefix": "Adapters, Registry & Governance > Data Flywheel (`soup loop`)"
+        }
+      ]
+    },
+    {
+      "id": "FR02",
+      "query": "how to get soup train to write energy json for the bom",
+      "supplied_target": "Bill of Materials → Attaching energy + CO₂",
+      "targets": [
+        "12"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "12",
+          "doc_name": "adapters-and-governance",
+          "section": "Attaching energy + CO₂ (`--energy`)",
+          "heading_prefix": "Adapters, Registry & Governance > Bill of Materials (`soup bom emit`) > Attaching energy + CO₂ (`--energy`)"
+        }
+      ]
+    },
+    {
+      "id": "FR03",
+      "query": "adapter merge refused because lora ranks differ on shared module",
+      "supplied_target": "Adapter Management → merge strategies / rank check",
+      "targets": [
+        "9"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "9",
+          "doc_name": "adapters-and-governance",
+          "section": "Adapter Management (git for LoRA)",
+          "heading_prefix": "Adapters, Registry & Governance > Adapter Management (git for LoRA)"
+        }
+      ]
+    },
+    {
+      "id": "FR04",
+      "query": "my merged adapter is weaker than inputs did --weights apply wrong",
+      "supplied_target": "Adapter Management → How --weights is applied",
+      "targets": [
+        "9"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "9",
+          "doc_name": "adapters-and-governance",
+          "section": "Adapter Management (git for LoRA)",
+          "heading_prefix": "Adapters, Registry & Governance > Adapter Management (git for LoRA)"
+        }
+      ]
+    },
+    {
+      "id": "FR05",
+      "query": "sign adapter with ed25519 and verify in ci pipeline",
+      "supplied_target": "Adapter Sign + Verify",
+      "targets": [
+        "20"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "20",
+          "doc_name": "adapters-and-governance",
+          "section": "Adapter Sign + Verify (`soup adapters sign` / `verify`)",
+          "heading_prefix": "Adapters, Registry & Governance > Adapter Sign + Verify (`soup adapters sign` / `verify`)"
+        }
+      ]
+    },
+    {
+      "id": "FR06",
+      "query": "soup adapters audit shows unknown for learning rate is that bad",
+      "supplied_target": "Run-vs-Config Audit → MLX peak_lr / unknown is never ok",
+      "targets": [
+        "18"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "18",
+          "doc_name": "adapters-and-governance",
+          "section": "Run-vs-Config Audit (`soup adapters audit`)",
+          "heading_prefix": "Adapters, Registry & Governance > Run-vs-Config Audit (`soup adapters audit`)"
+        }
+      ]
+    },
+    {
+      "id": "FR07",
+      "query": "edit a fact into smollm with rome without full finetune",
+      "supplied_target": "Knowledge Editing → soup edit set",
+      "targets": [
+        "5"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "5",
+          "doc_name": "adapters-and-governance",
+          "section": "Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)",
+          "heading_prefix": "Adapters, Registry & Governance > Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)"
+        }
+      ]
+    },
+    {
+      "id": "FR08",
+      "query": "grace codebook how many edits before norms blow up",
+      "supplied_target": "GRACE Codebook — Lifelong Knowledge Edits",
+      "targets": [
+        "7"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "7",
+          "doc_name": "adapters-and-governance",
+          "section": "GRACE Codebook — Lifelong Knowledge Edits",
+          "heading_prefix": "Adapters, Registry & Governance > GRACE Codebook — Lifelong Knowledge Edits"
+        }
+      ]
+    },
+    {
+      "id": "FR09",
+      "query": "soup steer vector not doing anything at serve time",
+      "supplied_target": "Activation Steering → soup serve --steer",
+      "targets": [
+        "6"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "6",
+          "doc_name": "adapters-and-governance",
+          "section": "Activation Steering (`soup steer`)",
+          "heading_prefix": "Adapters, Registry & Governance > Activation Steering (`soup steer`)"
+        }
+      ]
+    },
+    {
+      "id": "FR10",
+      "query": "soup can run refuses redacted value in config",
+      "supplied_target": "Soup Cans → Credentials / redaction",
+      "targets": [
+        "10"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "10",
+          "doc_name": "adapters-and-governance",
+          "section": "Soup Cans (Shareable Recipes)",
+          "heading_prefix": "Adapters, Registry & Governance > Soup Cans (Shareable Recipes)"
+        }
+      ]
+    },
+    {
+      "id": "FR11",
+      "query": "registry push idempotency key same key different config error",
+      "supplied_target": "Model Registry & Lineage → Retries",
+      "targets": [
+        "8"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "8",
+          "doc_name": "adapters-and-governance",
+          "section": "Model Registry & Lineage",
+          "heading_prefix": "Adapters, Registry & Governance > Model Registry & Lineage"
+        }
+      ]
+    },
+    {
+      "id": "FR12",
+      "query": "bisect checkpoints to find which step broke my eval",
+      "supplied_target": "Adapter Lifecycle → soup adapters bisect",
+      "targets": [
+        "2"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "2",
+          "doc_name": "adapters-and-governance",
+          "section": "Adapter Lifecycle (`soup adapters {merge,pr,bisect}`, `soup lock`)",
+          "heading_prefix": "Adapters, Registry & Governance > Adapter Lifecycle (`soup adapters {merge,pr,bisect}`, `soup lock`)"
+        }
+      ]
+    },
+    {
+      "id": "FR13",
+      "query": "backdoor scan failed my adapter can i still merge it",
+      "supplied_target": "Adapter Backdoor Scanner / License-Conflict Matrix backdoor gate",
+      "targets": [
+        "19",
+        "24"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "19",
+          "doc_name": "adapters-and-governance",
+          "section": "Adapter Backdoor Scanner (`soup adapters scan`)",
+          "heading_prefix": "Adapters, Registry & Governance > Adapter Backdoor Scanner (`soup adapters scan`)"
+        },
+        {
+          "chunk_id": "24",
+          "doc_name": "adapters-and-governance",
+          "section": "License-Conflict Matrix at Merge",
+          "heading_prefix": "Adapters, Registry & Governance > License-Conflict Matrix at Merge"
+        }
+      ]
+    },
+    {
+      "id": "FR14",
+      "query": "generate annex xi markdown from a training run",
+      "supplied_target": "EU AI Act Annex XI/XII Auto-Doc",
+      "targets": [
+        "14"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "14",
+          "doc_name": "adapters-and-governance",
+          "section": "EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)",
+          "heading_prefix": "Adapters, Registry & Governance > EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)"
+        }
+      ]
+    },
+    {
+      "id": "FR15",
+      "query": "where does soup audit log live and how do i turn it off",
+      "supplied_target": "Audit Log → SOUP_AUDIT_LOG_PATH / --no-audit-log",
+      "targets": [
+        "16"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "16",
+          "doc_name": "adapters-and-governance",
+          "section": "Audit Log (`soup audit-log`)",
+          "heading_prefix": "Adapters, Registry & Governance > Audit Log (`soup audit-log`)"
+        }
+      ]
+    },
+    {
+      "id": "FR16",
+      "query": "soup airgap bundle for offline deployment machine",
+      "supplied_target": "Airgap Bundle",
+      "targets": [
+        "25"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "25",
+          "doc_name": "adapters-and-governance",
+          "section": "Airgap Bundle (`soup airgap-bundle`)",
+          "heading_prefix": "Adapters, Registry & Governance > Airgap Bundle (`soup airgap-bundle`)"
+        }
+      ]
+    },
+    {
+      "id": "FR17",
+      "query": "soup loop watch not training says not_enough_new_data",
+      "supplied_target": "Data Flywheel → --min-new-pairs / data cursor",
+      "targets": [
+        "3"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "3",
+          "doc_name": "adapters-and-governance",
+          "section": "Data Flywheel (`soup loop`)",
+          "heading_prefix": "Adapters, Registry & Governance > Data Flywheel (`soup loop`)"
+        }
+      ]
+    },
+    {
+      "id": "FR18",
+      "query": "feedback log format for soup loop sft train method",
+      "supplied_target": "Data Flywheel → Learn from feedback",
+      "targets": [
+        "3"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "3",
+          "doc_name": "adapters-and-governance",
+          "section": "Data Flywheel (`soup loop`)",
+          "heading_prefix": "Adapters, Registry & Governance > Data Flywheel (`soup loop`)"
+        }
+      ]
+    },
+    {
+      "id": "FR19",
+      "query": "soup loop deploy keeps failing pending_deploy backoff",
+      "supplied_target": "Data Flywheel → refused deploy backoff / pending_deploy",
+      "targets": [
+        "3"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "3",
+          "doc_name": "adapters-and-governance",
+          "section": "Data Flywheel (`soup loop`)",
+          "heading_prefix": "Adapters, Registry & Governance > Data Flywheel (`soup loop`)"
+        }
+      ]
+    },
+    {
+      "id": "FR20",
+      "query": "autodistill shard manifest resume after crash",
+      "supplied_target": "AutoDistill → Transactional publication, resume, corruption",
+      "targets": [
+        "44"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "44",
+          "doc_name": "autodistill",
+          "section": "8. Transactional publication, resume, and corruption",
+          "heading_prefix": "AutoDistill artifact contract (Milestone A) > 8. Transactional publication, resume, and corruption"
+        }
+      ]
+    },
+    {
+      "id": "FR21",
+      "query": "autodistill top-k probabilities renormalized or not",
+      "supplied_target": "AutoDistill → Missing-probability policy",
+      "targets": [
+        "36"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "36",
+          "doc_name": "autodistill",
+          "section": "5. Missing-probability policy",
+          "heading_prefix": "AutoDistill artifact contract (Milestone A) > 5. Missing-probability policy"
+        }
+      ]
+    },
+    {
+      "id": "FR22",
+      "query": "autodistill plan-only estimate bytes per token",
+      "supplied_target": "AutoDistill → Plan-only estimate",
+      "targets": [
+        "45"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "45",
+          "doc_name": "autodistill",
+          "section": "9. Plan-only estimate",
+          "heading_prefix": "AutoDistill artifact contract (Milestone A) > 9. Plan-only estimate"
+        }
+      ]
+    },
+    {
+      "id": "FR23",
+      "query": "autodistill consumption event replay rules after commit",
+      "supplied_target": "AutoDistill → Consumption and replay",
+      "targets": [
+        "42"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "42",
+          "doc_name": "autodistill",
+          "section": "7.3 Consumption and replay",
+          "heading_prefix": "AutoDistill artifact contract (Milestone A) > 7. State machines > 7.3 Consumption and replay"
+        }
+      ]
+    },
+    {
+      "id": "FR24",
+      "query": "mlx backend on mac training lora setup",
+      "supplied_target": "Backends → Apple Silicon (MLX Backend)",
+      "targets": [
+        "53"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "53",
+          "doc_name": "backends-and-ops",
+          "section": "Apple Silicon (MLX Backend)",
+          "heading_prefix": "Backends, Platform & Ops > Apple Silicon (MLX Backend)"
+        }
+      ]
+    },
+    {
+      "id": "FR25",
+      "query": "soup lock check exit code on env drift",
+      "supplied_target": "Adapter Lifecycle → soup lock / drift exits 3",
+      "targets": [
+        "2"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "2",
+          "doc_name": "adapters-and-governance",
+          "section": "Adapter Lifecycle (`soup adapters {merge,pr,bisect}`, `soup lock`)",
+          "heading_prefix": "Adapters, Registry & Governance > Adapter Lifecycle (`soup adapters {merge,pr,bisect}`, `soup lock`)"
+        }
+      ]
+    },
+    {
+      "id": "FR26",
+      "query": "soup plan apply terraform style for training config",
+      "supplied_target": "Backends → Terraform-Style Plan & Apply",
+      "targets": [
+        "116"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "116",
+          "doc_name": "backends-and-ops",
+          "section": "Terraform-Style Plan & Apply (`soup plan` / `soup apply`)",
+          "heading_prefix": "Backends, Platform & Ops > Terraform-Style Plan & Apply (`soup plan` / `soup apply`)"
+        }
+      ]
+    },
+    {
+      "id": "FR27",
+      "query": "namespace pinning blocking hf download author changed",
+      "supplied_target": "Namespace Pinning (Anti-AI-Jacking)",
+      "targets": [
+        "23"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "23",
+          "doc_name": "adapters-and-governance",
+          "section": "Namespace Pinning (Anti-AI-Jacking)",
+          "heading_prefix": "Adapters, Registry & Governance > Namespace Pinning (Anti-AI-Jacking)"
+        }
+      ]
+    },
+    {
+      "id": "FR28",
+      "query": "soup autopilot picked weird learning rate can i override",
+      "supplied_target": "Backends → Autopilot (Zero-Config)",
+      "targets": [
+        "52"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "52",
+          "doc_name": "backends-and-ops",
+          "section": "Autopilot (Zero-Config)",
+          "heading_prefix": "Backends, Platform & Ops > Autopilot (Zero-Config)"
+        }
+      ]
+    },
+    {
+      "id": "FR29",
+      "query": "soup adapters check says inactive all lora_B zero",
+      "supplied_target": "Pre-Flight Adapter Health Audit → inactivity reasons",
+      "targets": [
+        "22"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "22",
+          "doc_name": "adapters-and-governance",
+          "section": "Pre-Flight Adapter Health Audit (`soup adapters check`)",
+          "heading_prefix": "Adapters, Registry & Governance > Pre-Flight Adapter Health Audit (`soup adapters check`)"
+        }
+      ]
+    },
+    {
+      "id": "FR30",
+      "query": "license conflict merging llama and gemma adapters",
+      "supplied_target": "License-Conflict Matrix at Merge",
+      "targets": [
+        "24"
+      ],
+      "target_sections": [
+        {
+          "chunk_id": "24",
+          "doc_name": "adapters-and-governance",
+          "section": "License-Conflict Matrix at Merge",
+          "heading_prefix": "Adapters, Registry & Governance > License-Conflict Matrix at Merge"
+        }
+      ]
+    }
+  ]
+}

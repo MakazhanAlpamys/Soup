@@ -1,0 +1,21 @@
+{
+  "cohort": "friend30",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "frozen_at_utc": "2026-11-24T09:48:04.511445+00:00",
+  "question_count": 30,
+  "provenance": "User attestation: these 30 questions and intended targets were supplied by a friend outside the project/tuning work. Individual attribution not supplied; attestation not independently verified.",
+  "writing_assistance": "Not specified; no claim of absence of assistance.",
+  "numerical_checks": "Existing --require-hit5-gain utility additionally enforces all four aggregates on the fresh set; report this utility status separately from the maintainer fresh Hit@5 condition. All metrics and individual rank losses retained.",
+  "execution_state_at_freeze": "No baseline or candidate rankings on these questions have been computed or inspected locally.",
+  "files": {
+    "src/soup_cli/docs/retriever.py": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a",
+    "src/soup_cli/docs/tokenizer.py": "f5d929939cadbe7da5ec7cefd8f257945c9658aeb97adc661eb2ee106d9203a8",
+    "src/soup_cli/docs/bm25.py": "3dbfbc893babe41374a9d67c2428dde5470eab5915d8a800791362a228484289",
+    "src/soup_cli/docs/chunker.py": "5f3aada4a27491b8744c3c256794cc069e6f5b73d1351f169c2f11fe5edadc47",
+    "scripts/check_docs_search_ranking.py": "0230eb498102f02c031acc5a3d3360420b446e9ff6acafef8f896ce28ac5cd4b",
+    "tests/fixtures/docs_search/friend30.json": "c7720c6e08a4bb7ebefe58c04cbab6e57f1dbb1a2d0782245516234cdb22948b",
+    "benchmarks/docs-search-3192/friend30-targets.md": "43a0853c4fb6ca2b5b8e11cff625887067c18c571123144ad4cb3469a2908e78"
+  },
+  "question_and_supplied_target_records_sha256": "0a5cfb550e2fbc124044b8570516a2ae9ff9c4a9445797396c974599f8829c1a",
+  "maintainer_fresh_acceptance": "Strict Hit@5 gain on all 30; original-28 option B gate remains separate."
+}
