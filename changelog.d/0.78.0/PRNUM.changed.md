@@ -1,1 +1,0 @@
-- A judge URL that is refused is shown in the refusal message without its userinfo part: `https://name:word@host/model` is echoed as `https://host/model`. The value itself and the set of accepted URLs do not change (#PRNUM)
