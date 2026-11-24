@@ -3,6 +3,7 @@
 import json
 import multiprocessing
 import os
+import re
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -16,11 +17,24 @@ from typer.testing import CliRunner
 
 from tests.test_issue1038_preprocess_to_pretokenized import _gate, _preprocess
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_ANSI_RE.sub("", text).split())
+
+
+def test_cli_output_normalization_handles_styled_paths_and_whitespace():
+    raw = "\x1b[1;35m/cache\x1b[0m/\x1b[1mbackup\x1b[0m\n  is\tretained"
+    assert "/cache/backup" not in raw
+    assert _plain(raw) == "/cache/backup is retained"
+    assert "/cache/other" not in _plain(raw)
+
 
 def _invoke():
     from soup_cli.cli import app
 
-    return CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
+    return CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"], color=True)
 
 
 @pytest.fixture
@@ -237,8 +251,9 @@ def test_failed_rollback_retains_and_reports_usable_backup(
         result = _invoke()
     assert result.exit_code == 1 and not cache.exists()
     backup, = cache.parent.glob(".backup_*")
-    assert str(backup) in result.output
-    assert "Could not restore" in result.output
+    output = _plain(result.output)
+    assert _plain(str(backup)) in output
+    assert "Could not restore" in output
     assert (backup / "metadata.json").read_bytes() == previous[1]
     assert _gate(tmp_path, "data.jsonl", backup)[0].to_list() == previous[0]
     assert not list(cache.parent.glob(".tmp_*"))
@@ -261,7 +276,8 @@ def test_failed_backup_cleanup_keeps_new_cache_and_reports_backup(
     assert result.exit_code == 0, result.output
     assert len(_gate(tmp_path, "data.jsonl", cache)[0]) == 3
     backup, = cache.parent.glob(".backup_*")
-    assert str(backup) in result.output and "New cache is complete" in result.output
+    output = _plain(result.output)
+    assert _plain(str(backup)) in output and "New cache is complete" in output
     assert _gate(tmp_path, "data.jsonl", backup)[0].to_list() == previous[0]
     assert not list(cache.parent.glob(".tmp_*"))
     assert _invoke().exit_code == 0
