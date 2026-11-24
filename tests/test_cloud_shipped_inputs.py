@@ -837,33 +837,29 @@ def test_local_train_input_rejects_dot_directory(chat_config, tmp_path):
         prepare_local_train_inputs(cfg, cwd=str(tmp_path))
 
 
+@pytest.mark.requires_symlink
 def test_local_train_input_rejects_file_symlink(chat_config, tmp_path):
     target = tmp_path / "data" / "train.jsonl"
     link = tmp_path / "data" / "linked.jsonl"
 
-    try:
-        link.parent.mkdir(parents=True)
-        link.symlink_to(target)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"Symlink creation is unavailable: {exc}")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target)
 
     cfg = load_config(chat_config)
     cfg.data.train = "data/linked.jsonl"
 
     with pytest.raises(ValueError, match="symlinks are not allowed"):
-       prepare_local_train_inputs(cfg, cwd=str(tmp_path))
+        prepare_local_train_inputs(cfg, cwd=str(tmp_path))
 
 
+@pytest.mark.requires_symlink
 def test_local_train_input_rejects_symlinked_parent(chat_config, tmp_path):
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir(exist_ok=True)
     (outside / "train.jsonl").write_text('{"text": "test"}\n', encoding="utf-8")
     link = tmp_path / "linked_data"
 
-    try:
-        link.symlink_to(outside, target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"Directory symlink creation is unavailable: {exc}")
+    link.symlink_to(outside, target_is_directory=True)
 
     cfg = load_config(chat_config)
     cfg.data.train = "linked_data/train.jsonl"
