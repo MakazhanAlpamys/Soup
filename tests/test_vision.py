@@ -82,6 +82,24 @@ class TestVisionConfig:
         assert "no vision-preference row path" in message
         assert "text preference format" in message
 
+    @pytest.mark.parametrize("task", ["kto", "reward_model", "dpo"])
+    @pytest.mark.parametrize("data_format", ["llava", "video", "multimodal"])
+    def test_the_refusal_does_not_depend_on_modality(self, task, data_format):
+        """The format refusal also applies when modality defaults to text."""
+        from soup_cli.config.loader import load_config_from_string
+
+        raw = (
+            f"base: org/model\ntask: {task}\n"
+            f"data:\n  train: ./data.jsonl\n  format: {data_format}\n"
+        )
+        with pytest.raises(ValueError) as exc_info:
+            load_config_from_string(raw)
+
+        message = str(exc_info.value)
+        assert f"task={task!r}" in message
+        assert f"data.format={data_format!r}" in message
+        assert "no vision-preference row path" in message
+
     @pytest.mark.parametrize(
         "task", ["dpo", "ipo", "simpo", "orpo", "bco", "preference", "reward_model"]
     )
