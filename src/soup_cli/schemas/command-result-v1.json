@@ -1,0 +1,387 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "description": "Wire reference to an artifact already verified under the reporting root.",
+      "properties": {
+        "kind": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "relative_path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "schema_version": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Version"
+        }
+      },
+      "required": [
+        "kind",
+        "relative_path"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "DataValidateResult": {
+      "properties": {
+        "format": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.-]*$",
+          "title": "Format",
+          "type": "string"
+        },
+        "invalid": {
+          "minimum": 0,
+          "title": "Invalid",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "valid": {
+          "minimum": 0,
+          "title": "Valid",
+          "type": "integer"
+        },
+        "valid_fraction": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Valid Fraction"
+        }
+      },
+      "required": [
+        "format",
+        "total",
+        "valid",
+        "invalid",
+        "valid_fraction"
+      ],
+      "title": "DataValidateResult",
+      "type": "object"
+    },
+    "ResultDetails": {
+      "description": "Fixed numeric details emitted by data validation.",
+      "properties": {
+        "actual": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "skipped": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        }
+      },
+      "title": "ResultDetails",
+      "type": "object"
+    },
+    "ResultReason": {
+      "properties": {
+        "code": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResultDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fix": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Fix",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "fix"
+      ],
+      "title": "ResultReason",
+      "type": "object"
+    }
+  },
+  "description": "Command result v1. Producers validate strictly. Reader schemas allow optional additions.",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "maxItems": 32,
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "child": {
+      "default": null,
+      "title": "Child",
+      "type": "null"
+    },
+    "command": {
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9_.]*$",
+      "title": "Command",
+      "type": "string"
+    },
+    "data": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DataValidateResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "decision": {
+      "anyOf": [
+        {
+          "enum": [
+            "valid",
+            "invalid",
+            "pass",
+            "fail",
+            "ship",
+            "dont_ship"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decision"
+    },
+    "duration_s": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration S"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Code"
+    },
+    "phase": {
+      "enum": [
+        "preflight",
+        "validate",
+        "evaluate",
+        "plan",
+        "execute",
+        "launch",
+        "export",
+        "finalize",
+        "transport"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "reasons": {
+      "items": {
+        "$ref": "#/$defs/ResultReason"
+      },
+      "maxItems": 32,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "schema": {
+      "const": "soup.command_result",
+      "title": "Schema",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "soup_version": {
+      "maxLength": 96,
+      "minLength": 1,
+      "title": "Soup Version",
+      "type": "string"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$",
+      "title": "Started At"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "blocked",
+        "refused",
+        "failed",
+        "cancelled"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "truncated": {
+      "additionalProperties": {
+        "exclusiveMinimum": 0,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "pattern": "^(?:/(?:[^~/]|~[01])*)+$"
+      },
+      "title": "Truncated",
+      "type": "object"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/ResultReason"
+      },
+      "maxItems": 32,
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "soup_version",
+    "command",
+    "phase",
+    "status"
+  ],
+  "title": "CommandResult",
+  "type": "object"
+}

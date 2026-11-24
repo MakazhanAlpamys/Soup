@@ -1671,6 +1671,7 @@ Usage: `soup data validate [OPTIONS] PATH`
 | `PATH` | text |  | yes | Path to dataset file |
 | `--format`, `-f` | text | `auto` |  | Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext |
 | `--min-valid-fraction` | float, 0.0 to 1.0 | `0.0` |  | Exit 2 when the fraction of valid rows is below this value |
+| `--result-json` | flag | off |  | Emit a machine-readable result (preview) |
 
 ## `soup delinearize-llama4`
 
