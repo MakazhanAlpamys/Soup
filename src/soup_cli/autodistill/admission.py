@@ -123,10 +123,16 @@ def admit_teacher_expert_shard(
 
     The shard ID is the directory locator. The caller pins the actual identity
     with the canonical available manifest hash and the expected plan. An MLX
-    caller also pins the exact bytes of the dispatched B1 request (including LF).
+    caller also pins the exact bytes of the dispatched B1 request (including LF);
+    that pin is refused for a plan on any other backend, before any file is opened.
     """
     if not isinstance(expected_plan, AutoDistillPlan):
         raise TypeError("expected_plan must be an AutoDistillPlan")
+    if expected_request_sha256 is not None and expected_plan.capture.backend != "mlx":
+        raise ValueError(
+            "expected_request_sha256 applies to MLX captures only; "
+            f"the plan's capture backend is {expected_plan.capture.backend!r}"
+        )
     _require_artifact_id(shard_id, "shard_id")
     _require_sha256(expected_artifact_sha256, "expected_artifact_sha256")
     root = normalize_capture_root(capture_root)

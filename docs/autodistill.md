@@ -360,7 +360,9 @@ sequence of tokens parsed from the same bytes whose hash was checked. Plan and m
 files are limited to 8,388,608 bytes each. The payload is limited to 67,108,864 bytes and
 100,000 rows. Linked files or directories inside the capture root are refused.
 
-For MLX captures, also pass the trusted request SHA-256, including the trailing LF.
+For MLX captures, also pass the trusted request SHA-256, including the trailing LF. The
+request SHA-256 applies to MLX captures only: passing it with a plan on another backend
+is refused before any file is opened.
 Admission reads the controller's `.workers/<transaction_id>/result.json` with
 `verify_mlx_capture_record`. It ties the controller's record of successful process exit
 to the dispatched request, the matching worker nonce and receipt, and the same published

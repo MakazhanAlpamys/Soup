@@ -202,6 +202,60 @@ def test_admission_refuses_a_missing_capture_without_creating_it(shard):
     assert not shard.root.exists()
 
 
+def test_a_request_pin_is_refused_for_a_plan_that_is_not_mlx(shard, published, monkeypatch):
+    assert shard.plan.capture.backend != "mlx"
+    before = _files(shard.root)
+    touched = []
+    for name in ("normalize_capture_root", "load_canonical_artifact", "read_bounded_artifact"):
+        monkeypatch.setattr(
+            admission, name, lambda *args, _name=name, **kwargs: touched.append(_name)
+        )
+
+    with pytest.raises(ValueError, match="applies to MLX captures only") as refused:
+        admission.admit_teacher_expert_shard(
+            capture_root=shard.root,
+            expected_plan=shard.plan,
+            shard_id=shard.publisher.shard_id,
+            expected_artifact_sha256=canonical_sha256(published),
+            expected_request_sha256="a" * 64,
+        )
+
+    assert repr(shard.plan.capture.backend) in str(refused.value)
+    assert touched == []
+    assert _files(shard.root) == before
+
+
+def test_a_request_pin_is_refused_before_the_capture_root_is_looked_at(shard, tmp_path):
+    missing = tmp_path / "no-such-capture"
+
+    with pytest.raises(ValueError, match="applies to MLX captures only"):
+        admission.admit_teacher_expert_shard(
+            capture_root=missing,
+            expected_plan=shard.plan,
+            shard_id=shard.publisher.shard_id,
+            expected_artifact_sha256="f" * 64,
+            expected_request_sha256="a" * 64,
+        )
+
+    assert not missing.exists()
+
+
+def test_a_shard_of_a_plan_that_is_not_mlx_is_still_admitted_without_a_request_pin(
+    shard, published,
+):
+    assert shard.plan.capture.backend != "mlx"
+
+    result = admission.admit_teacher_expert_shard(
+        capture_root=shard.root,
+        expected_plan=shard.plan,
+        shard_id=shard.publisher.shard_id,
+        expected_artifact_sha256=canonical_sha256(published),
+        expected_request_sha256=None,
+    )
+
+    assert result.rows == shard.rows
+
+
 def test_an_available_shard_with_a_quarantine_marker_is_refused(shard, published):
     marker = published.model_copy(
         update={"state": "quarantined", "previous_manifest_sha256": canonical_sha256(published)}
