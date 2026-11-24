@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import subprocess
@@ -271,6 +272,75 @@ def test_ranking_gate_refuses_changed_document_or_chunk_snapshot(monkeypatch):
     monkeypatch.setattr(gate, "load_docs", lambda: {"guide.md": "# Guide"})
     with pytest.raises(ValueError, match="documentation snapshot differs"):
         gate.compare(fixture)
+
+
+def test_rebuilt_fixture_preserves_queries_and_maps_fenced_headings():
+    from scripts.rebuild_docs_search_fixture import build_fixture
+
+    text = "# Guide\nIntro\n## Training\n```sh\n# resume here\nsoup train\n```\n"
+    source = {
+        "docs_commit": "pinned",
+        "documents": {"guide.md": hashlib.sha256(text.encode()).hexdigest()},
+        "passages": [
+            {"chunk_id": "old-a", "doc_name": "guide", "heading": "Training", "section_index": 1},
+            {
+                "chunk_id": "old-b",
+                "doc_name": "guide",
+                "heading": "resume here",
+                "section_index": 2,
+            },
+        ],
+        "queries": [{"query_id": "q1", "query": "  continue training?  "}],
+        "annotations": [
+            {"query_id": "q1", "status": "resolved", "relevant_chunk_ids": ["old-a", "old-b"]}
+        ],
+        "disputed_passages": ["old-b"],
+    }
+    fixture, audit = build_fixture(source, {"guide.md": text})
+    assert fixture["queries"] == [
+        {"id": "q1", "query": "  continue training?  ", "targets": ["guide::section_001"]}
+    ]
+    assert "# resume here" in fixture["chunks"][1]["text"]
+    assert audit["query_labels"][0]["old_targets"] == ["old-a", "old-b"]
+    assert audit["query_labels"][0]["new_targets"] == ["guide::section_001"]
+    assert audit["disputed_passages"][0]["old_target_queries"] == ["q1"]
+    assert audit["disputed_passages"][0]["new_target_queries"] == ["q1"]
+    source["passages"][1]["heading"] = "different"
+    with pytest.raises(ValueError, match="historical heading differs"):
+        build_fixture(source, {"guide.md": text})
+    with pytest.raises(ValueError, match="pinned document hashes differ"):
+        build_fixture(source, {"guide.md": text + "changed"})
+
+
+def test_rebuilt_fixture_lock_and_complete_label_migration():
+    root = Path(__file__).parents[1]
+    fixtures = root / "tests" / "fixtures" / "docs_search"
+    source = json.loads((fixtures / "original28-source.json").read_bytes())
+    fixture = json.loads((fixtures / "pinned_docs_v1.json").read_bytes())
+    audit = json.loads((fixtures / "pinned_docs_v1-migration.json").read_bytes())
+    lock = json.loads((root / "benchmarks/docs-search-3192/pinned_docs_v1-lock.json").read_bytes())
+    for name, expected in lock["files"].items():
+        assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected, name
+    assert [(q["id"], q["query"]) for q in fixture["queries"]] == [
+        (q["query_id"], q["query"]) for q in source["queries"]
+    ]
+    assert len(fixture["queries"]) == 28
+    assert set(audit["passage_mapping"]) == {p["chunk_id"] for p in source["passages"]}
+    assert len(audit["passage_mapping"]) == 1068
+    for old, migrated, new in zip(source["annotations"], audit["query_labels"], fixture["queries"]):
+        assert old["query_id"] == migrated["id"] == new["id"]
+        assert old["status"] == migrated["old_status"] == migrated["new_status"] == "resolved"
+        assert old["relevant_chunk_ids"] == migrated["old_targets"]
+        assert migrated["new_targets"] == new["targets"] == sorted(
+            {audit["passage_mapping"][target] for target in old["relevant_chunk_ids"]}
+        )
+    assert {p["old_chunk_id"] for p in audit["disputed_passages"]} == set(
+        source["disputed_passages"]
+    )
+    assert all(
+        not row["old_target_queries"] and not row["new_target_queries"]
+        for row in audit["disputed_passages"]
+    )
 
 
 def test_ranking_gate_command_exit_codes_and_json(tmp_path):

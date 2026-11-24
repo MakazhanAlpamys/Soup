@@ -3,10 +3,11 @@
 Draft implementation PR: [#3242](https://github.com/MakazhanAlpamys/Soup/pull/3242).
 
 This is a development candidate for draft implementation review. An eligible
-fresh query set with a Hit@5 gain and resolution of the historical corpus
-provenance gap below are required before requesting review or merge of a default
-change. The maintainer's confirmed gate is option B, not the earlier
-zero-individual-loss proposal.
+fresh query set with a Hit@5 gain is still required before a default change.
+The maintainer's [fixture ruling](https://github.com/MakazhanAlpamys/Soup/issues/3192#issuecomment-7126471247)
+replaces the original-corpus gate with a separately versioned fixture rebuilt
+entirely from pinned Soup docs. Option B applies to this new fixture. The
+original-corpus comparison remains historical evidence.
 
 ## Scope and selection
 
@@ -26,7 +27,64 @@ top-five hits. Unneeded prototype aliases for near-duplicate, GPU-memory and
 OpenAI-compatible phrases were not retained. No fresh questions were used to
 choose these rules.
 
-## Reproduce the current-section and development comparisons
+## Pinned-docs v1 gate: declaration before scoring
+
+`tests/fixtures/docs_search/pinned_docs_v1.json` is a new fixture, version 1,
+built from all 12 Markdown files at Soup commit
+`8ab26641ed34e724018e696a93a06460f26c153e`. Its 295 sections use Soup's existing
+fence-aware heading chunker, with no model tokenizer, model download or new
+dependency. The original 1,068 passage IDs are all retired for this fixture;
+model-based sub-splitting, decoded WordPiece normalization and code-comment
+pseudo-headings are removed. These section scores cannot be compared directly
+with the historical passage scores.
+
+All 28 original question IDs and wording are preserved. Their 69 positive
+passage targets map to 34 unique owning-section targets, with duplicates
+collapsed per question. No relevance judgments were added. Every question
+remains resolved, and no question was dropped. `pinned_docs_v1-migration.json`
+records every historical passage-to-section mapping and all 28 old/new target
+lists and statuses. `original28-source.json` preserves the original questions,
+annotations, source-file hashes and metadata/body hashes for all historical
+passages, without copying their bodies.
+
+The two disputed IDs are:
+
+- `backends-and-ops::replay-an-old-run-s-summary-loss-curve-from-history::sub_000`
+- `backends-and-ops::replay-an-old-run-s-summary-loss-curve-from-history::sub_001`
+
+Neither was listed as relevant in any of the 28 original annotations; their
+old label status was unjudged. Their clean owning section is
+`backends-and-ops::section_020` (Experiment Tracking), which is also unjudged
+by this set. Thus no query targets or label statuses changed because of these
+two passages. Their old bodies are excluded; the replacement section contains
+only pinned Soup docs text. The migration file names both passages and records
+empty old/new affected-query lists. This is a full rebuild, rather than deletion
+of only those two passages.
+
+`pinned_docs_v1-lock.json` fixes the fixture, source metadata, migration audit,
+rebuild script, evaluation script and candidate source hashes. Candidate
+`f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5` is unchanged. The lock and fixture
+are to be committed, pushed and declared in PR #3242 before either baseline or
+candidate is scored on v1. No v1 scores have been computed at this declaration.
+`candidate.json` remains the original development-freeze record, including the
+historical provenance status at that time.
+
+Reproduction requires the pinned Soup Git object in the local clone. In a
+shallow clone, fetch it with
+`git fetch https://github.com/MakazhanAlpamys/Soup.git 8ab26641ed34e724018e696a93a06460f26c153e`.
+The committed fixture can be scored offline without Git history or the
+prototype repository. From a base Soup environment:
+
+```bash
+python scripts/rebuild_docs_search_fixture.py
+python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/pinned_docs_v1.json
+```
+
+The first command verifies a byte-identical rebuild and complete migration
+without scoring. `--write` regenerates the two artifacts. The second runs the
+option B gate; v1 results will be recorded after the public declaration.
+
+## Reproduce the separate current-section and development comparisons
 
 From this revision, in a base Soup environment:
 
@@ -43,14 +101,14 @@ The runner refuses changed documentation, changed chunking, invalid labels or
 a changed recorded baseline. The 69 historical label mappings are recorded in
 `tests/fixtures/docs_search/current_mapping.json`; mappings were fixed before
 candidate scoring. Several old passages collapse to the same section, including
-old code-fence comments. These section metrics are a separate comparison and
-do not replace the original passage benchmark.
+old code-fence comments. These current-section metrics remain a separate
+comparison; the pinned-docs v1 fixture above is the gate.
 
 | Cohort | Baseline Hit@1 | Candidate Hit@1 | Baseline Hit@5 | Candidate Hit@5 | Baseline MRR@10 | Candidate MRR@10 |
 | --- | --- | --- | --- | --- | --- | --- |
 | Ten development questions, 702 current sections | 2/10 | 5/10 | 7/10 | 9/10 | 0.3833 | 0.6560 |
 | Original 28, mapped onto 702 current sections | 17/28 | 18/28 | 27/28 | 27/28 | 0.7857 | 0.8075 |
-| Original 28, exact 1,068 frozen passages (local replay; provenance pending) | 23/28 | 24/28 | 27/28 | 28/28 | 0.8845 | 0.9167 |
+| Original 28, exact 1,068 frozen passages (historical evidence only) | 23/28 | 24/28 | 27/28 | 28/28 | 0.8845 | 0.9167 |
 
 The source baseline is Soup `bf62781f0dc8cb509e3dae16a3818f8dba28627c`.
 The candidate documentation adds one section to its 701-section corpus. Each
@@ -113,7 +171,7 @@ who is not tuning the rules supply the questions. Keep the set separate and
 require a Hit@5 increase before proposing a default change. If inspected fresh
 results are used to revise the candidate, obtain another fresh set.
 
-## Historical corpus provenance gap
+## Historical corpus provenance and the approved rebuild
 
 The original corpus SHA-256 is
 `d787703e048a641884274e57f5802e328e43c637a0971217601e6a37128393e3`.
@@ -130,18 +188,19 @@ in that recorded snapshot:
 - `backends-and-ops::replay-an-old-run-s-summary-loss-curve-from-history::sub_000`
 - `backends-and-ops::replay-an-old-run-s-summary-loss-curve-from-history::sub_001`
 
-The extra prose includes “The loss candidate based on 0.73.3…” and discussion
-of NULL loss measurements. Its exact source revision has not been established.
+The extra prose discusses loss reporting and NULL loss measurements. Its exact
+source revision has not been established. The maintainer reports finding no
+matching commit and has ruled that further revision searches are unnecessary.
 Line endings also differ between the vendored docs and upstream, and the saved
 backends source-manifest hash does not match its vendored file. The original
 corpus and frozen-manifest hashes themselves do match.
 
 The maintainer requires every committed corpus text to come from Soup docs.
 The unresolved passage bodies are therefore not included in this PR candidate.
-The local exact-corpus replay is numerical evidence, not a completed
-repository-local fixture deliverable. No passages, labels or baseline results
-were silently replaced. A source revision or explicit maintainer decision is
-needed to complete this acceptance criterion.
+The local exact-corpus replay remains historical numerical evidence. The
+maintainer's November 24 ruling makes pinned-docs v1 the gate instead. All old
+identities and hashes are preserved as metadata, with every replacement and
+target migration disclosed above; the historical score output is unchanged.
 
 ## Verification and cost
 
