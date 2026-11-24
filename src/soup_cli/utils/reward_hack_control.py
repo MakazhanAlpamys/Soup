@@ -1105,15 +1105,23 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
             )
             self._request_stop(control)
             return control
-        restored = False
+        outcome: dict[str, Any] = {"adapter": False, "optimizer": False, "required": None}
         try:
-            restored = bool(
-                self.rl_checkpoint_cb.restore_checkpoint(
-                    step=target, model=model, optimizer=optimizer
-                )
+            outcome = self.rl_checkpoint_cb._restore_components(
+                step=target, model=model, optimizer=optimizer
             )
-        except Exception:  # noqa: BLE001 — rollback must never crash the run
-            restored = False
+        except Exception as exc:  # noqa: BLE001 — failed required recovery stops the run
+            outcome["error"] = strip_control(
+                f"{type(exc).__name__}: {exc}", single_line=True
+            )
+        restored = bool(outcome["adapter"] and (not outcome["required"] or outcome["optimizer"])
+                        and not outcome.get("error"))
+        if not restored:
+            self._request_stop(control)
+            outcome.setdefault("error", "required checkpoint components were not restored")
+            logger.error("RL rollback to step %d failed: %s. Take a complete checkpoint.",
+                         target, outcome["error"])
+        telemetry["recovery"] = outcome
         # NOTE (known limitation): the rollback restores the model weights +
         # optimizer, but the controller's β / integral state is intentionally
         # NOT reset — we keep KL elevated while recovering from hacking. The PID

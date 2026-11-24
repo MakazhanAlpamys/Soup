@@ -321,6 +321,35 @@ def load_optimizer_state(path: str) -> dict:
     return state
 
 
+def _validate_optimizer_layout(state: dict, optimizer) -> None:
+    """Check groups and populated slot layouts without changing the live optimizer."""
+    import torch
+
+    groups = state["param_groups"]
+    slots = state["state"]
+    if (not _is_plain_state(state) or not isinstance(groups, list)
+            or not isinstance(slots, dict) or len(groups) != len(optimizer.param_groups)):
+        raise RLCheckpointLoadError("RL checkpoint optimizer state has an incompatible layout")
+    for saved_group, live_group in zip(groups, optimizer.param_groups):
+        if (not isinstance(saved_group, dict) or not isinstance(saved_group.get("params"), list)
+                or len(saved_group["params"]) != len(live_group["params"])):
+            raise RLCheckpointLoadError("RL checkpoint optimizer parameter groups do not match")
+        for identifier, parameter in zip(saved_group["params"], live_group["params"]):
+            saved_slots = slots.get(identifier, {})
+            live_slots = optimizer.state.get(parameter, {})
+            if not isinstance(saved_slots, dict) or (
+                saved_slots and live_slots and saved_slots.keys() != live_slots.keys()
+            ):
+                raise RLCheckpointLoadError("RL checkpoint optimizer parameter slots do not match")
+            for name, value in saved_slots.items():
+                live_value = live_slots.get(name)
+                if (isinstance(value, torch.Tensor) and isinstance(live_value, torch.Tensor)
+                        and value.shape != live_value.shape):
+                    raise RLCheckpointLoadError(
+                        "RL checkpoint optimizer tensor shapes do not match"
+                    )
+
+
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
@@ -618,7 +647,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         return manifest
 
     def _restore_components(self, *, step: int, model, optimizer) -> dict:
-        """Strict collective outcome; keep the public best-effort boolean API intact."""
+        """Validate required state before applying it; report partial application failures."""
         from peft import PeftModel, load_peft_weights, set_peft_model_state_dict
 
         manifest = self._load_manifest(step)
@@ -626,7 +655,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
 
         model = peft_policy(model)
         if not isinstance(model, PeftModel):
-            raise RLCheckpointLoadError("RL collective recovery requires a PEFT policy")
+            raise RLCheckpointLoadError("RL recovery requires a PEFT policy")
         directory = os.path.join(self._ckpt_root(), f"step-{step}")
         candidates = [os.path.join(directory, name) for name in
                       ("adapter_model.safetensors", "adapter_model.bin")]
@@ -642,12 +671,28 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         if (expected.keys() != weights.keys()
                 or any(expected[name].shape != weights[name].shape for name in expected)):
             raise RLCheckpointLoadError("RL checkpoint adapter parameters do not match the policy")
-        set_peft_model_state_dict(model, weights)
         required = manifest.has_optimizer and self.config.include_optimizer_state
-        restored_optimizer = self._restore_optimizer_state(
-            os.path.join(directory, "optimizer.pt"), optimizer
-        ) if required and optimizer is not None else False
-        return {"adapter": True, "optimizer": restored_optimizer, "required": required}
+        optimizer_state = None
+        if required:
+            opt_path = os.path.join(directory, "optimizer.pt")
+            if optimizer is None:
+                raise RLCheckpointLoadError("RL recovery requires a live optimizer")
+            if os.path.islink(opt_path):
+                raise RLCheckpointLoadError(_refusal_message(opt_path, "it is a symlink"))
+            optimizer_state = load_optimizer_state(opt_path)
+            _validate_optimizer_layout(optimizer_state, optimizer)
+        outcome: dict[str, Any] = {"adapter": False, "optimizer": False, "required": required}
+        try:
+            set_peft_model_state_dict(model, weights)
+            outcome["adapter"] = True
+            if required:
+                optimizer.load_state_dict(optimizer_state)
+                outcome["optimizer"] = True
+        except Exception as exc:  # noqa: BLE001 — callers must stop after partial application
+            outcome["error"] = strip_control(
+                f"RL checkpoint application failed: {type(exc).__name__}: {exc}", single_line=True
+            )
+        return outcome
 
     def _prune(self) -> None:
         """Keep only the ``keep_last`` most-recent step checkpoints."""
