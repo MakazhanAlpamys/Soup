@@ -402,7 +402,7 @@ def _pull_langsmith(
             os.environ, allow_private_host=allow_private_host
         )
     except PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(str(exc), "red"))
         raise typer.Exit(1) from None
     except ValueError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -433,7 +433,7 @@ def _pull_langsmith(
         # Streams to a staging file; the target only appears once the pull finished.
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(str(exc), "red"))
         console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
         raise typer.Exit(1) from None
 
