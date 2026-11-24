@@ -5,7 +5,8 @@ Four strategies wrap mergekit-style math in pure numpy:
 - ``linear``: weighted average per-layer (baseline)
 - ``ties``: trim-elect-disjoint average (Yadav et al. 2023)
 - ``dare``: drop and rescale by 1/(1-density) (Yu et al. 2024)
-- ``svd``: low-rank SVD reconstruction of the merged delta
+- ``svd``: each LoRA module's merged delta ``B @ A`` truncated to ``--rank`` by SVD;
+  tensors that are not LoRA factors are not truncated (#2984)
 
 All strategies operate on the intersection of layer names. ``merge_adapters``
 refuses inputs that cannot be merged before anything is written (#2907): a
@@ -342,11 +343,35 @@ def merge_svd(
     *,
     rank: int | None = None,
 ) -> Tuple[dict[str, Any], Tuple[str, ...]]:
-    """SVD merge: linear-average, then low-rank reconstruct each 2D tensor.
+    """SVD merge: the linear merge, then each LoRA module's delta truncated to ``rank``.
 
-    Non-2D tensors are merged linearly without truncation.
+    Without ``rank`` this is :func:`merge_linear`. With it, each ``lora_A`` /
+    ``lora_B`` pair (and ``lora_embedding_A`` / ``lora_embedding_B`` pair) of the
+    linear merge, found through ``_lora_role`` and paired by module, kind and
+    adapter name (``lora_A.<name>.weight`` with ``lora_B.<name>.weight``), is
+    replaced by factors whose product is the best rank-``rank`` approximation
+    of that module's merged
+    delta ``B @ A`` (truncated SVD, computed in float64, written as float32),
+    so the result depends on the delta and not on how the inputs split it
+    between ``A`` and ``B`` (#2984). The new factors are zero-padded back to the
+    module's LoRA rank ``r``, so ``r`` and ``lora_alpha`` in
+    ``adapter_config.json`` stay valid. ``merge_adapters`` refuses inputs of
+    different rank before any strategy runs (#2907), so ``r`` is the rank the
+    inputs share.
+
+    A module whose ``rank`` is at or above ``r`` keeps the linear merge as it is:
+    its delta already has rank at most ``r``. Every tensor that is not a LoRA
+    factor (a ``modules_to_save`` weight, a ``lora_B.bias``, a DoRA magnitude
+    vector), a factor whose pair is missing, and a pair that is not 2-D (a conv
+    LoRA) are written as the linear merge gives them, never truncated.
     """
     import numpy as np
+
+    from soup_cli.utils.adapter_arithmetic import (
+        _lora_role,
+        _LoraStem,
+        _truncated_lora_factors,
+    )
 
     if rank is not None:
         if isinstance(rank, bool) or not isinstance(rank, int):
@@ -358,20 +383,33 @@ def merge_svd(
     if rank is None:
         return linear_merged, skipped
 
-    out: dict[str, Any] = {}
-    for name, tensor in linear_merged.items():
-        arr = np.asarray(tensor, dtype=np.float64)
-        if arr.ndim != 2:
-            out[name] = arr.astype(np.float32)
+    # A factor's stem is its module, its kind and its adapter name, so A is
+    # paired with the B of the same adapter name.
+    pairs: dict[_LoraStem, dict[str, str]] = {}
+    for name in linear_merged:
+        role = _lora_role(name)
+        if role is not None:
+            stem, which = role
+            pairs.setdefault(stem, {})[which] = name
+
+    out: dict[str, Any] = dict(linear_merged)
+    for roles in pairs.values():
+        if "A" not in roles or "B" not in roles:
+            continue
+        lora_a = np.asarray(linear_merged[roles["A"]], dtype=np.float64)
+        lora_b = np.asarray(linear_merged[roles["B"]], dtype=np.float64)
+        if lora_a.ndim != 2 or lora_b.ndim != 2 or lora_a.shape[0] != lora_b.shape[1]:
+            continue
+        lora_rank = lora_a.shape[0]
+        if rank >= lora_rank:
             continue
         try:
-            u_mat, sv, vt_mat = np.linalg.svd(arr, full_matrices=False)
+            new_b, new_a = _truncated_lora_factors(lora_b, lora_a, rank)
         except np.linalg.LinAlgError:
-            out[name] = arr.astype(np.float32)
             continue
-        r = min(rank, sv.shape[0])
-        reconstructed = u_mat[:, :r] @ np.diag(sv[:r]) @ vt_mat[:r, :]
-        out[name] = reconstructed.astype(np.float32)
+        pad = lora_rank - new_a.shape[0]
+        out[roles["A"]] = np.pad(new_a, ((0, pad), (0, 0))).astype(np.float32)
+        out[roles["B"]] = np.pad(new_b, ((0, 0), (0, pad))).astype(np.float32)
     return out, skipped
 
 

@@ -146,13 +146,12 @@ def validate_serve_paths(model: str, base: str | None) -> None:
         if any(member.is_symlink() for member in candidate.iterdir()):
             raise ValueError("MLX serving model/adapter files must not be symlinks")
 
+    def check_base(target: str) -> None:
+        if Path(target).exists() or Path(target).is_absolute() or target.startswith("."):
+            check(target)
+
     check(model)
-    metadata = read_native_adapter(Path(model), base)
-    target = metadata["model"] if metadata else base
-    if target is not None and (
-        Path(target).exists() or Path(target).is_absolute() or target.startswith(".")
-    ):
-        check(target)
+    read_native_adapter(Path(model), base, validate_base=check_base)
 
 
 @dataclass(eq=False)
