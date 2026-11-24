@@ -97,8 +97,10 @@ def _exec_controller(
     def fake_sleep(seconds: float) -> None:
         clock["now"] += seconds
 
-    namespace["_request_json"] = lambda api_key, path, *, method="GET", payload=None: (
-        fake_request_fn(api_key, path, method=method, payload=payload)
+    namespace["_request_json"] = (
+        lambda api_key, path, *, method="GET", payload=None, timeout=60: (
+            fake_request_fn(api_key, path, method=method, payload=payload)
+        )
     )
     namespace["_wait_for_ip"] = lambda *_: "192.0.2.1"
     namespace["_wait_for_termination"] = lambda _api_key, instance_id: (
@@ -378,10 +380,11 @@ class TestLambdaLaunchRecovery:
             for p in prints
         )
 
-    def test_ambiguous_reconciliation_fails_prints_critical(
+    def test_ambiguous_empty_polling_reports_no_match_observed(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Ambiguous failure: no matching instance for the window prints CRITICAL."""
+        """Successful lookups with no match through the deadline name the instance
+        instead of printing the CRITICAL cleanup-unconfirmed warning (#3304)."""
         stub, _ = _setup_env(tmp_path, monkeypatch)
         prints: list[str] = []
         terminations: list[tuple] = []
@@ -407,12 +410,15 @@ class TestLambdaLaunchRecovery:
 
         assert rc == 1
         assert terms == []
-        assert len(lkups) >= 1
+        # 60-second window with 5-second polls: bounded polling, no extra POST.
+        assert len(lkups) == 12
         name = launch_payloads[0].get("name") if launch_payloads else "unknown"
         assert any(
-            f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p
+            f"Lambda lookup observed no instance named {name} within the recovery "
+            "window; check the console and terminate it manually if it appears." in p
             for p in prints
         )
+        assert not any("CRITICAL: Lambda cleanup unconfirmed" in p for p in prints)
 
     def test_failed_lookup_prints_critical(self, tmp_path: Path, monkeypatch) -> None:
         """A failing `GET /instances` is reported as unconfirmed, not a traceback."""
@@ -538,6 +544,163 @@ class TestLambdaLaunchRecovery:
             "Lambda termination verified for ambiguous launch" in p
             for p in prints
         )
+
+class TestTransientLookupRetries:
+    """#3304: transient GET /instances failures retry inside the 60s window."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            _FakeLambdaAPIError(429, method="GET"),
+            _FakeLambdaAPIError(503, method="GET"),
+            urllib.error.URLError("connection reset"),
+        ],
+        ids=["http-429", "http-503", "network-error"],
+    )
+    def test_transient_error_then_recovery_terminates_match(
+        self, tmp_path: Path, monkeypatch, error
+    ) -> None:
+        """A 429, a 5xx or a network error on the first lookup recovers an exact
+        match on the retry without a second launch POST."""
+        stub, _ = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        terminations: list[tuple] = []
+        lookups: list[tuple] = []
+        checks: list[str] = []
+        launch_payloads: list[dict] = []
+        lookup_failures = [error]
+
+        def fake_request(api_key, path, *, method="GET", payload=None, **_):
+            if path.endswith("/launch"):
+                launch_payloads.append(payload)
+                raise RuntimeError("simulated response lost")
+            if path.endswith("/terminate"):
+                terminations.append((api_key, path, payload))
+                return {"data": {}}
+            if path == "/instances":
+                lookups.append((api_key, path))
+                if lookup_failures:
+                    raise lookup_failures.pop(0)
+                name = launch_payloads[0].get("name") if launch_payloads else "unknown"
+                return {"data": [{"id": "instance-retry", "name": name}]}
+            return {"data": {}}
+
+        rc, terms, lkups = _exec_controller(
+            stub, _make_fake_run(), fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups, termination_checks=checks,
+        )
+
+        assert rc == 1
+        assert len(launch_payloads) == 1
+        assert [entry[2] for entry in terms] == [{"instance_ids": ["instance-retry"]}]
+        assert len(lkups) == 2
+        assert checks == ["instance-retry"]
+        assert any(
+            "Lambda termination verified for ambiguous launch: ['instance-retry']" in p
+            for p in prints
+        )
+
+    def test_permanent_lookup_failure_stays_unconfirmed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A non-transient lookup error is not retried and stays CRITICAL."""
+        stub, _ = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        launch_payloads: list[dict] = []
+        lookups: list[tuple] = []
+
+        def fake_request(api_key, path, *, method="GET", payload=None, **_):
+            if path.endswith("/launch"):
+                launch_payloads.append(payload)
+                raise RuntimeError("simulated response lost")
+            if path == "/instances":
+                lookups.append((api_key, path))
+                raise _FakeLambdaAPIError(403, method="GET")
+            return {"data": {}}
+
+        rc, _, _ = _exec_controller(
+            stub, _make_fake_run(), fake_request, captured_prints=prints,
+            lookups=lookups,
+        )
+
+        assert rc == 1
+        assert len(lookups) == 1
+        name = launch_payloads[0]["name"]
+        assert any(
+            f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p
+            for p in prints
+        )
+
+    def test_repeated_transient_errors_to_deadline_stay_unconfirmed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Transients through the whole window exhaust the budget (12 bounded
+        polls, single launch POST) and stay CRITICAL."""
+        stub, _ = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        launch_payloads: list[dict] = []
+        lookups: list[tuple] = []
+
+        def fake_request(api_key, path, *, method="GET", payload=None, **_):
+            if path.endswith("/launch"):
+                launch_payloads.append(payload)
+                raise RuntimeError("simulated response lost")
+            if path == "/instances":
+                lookups.append((api_key, path))
+                raise urllib.error.URLError("network down")
+            return {"data": {}}
+
+        rc, _, _ = _exec_controller(
+            stub, _make_fake_run(), fake_request, captured_prints=prints,
+            lookups=lookups,
+        )
+
+        assert rc == 1
+        assert len(launch_payloads) == 1
+        assert len(lookups) == 12
+        name = launch_payloads[0]["name"]
+        assert any(
+            f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p
+            for p in prints
+        )
+
+    def test_unrelated_instance_only_is_not_terminated(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An empty-then-unrelated-only polling sequence ends as no-match-observed
+        and never terminates the unrelated instance."""
+        stub, _ = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        terminations: list[tuple] = []
+        lookups: list[tuple] = []
+        launch_payloads: list[dict] = []
+
+        def fake_request(api_key, path, *, method="GET", payload=None, **_):
+            if path.endswith("/launch"):
+                launch_payloads.append(payload)
+                raise RuntimeError("simulated response lost")
+            if path.endswith("/terminate"):
+                terminations.append((api_key, path, payload))
+                return {"data": {}}
+            if path == "/instances":
+                lookups.append((api_key, path))
+                return {"data": [{"id": "instance-other", "name": "other-user"}]}
+            return {"data": {}}
+
+        rc, terms, _ = _exec_controller(
+            stub, _make_fake_run(), fake_request, captured_prints=prints,
+            terminations=terminations, lookups=lookups,
+        )
+
+        assert rc == 1
+        assert terms == []
+        name = launch_payloads[0]["name"]
+        assert any(
+            f"Lambda lookup observed no instance named {name} within the recovery "
+            "window; check the console and terminate it manually if it appears." in p
+            for p in prints
+        )
+
 
 @pytest.mark.parametrize(
     ("method", "status", "rejected"),
@@ -666,5 +829,5 @@ def test_termination_confirmation_uses_status_not_error_text(tmp_path, monkeypat
 def test_generated_cleanup_diagnostics_have_separate_closing_lines(tmp_path, monkeypatch):
     stub, _ = _setup_env(tmp_path, monkeypatch)
 
-    assert "launch: {ids}',\n                    )" in stub
+    assert "launch: {ids}',\n                        )" in stub
     assert "for {name}'),\n                    )" in stub
