@@ -1122,7 +1122,7 @@ def _build_judge_scorer(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # never scores it (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
     references = _aligned_references(task_eval, len(tasks), judge_reference)
@@ -1486,7 +1486,7 @@ def _build_reward_scorer(
     """
     from soup_cli.eval.custom import load_eval_tasks
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # never scores it (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
 
@@ -1561,7 +1561,7 @@ def _build_pairwise_scorer(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # never scores it (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
     references = _aligned_references(task_eval, len(tasks), judge_reference)
