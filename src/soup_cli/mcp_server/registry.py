@@ -69,80 +69,141 @@ class ToolSpec:
     handler: Callable[[dict], dict]
     mutating: bool = False
     annotations: dict | None = None
+    level: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Tool levels -> MCP annotations. The ONE place a tool's annotation comes from.
+# Tool level (the gate class) and MCP annotations (the side effects). Two separate
+# things, both decided in ONE place: :func:`level_fields`.
 # ---------------------------------------------------------------------------
 
-#: Every tool the server lists is at exactly one level, and the level is the annotation.
-#: ``build_registry`` refuses a table holding a tool without one (see
-#: :func:`_require_annotated`), so a new tool cannot be listed without choosing a level.
+#: LEVEL is the gate class of a tool. ``read`` always runs; ``plan`` is gated by
+#: ``--allow-mutating`` and only renders the command that would run; ``execute`` is gated
+#: by ``--allow-execute``. The level decides ``ToolSpec.mutating``. It is not a statement
+#: about side effects: a ``read`` tool can still write benign state (see below).
 LEVEL_READ = "read"
 LEVEL_PLAN = "plan"
 LEVEL_EXECUTE = "execute"
+LEVELS = (LEVEL_READ, LEVEL_PLAN, LEVEL_EXECUTE)
 
-# MCP defines ``destructiveHint`` (and ``idempotentHint``) as meaningful only when
-# ``readOnlyHint`` is false, so the read level sets ``readOnlyHint`` alone.
+# ANNOTATIONS are MCP hints about side effects, with MCP's meaning: ``readOnlyHint`` true
+# is a promise that the tool does not modify its environment, so it is set only for a tool
+# whose code path writes nothing (no database opened for write, no schema migration, no
+# reconcile-on-read, no cache download). ``destructiveHint`` and ``idempotentHint`` are
+# meaningful only when ``readOnlyHint`` is false.
 #
-# The plan level is NOT read-only, even though a plan runs nothing: under
-# ``--allow-execute`` ``train_start`` creates ``.soup/mcp-runs/<run_id>/config.yaml`` (a run
-# directory this call creates, the file opened ``O_EXCL``) and both plan tools issue a
-# one-time token. Everything they do is additive -- they never delete or overwrite -- so
-# ``destructiveHint`` is false. ``idempotentHint`` is left unset on purpose: its default
-# (false) is the true answer, since every ``train_start`` under ``--allow-execute`` makes a
-# new run directory.
+# * A read-level tool that writes nothing:        readOnlyHint true.
+# * A read-level tool that can write benign state (``writes=True``): readOnlyHint false,
+#   destructiveHint false (additive state: a database file, a migrated column, a cache
+#   entry). Pass ``idempotent=True`` only when repeating the call changes nothing further.
+# * The plan level is NOT read-only even though a plan runs nothing: under
+#   ``--allow-execute`` ``train_start`` creates ``.soup/mcp-runs/<run_id>/config.yaml`` (a run
+#   directory this call creates, the file opened ``O_EXCL``) and both plan tools issue a
+#   one-time token. Everything they do is additive, so destructiveHint is false.
+#   idempotentHint is left unset on purpose: its default (false) is the true answer, since
+#   every ``train_start`` under ``--allow-execute`` makes a new run directory.
+# * The execute level is what ``train_execute`` / ``export_execute`` always carried.
 #
-# The execute level is what ``train_execute`` / ``export_execute`` always carried.
-_LEVEL_ANNOTATIONS: Mapping[str, Mapping[str, bool]] = MappingProxyType(
-    {
-        LEVEL_READ: MappingProxyType({"readOnlyHint": True}),
-        LEVEL_PLAN: MappingProxyType({"readOnlyHint": False, "destructiveHint": False}),
-        LEVEL_EXECUTE: MappingProxyType({"readOnlyHint": False, "destructiveHint": True}),
-    }
-)
+# These are hints for the client, never enforcement: the gates are what refuse a call.
+_READ_ONLY = MappingProxyType({"readOnlyHint": True})
+_READ_WRITES_BENIGN = MappingProxyType({"readOnlyHint": False, "destructiveHint": False})
+_PLAN = MappingProxyType({"readOnlyHint": False, "destructiveHint": False})
+_EXECUTE = MappingProxyType({"readOnlyHint": False, "destructiveHint": True})
 
 
-def annotations_for(level: str, *, open_world: bool | None = None) -> dict:
-    """The MCP annotations for a tool level, as a fresh dict (specs never share one).
+def annotations_for(
+    level: str,
+    *,
+    writes: bool = False,
+    idempotent: bool | None = None,
+    open_world: bool | None = None,
+) -> dict:
+    """The MCP annotations for a tool, as a fresh dict (specs never share one).
 
-    ``open_world`` adds ``openWorldHint`` and is for a tool whose code settles it: leave
-    it ``None`` (the hint is then omitted, and MCP's own default applies) when it does not.
+    ``writes`` is for a read-level tool whose code path can write benign state; it is
+    refused for ``plan`` and ``execute``, which are never read-only. ``idempotent`` and
+    ``open_world`` add ``idempotentHint`` / ``openWorldHint`` and are for a tool whose code
+    settles them: leave them ``None`` (the hint is then omitted, and MCP's own default
+    applies) when it does not. ``idempotent`` is refused on a read-only tool, where MCP
+    gives the hint no meaning.
     """
-    if not isinstance(level, str) or level not in _LEVEL_ANNOTATIONS:
-        raise ValueError(
-            f"unknown tool level {level!r}; accepted: " + ", ".join(sorted(_LEVEL_ANNOTATIONS))
-        )
-    annotations = dict(_LEVEL_ANNOTATIONS[level])
+    if not isinstance(level, str) or level not in LEVELS:
+        raise ValueError(f"unknown tool level {level!r}; accepted: " + ", ".join(sorted(LEVELS)))
+    if level == LEVEL_READ:
+        annotations = dict(_READ_WRITES_BENIGN if writes else _READ_ONLY)
+    else:
+        if writes:
+            raise ValueError(
+                f"'writes' applies to read-level tools only; a {level!r} tool is never read-only"
+            )
+        annotations = dict(_PLAN if level == LEVEL_PLAN else _EXECUTE)
+    if idempotent is not None:
+        if annotations["readOnlyHint"]:
+            raise ValueError("idempotentHint is meaningful only when readOnlyHint is false")
+        annotations["idempotentHint"] = idempotent
     if open_world is not None:
         annotations["openWorldHint"] = open_world
     return annotations
 
 
-def _require_annotated(specs: Iterable[ToolSpec]) -> list[ToolSpec]:
-    """Refuse a tool table holding a tool that does not state its level.
+def level_fields(
+    level: str,
+    *,
+    writes: bool = False,
+    idempotent: bool | None = None,
+    open_world: bool | None = None,
+) -> dict[str, Any]:
+    """The :class:`ToolSpec` fields a level decides: ``level``, ``mutating``, ``annotations``.
 
-    A spec passes when its annotations carry a boolean ``readOnlyHint`` that agrees with
-    its ``mutating`` flag: ``mutating`` is what the gate reads and the hint is what a
-    client reads, and a tool must not tell the two different stories. A programming error,
-    so it raises ``ValueError`` when the table is built rather than a tool-level error.
+    Splatted into every spec (``ToolSpec(..., **level_fields(LEVEL_READ))``) so the gate
+    class, the ``mutating`` flag the gate reads and the annotations a client reads come
+    from one call and cannot be written down three different ways.
+    """
+    return {
+        "level": level,
+        "mutating": level != LEVEL_READ,
+        "annotations": annotations_for(
+            level, writes=writes, idempotent=idempotent, open_world=open_world
+        ),
+    }
+
+
+def _require_level_and_hints(specs: Iterable[ToolSpec]) -> list[ToolSpec]:
+    """Refuse a tool table holding a tool that does not state its level and its hints.
+
+    Every spec must have: a ``level`` that is one of :data:`LEVELS`, agreeing with its
+    ``mutating`` flag (the gate reads the flag; only ``read`` is ungated); a boolean
+    ``readOnlyHint``, true for no level but ``read``; and a boolean ``destructiveHint``
+    whenever ``readOnlyHint`` is false. A programming error, so it raises ``ValueError``
+    when the table is built rather than a tool-level error.
     """
     checked = list(specs)
     for spec in checked:
+        if spec.level not in LEVELS:
+            raise ValueError(
+                f"tool {spec.name!r} has no level; give it one of "
+                + ", ".join(sorted(LEVELS))
+                + " through level_fields()"
+            )
+        if spec.mutating is not (spec.level != LEVEL_READ):
+            raise ValueError(
+                f"tool {spec.name!r} is at level {spec.level!r} but mutating={spec.mutating!r}"
+            )
         annotations = spec.annotations
         read_only = annotations.get("readOnlyHint") if isinstance(annotations, Mapping) else None
         if not isinstance(read_only, bool):
             raise ValueError(
-                f"tool {spec.name!r} has no MCP annotations; give it a level with "
-                "annotations_for('read' / 'plan' / 'execute')"
+                f"tool {spec.name!r} has no MCP annotations; give it some through "
+                "level_fields()"
             )
-        if spec.mutating and read_only:
+        if read_only and spec.level != LEVEL_READ:
             raise ValueError(
-                f"tool {spec.name!r} is gated as mutating but advertises readOnlyHint true"
+                f"tool {spec.name!r} is at level {spec.level!r} but advertises "
+                "readOnlyHint true; only 'read' tools may"
             )
-        if not spec.mutating and not read_only:
+        if not read_only and not isinstance(annotations.get("destructiveHint"), bool):
             raise ValueError(
-                f"tool {spec.name!r} is not gated as mutating but advertises readOnlyHint false"
+                f"tool {spec.name!r} advertises readOnlyHint false without destructiveHint"
             )
     return checked
 
@@ -981,7 +1042,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_advise,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="data_inspect",
@@ -994,7 +1055,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_inspect,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="data_validate",
@@ -1020,7 +1081,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_validate,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="data_score",
@@ -1036,7 +1097,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_score,
-            annotations=annotations_for(LEVEL_READ),
+            # Optional presidio-analyzer ([data-pro]) is started per row; its default engine
+            # downloads a missing spaCy model (writes the environment, reaches the network).
+            **level_fields(LEVEL_READ, writes=True, idempotent=True, open_world=True),
         ),
         ToolSpec(
             name="data_doctor",
@@ -1064,7 +1127,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_doctor,
-            annotations=annotations_for(LEVEL_READ, open_world=True),
+            # AutoTokenizer.from_pretrained downloads the tokenizer of a client-chosen model id
+            # into the Hugging Face cache.
+            **level_fields(LEVEL_READ, writes=True, idempotent=True, open_world=True),
         ),
         ToolSpec(
             name="recipes_search",
@@ -1080,7 +1145,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_recipes_search,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="recipes_show",
@@ -1093,7 +1158,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_recipes_show,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="runs_list",
@@ -1105,7 +1170,10 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_runs_list,
-            annotations=annotations_for(LEVEL_READ),
+            # ExperimentTracker() creates ~/.soup/experiments.db and migrates its schema;
+            # reading a run also rewrites a stale 'running' row whose process is gone
+            # to 'terminated' (idempotent).
+            **level_fields(LEVEL_READ, writes=True, idempotent=True),
         ),
         ToolSpec(
             name="runs_show",
@@ -1118,7 +1186,10 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_runs_show,
-            annotations=annotations_for(LEVEL_READ),
+            # ExperimentTracker() creates ~/.soup/experiments.db and migrates its schema;
+            # reading a run also rewrites a stale 'running' row whose process is gone
+            # to 'terminated' (idempotent).
+            **level_fields(LEVEL_READ, writes=True, idempotent=True),
         ),
         ToolSpec(
             name="registry_list",
@@ -1136,7 +1207,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_registry_list,
-            annotations=annotations_for(LEVEL_READ),
+            # RegistryStore() creates ~/.soup/registry.db, migrates its schema, switches
+            # it to WAL and tightens its file permissions; the read itself writes nothing.
+            **level_fields(LEVEL_READ, writes=True, idempotent=True),
         ),
         ToolSpec(
             name="registry_show",
@@ -1149,7 +1222,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_registry_show,
-            annotations=annotations_for(LEVEL_READ),
+            # RegistryStore() creates ~/.soup/registry.db, migrates its schema, switches
+            # it to WAL and tightens its file permissions; the read itself writes nothing.
+            **level_fields(LEVEL_READ, writes=True, idempotent=True),
         ),
         ToolSpec(
             name="profile",
@@ -1171,7 +1246,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_profile,
-            annotations=annotations_for(LEVEL_READ, open_world=False),
+            # allow_network=False: reads the model's local directory and the Hugging Face
+            # cache, never downloads, writes nothing.
+            **level_fields(LEVEL_READ, open_world=False),
         ),
         ToolSpec(
             name="diagnose_evidence",
@@ -1204,7 +1281,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_diagnose_evidence,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="ship_evidence",
@@ -1230,7 +1307,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_ship_evidence,
-            annotations=annotations_for(LEVEL_READ),
+            **level_fields(LEVEL_READ),
         ),
     ]
 
@@ -1310,8 +1387,7 @@ def _mutating_specs(
             description=description,
             input_schema=schema,
             handler=real if allow_mutating else _refuse_mutating(name),
-            mutating=True,
-            annotations=annotations_for(LEVEL_PLAN),
+            **level_fields(LEVEL_PLAN),
         )
         for name, title, description, schema, real in entries
     ]
@@ -1335,8 +1411,7 @@ def _mutating_specs(
                     if allow_execute and execution is not None
                     else _refuse_execute(name)
                 ),
-                mutating=True,
-                annotations=annotations_for(LEVEL_EXECUTE),
+                **level_fields(LEVEL_EXECUTE),
             )
         )
     return specs
@@ -1347,18 +1422,20 @@ def build_registry(
 ) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
-    The read-only tools are always present and executable. The mutating tools
+    The read-level tools are always present and executable (a few of them can write benign
+    state, which their annotations say; the level is the gate class). The mutating tools
     are always listed but refuse unless ``allow_mutating`` is set (and are
     plan-only even then). ``allow_execute`` gates the execution tools
     (``train_execute`` / ``export_execute``) and implies ``allow_mutating``.
 
-    Every tool in the table states its level through :func:`annotations_for`; a table
-    holding one that does not is refused with ``ValueError`` (:func:`_require_annotated`).
+    Every tool in the table states its level and its MCP annotations through
+    :func:`level_fields`; a table holding one that does not is refused with ``ValueError``
+    (:func:`_require_level_and_hints`).
     """
     allow_mutating = allow_mutating or allow_execute
     if allow_execute and execution is None:
         execution = ExecutionManager()
-    return _require_annotated(
+    return _require_level_and_hints(
         _readonly_specs()
         + _mutating_specs(
             allow_mutating=allow_mutating,

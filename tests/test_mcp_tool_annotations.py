@@ -1,65 +1,113 @@
-"""Every tool ``soup mcp serve`` lists carries an MCP annotation level.
+"""Every tool ``soup mcp serve`` lists carries a gate LEVEL and honest MCP annotations.
 
-Before this, the 14 read-only tools and the two plan-only tools were advertised with
-``annotations=None``, so a client reading ``tools/list`` could not tell a tool that only
-reads from one that is gated behind ``--allow-mutating``. A tool now has exactly one of
-three levels, and the level is the annotation:
+Two separate things, kept separate on purpose:
 
-* ``read``    -> ``readOnlyHint: true``
-* ``plan``    -> ``readOnlyHint: false, destructiveHint: false`` (additive: a run directory
-  and a token under ``--allow-execute``, nothing deleted or overwritten)
-* ``execute`` -> ``readOnlyHint: false, destructiveHint: true`` (unchanged)
+* **Level** (``read`` | ``plan`` | ``execute``) is the gate class: ``read`` always runs,
+  ``plan`` is gated by ``--allow-mutating``, ``execute`` by ``--allow-execute``. It is a
+  field on ``ToolSpec`` and decides ``ToolSpec.mutating``. The 14 / 2 / 2 split is pinned.
+* **Annotations** are MCP hints about side effects, with MCP's own meaning: ``readOnlyHint``
+  true says the tool does not modify its environment. So a read-LEVEL tool whose code path
+  can write (open a database, migrate a schema, reconcile a stale row, fill a cache) is
+  advertised ``readOnlyHint: false, destructiveHint: false``.
 
-The pinned table below is deliberately a literal: adding a tool or moving one between
-levels is a visible diff here, and it does not import the production helper, so a change
-to the helper cannot silently re-pin the expectation.
+The pinned table below is a literal: adding a tool, moving one between levels or changing
+a hint is a visible diff here, and it does not import the production helper, so a change to
+the helper cannot silently re-pin the expectation. The reason next to each tool is the code
+path that settles its ``readOnlyHint``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+from contextlib import closing
 from dataclasses import replace
 
 import pytest
 
 import soup_cli.mcp_server.registry as reg
 
-#: The annotation each level must produce. Literal on purpose (see module docstring).
-LEVEL_ANNOTATIONS = {
-    "read": {"readOnlyHint": True},
-    "plan": {"readOnlyHint": False, "destructiveHint": False},
-    "execute": {"readOnlyHint": False, "destructiveHint": True},
+_RO = {"readOnlyHint": True}
+_WRITES = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
+_PLAN = {"readOnlyHint": False, "destructiveHint": False}
+_EXECUTE = {"readOnlyHint": False, "destructiveHint": True}
+
+#: name -> (level, hints, why ``readOnlyHint`` is what it is). Every tool the server lists.
+TABLE = {
+    "advise": (
+        "read",
+        _RO,
+        "reads one dataset file and scores it in memory; the MCP path passes no model, "
+        "so the live probes never run",
+    ),
+    "data_inspect": ("read", _RO, "reads one dataset file and computes stats in memory"),
+    "data_validate": ("read", _RO, "reads one dataset file and checks its format in memory"),
+    "data_score": (
+        "read",
+        {**_WRITES, "openWorldHint": True},
+        "with the optional presidio-analyzer installed, its default engine downloads a "
+        "missing spaCy model",
+    ),
+    "data_doctor": (
+        "read",
+        {**_WRITES, "openWorldHint": True},
+        "AutoTokenizer.from_pretrained fills the Hugging Face cache for a client-chosen model",
+    ),
+    "recipes_search": ("read", _RO, "filters the in-memory recipe catalog"),
+    "recipes_show": ("read", _RO, "looks one recipe up in the in-memory catalog"),
+    "runs_list": (
+        "read",
+        _WRITES,
+        "ExperimentTracker() creates and migrates the database and reading reconciles rows",
+    ),
+    "runs_show": (
+        "read",
+        _WRITES,
+        "ExperimentTracker() creates and migrates the database and reading reconciles rows",
+    ),
+    "registry_list": (
+        "read",
+        _WRITES,
+        "RegistryStore() creates and migrates the database, switches it to WAL, sets perms",
+    ),
+    "registry_show": (
+        "read",
+        _WRITES,
+        "RegistryStore() creates and migrates the database, switches it to WAL, sets perms",
+    ),
+    "profile": (
+        "read",
+        {**_RO, "openWorldHint": False},
+        "allow_network=False reads the local model directory and cache, never downloads",
+    ),
+    "diagnose_evidence": ("read", _RO, "reads one evidence JSON and builds a report in memory"),
+    "ship_evidence": ("read", _RO, "reads one evidence JSON and computes a verdict in memory"),
+    "train_start": (
+        "plan",
+        _PLAN,
+        "not read-only: under --allow-execute it makes a run directory and issues a token",
+    ),
+    "export": (
+        "plan",
+        _PLAN,
+        "not read-only: under --allow-execute it issues a one-time token",
+    ),
+    "train_execute": ("execute", _EXECUTE, "spawns a training process"),
+    "export_execute": ("execute", _EXECUTE, "spawns an export process"),
 }
 
-#: Every tool the server lists, with its level.
-EXPECTED_LEVEL = {
-    "advise": "read",
-    "data_inspect": "read",
-    "data_validate": "read",
-    "data_score": "read",
-    "data_doctor": "read",
-    "recipes_search": "read",
-    "recipes_show": "read",
-    "runs_list": "read",
-    "runs_show": "read",
-    "registry_list": "read",
-    "registry_show": "read",
-    "profile": "read",
-    "diagnose_evidence": "read",
-    "ship_evidence": "read",
-    "train_start": "plan",
-    "export": "plan",
-    "train_execute": "execute",
-    "export_execute": "execute",
-}
-
-#: ``openWorldHint`` is set on exactly two tools, where the code settles it. ``data_doctor``
-#: loads a tokenizer for a model id the client chose, which can reach the Hub. ``profile``
-#: prices a config with ``allow_network=False``: it reads the model's local directory and
-#: cache and sends no request. Every other tool is left unset because the code does not
-#: settle it (``data_score`` may start presidio, which can fetch a language model; ``advise``
-#: has a live-probe path).
-EXPECTED_OPEN_WORLD = {"data_doctor": True, "profile": False}
+#: The read-LEVEL tools whose code path can write. Pinned: a tool leaves this list only when
+#: its write path is gone, and then its table row flips to ``readOnlyHint: true`` with it.
+WRITE_CAPABLE_READ_TOOLS = frozenset(
+    {
+        "data_score",
+        "data_doctor",
+        "runs_list",
+        "runs_show",
+        "registry_list",
+        "registry_show",
+    }
+)
 
 #: The three gate settings ``soup mcp serve`` can run with.
 GATES = [
@@ -69,70 +117,119 @@ GATES = [
 ]
 
 
-def _expected(name: str) -> dict:
-    expected = dict(LEVEL_ANNOTATIONS[EXPECTED_LEVEL[name]])
-    if name in EXPECTED_OPEN_WORLD:
-        expected["openWorldHint"] = EXPECTED_OPEN_WORLD[name]
-    return expected
-
-
 def _specs(allow_mutating: bool = False, allow_execute: bool = False) -> list[reg.ToolSpec]:
     return reg.build_registry(allow_mutating=allow_mutating, allow_execute=allow_execute)
 
 
 def _names_at(level: str) -> list[str]:
-    return [name for name, value in EXPECTED_LEVEL.items() if value == level]
+    return [name for name, row in TABLE.items() if row[0] == level]
 
 
-class TestPinnedLevelTable:
+def _hints(name: str) -> dict:
+    return TABLE[name][1]
+
+
+class TestPinnedTable:
     def test_the_table_names_exactly_the_tools_the_registry_builds(self):
         built = {spec.name for spec in _specs()}
-        assert built == set(EXPECTED_LEVEL), (
-            "a tool was added, removed or renamed: give it a level in EXPECTED_LEVEL",
-            sorted(built ^ set(EXPECTED_LEVEL)),
+        assert built == set(TABLE), (
+            "a tool was added, removed or renamed: give it a row in TABLE",
+            sorted(built ^ set(TABLE)),
         )
 
-    def test_the_table_has_fourteen_read_two_plan_two_execute(self):
+    def test_the_levels_split_fourteen_two_two(self):
         assert len(_names_at("read")) == 14
         assert len(_names_at("plan")) == 2
         assert len(_names_at("execute")) == 2
-        assert len(EXPECTED_LEVEL) == 18
+        assert len(TABLE) == 18
+
+    def test_every_tool_has_a_one_line_reason(self):
+        for name, (_, _, reason) in TABLE.items():
+            assert reason and "\n" not in reason, name
 
     @pytest.mark.parametrize(("allow_mutating", "allow_execute"), GATES)
-    def test_every_spec_has_the_annotations_its_level_pins(
+    def test_every_spec_has_the_level_and_hints_the_table_pins(
         self, allow_mutating, allow_execute
     ):
         for spec in _specs(allow_mutating, allow_execute):
-            assert spec.annotations == _expected(spec.name), spec.name
+            assert spec.level == TABLE[spec.name][0], spec.name
+            assert spec.annotations == _hints(spec.name), spec.name
 
-
-class TestEachLevel:
     @pytest.mark.parametrize(("allow_mutating", "allow_execute"), GATES)
-    def test_every_spec_has_annotations(self, allow_mutating, allow_execute):
+    def test_every_spec_has_annotations_with_a_boolean_read_only_hint(
+        self, allow_mutating, allow_execute
+    ):
         for spec in _specs(allow_mutating, allow_execute):
             assert isinstance(spec.annotations, dict) and spec.annotations, spec.name
             assert isinstance(spec.annotations.get("readOnlyHint"), bool), spec.name
 
-    def test_read_tools_are_read_only_and_not_gated(self):
+
+class TestLevelIsTheGateClass:
+    def test_mutating_is_true_exactly_for_plan_and_execute(self):
+        for spec in _specs(True, True):
+            assert spec.mutating is (TABLE[spec.name][0] != "read"), spec.name
+
+    def test_a_write_capable_read_tool_is_still_ungated(self):
         by_name = {spec.name: spec for spec in _specs()}
-        for name in _names_at("read"):
-            assert by_name[name].annotations["readOnlyHint"] is True, name
+        for name in WRITE_CAPABLE_READ_TOOLS:
+            assert by_name[name].level == "read", name
             assert by_name[name].mutating is False, name
 
-    def test_read_tools_carry_no_destructive_hint(self):
-        # MCP defines destructiveHint as meaningful only when readOnlyHint is false.
-        by_name = {spec.name: spec for spec in _specs()}
-        for name in _names_at("read"):
-            assert "destructiveHint" not in by_name[name].annotations, name
-            assert "idempotentHint" not in by_name[name].annotations, name
+    def test_a_write_capable_read_tool_still_runs_with_the_gates_off(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+        out = reg.call_tool("runs_list", {}, allow_mutating=False)
+        assert out == {"runs": [], "count": 0}
 
-    def test_plan_tools_are_explicitly_not_read_only(self):
+
+class TestReadOnlyHintIsTruthful:
+    def test_read_only_hint_is_true_for_exactly_the_tools_with_no_write_path(self):
         by_name = {spec.name: spec for spec in _specs()}
-        for name in _names_at("plan"):
+        read_only = {name for name, spec in by_name.items() if spec.annotations["readOnlyHint"]}
+        assert read_only == set(_names_at("read")) - WRITE_CAPABLE_READ_TOOLS
+        assert read_only == {
+            "advise",
+            "data_inspect",
+            "data_validate",
+            "recipes_search",
+            "recipes_show",
+            "profile",
+            "diagnose_evidence",
+            "ship_evidence",
+        }
+
+    def test_a_tool_with_a_write_path_is_never_advertised_read_only(self):
+        by_name = {spec.name: spec for spec in _specs()}
+        for name in WRITE_CAPABLE_READ_TOOLS:
             annotations = by_name[name].annotations
             assert annotations["readOnlyHint"] is False, name
             assert annotations["destructiveHint"] is False, name
-            assert by_name[name].mutating is True, name
+
+    def test_the_pinned_write_capable_list_agrees_with_the_table(self):
+        in_table = {
+            name
+            for name, (level, hints, _) in TABLE.items()
+            if level == "read" and hints["readOnlyHint"] is False
+        }
+        assert in_table == WRITE_CAPABLE_READ_TOOLS
+
+    def test_idempotent_hint_appears_only_on_the_write_capable_read_tools(self):
+        by_name = {spec.name: spec for spec in _specs()}
+        carrying = {name for name, spec in by_name.items() if "idempotentHint" in spec.annotations}
+        assert carrying == WRITE_CAPABLE_READ_TOOLS
+        for name in carrying:
+            assert by_name[name].annotations["idempotentHint"] is True, name
+
+    def test_read_only_tools_carry_no_destructive_or_idempotent_hint(self):
+        # MCP defines both as meaningful only when readOnlyHint is false.
+        for spec in _specs():
+            if spec.annotations["readOnlyHint"]:
+                assert "destructiveHint" not in spec.annotations, spec.name
+                assert "idempotentHint" not in spec.annotations, spec.name
+
+    def test_plan_and_execute_tools_are_never_read_only(self):
+        by_name = {spec.name: spec for spec in _specs()}
+        for name in _names_at("plan") + _names_at("execute"):
+            assert by_name[name].annotations["readOnlyHint"] is False, name
 
     def test_execute_tools_keep_what_they_had(self):
         by_name = {spec.name: spec for spec in _specs()}
@@ -141,26 +238,101 @@ class TestEachLevel:
                 "readOnlyHint": False,
                 "destructiveHint": True,
             }, name
-            assert by_name[name].mutating is True, name
 
     def test_open_world_is_set_only_where_the_code_settles_it(self):
         by_name = {spec.name: spec for spec in _specs()}
+        expected = {"data_score": True, "data_doctor": True, "profile": False}
         for name, spec in by_name.items():
-            if name in EXPECTED_OPEN_WORLD:
-                assert spec.annotations["openWorldHint"] is EXPECTED_OPEN_WORLD[name], name
+            if name in expected:
+                assert spec.annotations["openWorldHint"] is expected[name], name
             else:
                 assert "openWorldHint" not in spec.annotations, name
 
-    def test_mutating_flag_and_read_only_hint_agree(self):
-        # `mutating` is what the gate reads; the hint is what the client reads.
-        for spec in _specs(True, True):
-            assert spec.mutating is (not spec.annotations["readOnlyHint"]), spec.name
+
+class TestTheWritePathsAreReal:
+    """Witnesses for the four tracker / registry tools: they do write.
+
+    If one of these tests starts failing because the tool became write-free, that is the
+    follow-up landing: flip the tool's row in TABLE to ``readOnlyHint: true`` and take it out
+    of WRITE_CAPABLE_READ_TOOLS in the same change.
+    """
+
+    def test_runs_list_creates_the_experiments_database(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "experiments.db"
+        monkeypatch.setenv("SOUP_DB_PATH", str(db_path))
+        assert not db_path.exists()
+        reg.call_tool("runs_list", {})
+        assert db_path.exists()
+
+    def test_runs_show_rewrites_a_stale_running_row(self, tmp_path, monkeypatch):
+        import soup_cli.experiment.tracker as tracker_module
+
+        db_path = tmp_path / "experiments.db"
+        monkeypatch.setenv("SOUP_DB_PATH", str(db_path))
+        tracker = tracker_module.ExperimentTracker(db_path=db_path)
+        try:
+            tracker.launch_run(
+                run_id="run_stale_1",
+                kind="train",
+                config_dict={},
+                command_digest="digest",
+                log_path="run.log",
+            )
+            tracker.mark_running("run_stale_1", pid=4242)
+        finally:
+            tracker.close()
+        monkeypatch.setattr(tracker_module, "_process_is_alive", lambda pid: False)
+
+        def stored_status() -> str:
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                return conn.execute(
+                    "SELECT status FROM runs WHERE run_id = ?", ("run_stale_1",)
+                ).fetchone()[0]
+
+        assert stored_status() == "running"
+        reg.call_tool("runs_show", {"run_id": "run_stale_1"})
+        assert stored_status() == "terminated"
+
+    def test_registry_list_creates_the_registry_database(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "registry.db"
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db_path))
+        assert not db_path.exists()
+        reg.call_tool("registry_list", {})
+        assert db_path.exists()
+
+    def test_registry_show_creates_the_registry_database_even_on_a_miss(
+        self, tmp_path, monkeypatch
+    ):
+        db_path = tmp_path / "registry.db"
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db_path))
+        assert not db_path.exists()
+        with pytest.raises(reg.McpToolError) as exc:
+            reg.call_tool("registry_show", {"ref": "reg_missing"})
+        assert str(exc.value) == "registry entry not found"
+        assert db_path.exists()
 
 
 class TestAnnotationsForHelper:
-    @pytest.mark.parametrize("level", sorted(LEVEL_ANNOTATIONS))
-    def test_each_level_yields_its_pinned_annotation(self, level):
-        assert reg.annotations_for(level) == LEVEL_ANNOTATIONS[level]
+    @pytest.mark.parametrize(
+        ("level", "kwargs", "expected"),
+        [
+            pytest.param("read", {}, {"readOnlyHint": True}, id="read"),
+            pytest.param(
+                "read",
+                {"writes": True},
+                {"readOnlyHint": False, "destructiveHint": False},
+                id="read-writes",
+            ),
+            pytest.param(
+                "plan", {}, {"readOnlyHint": False, "destructiveHint": False}, id="plan"
+            ),
+            pytest.param(
+                "execute", {}, {"readOnlyHint": False, "destructiveHint": True}, id="execute"
+            ),
+        ],
+    )
+    def test_each_level_yields_its_pinned_annotation(self, level, kwargs, expected):
+        assert reg.annotations_for(level, **kwargs) == expected
 
     def test_an_unknown_level_is_refused_naming_the_accepted_levels(self):
         with pytest.raises(ValueError) as exc:
@@ -168,26 +340,56 @@ class TestAnnotationsForHelper:
         assert "unknown tool level 'write'" in str(exc.value)
         assert "execute, plan, read" in str(exc.value)
 
-    def test_each_call_returns_a_fresh_dict(self):
-        first = reg.annotations_for("read")
-        first["readOnlyHint"] = False
-        first["extra"] = True
-        assert reg.annotations_for("read") == {"readOnlyHint": True}
+    @pytest.mark.parametrize("level", ["plan", "execute"])
+    def test_writes_is_refused_for_levels_that_are_never_read_only(self, level):
+        with pytest.raises(ValueError) as exc:
+            reg.annotations_for(level, writes=True)
+        assert (
+            f"'writes' applies to read-level tools only; a {level!r} tool is never read-only"
+            in str(exc.value)
+        )
 
-    def test_open_world_is_added_only_when_asked(self):
-        assert reg.annotations_for("read", open_world=True) == {
-            "readOnlyHint": True,
-            "openWorldHint": True,
+    def test_idempotent_is_refused_on_a_read_only_tool(self):
+        with pytest.raises(ValueError) as exc:
+            reg.annotations_for("read", idempotent=True)
+        assert "idempotentHint is meaningful only when readOnlyHint is false" in str(exc.value)
+
+    def test_idempotent_and_open_world_are_added_only_when_asked(self):
+        assert reg.annotations_for("read", writes=True, idempotent=True) == {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
         }
         assert reg.annotations_for("read", open_world=False) == {
             "readOnlyHint": True,
             "openWorldHint": False,
         }
         assert "openWorldHint" not in reg.annotations_for("read")
+        assert "idempotentHint" not in reg.annotations_for("read", writes=True)
+
+    def test_each_call_returns_a_fresh_dict(self):
+        first = reg.annotations_for("read")
+        first["readOnlyHint"] = False
+        first["extra"] = True
+        assert reg.annotations_for("read") == {"readOnlyHint": True}
+
+    def test_level_fields_decides_level_mutating_and_annotations_together(self):
+        assert reg.level_fields("read") == {
+            "level": "read",
+            "mutating": False,
+            "annotations": {"readOnlyHint": True},
+        }
+        assert reg.level_fields("read", writes=True)["mutating"] is False
+        assert reg.level_fields("plan")["mutating"] is True
+        assert reg.level_fields("execute") == {
+            "level": "execute",
+            "mutating": True,
+            "annotations": {"readOnlyHint": False, "destructiveHint": True},
+        }
 
 
-class TestRegistryRefusesAnUnannotatedTool:
-    """A new tool cannot be listed without a level."""
+class TestRegistryRefusesAToolThatDoesNotStateItself:
+    """A new tool cannot be listed without a level and honest hints."""
 
     @staticmethod
     def _registry_with(monkeypatch, *, source: str, index: int, change) -> None:
@@ -211,7 +413,7 @@ class TestRegistryRefusesAnUnannotatedTool:
             reg.build_registry(allow_mutating=False)
         message = str(exc.value)
         assert "tool 'advise' has no MCP annotations" in message
-        assert "annotations_for" in message
+        assert "level_fields" in message
 
     def test_a_plan_tool_without_annotations_stops_the_build(self, monkeypatch):
         self._registry_with(
@@ -244,7 +446,9 @@ class TestRegistryRefusesAnUnannotatedTool:
             pytest.param({"readOnlyHint": 1}, id="read-only-hint-int"),
         ],
     )
-    def test_annotations_that_do_not_state_the_level_stop_the_build(self, monkeypatch, bad):
+    def test_annotations_without_a_boolean_read_only_hint_stop_the_build(
+        self, monkeypatch, bad
+    ):
         self._registry_with(
             monkeypatch,
             source="_readonly_specs",
@@ -255,38 +459,90 @@ class TestRegistryRefusesAnUnannotatedTool:
             reg.build_registry(allow_mutating=False)
         assert "tool 'data_validate' has no MCP annotations" in str(exc.value)
 
-    def test_a_gated_tool_cannot_advertise_itself_read_only(self, monkeypatch):
+    @pytest.mark.parametrize("bad_level", [None, "write", ""])
+    def test_a_tool_without_a_known_level_stops_the_build(self, monkeypatch, bad_level):
         self._registry_with(
             monkeypatch,
-            source="_mutating_specs",
-            index=1,
-            change=lambda spec: replace(spec, annotations=reg.annotations_for("read")),
+            source="_readonly_specs",
+            index=0,
+            change=lambda spec: replace(spec, level=bad_level),
         )
         with pytest.raises(ValueError) as exc:
-            reg.build_registry(allow_mutating=True)
-        assert (
-            "tool 'export' is gated as mutating but advertises readOnlyHint true"
-            in str(exc.value)
-        )
+            reg.build_registry(allow_mutating=False)
+        assert "tool 'advise' has no level; give it one of execute, plan, read" in str(exc.value)
 
-    def test_an_ungated_tool_cannot_advertise_itself_as_not_read_only(self, monkeypatch):
+    def test_a_read_level_tool_cannot_be_gated(self, monkeypatch):
         self._registry_with(
             monkeypatch,
             source="_readonly_specs",
             index=5,
-            change=lambda spec: replace(spec, annotations=reg.annotations_for("plan")),
+            change=lambda spec: replace(spec, mutating=True),
         )
         with pytest.raises(ValueError) as exc:
             reg.build_registry(allow_mutating=False)
+        assert "tool 'recipes_search' is at level 'read' but mutating=True" in str(exc.value)
+
+    def test_a_plan_level_tool_cannot_be_ungated(self, monkeypatch):
+        self._registry_with(
+            monkeypatch,
+            source="_mutating_specs",
+            index=1,
+            change=lambda spec: replace(spec, mutating=False),
+        )
+        with pytest.raises(ValueError) as exc:
+            reg.build_registry(allow_mutating=True)
+        assert "tool 'export' is at level 'plan' but mutating=False" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        ("index", "name", "level"),
+        [
+            pytest.param(0, "train_start", "plan", id="plan"),
+            pytest.param(2, "train_execute", "execute", id="execute"),
+        ],
+    )
+    def test_only_a_read_level_tool_may_advertise_read_only(
+        self, monkeypatch, index, name, level
+    ):
+        self._registry_with(
+            monkeypatch,
+            source="_mutating_specs",
+            index=index,
+            change=lambda spec: replace(spec, annotations={"readOnlyHint": True}),
+        )
+        with pytest.raises(ValueError) as exc:
+            reg.build_registry(allow_mutating=True)
         assert (
-            "tool 'recipes_search' is not gated as mutating but advertises readOnlyHint false"
-            in str(exc.value)
+            f"tool '{name}' is at level '{level}' but advertises readOnlyHint true; "
+            "only 'read' tools may"
+        ) in str(exc.value)
+
+    @pytest.mark.parametrize(
+        ("source", "index", "name"),
+        [
+            pytest.param("_readonly_specs", 7, "runs_list", id="read"),
+            pytest.param("_mutating_specs", 0, "train_start", id="plan"),
+            pytest.param("_mutating_specs", 2, "train_execute", id="execute"),
+        ],
+    )
+    def test_a_tool_that_is_not_read_only_must_state_destructive_hint(
+        self, monkeypatch, source, index, name
+    ):
+        self._registry_with(
+            monkeypatch,
+            source=source,
+            index=index,
+            change=lambda spec: replace(spec, annotations={"readOnlyHint": False}),
+        )
+        with pytest.raises(ValueError) as exc:
+            reg.build_registry(allow_mutating=True)
+        assert f"tool '{name}' advertises readOnlyHint false without destructiveHint" in str(
+            exc.value
         )
 
     def test_call_tool_with_its_own_registry_is_not_affected(self):
         # `call_tool(registry=[...])` takes the caller's table as given: the guard is on
         # building the server's table, so an ad-hoc spec in a test or an embedding keeps
-        # working without annotations.
+        # working without a level or annotations.
         probe = reg.ToolSpec(
             name="probe",
             title="probe",
@@ -294,12 +550,12 @@ class TestRegistryRefusesAnUnannotatedTool:
             input_schema={"type": "object", "properties": {}},
             handler=lambda args: {"ok": True},
         )
-        assert probe.annotations is None
+        assert probe.annotations is None and probe.level is None
         assert reg.call_tool("probe", {}, registry=[probe]) == {"ok": True}
 
 
 class TestGatingIsUnchanged:
-    """The annotations describe the tools; they do not move a gate."""
+    """The level and the annotations describe the tools; they do not move a gate."""
 
     def test_plan_tools_refuse_with_the_same_message_when_gates_are_off(self):
         by_name = {spec.name: spec for spec in _specs()}
@@ -357,9 +613,9 @@ class TestAnnotationsReachTheClient:
         from soup_cli.mcp_server.server import _tool_descriptors
 
         tools = _tool_descriptors(_specs(allow_mutating, allow_execute))
-        assert {tool.name for tool in tools} == set(EXPECTED_LEVEL)
+        assert {tool.name for tool in tools} == set(TABLE)
         for tool in tools:
-            assert self._wire(tool) == _expected(tool.name), tool.name
+            assert self._wire(tool) == _hints(tool.name), tool.name
 
     def test_tools_list_over_a_real_session_carries_the_annotations(self):
         from soup_cli.mcp_server.server import build_server
@@ -372,6 +628,6 @@ class TestAnnotationsReachTheClient:
                 return await client.list_tools()
 
         result = asyncio.run(_go())
-        assert {tool.name for tool in result.tools} == set(EXPECTED_LEVEL)
+        assert {tool.name for tool in result.tools} == set(TABLE)
         for tool in result.tools:
-            assert self._wire(tool) == _expected(tool.name), tool.name
+            assert self._wire(tool) == _hints(tool.name), tool.name
