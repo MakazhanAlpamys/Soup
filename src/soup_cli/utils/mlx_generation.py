@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,31 @@ def _same_base(left: str, right: str) -> bool:
     if Path(left).exists() or Path(right).exists():
         return os.path.normcase(os.path.realpath(left)) == os.path.normcase(os.path.realpath(right))
     return left == right
+
+
+def _resolve_adapter_base(stored: str, base: str | None) -> tuple[str, str, bool]:
+    """Keep the selected spelling alongside the resolved legacy local identity."""
+    path = Path(stored)
+    legacy = not path.is_absolute() and (
+        stored.startswith(("./", "../", ".\\", "..\\")) or path.is_dir()
+    )
+    if legacy and base is not None and Path(base).is_absolute():
+        if not Path(base).is_dir():
+            raise ValueError(
+                f"Native MLX legacy relative base {stored!r}: "
+                "--base must name an existing absolute local directory"
+            )
+        return base, os.path.realpath(base), True
+    if base is not None and not _same_base(base, stored):
+        raise ValueError("--base does not match the native MLX metadata model identity")
+    if legacy:
+        if not path.is_dir():
+            raise ValueError(
+                f"Native MLX legacy relative base {stored!r} is not a directory in cwd; "
+                "pass --base with the absolute path to the original local base directory"
+            )
+        return stored, os.path.realpath(stored), True
+    return stored, stored, False
 
 
 #: Bounds on native adapter metadata; a file past them is refused.
@@ -92,8 +117,11 @@ def _validate_adapter_rope_scaling(config: dict[str, Any]) -> None:
         )
 
 
-def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
-    """Validate metadata before loading optional dependencies or allocating a model."""
+def read_native_adapter(
+    path: Path, base: str | None = None, *, announce: bool = True,
+    validate_base: Callable[[str], None] | None = None,
+) -> dict | None:
+    """Validate metadata and the selected base spelling before announcing or loading it."""
     if (path / "added_tokens.safetensors").exists():
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
@@ -116,8 +144,7 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Expected native MLX metadata with a model identity, not a PEFT adapter")
     if not config["model"].strip() or "base_model_name_or_path" in config:
         raise ValueError("Ambiguous or empty native MLX metadata model identity")
-    if base is not None and not _same_base(base, config["model"]):
-        raise ValueError("--base does not match the native MLX metadata model identity")
+    selected_base, resolved_base, legacy = _resolve_adapter_base(config["model"], base)
     if config.get("vocab_expansion"):
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
@@ -157,6 +184,19 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Native MLX metadata requires unique resolved target keys")
     if not (path / "adapters.safetensors").is_file():
         raise ValueError("Native MLX adapter is missing adapters.safetensors")
+    if validate_base is not None:
+        validate_base(selected_base)
+    if legacy:
+        if announce:
+            from rich.console import Console
+
+            from soup_cli.utils.terminal import for_terminal
+
+            Console().print(for_terminal(
+                f"Native MLX legacy relative base {config['model']!r} "
+                f"resolved to {resolved_base!r}; the original training cwd is unknown."
+            ))
+        config["model"] = resolved_base
     return config
 
 

@@ -42,6 +42,42 @@ forcecheck = _load("forcecheck")
 HARNESSES = (numerics, numerics2, forcecheck)
 
 
+class TestClockProvenance:
+    @pytest.mark.parametrize("harness", HARNESSES)
+    def test_the_idle_clock_is_read_before_the_first_measurement(self, harness, monkeypatch):
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        order: list[str] = []
+
+        def fake_hardware(*args, **kwargs):
+            order.append("hardware")
+            return {"sm_clock_mhz_idle": 1}
+
+        def fake_measure(*args, **kwargs):
+            order.append("measure")
+            return {
+                "set": "default", "N": 64, "K": 64, "M": 8,
+                "bnb_selected_custom_kernel": False,
+                "resident_fallback_calls": 1, "resident_kernel_calls": 0,
+                "kernel_calls": 0, "fallback_calls": 1, "dequant_wrapper_calls": 0,
+                "control_detected": True,
+                "forward": {"exact": True}, "gradient": {"exact": True},
+            }
+
+        monkeypatch.setattr(harness, "hardware", fake_hardware)
+        monkeypatch.setattr(harness, "measure_row", fake_measure)
+        monkeypatch.setattr(
+            harness, "evaluate", lambda rows: {"verdict": "ok", "exit_code": 0, "reason": "ok"}
+        )
+
+        result = harness.run_sweep(harness._parse_args([]))
+
+        assert order[0] == "hardware", order
+        assert "measure" in order
+        assert result["env"] == {"sm_clock_mhz_idle": 1}
+
+
 class TestSelectedCustom:
     @pytest.mark.parametrize("harness", HARNESSES)
     def test_above_the_row_cap_bitsandbytes_is_not_asked(self, harness):

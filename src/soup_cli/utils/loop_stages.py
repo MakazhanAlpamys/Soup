@@ -1198,34 +1198,93 @@ def _iteration_lines_of(name: str) -> "list[dict]":
     return list(latest.values())
 
 
+def _matches_adapter_root(path: str, root: str) -> bool:
+    if path == root:
+        return True
+    try:
+        return os.path.samefile(path, root)
+    except FileNotFoundError:
+        # Preserve lookup by path for a removed adapter tree on Windows.
+        return (
+            os.path.normcase(path) == os.path.normcase(root)
+            and not os.path.lexists(path)
+            and not os.path.lexists(root)
+        )
+    except OSError:
+        return False
+
+
+def _is_direct_checkpoint(path: str) -> bool:
+    name = os.path.basename(path)
+    canonical = name.lower()
+    if re.fullmatch(r"checkpoint-[0-9]+", canonical) is None or not os.path.isdir(path):
+        return False
+    if name == canonical:
+        return True
+    try:
+        return os.path.samefile(path, os.path.join(os.path.dirname(path), canonical))
+    except OSError:
+        return False
+
+
 def _adapter_dir_entry_name(argument: str) -> Optional[str]:
-    """The adapter name of ``argument`` when it is a path to an entry of ``.soup-loops/adapters``.
+    """The adapter name for an adapter directory or its direct checkpoint directory.
 
     The path is resolved first (``realpath``: ``..``, ``.``, a trailing separator, a symlink or a
-    junction, the case Windows keeps on disk). It must then be inside the loop's adapter
-    directory (``commonpath`` compares whole components, so ``adapters-old/<name>`` is not) and
-    directly in it (``adapters/x/<name>`` is not). Anything else, or a name that is not an
-    adapter name, is ``None``: that path names some other adapter, which the loop knows nothing
-    about.
+    junction). A case-folded ``commonpath`` rules out unrelated paths without assuming that
+    the filesystem folds case. The adapter root and a differently cased checkpoint are then
+    checked by directory identity.
+    Only a direct adapter entry or an existing ``checkpoint-N`` directory immediately under it
+    is recognised.
     """
     try:
         entry = os.path.realpath(argument)
-        adapters = os.path.normcase(os.path.realpath(_ADAPTERS_DIR))
-        inside = os.path.commonpath([os.path.normcase(entry), adapters])
+        adapters = os.path.realpath(_ADAPTERS_DIR)
+        inside = os.path.commonpath([entry.casefold(), adapters.casefold()])
     except (OSError, ValueError):  # a NUL byte, or another drive (commonpath refuses to compare)
         return None
-    if inside != adapters or os.path.normcase(os.path.dirname(entry)) != adapters:
+    if inside != adapters.casefold():
         return None
+    parent = os.path.dirname(entry)
+    if not _matches_adapter_root(parent, adapters):
+        if (
+            not _matches_adapter_root(os.path.dirname(parent), adapters)
+            or not _is_direct_checkpoint(entry)
+        ):
+            return None
+        entry = parent
     name = os.path.basename(entry)
     return name if _ADAPTER_NAME_RE.fullmatch(name) is not None else None
+
+
+def _adapter_name_on_disk(name: str) -> str:
+    """Use the actual spelling only when the filesystem resolves both names to the same entry."""
+    path = os.path.join(_ADAPTERS_DIR, name)
+    if not os.path.isdir(path):
+        return name
+    try:
+        entries = os.listdir(_ADAPTERS_DIR)
+        if name in entries:
+            return name
+        for entry in entries:
+            if (
+                _ADAPTER_NAME_RE.fullmatch(entry)
+                and entry.lower() == name.lower()
+                and os.path.samefile(path, os.path.join(_ADAPTERS_DIR, entry))
+            ):
+                return entry
+    except OSError:
+        pass
+    return name
 
 
 def known_dont_ship(name: str) -> Optional[str]:
     """Why the loop knows adapter ``name`` must not be canaried, or ``None``.
 
-    ``name`` is an adapter name or a path to the adapter's directory directly inside
-    ``.soup-loops/adapters`` (any spelling of it: relative, absolute, with ``..``, through a
-    link); a path anywhere else is some other adapter and reads nothing.
+    ``name`` is an adapter name, a path to its directory directly inside ``.soup-loops/adapters``,
+    or a path to its immediate checkpoint directory. Bare names follow the filesystem's case
+    rules. Both verdict sources use the same name after that lookup. A path anywhere else is
+    some other adapter and reads nothing.
 
     The newest iteration that trained the adapter decides: a verdict of DON'T SHIP on an
     iteration that ended ``skipped`` (the loop did not deploy it) is a "no". An iteration that
@@ -1241,6 +1300,7 @@ def known_dont_ship(name: str) -> Optional[str]:
         name = _adapter_dir_entry_name(name)
         if name is None:
             return None
+    name = _adapter_name_on_disk(name)
     lines = _iteration_lines_of(name)
     if lines:
         newest = lines[-1]
