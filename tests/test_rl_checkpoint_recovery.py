@@ -115,6 +115,10 @@ def _damage(kind):
             state["param_groups"][0]["params"].pop()
         elif kind == "optimizer_slots":
             next(iter(state["state"].values()))["exp_avg"] = torch.zeros(1)
+        elif kind == "optimizer_slot_type":
+            next(iter(state["state"].values()))["exp_avg"] = 1.0
+        elif kind == "optimizer_step_type":
+            next(iter(state["state"].values()))["step"] = "invalid"
         elif kind == "optimizer_fields":
             del next(iter(state["state"].values()))["exp_avg"]
         elif kind == "optimizer_structure":
@@ -135,7 +139,8 @@ def _damage(kind):
 @pytest.mark.parametrize("damage", [
     "adapter_corrupt", "adapter_missing", "adapter_keys", "adapter_shape",
     "optimizer_corrupt", "optimizer_missing", "optimizer_groups", "optimizer_parameters",
-    "optimizer_slots", "optimizer_fields", "optimizer_structure", "optimizer_nonplain",
+    "optimizer_slots", "optimizer_slot_type", "optimizer_step_type", "optimizer_fields",
+    "optimizer_structure", "optimizer_nonplain",
     "manifest_missing", "manifest_corrupt", "manifest_step", "manifest_task", "manifest_path",
 ])
 def test_invalid_required_state_stops_before_mutating_live_objects(
@@ -233,6 +238,19 @@ def test_missing_live_optimizer_cannot_apply_adapter_first(tmp_path, monkeypatch
     assert _same(model.state_dict(), before)
 
 
+def test_non_peft_policy_cannot_claim_optimizer_only_recovery(tmp_path, monkeypatch):
+    import torch
+
+    model, optimizer, trainer, _checkpoint, controller, _saved = _case(tmp_path, monkeypatch)
+    trainer.model = torch.nn.Linear(4, 4)
+    before = copy.deepcopy(optimizer.state_dict())
+    control, record = _run(model, optimizer, trainer, controller)
+    assert control.should_training_stop
+    assert record["escalation"] == "rollback to step 1 (restored=False)"
+    assert "requires a PEFT policy" in record["recovery"]["error"]
+    assert _same(optimizer.state_dict(), before)
+
+
 def test_preloaded_optimizer_is_not_read_again_after_adapter_application(tmp_path, monkeypatch):
     from unittest.mock import Mock
 
@@ -245,6 +263,22 @@ def test_preloaded_optimizer_is_not_read_again_after_adapter_application(tmp_pat
     assert not control.should_training_stop
     assert record["escalation"] == "rollback to step 1 (restored=True)"
     assert loader.call_count == 1
+    assert _same(optimizer.state_dict(), saved[1])
+
+
+def test_strict_recovery_accepts_legacy_numeric_optimizer_step(tmp_path, monkeypatch):
+    import torch
+
+    model, optimizer, trainer, _checkpoint, controller, saved = _case(tmp_path, monkeypatch)
+    path = Path("run/rl-checkpoints/step-1/optimizer.pt")
+    state = torch.load(path, weights_only=True)
+    for slots in state["state"].values():
+        slots["step"] = slots["step"].item()
+    torch.save(state, path)
+    control, record = _run(model, optimizer, trainer, controller)
+    assert not control.should_training_stop
+    assert record["escalation"] == "rollback to step 1 (restored=True)"
+    assert _same(model.state_dict(), saved[0])
     assert _same(optimizer.state_dict(), saved[1])
 
 

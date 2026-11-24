@@ -741,7 +741,7 @@ files from runs before this version are not comparable.
 PID rollback counts as restored only after the adapter and every required component have
 been applied. The optimizer is required when the manifest declares it present and
 `rl_checkpoint_include_optimizer` is on. The controller validates the manifest, adapter
-keys/shapes, and required optimizer file and parameter-group/populated-slot layouts before
+keys/shapes, and required optimizer file and parameter-group/populated-slot types and shapes before
 changing live state. Missing or invalid required state stops training before another
 update. An unexpected application failure also stops training; state already applied is
 not undone. Single-process `mitigation_log.jsonl` records `recovery.adapter`, `recovery.optimizer`,

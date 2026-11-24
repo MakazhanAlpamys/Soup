@@ -343,6 +343,11 @@ def _validate_optimizer_layout(state: dict, optimizer) -> None:
                 raise RLCheckpointLoadError("RL checkpoint optimizer parameter slots do not match")
             for name, value in saved_slots.items():
                 live_value = live_slots.get(name)
+                if (isinstance(live_value, torch.Tensor) and not isinstance(value, torch.Tensor)
+                        and not (live_value.ndim == 0 and type(value) in (int, float))):
+                    raise RLCheckpointLoadError(
+                        "RL checkpoint optimizer tensor types do not match"
+                    )
                 if (isinstance(value, torch.Tensor) and isinstance(live_value, torch.Tensor)
                         and value.shape != live_value.shape):
                     raise RLCheckpointLoadError(
