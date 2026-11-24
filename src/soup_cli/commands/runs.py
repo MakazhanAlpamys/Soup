@@ -905,7 +905,7 @@ def curriculum_curve(
 
     rows = []
     max_lines = 100_000
-    with open(real, "r", encoding="utf-8") as fh:
+    with open(real, "r", encoding="utf-8-sig") as fh:
         for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
