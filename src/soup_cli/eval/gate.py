@@ -165,6 +165,11 @@ class EvalSuite(BaseModel):
 
 
 class MalformedSuiteError(ValueError):
+    """Suite document does not match the expected schema."""
+
+
+class JudgeJSONLError(ValueError):
+    """Judge prompts JSONL could not be parsed (coordinates included)."""
     """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
@@ -709,8 +714,8 @@ def _run_judge_task(
             except json.JSONDecodeError as exc:
                 # The decoder sees one stripped line, so its coordinates are
                 # row-local: rebase them onto the physical file position.
-                raise ValueError(
-                    f"invalid JSONL: judge task {task.name!r} file {task.prompts!r} "
+                raise JudgeJSONLError(
+                    f"judge task {task.name!r} file {task.prompts!r} "
                     f"line {line_number} column {indent + exc.colno}: {exc.msg}"
                 ) from exc
             if not isinstance(row, dict):
@@ -874,6 +879,9 @@ def run_gate(
                 # Pydantic Literal already restricts task.type, so this is a
                 # belt-and-braces fallthrough.
                 raise ValueError(f"unknown task type: {task.type}")
+        except JudgeJSONLError as exc:
+            score = None
+            error = f"invalid JSONL: {exc}"
         except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
             score = None
             error = str(exc)
