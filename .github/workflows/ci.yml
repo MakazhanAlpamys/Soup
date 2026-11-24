@@ -281,11 +281,9 @@ jobs:
   #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
-  # The pull request's current labels decide, not the event, so every run on a
-  # labelled pull request is an approval run -- including each later push, which
-  # a merge on the current head needs anyway. Remove the label to go back to
-  # quick runs. A
-  # labelled run is an ordinary pull_request run, with the token and secrets a
+  # The plan job reads the current labels. If lookup fails, it warns and uses
+  # the triggering event's labels. Remove ci:full to go back to quick runs.
+  # A labelled run is an ordinary pull_request run, with the token and secrets a
   # push to that pull request already gets.
   #
   # What this costs, and why the merge gate still holds:
@@ -406,12 +404,56 @@ jobs:
       constraints: ${{ steps.decide.outputs.constraints }}
       docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
+      - name: Read the pull request's labels as they are now
+        # 2026-11-23: the labels are read from the API when this job RUNS, and the event's own
+        # payload is only the fallback. A maintainer adds `ci:full` a second or two after a push;
+        # GitHub makes a run for `labeled` and a run for the push in ONE concurrency group, the
+        # later-created run cancels the earlier, and the push event was generated before the
+        # label existed, so its payload has no `ci:full`. When that run was the later one it chose
+        # the QUICK matrix, the other required contexts were never created, and the label had to
+        # be removed and added again (#3156 and #3166, 2026-11-21 and 2026-11-22; 11 of the last
+        # 100 merged pull requests carry that remove-and-re-add pair). When the live read succeeds,
+        # the surviving run computes the matrix from labels current at lookup time, including
+        # changes made while it waited for a runner. The call is one GET of the
+        # pull request, with the `pull-requests: read` this job already has; the filter prints
+        # `true` or `false`, matched case-insensitively like the expression it replaces. An error,
+        # or any other answer, falls back to the payload with a warning. If the required cells
+        # are missing after a fallback, remove and re-add `ci:full`. Only a pull
+        # request has the label: no other event makes the call. Values come in through `env:`,
+        # never into the script text. tests/test_ci_plan_live_labels.py pins it.
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          set -u
+          ci_full=false
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ "$EVENT_HAS_LABEL" = "true" ]; then
+              ci_full=true
+            fi
+            if [ -n "$PR_NUMBER" ]; then
+              if live=$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'any(.labels[]; (.name | ascii_downcase) == "ci:full")'); then
+                case "$live" in
+                  true|false) ci_full=$live ;;
+                  *) echo "::warning title=Label check::unexpected answer reading the pull request's labels; using the labels of the event" ;;
+                esac
+              else
+                echo "::warning title=Label check::could not read the pull request's labels; using the labels of the event"
+              fi
+            fi
+          fi
+          echo "ci_full=$ci_full" >> "$GITHUB_OUTPUT"
+
       - name: Choose the release, full, approval or quick matrix
         id: decide
         env:
           RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
           FULL: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.matrix != 'approval') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
-          APPROVAL: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full')) || (github.event_name == 'workflow_dispatch' && inputs.matrix == 'approval') }}
+          APPROVAL: ${{ (github.event_name == 'pull_request' && steps.labels.outputs.ci_full == 'true') || (github.event_name == 'workflow_dispatch' && inputs.matrix == 'approval') }}
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then

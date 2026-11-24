@@ -263,11 +263,16 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #                         The parameter count is read without loading weights: the
 #                         safetensors headers of a local model directory (a symlink is
 #                         refused), else the Hub's header-only metadata for a repo id (not
-#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device,
-#                         no torch, or a probe that fails or times out also gives 4bit. The
-#                         iteration's notes say which, for example "sft quantization auto:
+#                         asked when HF_HUB_OFFLINE is set), else what the Hugging Face cache
+#                         holds of the repo: its cached safetensors headers, else its cached
+#                         config.json (an estimate). So offline, a cached base is still
+#                         measured; a size in the repo name is not a count. An unknown count,
+#                         no CUDA device, no torch, or a probe that fails or times out also
+#                         gives 4bit. The iteration's notes and the train line of
+#                         progress.jsonl say which, for example "sft quantization auto:
 #                         none (need 3.0 GB, free 7.1 GB)" or "sft quantization auto: 4bit
-#                         (parameter count unknown)".
+#                         (parameter count unknown: the Hub is offline and the cache has no
+#                         config.json or weights to count)".
 # The recipe also writes data.max_length from the rows it just built, so that soup train's
 # hardware-fit gate prices the run that will happen and not 2048 tokens per row: the longest row
 # of the dataset in tokens of the BASE model's tokenizer (the chat template applied for sft), plus
@@ -920,6 +925,12 @@ factors but still applied `cᵢ` to named factors. Re-merge affected artifacts.
 **v0.71.4:** the merge verdict is now LIVE — `soup adapters merge … --canary suite.json` lifts the `MergeReport.verdict` `UNKNOWN` stub. A pre-scored `{"baseline_scores","candidate_scores"}` suite classifies the blend OK / MINOR / MAJOR with no model load; a `{"tasks":[...]}` suite uses an injectable scorer. `--strict-verdict` exits 2 on MAJOR. The backdoor-scan and license-conflict gates now run for **every** strategy, including `cmaes`. `soup adapters branch <name> --from-registry <id>` / `--attach-to-registry <id>` link training-env snapshots into the Registry lineage DAG (shown as a `branches` node in `soup history`).
 
 **v0.71.34 — task-vector arithmetic.** `soup adapters arithmetic "<expr>"` applies task arithmetic (arXiv:2212.04089) to LoRA deltas: **add** (blend two skills), **scale** (`2*coder`), and — the differentiator — **negate** (`- toxic` removes a behaviour). Names in the expression map to adapter dirs via repeatable `--adapter name=path`. The math is done at the effective-delta level: a LoRA contributes `ΔW = B·A`, so the coefficient is applied so that `ΔW` scales **linearly** (subtracting an adapter actually negates its delta — a naïve element-wise sum would scale by `c²`, making negation a no-op). Adapters must share the base model (`--allow-cross-base` to override). Mixed-rank inputs, and any run with `--rank N`, take the exact concatenation path (#305); same-rank inputs keep the element-wise path. Each input passes the v0.71.2 backdoor-scan gate (`--allow-unscanned` to skip). Output is a single loadable adapter; exit 0 = ok, 1 = refusal.
+
+The concat path folds each input's scalar decode-time scaling into its factors:
+`lora_alpha / r` for ordinary LoRA, or `lora_alpha / sqrt(r)` for rsLoRA. Ordinary and
+rsLoRA inputs can be mixed. The exported concat adapter uses unit scaling
+(`r == lora_alpha`, `use_rslora: false`) and clears inherited per-module rank/alpha
+overrides, so the template adapter cannot scale the result a second time.
 
 
 ## Soup Cans (Shareable Recipes)

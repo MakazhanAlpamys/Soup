@@ -36,6 +36,19 @@ def _manifest(path: Path, iteration_id: str, run_id: str) -> None:
     }), encoding="utf-8")
 
 
+def _stamp_oldest_first(*directories: Path) -> None:
+    """Give each directory its own mtime, two seconds apart, oldest first.
+
+    The planner ranks adapter folders by mtime. Folders created back to back can share one
+    mtime on a coarse-clock filesystem (Linux CI), so a test that depends on "newest" must
+    say which folder that is.
+    """
+    base_ns = min(path.stat().st_mtime_ns for path in directories)
+    for step, path in enumerate(directories):
+        stamp_ns = base_ns + step * 2_000_000_000
+        os.utime(path, ns=(stamp_ns, stamp_ns))
+
+
 def test_plan_keeps_runs_and_pair_refs_then_applies_only_unreferenced(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     root = tmp_path / ".soup-loops"
@@ -53,6 +66,7 @@ def test_plan_keeps_runs_and_pair_refs_then_applies_only_unreferenced(tmp_path, 
                     "dataset": {"path": f".soup-loops/pairs/{kept_pair}"}}) + "\n",
         encoding="utf-8",
     )
+    _stamp_oldest_first(root / "adapters" / "loop-train-old", root / "adapters" / "loop-train-kept")
 
     plan = build_prune_plan(keep_runs=1, keep_log_lines=1)
 
@@ -264,6 +278,35 @@ def test_canary_iteration_dict_preserves_iteration_adapter_and_sidecars(tmp_path
     assert (root / "adapters" / f"{canary_run}.recipe.json").is_file()
     assert (root / "adapters" / f"{canary_run}.train.log").is_file()
     assert (root / "verdicts" / f"{canary_run}.json").is_file()
+
+
+@pytest.mark.parametrize("listing_order", ["ascending", "descending"])
+def test_equal_mtime_adapters_are_ranked_by_name_not_listing_order(
+    tmp_path, monkeypatch, listing_order
+):
+    monkeypatch.chdir(tmp_path)
+    adapters = tmp_path / ".soup-loops" / "adapters"
+    names = ["run-a", "run-b", "run-c"]
+    for name in names:
+        (adapters / name).mkdir(parents=True, exist_ok=True)
+    tie_ns = (adapters / names[0]).stat().st_mtime_ns
+    for name in names:
+        os.utime(adapters / name, ns=(tie_ns, tie_ns))
+    real_iterdir = Path.iterdir
+
+    def iterdir(self):
+        return iter(sorted(
+            real_iterdir(self), key=lambda path: path.name,
+            reverse=listing_order == "descending",
+        ))
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+
+    paths = {entry.path for entry in build_prune_plan(keep_runs=1)}
+
+    assert ".soup-loops/adapters/run-c" not in paths
+    assert ".soup-loops/adapters/run-a" in paths
+    assert ".soup-loops/adapters/run-b" in paths
 
 
 def test_unknown_adapter_and_verdict_notes_are_kept_during_apply(tmp_path, monkeypatch):
