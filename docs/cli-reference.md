@@ -2911,7 +2911,7 @@ Usage: `soup mcp runs reconcile [OPTIONS]`
 
 ### `soup mcp serve`
 
-Start the MCP server (read-only tools by default).
+Start the MCP server (ungated tools available by default).
 
 Usage: `soup mcp serve [OPTIONS]`
 

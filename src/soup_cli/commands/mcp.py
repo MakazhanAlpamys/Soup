@@ -1,7 +1,7 @@
 """soup mcp - Model Context Protocol server (v0.71.28; network transports #296).
 
-``soup mcp serve`` exposes Soup's read-only commands (plus two plan-only
-mutating tools) to any MCP client (Claude Code / Cursor / Cline / Continue).
+``soup mcp serve`` makes the ungated tools callable by default. Separate
+startup flags enable planning and confirmed execution.
 stdio remains the default and is unchanged; ``--transport sse`` and
 ``--transport http`` add a local listener for remote or multi-client setups.
 The heavy ``mcp`` SDK is behind the ``[mcp]`` extra and imported lazily, so this
@@ -151,7 +151,7 @@ def serve(
         ),
     ),
 ) -> None:
-    """Start the MCP server (read-only tools by default).
+    """Start the MCP server (ungated tools available by default).
 
     Under the default stdio transport, stdout is the JSON-RPC channel - all
     human-facing output goes to stderr. Wire it into a client, e.g. `.mcp.json`:
