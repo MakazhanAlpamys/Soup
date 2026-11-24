@@ -1,0 +1,1 @@
+- `soup mcp serve` now annotates every tool it lists: the 14 read-only tools advertise `readOnlyHint: true` and the plan-only `train_start` / `export` advertise `readOnlyHint: false, destructiveHint: false`, so a client can tell a read tool from a plan tool in `tools/list` (before, both had no annotations), and the registry refuses to build with a tool that has none (#PRNUM)

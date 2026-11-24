@@ -20,6 +20,7 @@ import sys
 from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from soup_cli.mcp_server.execution import (
@@ -68,6 +69,82 @@ class ToolSpec:
     handler: Callable[[dict], dict]
     mutating: bool = False
     annotations: dict | None = None
+
+
+# ---------------------------------------------------------------------------
+# Tool levels -> MCP annotations. The ONE place a tool's annotation comes from.
+# ---------------------------------------------------------------------------
+
+#: Every tool the server lists is at exactly one level, and the level is the annotation.
+#: ``build_registry`` refuses a table holding a tool without one (see
+#: :func:`_require_annotated`), so a new tool cannot be listed without choosing a level.
+LEVEL_READ = "read"
+LEVEL_PLAN = "plan"
+LEVEL_EXECUTE = "execute"
+
+# MCP defines ``destructiveHint`` (and ``idempotentHint``) as meaningful only when
+# ``readOnlyHint`` is false, so the read level sets ``readOnlyHint`` alone.
+#
+# The plan level is NOT read-only, even though a plan runs nothing: under
+# ``--allow-execute`` ``train_start`` creates ``.soup/mcp-runs/<run_id>/config.yaml`` (a run
+# directory this call creates, the file opened ``O_EXCL``) and both plan tools issue a
+# one-time token. Everything they do is additive -- they never delete or overwrite -- so
+# ``destructiveHint`` is false. ``idempotentHint`` is left unset on purpose: its default
+# (false) is the true answer, since every ``train_start`` under ``--allow-execute`` makes a
+# new run directory.
+#
+# The execute level is what ``train_execute`` / ``export_execute`` always carried.
+_LEVEL_ANNOTATIONS: Mapping[str, Mapping[str, bool]] = MappingProxyType(
+    {
+        LEVEL_READ: MappingProxyType({"readOnlyHint": True}),
+        LEVEL_PLAN: MappingProxyType({"readOnlyHint": False, "destructiveHint": False}),
+        LEVEL_EXECUTE: MappingProxyType({"readOnlyHint": False, "destructiveHint": True}),
+    }
+)
+
+
+def annotations_for(level: str, *, open_world: bool | None = None) -> dict:
+    """The MCP annotations for a tool level, as a fresh dict (specs never share one).
+
+    ``open_world`` adds ``openWorldHint`` and is for a tool whose code settles it: leave
+    it ``None`` (the hint is then omitted, and MCP's own default applies) when it does not.
+    """
+    if not isinstance(level, str) or level not in _LEVEL_ANNOTATIONS:
+        raise ValueError(
+            f"unknown tool level {level!r}; accepted: " + ", ".join(sorted(_LEVEL_ANNOTATIONS))
+        )
+    annotations = dict(_LEVEL_ANNOTATIONS[level])
+    if open_world is not None:
+        annotations["openWorldHint"] = open_world
+    return annotations
+
+
+def _require_annotated(specs: Iterable[ToolSpec]) -> list[ToolSpec]:
+    """Refuse a tool table holding a tool that does not state its level.
+
+    A spec passes when its annotations carry a boolean ``readOnlyHint`` that agrees with
+    its ``mutating`` flag: ``mutating`` is what the gate reads and the hint is what a
+    client reads, and a tool must not tell the two different stories. A programming error,
+    so it raises ``ValueError`` when the table is built rather than a tool-level error.
+    """
+    checked = list(specs)
+    for spec in checked:
+        annotations = spec.annotations
+        read_only = annotations.get("readOnlyHint") if isinstance(annotations, Mapping) else None
+        if not isinstance(read_only, bool):
+            raise ValueError(
+                f"tool {spec.name!r} has no MCP annotations; give it a level with "
+                "annotations_for('read' / 'plan' / 'execute')"
+            )
+        if spec.mutating and read_only:
+            raise ValueError(
+                f"tool {spec.name!r} is gated as mutating but advertises readOnlyHint true"
+            )
+        if not spec.mutating and not read_only:
+            raise ValueError(
+                f"tool {spec.name!r} is not gated as mutating but advertises readOnlyHint false"
+            )
+    return checked
 
 
 def sanitize(obj: Any) -> Any:
@@ -904,6 +981,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_advise,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="data_inspect",
@@ -916,6 +994,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_inspect,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="data_validate",
@@ -941,6 +1020,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_validate,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="data_score",
@@ -956,6 +1036,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_score,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="data_doctor",
@@ -983,6 +1064,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_doctor,
+            annotations=annotations_for(LEVEL_READ, open_world=True),
         ),
         ToolSpec(
             name="recipes_search",
@@ -998,6 +1080,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_recipes_search,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="recipes_show",
@@ -1010,6 +1093,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_recipes_show,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="runs_list",
@@ -1021,6 +1105,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_runs_list,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="runs_show",
@@ -1033,6 +1118,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_runs_show,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="registry_list",
@@ -1050,6 +1136,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_registry_list,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="registry_show",
@@ -1062,6 +1149,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_registry_show,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="profile",
@@ -1083,6 +1171,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_profile,
+            annotations=annotations_for(LEVEL_READ, open_world=False),
         ),
         ToolSpec(
             name="diagnose_evidence",
@@ -1115,6 +1204,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_diagnose_evidence,
+            annotations=annotations_for(LEVEL_READ),
         ),
         ToolSpec(
             name="ship_evidence",
@@ -1140,6 +1230,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_ship_evidence,
+            annotations=annotations_for(LEVEL_READ),
         ),
     ]
 
@@ -1220,6 +1311,7 @@ def _mutating_specs(
             input_schema=schema,
             handler=real if allow_mutating else _refuse_mutating(name),
             mutating=True,
+            annotations=annotations_for(LEVEL_PLAN),
         )
         for name, title, description, schema, real in entries
     ]
@@ -1244,7 +1336,7 @@ def _mutating_specs(
                     else _refuse_execute(name)
                 ),
                 mutating=True,
-                annotations={"readOnlyHint": False, "destructiveHint": True},
+                annotations=annotations_for(LEVEL_EXECUTE),
             )
         )
     return specs
@@ -1259,14 +1351,20 @@ def build_registry(
     are always listed but refuse unless ``allow_mutating`` is set (and are
     plan-only even then). ``allow_execute`` gates the execution tools
     (``train_execute`` / ``export_execute``) and implies ``allow_mutating``.
+
+    Every tool in the table states its level through :func:`annotations_for`; a table
+    holding one that does not is refused with ``ValueError`` (:func:`_require_annotated`).
     """
     allow_mutating = allow_mutating or allow_execute
     if allow_execute and execution is None:
         execution = ExecutionManager()
-    return _readonly_specs() + _mutating_specs(
-        allow_mutating=allow_mutating,
-        allow_execute=allow_execute,
-        execution=execution,
+    return _require_annotated(
+        _readonly_specs()
+        + _mutating_specs(
+            allow_mutating=allow_mutating,
+            allow_execute=allow_execute,
+            execution=execution,
+        )
     )
 
 

@@ -535,6 +535,8 @@ The server exposes 14 read-only tools — `advise`, `data_inspect`,
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
 
+Every tool in `tools/list` carries an MCP annotation, so a client can tell the three levels apart without reading descriptions: the 14 read-only tools advertise `readOnlyHint: true`; `train_start` and `export` advertise `readOnlyHint: false, destructiveHint: false` (they run nothing; under `--allow-execute` `train_start` writes a new run directory under `.soup/mcp-runs/` and both issue a one-time token, and neither deletes or overwrites anything); `train_execute` and `export_execute` advertise `readOnlyHint: false, destructiveHint: true`. `data_doctor` also advertises `openWorldHint: true` (it can fetch a tokenizer from the Hub) and `profile` `openWorldHint: false` (it sends no request). These are hints for the client, not enforcement: the gates above are what refuse a call.
+
 `--allow-execute` implies `--allow-mutating` and enables full background subprocess execution via two execution tools (`train_execute` and `export_execute`). Execution requires a server-issued one-time confirmation token returned during the planning phase (`train_start` or `export`). The token state is kept in-memory with a 5-minute TTL and is consumed before subprocess invocation.
 
 **Execution Security & Boundaries:**
