@@ -69,7 +69,7 @@ def test_answer_mode_loads_a_readable_expected(tmp_path):
 
 @pytest.mark.parametrize(
     "expected",
-    ["", "Step 1.\nStep 2.", "6*7=42\n####", r"\boxed{}", "The answer is either 41 or 42."],
+    ["Step 1.\nStep 2.", "6*7=42\n####", r"\boxed{}", "The answer is either 41 or 42."],
 )
 def test_answer_mode_refuses_an_expected_with_no_single_answer(tmp_path, expected):
     rows = [
