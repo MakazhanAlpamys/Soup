@@ -231,7 +231,7 @@ def serve(
     elif allow_mutating:
         mode = "mutating tools ENABLED (plan-only)"
     else:
-        mode = "read-only"
+        mode = "ungated tools (some can write state)"
 
     if transport == _STDIO:
         console.print(

@@ -1444,7 +1444,7 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   `A-Z a-z 0-9 _ . -` and must start with a letter or digit. The file's SHA-256 is
   pinned in the ledger; if a registered file later changes, the run is refused (exit
   `3`) with a message naming the task and both hashes, because a silently swapped
-  control set would fake retention. Restore the original bytes to keep using that
+  control set would fake retention. Restore the exact original bytes to keep using that
   ledger. The same name with the same bytes is a no-op, or updates the stored path if
   you moved the file: pass `--add-task NAME=NEWPATH` (a missing control file is refused
   with exactly that hint). The file is read once and the bytes that are hashed are the
@@ -1469,12 +1469,12 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   `0`; in CI pass the flag so that cannot pass silently. Without the flag a run with no
   earlier version prints a warning that names it.
 
-**Correcting a registered control file.** If a control has a missing, null or blank
-`expected` value, fix the row or remove it. Start a fresh `--ledger NEW.json`,
-register the controls again with `--add-task`, and use `--record` to establish a
-new baseline. Leave off `--require-history` for that first record. The old ledger
-still checks every original control, so adding the corrected copy under another
-name leaves the unusable control in the old series.
+**Correcting a registered control file.** You can add a control under a new task name
+once all original controls match their registered bytes and pass validation. The ledger
+keeps checking every original control. To replace an unusable control, fix or remove
+any invalid rows, such as those with missing, null or blank `expected` values. Start
+a fresh `--ledger NEW.json`, register the controls with `--add-task`, and establish
+the first baseline with `--record` and without `--require-history`.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
 the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
