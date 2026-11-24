@@ -892,6 +892,11 @@ class NullTracker:
     def mark_running(self, run_id: str, *, pid: int) -> None:
         return None
 
+    def record_code_revision(
+        self, run_id: str, *, commit: Optional[str], dirty: Optional[bool],
+    ) -> None:
+        return None
+
     def record_training_data_hash(self, run_id: str, digest: Optional[str]) -> None:
         return None
 
@@ -905,24 +910,30 @@ class NullTracker:
         run_id: str,
         step: int,
         epoch: float = 0.0,
-        loss: Optional[float] = 0.0,
-        lr: float = 0.0,
+        loss: Optional[float] = None,
+        lr: Optional[float] = None,
         grad_norm: Optional[float] = None,
-        speed: float = 0.0,
+        speed: Optional[float] = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
         val_reward: Optional[float] = None,
+        kind: Optional[str] = None,
+        reward: Optional[float] = None,
+        reward_std: Optional[float] = None,
     ) -> None:
         return None
 
     def finish_run(
         self,
         run_id: str,
-        initial_loss: float,
-        final_loss: float,
+        initial_loss: Optional[float],
+        final_loss: Optional[float],
         total_steps: int,
         duration_secs: float,
         output_dir: str,
+        loss_summary_kind: Optional[str] = None,
+        *,
+        status: Literal["completed", "stopped"] = "completed",
     ) -> None:
         return None
 
