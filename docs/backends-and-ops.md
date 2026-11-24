@@ -1421,7 +1421,8 @@ default is unset. Settings refused at config load are not listed as doctor rows:
 their active values fail before the report can run. This report describes the
 reviewed gaps, not a guarantee that every unlisted setting is supported.
 For a combination without a reviewed table, the config check says that the
-task, backend and modality have not been reviewed for ignored settings. The
+task and backend (and the modality, when it is not text) have not been
+reviewed for ignored settings. The
 Transformers text SFT table covers 19 other-task settings, including
 `dpo_beta`, `grpo_beta`, `embedding_loss` and `reward_model`. These settings can
 load on text SFT but are used by other trainers.

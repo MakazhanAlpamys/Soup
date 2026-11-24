@@ -111,6 +111,19 @@ def test_the_waiting_list_only_shrinks(recipe_combinations):
     assert not unused, f"No shipped recipe uses these any more; drop them: {unused}"
 
 
+#: Size of the waiting list when it was written. It may only go down: a new combination is
+#: reviewed (a REGISTRY table) rather than parked here.
+_WAITING_LIST_CEILING = 15
+
+
+def test_the_waiting_list_cannot_grow():
+    assert len(NOT_YET_REVIEWED) <= _WAITING_LIST_CEILING, (
+        f"NOT_YET_REVIEWED grew to {len(NOT_YET_REVIEWED)} entries (ceiling "
+        f"{_WAITING_LIST_CEILING}): review the new combination and give it a REGISTRY table "
+        "instead of adding it to the waiting list"
+    )
+
+
 def test_the_guard_can_fail(recipe_combinations, monkeypatch):
     combo = ("sft", "transformers", "text")
     monkeypatch.delitem(REGISTRY, combo)
