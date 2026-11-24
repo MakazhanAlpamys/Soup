@@ -728,6 +728,15 @@ def _run_custom_task(
 
     if not task.tasks:
         raise ValueError(f"task '{task.name}' is type=custom but 'tasks' is missing")
+    # #3189: same containment rule as the suite file, baseline and judge
+    # prompts — a custom tasks file outside the working directory is refused
+    # here, at run time, so a value assigned after load is refused too.
+    tasks_path = Path(task.tasks)
+    if not is_under_cwd(tasks_path):
+        raise ValueError(
+            f"task '{task.name}' tasks file '{task.tasks}' "
+            "is outside cwd - refusing to load"
+        )
     tasks = load_eval_tasks(task.tasks)
     if not tasks:
         return 0.0
