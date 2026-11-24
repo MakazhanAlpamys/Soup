@@ -264,6 +264,8 @@ def test_failed_backup_cleanup_keeps_new_cache_and_reports_backup(
     assert str(backup) in result.output and "New cache is complete" in result.output
     assert _gate(tmp_path, "data.jsonl", backup)[0].to_list() == previous[0]
     assert not list(cache.parent.glob(".tmp_*"))
+    assert _invoke().exit_code == 0
+    assert _gate(tmp_path, "data.jsonl", backup)[0].to_list() == previous[0]
 
 
 def test_cleanup_does_not_touch_other_runs(tmp_path, monkeypatch, publication_case):
@@ -426,6 +428,29 @@ def test_unexpected_lock_error_preserves_cache(tmp_path, monkeypatch, publicatio
     assert isinstance(result.exception, OSError) and result.exception.errno == errno.EIO
     assert _gate(tmp_path, "data.jsonl", cache)[0].to_list() == previous[0]
     assert not list(cache.parent.glob(".tmp_*"))
+
+
+def test_nonregular_lock_descriptor_is_closed_and_cache_preserved(
+    tmp_path, monkeypatch, publication_case,
+):
+    import errno
+
+    from soup_cli.utils import paths
+
+    cache, previous = publication_case
+    reader, writer = os.pipe()
+    try:
+        with monkeypatch.context() as fault:
+            fault.setattr(paths, "open_no_follow", lambda *args, **kwargs: reader)
+            result = _invoke()
+    finally:
+        os.close(writer)
+    assert result.exit_code == 1
+    assert "lock must be a regular file" in str(result.exception)
+    with pytest.raises(OSError) as closed:
+        os.fstat(reader)
+    assert closed.value.errno == errno.EBADF
+    assert _gate(tmp_path, "data.jsonl", cache)[0].to_list() == previous[0]
 
 
 def test_keyboard_interrupt_during_install_restores_previous_cache(
