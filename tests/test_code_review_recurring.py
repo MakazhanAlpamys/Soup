@@ -77,7 +77,8 @@ def test_generate_path_within_cwd_behaviour(tmp_path, monkeypatch):
 
 
 def test_eval_v0550_escapes_dataset_error():
-    assert "escape(str(exc))" in _src("commands/_eval_v0550.py")
+    # The message is shown through a Text (never parsed as markup), control characters stripped.
+    assert '_print_error(console, "Cannot read dataset:", exc)' in _src("commands/_eval_v0550.py")
     assert 'f"[red]Cannot read dataset:[/] {exc}"' not in _src("commands/_eval_v0550.py")
 
 
