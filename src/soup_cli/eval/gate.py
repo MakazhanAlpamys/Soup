@@ -637,6 +637,7 @@ def _run_judge_task(
     validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
         for line_number, line in enumerate(fh, start=1):
+            leading_whitespace = len(line) - len(line.lstrip())
             line = line.strip()
             if not line:
                 continue
@@ -644,7 +645,9 @@ def _run_judge_task(
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(
-                    f"invalid JSONL in {task.prompts}: {exc}"
+                    f"invalid JSONL in {task.prompts} for judge task {task.name!r} at "
+                    f"line {line_number}, column {exc.colno + leading_whitespace}: "
+                    f"{exc.msg}"
                 ) from exc
             if not isinstance(row, dict):
                 raise ValueError(

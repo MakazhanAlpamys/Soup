@@ -182,6 +182,46 @@ def test_valid_row_before_bad_row_does_not_forward_bad_value(calls: dict[str, li
     assert calls == {"generate": [], "judge": []}
 
 
+def test_invalid_json_reports_physical_line_and_column_before_generation(
+    calls: dict[str, list],
+) -> None:
+    Path("prompts.jsonl").write_text(
+        '{"prompt":"valid"}\n\n\n  {"prompt": }\n', encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(
+            task(), lambda prompt: calls["generate"].append(prompt) or "synthetic",
+        )
+
+    assert str(caught.value) == (
+        "invalid JSONL in prompts.jsonl for judge task 'judge-control' at "
+        "line 4, column 14: Expecting value"
+    )
+    assert calls == {"generate": [], "judge": []}
+
+
+def test_cli_reports_json_syntax_position_and_exits_two(
+    calls: dict[str, list],
+) -> None:
+    Path("prompts.jsonl").write_text(
+        '{"prompt":"valid"}\n\n\n  {"prompt": }\n', encoding="utf-8",
+    )
+    write_suite()
+
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", "gate.yaml", "--model", "synthetic",
+    ])
+    output = " ".join(strip_ansi(result.output).split())
+
+    assert result.exit_code == 2, (output, repr(result.exception))
+    assert (
+        "invalid JSONL in prompts.jsonl for judge task 'judge-control' at line 4, "
+        "column 14: Expecting value"
+    ) in output
+    assert calls == {"generate": [], "judge": []}
+
+
 def test_bad_row_at_end_of_longer_file_makes_zero_generations(calls: dict[str, list]) -> None:
     lines = [f'{{"prompt":"valid_{i}"}}' for i in range(20)]
     lines.append('{"prompt":17}')
