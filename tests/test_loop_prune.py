@@ -43,11 +43,6 @@ def test_plan_keeps_runs_and_pair_refs_then_applies_only_unreferenced(tmp_path, 
     _manifest(root, "iter-20261117T120000-00000002", "loop-train-old")
     (root / "adapters" / "loop-train-old").mkdir(parents=True)
     (root / "adapters" / "loop-train-kept").mkdir()
-    old_adapter = root / "adapters" / "loop-train-old"
-    kept_adapter = root / "adapters" / "loop-train-kept"
-    old_mtime_ns = old_adapter.stat().st_mtime_ns
-    os.utime(kept_adapter, ns=(old_mtime_ns + 2_000_000_000,
-                              old_mtime_ns + 2_000_000_000))
     (root / "pairs").mkdir()
     kept_pair = "pairs-a.jsonl"
     removed_pair = "pairs-b.jsonl"
