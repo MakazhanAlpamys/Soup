@@ -23,6 +23,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
+from soup_cli import __version__
 from soup_cli.mcp_server.execution import (
     ExecutionError,
     ExecutionManager,
@@ -85,6 +86,8 @@ LEVEL_READ = "read"
 LEVEL_PLAN = "plan"
 LEVEL_EXECUTE = "execute"
 LEVELS = (LEVEL_READ, LEVEL_PLAN, LEVEL_EXECUTE)
+ENGINE_DESCRIBE = "soup.engine.describe"
+TOOL_CONTRACT_VERSION = 1
 
 # ANNOTATIONS are MCP hints about side effects, with MCP's meaning: ``readOnlyHint`` true
 # is a promise that the tool does not modify its environment, so it is set only for a tool
@@ -1427,8 +1430,47 @@ def _mutating_specs(
     return specs
 
 
+def _engine_describe_spec(
+    specs: Iterable[ToolSpec], *, allow_mutating: bool, allow_execute: bool, transport: str | None,
+) -> ToolSpec:
+    enabled: dict[str | None, bool] = {
+        LEVEL_READ: True,
+        LEVEL_PLAN: allow_mutating,
+        LEVEL_EXECUTE: allow_execute,
+    }
+    entries = [(spec.name, spec.level) for spec in specs if enabled.get(spec.level, False)]
+    entries.append((ENGINE_DESCRIBE, LEVEL_READ))
+    tools = tuple(sorted(entries))
+
+    def describe(arguments: dict) -> dict:
+        if not isinstance(arguments, dict) or arguments:
+            raise McpToolError("soup.engine.invalid_arguments: expected an empty object.")
+        result = {
+            "contract_version": TOOL_CONTRACT_VERSION,
+            "soup_version": __version__,
+            "gates": {"mutating": allow_mutating, "execute": allow_execute},
+            "tools": [{"name": name, "level": level} for name, level in tools],
+        }
+        if transport is not None:
+            result["transport"] = transport
+        return result
+
+    return ToolSpec(
+        name=ENGINE_DESCRIBE,
+        title="Describe Soup engine",
+        description="Report Soup's tool contract, effective startup gates and enabled tools.",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        handler=describe,
+        **level_fields(LEVEL_READ),
+    )
+
+
 def build_registry(
-    *, allow_mutating: bool, allow_execute: bool = False, execution: ExecutionManager | None = None
+    *,
+    allow_mutating: bool,
+    allow_execute: bool = False,
+    execution: ExecutionManager | None = None,
+    transport: str | None = None,
 ) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
@@ -1442,17 +1484,18 @@ def build_registry(
     :func:`level_fields`; a table holding one that does not is refused with ``ValueError``
     (:func:`_require_level_and_hints`).
     """
+    if transport not in (None, "stdio", "sse", "http"):
+        raise ValueError("Expected a supported MCP transport.")
     allow_mutating = allow_mutating or allow_execute
     if allow_execute and execution is None:
         execution = ExecutionManager()
-    return _require_level_and_hints(
-        _readonly_specs()
-        + _mutating_specs(
-            allow_mutating=allow_mutating,
-            allow_execute=allow_execute,
-            execution=execution,
-        )
+    specs = _readonly_specs() + _mutating_specs(
+        allow_mutating=allow_mutating, allow_execute=allow_execute, execution=execution,
     )
+    specs.append(_engine_describe_spec(
+        specs, allow_mutating=allow_mutating, allow_execute=allow_execute, transport=transport,
+    ))
+    return _require_level_and_hints(specs)
 
 
 def call_tool(
@@ -1514,7 +1557,10 @@ def call_tool(
         # stdout. Serialization stays inside the try in the server so a
         # non-serializable result also becomes a sanitized error.
         with redirect_stdout(sys.stderr):
-            result = spec.handler(arguments or {})
+            if name == ENGINE_DESCRIBE:
+                result = spec.handler({} if arguments is None else arguments)
+            else:
+                result = spec.handler(arguments or {})
         return sanitize(result)
     except McpToolError as exc:
         # sanitize the message too, so the C0/ESC guarantee is structural rather than a
