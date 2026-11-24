@@ -705,9 +705,11 @@ For replicated DDP with a PEFT policy, RL checkpoint callbacks share rank 0's sa
 and retained checkpoint steps. With `pid_lagrangian`, each rank computes its vote using its
 own detector history, smoothing windows and drift guard. The maximum finite vote drives
 one PID decision on rank 0; every rank receives the controller state, rollback target,
-counters and stop decision and applies the coefficient to its own trainer. Missing or
-non-finite vote inputs stop all ranks. The elevated PID beta and integral are retained
-after rollback.
+counters and stop decision and applies the coefficient to its own trainer. A detector that
+deliberately returns `None` contributes a healthy `0.0` signal, as in a single-process run;
+this includes InfoRM steps with too few scores or a two-valued 0/1 reward. Missing buffers,
+genuinely absent vote inputs and non-finite votes stop the run on all ranks. The elevated
+PID beta and integral are retained after rollback.
 
 Recovery requires the policy adapter on every rank and the optimizer state when the
 manifest declares it present and optimizer recovery is enabled. A declared adapter-only

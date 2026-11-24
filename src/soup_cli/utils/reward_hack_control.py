@@ -1168,8 +1168,6 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
             if self.buffer is None or self.log_writer is None or self.pid is None:
                 raise ValueError("missing PID callback inputs")
             telemetry, signals = self._observe(self.buffer.snapshot(), step)
-            if "raw_signal" in telemetry and telemetry["raw_signal"] is None:
-                signals.pop(self.detector, None)
             for name in self.signals:
                 if name not in signals:
                     raise ValueError(f"missing vote signal {name}")

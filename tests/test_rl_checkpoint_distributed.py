@@ -121,10 +121,11 @@ def _worker(rank, directory, case):
         state = SimpleNamespace(global_step=1)
         control = TrainerControl()
         controller._observe = lambda snapshot, step: ({}, {"info_rm": 0.0})
-        if case == "real_detector":
+        if case in {"real_detector", "binary_reward"}:
             del controller._observe
             controller.buffer.snapshot = lambda: {
-                "rewards": [0.0, 0.05, 0.95, 1.0], "completions": ["a", "b", "c", "d"]
+                "rewards": ([0.0, 0.05, 0.95, 1.0] if case == "real_detector" else [0, 0, 1, 1]),
+                "completions": ["a", "b", "c", "d"]
             }
         if case in {"fsdp", "deepspeed"}:
             with patch.object(distributed, "all_gather", side_effect=AssertionError("collective")):
@@ -166,6 +167,27 @@ def _worker(rank, directory, case):
             return
         assert checkpoint._saved == [1], "every rank must learn the committed step"
         assert controller._last_good_step == 1
+        if case == "binary_reward":
+            before = copy.deepcopy(model.state_dict())
+            wrapped = DistributedDataParallel(model)
+            tokens = torch.tensor([[1, 2, 3]])
+            for step in range(2, 5):
+                optimizer.zero_grad()
+                loss = wrapped(input_ids=tokens, labels=tokens).loss
+                assert torch.isfinite(loss)
+                loss.backward()
+                optimizer.step()
+                state.global_step = step
+                handler.on_step_end(trainer.args, state, control)
+                assert not control.should_training_stop
+                assert controller._state.step == step
+                assert controller._state.last_signal == 0.0
+                assert controller._state.recovery_attempts == controller._hack_streak == 0
+                assert controller._last_good_step == step
+            assert not _same(before, model.state_dict())
+            torch.save({"model": model.state_dict(), "state": vars(controller._state)},
+                       f"rank-{rank}.pt")
+            return
         if case in {"prune", "pruned_target"}:
             state.global_step = 2
             handler.on_step_end(trainer.args, state, control)
@@ -181,7 +203,8 @@ def _worker(rank, directory, case):
             for moments in optimizer.state.values():
                 moments["exp_avg"].add_(3)
         optimizer.param_groups[0]["lr"] = 0.9
-        vote = 0.0 if case in {"unequal_grpo", "unequal_ppo"} and rank == 0 else 1.0
+        vote = 0.0 if ((case in {"unequal_grpo", "unequal_ppo"} and rank == 0)
+                       or (case == "silent_peer" and rank == 1)) else 1.0
         if case == "nan" and rank == 1:
             vote = float("nan")
         if case == "nan_root" and rank == 0:
@@ -197,7 +220,7 @@ def _worker(rank, directory, case):
             }
         if case == "invalid_computed_vote" and rank == 1:
             controller._compute_vote = lambda signals: float("nan")
-        if case == "raw_missing" and rank == 1:
+        if case == "silent_peer" and rank == 1:
             controller._observe = lambda snapshot, step: ({"raw_signal": None}, signals)
         if case == "missing_buffer" and rank == 1:
             controller.buffer = None
@@ -279,7 +302,7 @@ def _worker(rank, directory, case):
         handler.on_step_end(trainer.args, state, control)
         failure_cases = {
             "nan", "nan_root", "infinite", "invalid_computed_vote", "missing_signal",
-            "raw_missing", "missing_buffer", "manifest_disagreement",
+            "missing_buffer", "manifest_disagreement",
             "prepare_error", "missing_manifest", "include_off_manifest", "missing_optimizer",
             "corrupt_manifest", "manifest_invisible", "manifest_unreadable", "optimizer_only",
             "corrupt_optimizer", "adapter_missing_key", "optimizer_only_outcome",
@@ -366,7 +389,7 @@ def _run_workers(tmp_path, case):
 
 
 @pytest.mark.parametrize("case", ["restore", "unequal_grpo", "unequal_ppo", "mock_flags",
-                                 "prune", "adapter_only", "real_detector"])
+                                 "prune", "adapter_only", "real_detector", "silent_peer"])
 def test_both_ranks_restore_and_make_the_same_next_update(tmp_path, case):
     import torch
 
@@ -377,7 +400,7 @@ def test_both_ranks_restore_and_make_the_same_next_update(tmp_path, case):
 
 
 @pytest.mark.parametrize("case", [
-    "nan", "nan_root", "infinite", "invalid_computed_vote", "missing_signal", "raw_missing",
+    "nan", "nan_root", "infinite", "invalid_computed_vote", "missing_signal",
     "missing_buffer", "prepare_error", "manifest_disagreement",
     "missing_manifest", "include_off_manifest", "missing_optimizer", "corrupt_manifest",
     "manifest_invisible", "manifest_unreadable", "optimizer_only", "asymmetric_adapter",
@@ -404,6 +427,15 @@ def test_mismatched_exchange_fails_loudly_on_every_rank(tmp_path, case):
                                  "fsdp", "deepspeed", "hard_exit"])
 def test_control_paths_and_process_loss_terminate_within_deadline(tmp_path, case):
     _run_workers(tmp_path, case)
+
+
+def test_two_valued_rewards_keep_real_detector_and_ddp_training_running(tmp_path):
+    import torch
+
+    _run_workers(tmp_path, "binary_reward")
+    first, second = [torch.load(tmp_path / f"rank-{rank}.pt", weights_only=True)
+                     for rank in range(2)]
+    assert _same(first, second)
 
 
 @pytest.mark.parametrize("environment_rank", [None, "1"])
