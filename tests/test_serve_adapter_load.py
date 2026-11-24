@@ -19,7 +19,9 @@ import logging
 import os
 import re
 import threading
+from builtins import BaseExceptionGroup
 from contextlib import contextmanager
+from queue import Queue
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -699,6 +701,722 @@ def test_sixteen_runtime_adapters_load_and_the_seventeenth_evicts_the_oldest(roo
     listed = served.listed()
     assert "v16" in listed and "v0" not in listed
     assert len(listed) == 17  # chat + 16
+
+
+@pytest.mark.parametrize("pressure", [False, True], ids=["control", "eviction"])
+@pytest.mark.parametrize(
+    "mode", ["chat", "tokens", "buffered", "messages", "messages-tokens", "messages-buffered"]
+)
+def test_a_queued_selection_keeps_its_adapter_and_jsonl_identity(
+    root, loader, seen, monkeypatch, pressure, mode
+):
+    from soup_cli.monitoring.trace_logger import TraceLogWriter
+
+    monkeypatch.chdir(root.parent)
+    trace = root.parent / "trace.jsonl"
+    served = _serve(root, trace_log_writer=TraceLogWriter(str(trace)))
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    if mode.startswith("messages"):
+        assert served.client.post("/v1/adapters/activate/v0", headers=AUTH).status_code == 200
+    if "tokens" in mode:
+        serve_cmd._reply_streamer_class()
+        monkeypatch.setattr(serve_cmd, "_can_stream", lambda model: True)
+    elif "buffered" in mode:
+        monkeypatch.setattr(serve_cmd, "_can_stream", lambda model: False)
+    record_generation = serve_cmd._generate_response
+
+    def generate(model, *args, streamer=None, **kwargs):
+        result = record_generation(model, *args, **kwargs)
+        if streamer is not None:
+            streamer.on_finalized_text("ok", stream_end=True)
+        return result
+
+    monkeypatch.setattr(serve_cmd, "_generate_response", generate)
+    selected = threading.Event()
+    release = threading.Event()
+    original = serve_cmd._adapter_scope
+
+    def pause(*args, **kwargs):
+        selected.set()
+        assert release.wait(10), "queued selection was not released"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", pause)
+    responses = []
+
+    def chat():
+        if mode.startswith("messages"):
+            return served.client.post("/v1/messages", json={
+                "model": "test", "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 8, "stream": mode != "messages",
+            })
+        return served.chat(adapter="v0", stream=mode != "chat")
+
+    request = threading.Thread(target=lambda: responses.append(chat()))
+    request.start()
+    try:
+        assert selected.wait(10), "request did not select its adapter"
+        if mode.startswith("messages"):
+            assert served.client.post("/v1/adapters/deactivate", headers=AUTH).status_code == 200
+        if pressure:
+            loaded = served.load("v16", _adapter(root, "d16"))
+            assert loaded.status_code == 200, loaded.text
+    finally:
+        release.set()
+        request.join(10)
+    assert not request.is_alive()
+    assert responses[0].status_code == 200, responses[0].text
+    assert [name for _, name in seen] == ["v0"]
+    assert json.loads(trace.read_text(encoding="utf-8"))["adapter"] == "v0"
+    assert loader.returned.deleted == (["v1"] if pressure else [])
+
+
+@pytest.mark.parametrize("spec_version", ["2.0", "2.4"])
+@pytest.mark.parametrize(
+    "stage", [
+        "uniterated", "pending-worker", "never-started", "selected-before-generate",
+        "draining", "send-error",
+    ]
+)
+def test_http_disconnect_releases_only_the_response_owned_reservation(
+    root, loader, monkeypatch, reservations, spec_version, stage
+):
+    import anyio
+
+    from soup_cli.monitoring.trace_logger import TraceLogWriter
+
+    monkeypatch.chdir(root.parent)
+    trace = root.parent / "trace.jsonl"
+    served = _serve(root, trace_log_writer=TraceLogWriter(str(trace)))
+    assert served.load("v0", _adapter(root, "d0")).status_code == 200
+    serve_cmd._reply_streamer_class()
+    monkeypatch.setattr(serve_cmd, "_can_stream", lambda model: True)
+    disconnect = threading.Event()
+    release = threading.Event()
+    worker_done = threading.Event()
+    observed = []
+    generation = serve_cmd._AdapterReservation.generation
+    start_generation = serve_cmd._AdapterReservation.start_generation
+    start = threading.Thread.start
+    workers = []
+
+    @contextmanager
+    def delayed_generation(self):
+        try:
+            if stage == "pending-worker":
+                disconnect.set()
+                assert release.wait(10)
+            with generation(self):
+                yield
+        finally:
+            worker_done.set()
+
+    def start_worker(self):
+        if self.name == serve_cmd._STREAM_WORKER_NAME:
+            workers.append(self)
+            if stage == "never-started":
+                disconnect.set()
+                return
+        start(self)
+
+    def pause_before_generation(self):
+        if stage == "selected-before-generate":
+            disconnect.set()
+            assert release.wait(10)
+        start_generation(self)
+
+    def generate(model, *args, streamer=None, stop_event=None, **kwargs):
+        observed.append(model.current)
+        streamer.on_finalized_text("ok")
+        assert stop_event.wait(10), "disconnect did not stop generation"
+        assert release.wait(10), "test did not let the current token finish"
+        return "ok", 1, 1, "stop"
+
+    monkeypatch.setattr(serve_cmd._AdapterReservation, "generation", delayed_generation)
+    monkeypatch.setattr(serve_cmd._AdapterReservation, "start_generation", pause_before_generation)
+    monkeypatch.setattr(threading.Thread, "start", start_worker)
+    monkeypatch.setattr(serve_cmd, "_generate_response", generate)
+    application = served.client.app
+    bodies = []
+    stream_response = serve_cmd._stream_response
+
+    def retain_body(*args, **kwargs):
+        body = stream_response(*args, **kwargs)
+        bodies.append(body)
+        return body
+
+    monkeypatch.setattr(serve_cmd, "_stream_response", retain_body)
+
+    async def disconnecting_client(scope, receive, send):
+        scope = {**scope, "asgi": {"version": "3.0", "spec_version": spec_version}}
+        request_received = False
+        completed = False
+        delivered = anyio.Event()
+
+        async def receive_disconnect():
+            nonlocal request_received
+            if not request_received:
+                request_received = True
+                return await receive()
+            assert await anyio.to_thread.run_sync(lambda: disconnect.wait(10))
+            delivered.set()
+            return {"type": "http.disconnect"}
+
+        async def observe_send(message):
+            nonlocal completed
+            if message.get("body") and stage == "send-error":
+                disconnect.set()
+                raise OSError("client socket closed")
+            await send(message)
+            if message["type"] == "http.response.start" and stage == "uniterated":
+                disconnect.set()
+                # Let the receive task cancel before Starlette asks for the body.
+                await delivered.wait()
+            if message["type"] == "http.response.body":
+                if message.get("body") and stage == "draining":
+                    disconnect.set()
+                completed = not message.get("more_body", False)
+
+        if stage == "send-error":
+            try:
+                await application(scope, receive_disconnect, observe_send)
+            except OSError as exc:
+                assert str(exc) == "client socket closed"
+            except BaseExceptionGroup as exc:
+                assert all(isinstance(error, OSError) for error in exc.exceptions)
+        else:
+            await application(scope, receive_disconnect, observe_send)
+        # TestClient buffers responses; finish its transport after the simulated disconnect.
+        if not completed:
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    responses = []
+    errors = []
+    finished = threading.Event()
+
+    def request():
+        try:
+            responses.append(TestClient(disconnecting_client).post("/v1/chat/completions", json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "adapter": "v0", "stream": True,
+            }))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    chat = threading.Thread(target=request)
+    chat.start()
+    try:
+        assert disconnect.wait(10), "test never reached the disconnect boundary"
+        assert finished.wait(2), "disconnect waited for the delayed generation worker"
+        assert errors == []
+        response = responses[0]
+        assert response.status_code == 200
+        assert bodies[0].gi_frame is None, "response left its body open until garbage collection"
+        reservation = reservations[0]
+        if stage in {"draining", "send-error", "selected-before-generate"}:
+            assert reservation._counts == {"v0": 1}
+            assert not worker_done.is_set()
+            if stage == "selected-before-generate":
+                assert observed == []
+                assert not trace.exists()
+            else:
+                record = json.loads(trace.read_text(encoding="utf-8"))
+                assert record["adapter"] == "v0"
+                assert record["response"] == "ok"
+                assert record["finish_reason"] == "client_disconnected"
+        else:
+            assert reservation._counts == {}
+            assert observed == []
+            assert not trace.exists()
+    finally:
+        release.set()
+        chat.join(10)
+        for worker in workers:
+            if worker.ident is None:
+                start(worker)  # A late start must be refused after pending cleanup.
+            worker.join(10)
+    assert all(not worker.is_alive() for worker in workers)
+    assert not chat.is_alive()
+    assert reservations[0]._counts == {}
+    assert observed == (["v0"] if stage in {"draining", "send-error"} else [])
+    assert reservations[0]._wakeup is None
+
+
+def test_a_disconnect_before_queue_registration_wakes_a_never_started_worker(monkeypatch):
+    serve_cmd._reply_streamer_class()
+    reservation = serve_cmd._AdapterReservation(
+        "v0", threading.Lock(), {}, {"v0": "unused"}, {"v0"}, pinned=True,
+    )
+    reservation.disconnect()
+    original = threading.Thread.start
+
+    def never_start(self):
+        if self.name != serve_cmd._STREAM_WORKER_NAME:
+            original(self)
+
+    monkeypatch.setattr(threading.Thread, "start", never_start)
+    finished = threading.Event()
+    errors = []
+
+    def consume():
+        try:
+            next(serve_cmd._iter_generated_text(
+                object(), lambda **kwargs: pytest.fail("cancelled work ran"), {},
+                reservation.stop_event, reservation=reservation,
+            ))
+        except serve_cmd._StreamDisconnectedError:
+            pass
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    caller = threading.Thread(target=consume)
+    caller.start()
+    try:
+        assert finished.wait(2), "queue registration lost an earlier disconnect"
+    finally:
+        if reservation._wakeup is not None:
+            reservation._wakeup()
+        caller.join(10)
+    assert not caller.is_alive()
+    assert errors == []
+    assert reservation._counts == {}
+    assert reservation._wakeup is None
+
+
+@pytest.fixture
+def reservations(monkeypatch):
+    captured = []
+    original = serve_cmd._AdapterReservation.__init__
+
+    def capture(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        captured.append(self)
+
+    monkeypatch.setattr(serve_cmd._AdapterReservation, "__init__", capture)
+    return captured
+
+
+@pytest.mark.parametrize(
+    "selection,expected",
+    [
+        ("explicit", "v0"), ("active", "v0"), ("public-empty", "v0"),
+        ("canary", "v0"), ("stable-runtime", "v0"),
+        ("base", None), ("stable-base", None), ("startup", "startup"),
+        ("unrelated", "v1"),
+    ],
+)
+def test_reservations_freeze_the_whole_selection_range(
+    root, loader, seen, monkeypatch, reservations, selection, expected
+):
+    from soup_cli.monitoring.trace_logger import TraceLogWriter
+    from soup_cli.utils.canary_router import CanaryPolicy, route
+
+    monkeypatch.chdir(root.parent)
+    trace = root.parent / "trace.jsonl"
+    state_path = _loop_state(root)
+    served = _serve(
+        root, startup=["startup"], canary_state_path=state_path,
+        trace_log_writer=TraceLogWriter(str(trace)),
+    )
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    extra = {}
+    if selection in {"active", "public-empty", "stable-base"}:
+        assert served.client.post("/v1/adapters/activate/v0", headers=AUTH).status_code == 200
+    if selection in {"explicit", "unrelated", "startup"}:
+        extra["adapter"] = expected
+    elif selection == "public-empty":
+        extra["adapter"] = ""
+    elif selection in {"canary", "stable-base", "stable-runtime"}:
+        stable = "v0" if selection == "stable-runtime" else "base"
+        candidate = "v1" if selection == "stable-runtime" else "v0"
+        _loop_state(
+            root, production_name=stable, canary_active=candidate,
+            canary_traffic_pct=50.0, canary_rollout_id="first",
+        )
+        policy = CanaryPolicy(stable=stable, canary=candidate, traffic_pct=50.0)
+        bucket = "canary" if selection == "canary" else "stable"
+        extra["conversation_id"] = next(
+            f"key-{index}" for index in range(100)
+            if route(policy, f"key-{index}").bucket == bucket
+        )
+    selected = threading.Event()
+    release = threading.Event()
+    original = serve_cmd._adapter_scope
+
+    def pause(*args, **kwargs):
+        selected.set()
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", pause)
+    responses = []
+    request = threading.Thread(target=lambda: responses.append(served.chat(**extra)))
+    request.start()
+    try:
+        assert selected.wait(10)
+        pinned = expected if expected and expected.startswith("v") else None
+        assert reservations[-1]._counts == ({pinned: 1} if pinned else {})
+        assert served.client.post("/v1/adapters/activate/startup", headers=AUTH).status_code == 200
+        _loop_state(root, canary_active="v15", canary_traffic_pct=50.0, canary_rollout_id="next")
+        assert served.load("v16", _adapter(root, "d16")).status_code == 200
+    finally:
+        release.set()
+        request.join(10)
+        served.client.app.state.canary_outcomes.close()
+    assert not request.is_alive()
+    assert responses[0].status_code == 200, responses[0].text
+    assert [name for _, name in seen] == [expected]
+    record = json.loads(trace.read_text(encoding="utf-8"))
+    assert record["adapter"] == expected
+    assert reservations[-1]._counts == {}
+    assert loader.returned.deleted == (["v1"] if pinned == "v0" else ["v0"])
+
+
+@pytest.mark.parametrize("missing", ["adapter_map", "peft_names"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_registry_mismatch_is_refused_before_headers(
+    root, loader, seen, monkeypatch, missing, stream
+):
+    served = _serve(root, startup=["startup"])
+    assert served.load("v0", _adapter(root, "d0")).status_code == 200
+    if missing == "peft_names":
+        served.peft_names.remove("v0")
+    else:
+        served.adapter_map.pop("v0")
+    response = served.chat(adapter="v0", stream=stream)
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": serve_cmd._ADAPTER_UNAVAILABLE}
+    assert seen == []
+
+
+@pytest.mark.parametrize("reserved_count", [15, 16])
+def test_the_runtime_cap_excludes_every_queued_reservation(
+    root, loader, seen, monkeypatch, reservations, reserved_count
+):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    admitted = Queue()
+    release = threading.Event()
+    original = serve_cmd._adapter_scope
+
+    def pause(*args, **kwargs):
+        admitted.put(True)
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", pause)
+    responses = []
+    requests = [threading.Thread(
+        target=lambda index=index: responses.append(served.chat(adapter=f"v{index}"))
+    ) for index in range(reserved_count)]
+    try:
+        for request in requests:
+            request.start()
+        for _ in requests:
+            admitted.get(timeout=10)
+        assert reservations[0]._counts == {f"v{index}": 1 for index in range(reserved_count)}
+        loaded = served.load("v16", _adapter(root, "d16"))
+        if reserved_count == 16:
+            assert loaded.status_code == 409, loaded.text
+            assert "reserved by queued/running requests" in loaded.json()["detail"]
+            assert loader.returned.deleted == []
+        else:
+            assert loaded.status_code == 200, loaded.text
+            assert loader.returned.deleted == ["v15"]
+    finally:
+        release.set()
+        for request in requests:
+            request.join(10)
+    assert all(not request.is_alive() for request in requests)
+    assert len(responses) == reserved_count
+    assert all(response.status_code == 200 for response in responses)
+    assert len(seen) == reserved_count
+    assert reservations[0]._counts == {}
+
+
+def test_two_queued_requests_release_one_pin_each(root, loader, seen, monkeypatch, reservations):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    admitted = Queue()
+    gates = [threading.Event(), threading.Event()]
+    gate_iterator = iter(gates)
+    original = serve_cmd._adapter_scope
+
+    def pause(*args, **kwargs):
+        gate = next(gate_iterator)
+        admitted.put(True)
+        assert gate.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", pause)
+    responses = []
+    first = threading.Thread(target=lambda: responses.append(served.chat(adapter="v0")))
+    second = threading.Thread(target=lambda: responses.append(served.chat(adapter="v0")))
+    first.start()
+    try:
+        admitted.get(timeout=10)
+        second.start()
+        admitted.get(timeout=10)
+        assert reservations[0]._counts == {"v0": 2}
+        gates[0].set()
+        first.join(10)
+        assert not first.is_alive()
+        assert reservations[0]._counts == {"v0": 1}
+        assert served.load("v16", _adapter(root, "d16")).status_code == 200
+        assert loader.returned.deleted == ["v1"]
+    finally:
+        for gate in gates:
+            gate.set()
+        first.join(10)
+        if second.ident is not None:
+            second.join(10)
+    assert not second.is_alive()
+    assert reservations[0]._counts == {}
+    assert all(response.status_code == 200 for response in responses)
+    assert [name for _, name in seen] == ["v0", "v0"]
+    assert served.load("v17", _adapter(root, "d17")).status_code == 200
+    assert loader.returned.deleted == ["v1", "v0"]
+
+
+@pytest.mark.parametrize("stage", ["before-delete", "after-delete"])
+def test_activation_waits_for_eviction_and_refuses_a_deleted_name(root, loader, seen, stage):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    deleting = threading.Event()
+    release = threading.Event()
+    activating = threading.Event()
+    activated = threading.Event()
+    original_delete = loader.returned.delete_adapter
+    activation_route = next(
+        route for route in served.client.app.routes if route.path == "/v1/adapters/activate/{name}"
+    )
+    endpoint = activation_route.dependant.call
+
+    def activate(**kwargs):
+        activating.set()
+        try:
+            return endpoint(**kwargs)
+        finally:
+            activated.set()
+
+    def delete(name):
+        assert name == "v0"
+        if stage == "after-delete":
+            original_delete(name)
+        deleting.set()
+        assert release.wait(10)
+        if stage == "before-delete":
+            original_delete(name)
+
+    activation_route.dependant.call = activate
+    loader.returned.delete_adapter = delete
+    responses = {}
+    path = _adapter(root, "d16")
+    load = threading.Thread(target=lambda: responses.update(load=served.load("v16", path)))
+    activation = threading.Thread(target=lambda: responses.update(activation=served.client.post(
+        "/v1/adapters/activate/v0", headers=AUTH,
+    )))
+    load.start()
+    try:
+        assert deleting.wait(10)
+        activation.start()
+        assert activating.wait(10)
+        assert not activated.wait(0.1), "activation read the victim before eviction committed"
+    finally:
+        release.set()
+        load.join(10)
+        if activation.ident is not None:
+            activation.join(10)
+    assert not load.is_alive() and not activation.is_alive()
+    assert responses["load"].status_code == 200
+    assert responses["activation"].status_code == 404
+    assert served.client.get("/v1/adapters", headers=AUTH).json()["active"] is None
+    assert served.chat().status_code == 200
+    assert seen[-1][1] is None
+
+
+def test_activation_before_eviction_protects_the_new_active_name(root, loader):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    assert served.client.post("/v1/adapters/activate/v0", headers=AUTH).status_code == 200
+    assert served.load("v16", _adapter(root, "d16")).status_code == 200
+    assert loader.returned.deleted == ["v1"]
+
+
+def test_two_loads_and_two_queued_requests_finish_within_the_deadline(
+    root, loader, seen, monkeypatch, reservations
+):
+    import time
+
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    admitted = Queue()
+    release = threading.Event()
+    original = serve_cmd._adapter_scope
+
+    def pause(*args, **kwargs):
+        admitted.put(True)
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", pause)
+    responses = []
+    threads = [threading.Thread(
+        target=lambda index=index: responses.append(served.chat(adapter=f"v{index}"))
+    ) for index in range(2)]
+    paths = [_adapter(root, "d16"), _adapter(root, "d17")]
+    loads = [threading.Thread(
+        target=lambda index=index: responses.append(served.load(f"v{16 + index}", paths[index]))
+    ) for index in range(2)]
+    deadline = time.monotonic() + 10
+    try:
+        for request in threads:
+            request.start()
+        for _ in threads:
+            admitted.get(timeout=max(0, deadline - time.monotonic()))
+        for load in loads:
+            load.start()
+        for load in loads:
+            load.join(max(0, deadline - time.monotonic()))
+        assert all(not load.is_alive() for load in loads)
+        assert loader.returned.deleted == ["v2", "v3"]
+    finally:
+        release.set()
+        for thread in threads + loads:
+            if thread.ident is not None:
+                thread.join(max(0, deadline - time.monotonic()))
+    assert all(not thread.is_alive() for thread in threads + loads)
+    assert len(responses) == 4 and all(response.status_code == 200 for response in responses)
+    assert sorted(name for _, name in seen) == ["v0", "v1"]
+    assert reservations[0]._counts == {}
+
+
+@pytest.mark.parametrize("failure", ["response-construction", "thread-start", "worker", "plain"])
+def test_failures_release_admitted_runtime_reservations(
+    root, loader, monkeypatch, reservations, failure
+):
+    from soup_cli.utils import structured_output
+
+    served = _serve(root)
+    assert served.load("v0", _adapter(root, "d0")).status_code == 200
+    serve_cmd._reply_streamer_class()
+    monkeypatch.setattr(serve_cmd, "_can_stream", lambda model: True)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("controlled failure")
+
+    if failure == "response-construction":
+        # Processor construction is inside the same response-construction cleanup guard.
+        monkeypatch.setattr(structured_output, "build_logits_processors", fail)
+    elif failure == "thread-start":
+        original = threading.Thread.start
+
+        def fail_worker(self):
+            if self.name == serve_cmd._STREAM_WORKER_NAME:
+                fail()
+            original(self)
+
+        monkeypatch.setattr(threading.Thread, "start", fail_worker)
+    else:
+        monkeypatch.setattr(serve_cmd, "_generate_response", fail)
+    if failure == "response-construction":
+        with pytest.raises(RuntimeError, match="controlled failure"):
+            served.chat(adapter="v0", stream=True)
+    else:
+        response = served.chat(adapter="v0", stream=failure != "plain")
+        assert response.status_code == (500 if failure == "plain" else 200)
+    assert reservations[0]._counts == {}
+    assert reservations[0]._state == "released"
+    assert reservations[0]._wakeup is None
+    reservations[0].cancel_pending()
+    reservations[0].cancel_pending()
+    assert reservations[0]._counts == {}
+    with pytest.raises(serve_cmd._AdapterUnavailableError, match="retry with a loaded adapter"):
+        with reservations[0].generation():
+            pytest.fail("released work claimed generation ownership")
+
+
+def test_response_cleanup_runs_even_if_the_body_is_never_iterated(
+    root, loader, seen, monkeypatch, reservations
+):
+    import anyio
+    from fastapi.responses import StreamingResponse
+
+    served = _serve(root)
+    assert served.load("v0", _adapter(root, "d0")).status_code == 200
+
+    async def empty_response(self, send):
+        await send({"type": "http.response.start", "status": 200, "headers": self.raw_headers})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    monkeypatch.setattr(StreamingResponse, "stream_response", empty_response)
+    application = served.client.app
+
+    async def without_a_disconnect(scope, receive, send):
+        async def receive_request():
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                await anyio.sleep_forever()
+            return message
+
+        await application(scope, receive_request, send)
+
+    response = TestClient(without_a_disconnect).post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "hi"}], "adapter": "v0", "stream": True,
+    })
+    assert response.status_code == 200
+    assert seen == []
+    assert reservations[0]._counts == {}
+    assert reservations[0]._state == "released"
+
+
+def test_replacement_failure_never_removes_a_reserved_adapter(
+    root, loader, seen, monkeypatch, reservations
+):
+    served = _serve(root)
+    for index in range(16):
+        assert served.load(f"v{index}", _adapter(root, f"d{index}")).status_code == 200
+    selected = threading.Event()
+    release = threading.Event()
+    original = serve_cmd._adapter_scope
+
+    def pause(*args, **kwargs):
+        selected.set()
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(serve_cmd, "_adapter_scope", pause)
+    responses = []
+    request = threading.Thread(target=lambda: responses.append(served.chat(adapter="v0")))
+    request.start()
+    try:
+        assert selected.wait(10)
+        loader.error = RuntimeError("replacement rejected")
+        path = _adapter(root, "d16")
+        assert served.load("v16", path).status_code == 400
+        assert loader.returned.deleted == ["v1"]
+        assert "v0" in served.listed() and "v16" not in served.listed()
+        assert reservations[0]._counts == {"v0": 1}
+        loader.error = None
+        assert served.load("v16", path).status_code == 200
+    finally:
+        release.set()
+        request.join(10)
+    assert not request.is_alive()
+    assert responses[0].status_code == 200
+    assert [name for _, name in seen] == ["v0"]
+    assert reservations[0]._counts == {}
 
 
 def _loop_state(root, **fields):
