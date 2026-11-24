@@ -1241,11 +1241,12 @@ before, is refused for that reason.
 To fix a refused name use a shorter or plainer `--output` name: the stem plus
 `.task-rows.jsonl` must fit in 255 bytes on POSIX or 255 UTF-16 code units on Windows (a stem
 of more than 239 ASCII characters no longer works), with no control character in it and, on
-POSIX, no backslash. If the write fails, the verdict, the evidence and the PR
-comment are written first, then `cannot write the task rows next to --output: ...` is printed:
-a SHIP exits 1, a DON'T SHIP keeps exit 2 (a pipeline that retries on exit 1 must not run a
-finished verdict again). The file is part of the evidence, and the verdict JSON never names a file
-that was not written.
+POSIX, no backslash. After evaluation, Soup attempts each requested file output (the task rows,
+verdict JSON and evidence) and then the best-effort `--push` comment even if another output fails.
+It reports every file-write failure afterward. A SHIP exits 1 if any requested file could not be
+written; a DON'T SHIP keeps exit 2 so a pipeline that retries on exit 1 does not rerun a finished
+verdict. A task-rows file is part of the evidence, and neither the verdict JSON nor the evidence
+names a task-rows file that was not written.
 
 **Reading it back, strictly.** `soup_cli.utils.ship_task_rows.load_task_rows(path, n=, base=,
 tuned=, counts=, mean_tolerance=)` refuses, naming the defect: a blank, over-long or malformed
@@ -1915,6 +1916,11 @@ How the string scorers read an output:
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
+| `semantic` | Jaccard overlap of the two sides' words, a match at `>= 0.5`. A word is a whitespace-separated piece, lowercased, with its leading and trailing punctuation and symbols removed (`h2o.` and `(h2o)` are `h2o`; a combining mark such as a vowel sign or an accent written as its own character is part of the word and stays, and a minus sign `-` or U+2212 right before a digit stays, so `(-4).` is `-4`; a dot right before a digit stays too, also after a kept sign, so `(.5).` is `.5` and `-.5` is not `5`); a word that is only punctuation, or only combining marks once its edges are removed, is dropped, and punctuation inside a word stays (`3.14`, `don't`, `e-mail` are one word each). Lexical, not embedding similarity | 0.25, no match | 0.0, no match |
+
+Every word of the output counts toward `semantic`'s union, so a short expected answer
+inside a sentence scores low (`H2O` against `The chemical symbol for water is H2O.` is
+1/7). For a short answer inside a sentence, use `contains` or `answer`.
 
 The two tool-call scorers parse the call and compare `arguments` as **JSON**, not as
 strings, and `1` is not `true` there: JSON has one boolean type and one number type, and a

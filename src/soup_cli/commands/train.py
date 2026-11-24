@@ -214,6 +214,14 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
 
 UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
 
+#: The runs that ``--resume`` and ``--hf-resume`` refuse, for both help texts
+#: (#3086 T-3): the ReLoRA check in ``train`` and each branch of
+#: :func:`_resume_refusal`. A refusal added there is named here too.
+RESUME_REFUSED_RUNS_HELP = (
+    "training.relora_steps is configured, for task: unlearn or task: ppo, and on "
+    "backend: mlx for a full fine-tune (lora.r: 0) or task: grpo"
+)
+
 
 def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
     """Why ``flag`` (``--resume`` / ``--hf-resume``) cannot run for ``cfg``, or None."""
@@ -1247,7 +1255,7 @@ def train(
         "-r",
         help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
         "on the MLX backend, a path to a .safetensors adapter file instead. "
-        "Not supported when training.relora_steps is configured",
+        f"Not supported when {RESUME_REFUSED_RUNS_HELP}",
     ),
     wandb: bool = typer.Option(
         False,
@@ -1340,7 +1348,7 @@ def train(
         help=(
             "Download the latest checkpoint branch from the --push-as repo "
             "and resume from it. Requires --push-as; not supported when "
-            "training.relora_steps is configured."
+            f"{RESUME_REFUSED_RUNS_HELP}."
         ),
     ),
     find_lr: bool = typer.Option(
@@ -1913,6 +1921,21 @@ def train(
         )
         raise typer.Exit(0)
 
+    # --- Layer streaming is single-process (#2585) ---
+    # The earliest point that knows WORLD_SIZE: after the config is loaded and the cloud
+    # hand-off (which runs elsewhere), before the dataset, the Hub resume pull, the run
+    # record and any model work. The trainer setup repeats the check for callers that
+    # never come through this command. Not a config validator: other commands load the
+    # same config in shells where a launcher variable may be left over.
+    if getattr(cfg.training, "stream_layers", False):
+        from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
+
+        try:
+            refuse_if_distributed_launch()
+        except ValueError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
     # --- --push-as / --hf-resume validation ---
     if push_as:
         from soup_cli.utils.hf import validate_repo_id
@@ -1936,12 +1959,14 @@ def train(
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
         from soup_cli.config.eval_gate_support import eval_gate_refusal
+        from soup_cli.config.loader import print_config_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
 
         refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
         if refusal is not None:
-            console.print(f"[red]{for_terminal(refusal)}[/]")
+            # The lines the same gate gets when it is set in the config file.
+            print_config_refusal(refusal)
             raise typer.Exit(1)
 
         try:
