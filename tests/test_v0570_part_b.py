@@ -201,12 +201,19 @@ def test_merge_svd_no_rank_equals_linear():
 
 
 def test_merge_svd_with_rank_reduces_rank():
-    # Random matrix → low-rank reconstruction should be lower rank
+    # Random rank-8 LoRA pair → the merged delta B @ A is truncated to rank 2.
+    # A tensor that is not a LoRA factor is not truncated (#2984).
     rng = np.random.default_rng(0)
-    a = {"w": rng.standard_normal((8, 8)).astype(np.float32)}
-    b = {"w": rng.standard_normal((8, 8)).astype(np.float32)}
+    a, b = (
+        {
+            "m.lora_A.weight": rng.standard_normal((8, 8)).astype(np.float32),
+            "m.lora_B.weight": rng.standard_normal((8, 8)).astype(np.float32),
+        }
+        for _ in range(2)
+    )
     merged, _ = merge_svd([a, b], [1.0, 1.0], rank=2)
-    actual_rank = np.linalg.matrix_rank(merged["w"], tol=1e-5)
+    delta = merged["m.lora_B.weight"] @ merged["m.lora_A.weight"]
+    actual_rank = np.linalg.matrix_rank(delta, tol=1e-5)
     assert actual_rank <= 2
 
 
