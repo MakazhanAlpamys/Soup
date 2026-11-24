@@ -375,7 +375,18 @@ class TestShipJudgeModelFlag:
         _validate_judge_model_url(f"https://{host}/m")
         assert out.getvalue() == ""
 
-    def test_refused_before_any_model_loads(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize(
+        ("judge_url", "expected"),
+        [
+            pytest.param("https://10.0.0.1/m", f"--judge-model: {_REFUSED}", id="private-ip"),
+            pytest.param(
+                "http://sample-user:sample-pass@judge.example.invalid/m",
+                "--judge-model 'http://judge.example.invalid/m' uses a disallowed scheme/host",
+                id="userinfo",
+            ),
+        ],
+    )
+    def test_refused_before_any_model_loads(self, monkeypatch, tmp_path, judge_url, expected):
         """Through the real command: the judge URL is a usage error before the base
         and tuned models are built, not after."""
         import json
@@ -400,11 +411,14 @@ class TestShipJudgeModelFlag:
             [
                 "--base", "fake-base", "--adapter", "fake-adapter",
                 "--task-eval", "tasks.jsonl", "--task-mode", "judge_score",
-                "--judge-model", "https://10.0.0.1/m",
+                "--judge-model", judge_url,
             ],
         )
         assert res.exit_code == 3, (res.output, repr(res.exception))
-        assert f"--judge-model: {_REFUSED}" in _plain(res.output)
+        message = _plain(res.output)
+        assert expected in message
+        assert "sample-user" not in message
+        assert "sample-pass" not in message
         assert loads == []
 
 

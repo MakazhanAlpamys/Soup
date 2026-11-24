@@ -13,7 +13,6 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Mapping, Optional
-from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -21,6 +20,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.redaction import parse_url_with_safe_error, url_without_userinfo
 from soup_cli.utils.yaml_limits import (
     MAX_CONFIG_BYTES,
     duplicate_keys_in_sequence_mappings,
@@ -124,7 +124,7 @@ class GateTask(BaseModel):
         # Allowlist of schemes — SSRF hardening consistent with the project.
         from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
-        parsed = urlparse(value)
+        parsed = parse_url_with_safe_error(value, label="judge_model URL")
 
         if parsed.scheme == "ollama":
             return value
@@ -139,7 +139,7 @@ class GateTask(BaseModel):
             return value
 
         raise ValueError(
-            f"judge_model URL '{value}' uses disallowed scheme - "
+            f"judge_model URL '{url_without_userinfo(value)}' uses disallowed scheme - "
             "use ollama://, https://, or http://localhost"
         )
 
@@ -586,22 +586,6 @@ def resolve_baseline(
     return scores
 
 
-def _shown_judge_url(judge_model: str) -> str:
-    """The URL as a refusal message shows it: without a userinfo part.
-
-    ``https://user:secret@host/m`` is shown as ``https://host/m``. A refusal is printed to the
-    terminal and lands in logs, and whatever sits before ``@`` is not needed to say why the URL
-    was refused. The value itself is never changed, only its echo.
-    """
-    head, sep, rest = judge_model.partition("//")
-    if not sep:
-        head, rest = "", judge_model
-    authority, slash, path = rest.partition("/")
-    if "@" not in authority:
-        return judge_model
-    return f"{head}{sep}{authority.rsplit('@', 1)[1]}{slash}{path}"
-
-
 def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     """Split a ``judge_model`` URL into ``(provider, model, api_base)``.
 
@@ -612,8 +596,8 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
       ``https://judge.example.com/m`` -> ("server", "m", "https://judge.example.com")
     """
 
-    parsed = urlparse(judge_model)
-    shown = _shown_judge_url(judge_model)
+    parsed = parse_url_with_safe_error(judge_model)
+    shown = url_without_userinfo(judge_model)
 
     if parsed.scheme == "ollama":
         return ("ollama", judge_model[len("ollama://"):], None)
@@ -643,8 +627,12 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
             "Use https://, ollama:// or a loopback http:// URL instead"
         )
     else:
+        # In a bare credential spelling, urllib interprets the username as a scheme.
+        scheme = parsed.scheme
+        if shown != judge_model and not shown.lstrip().lower().startswith(f"{scheme}:/"):
+            scheme = ""
         raise ValueError(
-            f"judge_model '{shown}' uses unsupported scheme '{parsed.scheme}'; "
+            f"judge_model '{shown}' uses unsupported scheme '{scheme}'; "
             "accepted: https://, ollama:// or http:// to a loopback host"
         )
 
