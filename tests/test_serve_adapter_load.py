@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import threading
+from builtins import BaseExceptionGroup
 from contextlib import contextmanager
 from queue import Queue
 from unittest.mock import MagicMock, patch
