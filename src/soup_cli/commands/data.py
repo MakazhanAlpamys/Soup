@@ -7,12 +7,13 @@ import ntpath
 import os
 import random
 import sys
+from contextlib import contextmanager
 from csv import Error as CsvError
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
-from typing import Annotated, NoReturn, Optional
+from typing import Annotated, Any, Iterator, NoReturn, Optional
 
 import typer
 from rich.console import Console
@@ -2925,6 +2926,118 @@ def _mask_labels_for_cache_row(
     )
 
 
+@contextmanager
+def _preprocess_publish_lock(target: Path) -> Iterator[None]:
+    """Serialize commit/rollback across processes; keep the lock inode stable."""
+    import errno
+    import stat
+    from time import sleep
+
+    from soup_cli.utils.paths import open_no_follow
+
+    lock_path = target.with_name(".lock_" + target.name)
+    descriptor = open_no_follow(
+        lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0),
+        check_parent=True, refuse_hardlink=True,
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("preprocess publication lock must be a regular file")
+        deadline = monotonic() + 30.0
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise
+                if monotonic() >= deadline:
+                    raise TimeoutError("preprocess cache publication is busy; retry") from exc
+                sleep(0.02)
+        yield
+    finally:
+        # Closing releases either OS lock. Unlinking would let waiters lock different inodes.
+        os.close(descriptor)
+
+
+def _publish_preprocess_cache(
+    dataset: Any, target: Path, metadata: dict, *, overwrite: bool,
+) -> bool:
+    """Publish complete Arrow/metadata, restoring the previous directory on install failure."""
+    import shutil
+    import tempfile
+
+    from datasets import load_from_disk
+
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".tmp_" + target.name + ".", dir=target.parent))
+    try:
+        dataset.save_to_disk(str(staging))
+        metadata_path = staging / "metadata.json"
+        with open(metadata_path, "w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2)
+        with open(metadata_path, encoding="utf-8") as handle:
+            if json.load(handle) != metadata:
+                raise ValueError("preprocess staged metadata does not match")
+        # No validation mmap may outlive this check: Windows must be able to move the shards.
+        validated = load_from_disk(str(staging), keep_in_memory=True)
+        if len(validated) != metadata["row_count"] or validated.features != dataset.features:
+            raise ValueError("preprocess staged Arrow does not match")
+        del validated
+
+        with _preprocess_publish_lock(target):
+            enforce_under_cwd_and_no_symlink(str(target), "preprocess target")
+            if target.exists() and not target.is_dir():
+                raise ValueError("preprocess target must be a directory")
+            if target.exists() and not overwrite:
+                console.print(
+                    f"[yellow]Target already exists:[/] {for_terminal(target)}\n"
+                    "[dim]Re-run with --yes to overwrite.[/]"
+                )
+                return False
+            backup = None
+            if target.exists():
+                backup = Path(tempfile.mkdtemp(
+                    prefix=".backup_" + target.name + ".", dir=target.parent,
+                ))
+                backup.rmdir()
+                os.replace(str(target), str(backup))
+            try:
+                os.replace(str(staging), str(target))
+            except BaseException:
+                if backup is not None:
+                    try:
+                        os.replace(str(backup), str(target))
+                    except OSError:
+                        console.print(
+                            "[red]Could not restore the previous cache; it is retained at[/] "
+                            f"{for_terminal(backup)}", soft_wrap=True,
+                        )
+                        raise
+                raise
+            if backup is not None:
+                try:
+                    shutil.rmtree(backup)
+                except OSError:
+                    console.print(
+                        "[yellow]New cache is complete; could not remove previous cache at[/] "
+                        f"{for_terminal(backup)}", soft_wrap=True,
+                    )
+        return True
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2947,8 +3060,6 @@ def preprocess_dataset(
 
     Rows capped at 10M to defend against pathological dataset sizes.
     """
-    import json as _json
-
     from soup_cli.config.loader import load_config
     from soup_cli.data.chat_templates import resolve_chat_template
     from soup_cli.utils.data_pipeline import (
@@ -3189,25 +3300,6 @@ def preprocess_dataset(
         raise typer.Exit(1)
 
     ds = Dataset.from_list(rendered_rows)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # v0.53.7 M-H: atomic write via temp dir + os.replace so a partial
-    # write (e.g. SIGKILL mid-save) does not leave a corrupt dataset at
-    # ``target``. save_to_disk overwrites silently; we route through a
-    # sibling temp dir to defend against that too.
-    import shutil as _shutil
-
-    tmp_dir = target.parent / (".tmp_" + target.name)
-    if tmp_dir.exists():
-        _shutil.rmtree(tmp_dir, ignore_errors=True)
-    try:
-        ds.save_to_disk(str(tmp_dir))
-        if target.exists():
-            _shutil.rmtree(target, ignore_errors=True)
-        os.replace(str(tmp_dir), str(target))
-    except Exception:
-        _shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise
-
     from soup_cli import __version__ as _soup_version
     from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
 
@@ -3226,9 +3318,8 @@ def preprocess_dataset(
         "dataset_key": json.loads(dataset_path),
         "soup_version": _soup_version,
     }
-    metadata_path = target / "metadata.json"
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        _json.dump(metadata, f, indent=2)
+    if not _publish_preprocess_cache(ds, target, metadata, overwrite=yes):
+        raise typer.Exit(0)
 
     console.print(
         f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {for_terminal(target)}"
