@@ -5,8 +5,8 @@
   "authorship": "User attestation: these 30 questions and intended targets were supplied by a friend outside the project/tuning work. Individual attribution not supplied; attestation not independently verified.",
   "reproduction_terms": {
     "license": "Apache-2.0",
-    "permission_statement": "The project author confirms that the friend who supplied these 30 questions authorizes reproducing the questions and target descriptions in Soup under the Apache License, Version 2.0.",
-    "permission_evidence": "The project author confirmed authorization for both sets in the project chat on 2026-11-24: \"yes all authorize\".",
+    "permission_statement": "The author of #3192 confirms that the friend who supplied these 30 questions authorizes reproducing the questions and target descriptions in Soup under the Apache License, Version 2.0.",
+    "permission_evidence": "The author of #3192 confirmed authorization for both sets in this public PR comment: https://github.com/MakazhanAlpamys/Soup/pull/3242#issuecomment-7133280229",
     "personal_identifiers": "Omitted; permission is recorded without naming contributors."
   },
   "writing_assistance": "Not specified; no claim of absence of assistance.",

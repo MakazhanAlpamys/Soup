@@ -13,8 +13,8 @@
   "authorship_declaration": "Attestation by project author: manually written by three external contributors; individual attribution unavailable to preserve privacy",
   "reproduction_terms": {
     "license": "Apache-2.0",
-    "permission_statement": "The project author confirms that all original question contributors and the annotation owner authorize reproducing the original 28 questions and annotations in Soup under the Apache License, Version 2.0.",
-    "permission_evidence": "The project author confirmed authorization for both sets in the project chat on 2026-11-24: \"yes all authorize\".",
+    "permission_statement": "The author of #3192 confirms that all original question contributors and the annotation owner authorize reproducing the original 28 questions and annotations in Soup under the Apache License, Version 2.0.",
+    "permission_evidence": "The author of #3192 confirmed authorization for both sets in this public PR comment: https://github.com/MakazhanAlpamys/Soup/pull/3242#issuecomment-7133280229",
     "personal_identifiers": "Omitted; permission is recorded without naming contributors."
   },
   "ai_assistance_declaration": "Project author attestation: manual authorship; absence of AI assistance not independently verified",
