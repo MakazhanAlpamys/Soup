@@ -151,6 +151,7 @@ def rewind_skip_reason(
     multipack: bool,
     vision: bool,
     audio: bool,
+    prefix_tree: bool = False,
 ) -> str:
     """Why this run takes no rewind recorder, in words a user can act on.
 
@@ -165,6 +166,8 @@ def rewind_skip_reason(
         return "RAFT builds its own trainer and collator"
     if multipack:
         return "multipack owns the dataloader the recorder wraps"
+    if prefix_tree:
+        return "prefix-tree batches own the dataloader the recorder wraps"
     if vision:
         return "vision runs a custom collator"
     if audio:
@@ -1068,6 +1071,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # so two ``multipack: true`` runs against the same base class share
         # the same subclass.
         use_multipack = bool(getattr(tcfg, "multipack", False))
+        # Prefix-tree batches (utils/prefix_tree.py): the same kind of wiring, a
+        # trainer subclass that builds its own training dataloader.
+        use_prefix_tree = bool(getattr(tcfg, "prefix_tree", False))
         # #1693 -- with `stream_loss_chunk` the model returns no logits, which
         # TRL's `compute_loss` reads for its metrics. The schema keeps the
         # option to the two branches below that build `sft_cls`.
@@ -1165,6 +1171,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 ),
             )
             console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        elif use_prefix_tree:
+            from soup_cli.utils.prefix_tree_trainer import make_prefix_tree_trainer_class
+
+            self.trainer = make_prefix_tree_trainer_class(sft_cls)(**trainer_kwargs)
+            self._attach_prefix_tree(
+                batch_size=batch_size,
+                max_length=cfg.data.max_length,
+                seed=DEFAULT_MULTIPACK_SEED if tcfg.seed is None else tcfg.seed,
+            )
         elif use_vision and not tcfg.packing:
             # Vision rows still contain PIL images and structured messages.
             # Plain Trainer must receive the custom collator directly; letting
@@ -1212,6 +1227,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         multipack=use_multipack,
                         vision=use_vision,
                         audio=use_audio,
+                        prefix_tree=use_prefix_tree,
                     )
                 )
 
@@ -1596,6 +1612,92 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
                 return torch.float16
         return dtype
+
+    def _attach_prefix_tree(self, *, batch_size: int, max_length: int, seed: int) -> None:
+        """``training.prefix_tree``: plan the rows, check the model, say what it saves.
+
+        The model check raises before any step when the model does not compute
+        a prefix-tree row as it computes the ordinary batch.
+        """
+        from soup_cli.utils.prefix_tree_trainer import (
+            _model_float_dtype,
+            attach_prefix_tree_state,
+            check_prefix_tree_model,
+            dropout_in_model,
+            examples_from_dataset,
+            planning_notice,
+            verification_examples,
+        )
+
+        dropped = dropout_in_model(self.model)
+        if dropped:
+            shown = ", ".join(dropped[:4])
+            if len(dropped) > 4:
+                shown += f" and {len(dropped) - 4} more"
+            raise ValueError(
+                f"training.prefix_tree needs a model that applies no dropout in training; "
+                f"this one does: {shown}. A prefix-tree row computes a shared beginning "
+                "once, so one dropout mask would serve every example that shares it and "
+                "the loss would no longer be the ordinary batch's. Set those rates to 0 "
+                "in the model's config or set training.prefix_tree: false."
+            )
+        trainer = self.trainer
+        collator = trainer.data_collator
+        pad_token_id = getattr(collator, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "eos_token_id", None) or 0
+        try:
+            notice = planning_notice(len(trainer.train_dataset), int(max_length))
+        except TypeError:
+            notice = None  # no length: examples_from_dataset refuses it below
+        if notice:
+            console.print(f"[yellow]Prefix-tree batches:[/] {notice}.")
+        examples = examples_from_dataset(trainer.train_dataset, collator)
+        state = attach_prefix_tree_state(
+            trainer,
+            examples=examples,
+            max_tokens=int(max_length),
+            batch_size=int(batch_size),
+            pad_token_id=int(pad_token_id),
+            seed=int(seed),
+            drop_last=bool(getattr(trainer.args, "dataloader_drop_last", False)),
+        )
+        # Checked on real training examples, the ones the first planned row holds:
+        # half-precision arithmetic on tokens a model never saw is too unstable
+        # to verify anything (see verify_prefix_tree_model).
+        verdict = check_prefix_tree_model(
+            self.model,
+            pad_token_id=int(pad_token_id),
+            examples=verification_examples(
+                examples, state.sampler.rows, max_tokens=int(max_length)
+            ),
+        )
+        if verdict.mask == "additive":
+            state.additive_dtype = _model_float_dtype(self.model)
+        stats = state.sampler.stats
+        console.print(
+            f"[green]Prefix-tree batches enabled:[/] {stats.examples} examples in "
+            f"{stats.rows} rows, {stats.tree_tokens:,} tokens per epoch instead of "
+            f"{stats.source_tokens:,} ({stats.ratio:.2f}x fewer)"
+        )
+        console.print(
+            f"[dim]Prefix-tree model check ({verdict.mask} mask): logits differ from the "
+            f"ordinary batch by {verdict.error:.3g} of a range of {verdict.scale:.3g}; "
+            f"this model's own layout noise {verdict.noise:.3g}; a plain causal mask "
+            f"moves them by {verdict.mask_control:.3g}, wrong positions by "
+            f"{0.0 if verdict.control is None else verdict.control:.3g}[/]"
+        )
+        if stats.ratio < 1.02:
+            per_row = stats.examples / max(stats.rows, 1)
+            console.print(
+                "[yellow]Prefix-tree batches:[/] these examples share almost no "
+                "untrained beginning, so an epoch runs as many tokens as before; a row "
+                f"still holds {per_row:.1f} examples on average. Sharing needs prompt "
+                "tokens that are not trained on (data.train_on_responses_only) and that "
+                "several examples begin with."
+            )
 
     @staticmethod
     def _as_sft_config(training_args, max_length, packing=False):

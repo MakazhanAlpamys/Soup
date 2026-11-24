@@ -174,6 +174,29 @@ keep the ordinary unknown-identity message; cache paths keep their unverified-hi
 message. This does not bind MLX sweeps or
 independent inference, chat, serve, merge and export consumers.
 
+Native MLX LoRA adapters record an existing local base directory as its absolute,
+real path in `adapter_config.json`, including when training uses a relative path
+or a directory symlink. Hub IDs stay as typed; the effective training config and
+recorded Hub revision are unchanged. This makes chat, infer and merge independent
+of their working directory. The base must remain at the recorded path: moving it
+elsewhere does not make a different `--base` acceptable for an absolute identity.
+
+For older adapters, an identity starting with `./` or `../` is a legacy relative
+local path. Other non-absolute strings (such as `base` or `org/name`) name a local
+directory when one exists in the caller's working directory, otherwise a Hub ID.
+A legacy local identity loads from that directory with a message naming the
+stored value and the absolute base used. If the directory is absent, pass
+`--base /absolute/path/to/original/base` to native `soup chat`, `soup infer` or
+`soup merge`. An existing absolute local `--base` wins even if the current
+directory has a different same-named base; a relative `--base` still has to match.
+The old metadata does not contain its training directory, so an implicit
+same-named base cannot be identified as wrong: the message makes the choice
+visible, and an explicit absolute `--base` disambiguates it. Mismatching overrides
+for absolute identities and Hub IDs remain refused.
+
+Native HTTP serving checks the selected local base spelling against its cwd and
+symlink restrictions before announcing the resolved path or loading the model.
+
 For native HTTP deployment, install `[mlx,serve]` and use
 `soup serve --backend mlx --model ./mlx-output`. Its initial serving slice is
 dense text models plus optional ordinary native LoRA; native batch inference's
@@ -2502,3 +2525,8 @@ soup doctor    # GPU, system resources, dependencies, and version in one place
   wheel is CPU-only. Reinstall a CUDA build; `soup doctor` prints the
   `pip install` command for the wheel your driver can run.
 - **`soup version` ≠ `pip show soup-cli`** — multiple Python installs; use a virtualenv.
+
+A core CLI installation can run `soup doctor` and `soup init` with PyTorch absent.
+Use [the training extra](models.md#optional-extras) when you are ready to train.
+The chat template creates `soup.yaml` with `data.train: ./data/train.jsonl`.
+Provide that dataset or update `data.train` to an existing source before training.

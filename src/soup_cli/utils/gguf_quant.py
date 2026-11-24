@@ -583,6 +583,11 @@ def export_advanced_gguf(
             f"Unknown gguf flavour {flavour!r}. "
             "See ALL_ADVANCED_GGUF_FORMATS."
         )
+    # The check above matches case-insensitively, but the imatrix table and the
+    # ``UD-`` prefix strip below compare exact strings: ``iq2_m`` skipped the
+    # importance matrix (and ignored --calibration-data) that ``IQ2_M`` gets, and
+    # ``ud-iq2_m`` reached llama-quantize with its prefix. Use the canonical name.
+    flavour = cast(str, _resolve_canonical(flavour))
 
     _enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
     _enforce_under_cwd_and_no_symlink(output_path, "output_path")
