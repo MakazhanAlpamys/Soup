@@ -145,3 +145,39 @@ def test_init_strips_controls_only_from_displayed_output_path(tmp_path, monkeypa
     assert "Config saved to [bold]config.yaml" in text
     assert "soup train --config [bold]config.yaml" in text
     assert "\x9b" not in text and "\u202e" not in text
+
+
+@pytest.mark.parametrize("data_present", [False, True])
+def test_init_chat_template_missing_dataset_step(tmp_path: Path, monkeypatch, data_present: bool):
+    """When the chat template's local training file is absent, explain how to provide it."""
+    monkeypatch.chdir(tmp_path)
+    output_dir = Path("custom")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / "soup.yaml"
+
+    if data_present:
+        data_file = Path("./data/train.jsonl")
+        data_file.parent.mkdir(parents=True, exist_ok=True)
+        data_file.write_text('{"text": "example"}\n', encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["init", "--template", "chat", "--output", str(output)],
+        env={"COLUMNS": "250"},
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert output.exists()
+    assert output.read_text(encoding="utf-8") == load_template("chat")
+
+    text = " ".join(strip_ansi(result.output).split())
+    assert f"Config saved to {output}" in text
+    assert f"soup train --config {output}" in text
+
+    if data_present:
+        assert "./data/train.jsonl" not in text
+        assert "data.train" not in text
+    else:
+        assert "./data/train.jsonl" in text
+        assert "data.train" in text
+

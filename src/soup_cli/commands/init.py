@@ -166,15 +166,29 @@ def init(
         config_text = _interactive_wizard()
 
     _write_config(output, config_text)
+
+    if template == "chat" and not Path("./data/train.jsonl").exists():
+        receipt_text = Text.assemble(
+            ("Config saved to ", "bold green"),
+            terminal_text(output_path, style="bold green"),
+            "\n\nNext step:\nProvide training data at ",
+            ("./data/train.jsonl", "bold"),
+            " (or edit data.train in the config) before running:\n",
+            ("soup train --config ", "bold"),
+            terminal_text(output_path, style="bold"),
+        )
+    else:
+        receipt_text = Text.assemble(
+            ("Config saved to ", "bold green"),
+            terminal_text(output_path, style="bold green"),
+            "\n\nNext step: ",
+            ("soup train --config ", "bold"),
+            terminal_text(output_path, style="bold"),
+        )
+
     console.print(
         Panel(
-            Text.assemble(
-                ("Config saved to ", "bold green"),
-                terminal_text(output_path, style="bold green"),
-                "\n\nNext step: ",
-                ("soup train --config ", "bold"),
-                terminal_text(output_path, style="bold"),
-            ),
+            receipt_text,
             title="Ready!",
         )
     )
