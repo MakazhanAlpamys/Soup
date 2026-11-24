@@ -17,6 +17,7 @@ from soup_cli.utils.profiler import (
     estimate_speed,
     estimate_training_time,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 err_console = Console(stderr=True)
@@ -78,13 +79,17 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
         except (OSError, ValueError, KeyError):
             pass
 
-    # HF dataset (only if not a local file path with extension)
-    if not path.suffix:
+    # Match training's route for Hub names, including names such as OpenHermes-2.5.
+    from soup_cli.data.loader import _classify_train_entry
+
+    if _classify_train_entry(train_path) == "hub" and not (path.suffix and path.is_file()):
         try:
             from datasets import load_dataset_builder
-            builder = load_dataset_builder(train_path)
-            size = builder.info.splits["train"].num_examples
-            return int(size * split), False
+
+            splits = load_dataset_builder(train_path).info.splits
+            if splits is not None:
+                size = splits["train"].num_examples
+                return int(size * split), False
         except (OSError, ValueError, KeyError, ImportError):
             pass
 
@@ -109,7 +114,9 @@ def cost(
     diagnostic_console = err_console if json_output else console
     config_path = Path(config)
     if not config_path.exists():
-        diagnostic_console.print(f"[red]Config file not found:[/] {config}")
+        diagnostic_console.print(
+            f"[red]Config file not found:[/] {for_terminal(config)}", emoji=False
+        )
         raise typer.Exit(1)
 
     # The loader reports refusals and advisories on stdout. Keep those out of
@@ -165,7 +172,9 @@ def cost(
         })
 
     if not results:
-        diagnostic_console.print(f"[red]No matching GPUs found for:[/] {gpu}")
+        diagnostic_console.print(
+            f"[red]No matching GPUs found for:[/] {for_terminal(gpu)}", emoji=False
+        )
         raise typer.Exit(1)
 
     if json_output:

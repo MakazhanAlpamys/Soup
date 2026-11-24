@@ -25,6 +25,24 @@ def post_capped(
     policies. Error text contains only the caller's setting label and limit,
     never the URL, credentials, request headers or response body.
     """
+    return request_capped(
+        "POST", url, max_bytes=max_bytes, endpoint_label=endpoint_label, **kwargs
+    )
+
+
+def get_capped(
+    url: str, *, max_bytes: int, endpoint_label: str, **kwargs: Any,
+) -> httpx.Response:
+    """GET and return a bounded, decoded response (``post_capped``'s rules, same errors)."""
+    return request_capped(
+        "GET", url, max_bytes=max_bytes, endpoint_label=endpoint_label, **kwargs
+    )
+
+
+def request_capped(
+    method: str, url: str, *, max_bytes: int, endpoint_label: str, **kwargs: Any,
+) -> httpx.Response:
+    """``method`` the URL and return a bounded, decoded response, always closing the stream."""
     import httpx
 
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
@@ -35,7 +53,7 @@ def post_capped(
             f"Response for {endpoint_label} exceeds the {max_bytes} bytes limit"
         )
 
-    with httpx.stream("POST", url, **kwargs) as response:
+    with httpx.stream(method, url, **kwargs) as response:
         try:
             declared_length = int(response.headers.get("Content-Length", ""))
         except ValueError:

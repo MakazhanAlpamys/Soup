@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:e6f82927020a21ba77157b9c2891d7b7918a7eb34e2a291a4fa7ecbd0fb90f0a -->
+<!-- synced-from: README.md sha256:9f4b79874f1e9cee9a123cc0e8a7bfb507ebd8429374bb83af16d0b5038d692d -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.ru.md">Русский</a></p>
 
 <p align="center">
@@ -93,40 +93,40 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.77.1 — bir yama: `soup data` girdisini koruyor, `soup plan` `soup train` ile aynı kararı veriyor
-ve GRPO Apple Silicon'da eğitiliyor.** v0.77.0'daki hiçbir şey geri alınmıyor. O sürüm, v0.76'nın
-uyardığı ya da yok saydığı ayarları reddediyor; bu yüzden v0.76'da yüklenen bir yapılandırma artık
-yüklenmeyebilir: 0.76.x'ten geliyorsanız önce `soup doctor --config soup.yaml` komutunu çalıştırın ve
-[v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
+**v0.78.0 — v0.77.2'den sonra `main`'in bir kesiti: 271 pull request, bunların 218'i bakımcı
+dışındaki 48 kişiden.** Yeni özellikler getiriyor ve v0.77.2'nin kabul ettiği bazı girdileri
+reddeden kurallar içeriyor; bu yüzden bir yapılandırmayı ya da betiği yükseltmeden önce
+[v0.78.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) okuyun. 0.76.x'ten geliyorsanız önce
+`soup doctor --config soup.yaml` komutunu çalıştırın ve [v0.77.0 sürüm notlarını](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0) okuyun.
 
-- **`soup data` komutları artık girdilerinin üzerine yazmıyor.** Bunlardan on sekizi (`dedup`,
-  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` ve diğerleri), hangi yazımla verilirse
-  verilsin bir girdiyle aynı dosya olan bir `--output` değerini hiçbir şey okumadan önce reddediyor;
-  girdinin zaten taşıdığı varsayılan bir çıktı adı da reddediliyor. Bunun yerine yeni bir dosyaya yazın.
-- **`soup plan` ve `soup apply`, `soup train`'in reddettiği yapılandırmaları** aynı mesajla reddediyor
-  ve plan yazmıyor.
-- **GRPO, Apple Silicon'da yerel olarak eğitiliyor.** `backend: mlx` ile `task: grpo`, Soup'un kendi
-  MLX döngüsünü transformers yolunun eğittiği hedefle ve yerleşik `accuracy` ya da `format` ödülüyle
-  çalıştırıyor. `soup infer --backend mlx`, MLX taban modellerinden ve yerel metin LoRA
-  adaptörlerinden Torch olmadan üretim yapıyor.
-- **Tek bir tepe VRAM tahmini:** `soup train`'in ön kontrolü, `soup profile` ve `soup plan` aynı
-  tahmini kullanıyor; tahmin 39 ölçülmüş çalıştırmayla kalibre edildi
-  ([kayıt](benchmarks/gate-2049-resident-vram.md)). Tahminin kalibre edildiği aralıkta, yani yaklaşık
-  3.5B parametreye kadar yoğun modellerde, ön kontrol artık daha önce geçirdiği bazı uzun dizili, büyük
-  sözlüklü çalıştırmaları reddediyor; `--allow-oom-attempt` onları yine de başlatıyor. Bu aralığın
-  dışında (daha büyük ya da mixture-of-experts bir model, `medium` ya da `selective` checkpointing,
-  `use_liger` / `use_cut_ce`, `backend: unsloth`) sığmayan bir çalıştırma için tahmini bir uyarı olarak
-  yazdırıyor ve çalıştırmayı başlatıyor; ancak ağırlıklar, CUDA bağlamı ve eğitilen parametrelerin
-  gradyanları ile optimizer durumu kartın kapasitesini aşıyorsa (80 GB'ta 7B tam ince ayar, 24 GB'ta
-  4-bit Llama-3.1-70B) o çalıştırma orada da reddediliyor. LoRA çalıştırmaları ve parametrelerin bir
-  kısmını eğiten çalıştırmalar (Spectrum, LISA, dondurma) daha az terimle değerlendiriliyor;
-  `--allow-oom-attempt` reddedilen bir çalıştırmayı yine de başlatıyor.
-- **Harici programlar `PATH` üzerinde bulunan mutlak bir yolla başlatılıyor.** Geçerli dizin ve göreli
-  `PATH` girdileri artık aranmıyor: yalnızca orada bulunan bir aracın dizinini `PATH`'e ekleyin.
-- **Ayrıca yeni.** `soup ship --progress jsonl`; başka bir kütüphanenin adlandırdığı biçimde yazılmış
-  bilinmeyen yapılandırma anahtarları için Soup alanı öneriliyor (`learning_rate` için `lr`); ve
-  aşağıdaki Docker örneği, etkileşimsiz bir `soup train`'in v0.77.0'dan beri ihtiyaç duyduğu `--yes`
-  bayrağını geçiriyor.
+- **Sürekli öğrenen bir döngü.** `soup serve` her yanıta bir kimlik verip üzerine geri bildirim alıyor
+  (beğeni, puan, düzeltme); `soup loop` bu geri bildirimden bir aday eğitiyor, `soup ship --gate loop-v2`
+  ile değerlendiriyor, canary olarak çalıştırıyor ve kendiliğinden geri alıyor.
+- **`soup ship` sayısının neden oluştuğunu gösteriyor.** Görev başına daha iyi/daha kötü/aynı sayıları,
+  satır satır denetim dosyası, sağladığınız bir fonksiyonla puanlamak için `--task-mode reward --reward-fn`
+  (bir `.py` dosyası çalıştırılır), adaptörün tabanı ne kadar değiştirdiği ve iki adaptörü
+  karşılaştırmak için `--base-adapter`.
+- **Yeni komutlar.** `soup eval retention` (model sürümleri arasında unutma), `soup data leakage`
+  (eğitim/değerlendirme örtüşmesi), `soup docs search` (çevrimdışı), `soup prune-layer-cache` ve
+  `soup eval quant-check --performance`.
+- **Apple Silicon'da daha fazlası.** Yerel MLX sohbeti, birleştirme, seçici kayıp maskeleri, ön işleme
+  önbellekleri, sözcük dağarcığı genişletme, RoPE uzatma ve yoğun Llama SFT.
+- **Katman akışı daha fazlasını yapıyor.** Yalnızca ileri geçişli çıkarım kipi, önceden nicemlenmiş NF4
+  içe aktarma ve akıtılan bir tabanda BCO, IPO ve tek kayıplı `task: preference` eğitimi.
+- **Kısa satırlara uyan VRAM tahminleri.** Dolgulu bir SFT çalıştırması en uzun satırına göre
+  fiyatlanıyor; 8-bit checkpointing, cuBLAS çalışma alanları ve bir damıtma öğretmeni ücretlendiriliyor;
+  ön kontrol de bir sığma denetiminin neden yapılmadığını söylüyor.
+- **8 yeni tarif** (toplam 181) ve Qwen2 QLoRA SFT için bir Triton çekirdek kütüphanesi (yapılandırma anahtarı yok).
+- **Metin yazıldığı gibi gösteriliyor.** Onlarca komut daha yolları ve adları köşeli parantezler ve
+  `:name:` metni korunarak, terminal denetim karakterleri kaldırılarak yazdırıyor.
+
+**Bilmeniz gereken davranış değişiklikleri.** Sayısal bir `training` alanındaki boolean reddediliyor.
+`--push-as` depoyu özel oluşturuyor (bunu değiştirmek için `--push-public`). MLX'te ya da `prm`,
+`unlearn`, `moe_lora_routing` üzerinde etkin bir eval gate reddediliyor. `soup serve --max-tokens`
+16384'te duruyor. `soup adapters merge` ağırlıkları ve `tool_call_args_subset` puanı değişti; bu yüzden
+birleştirmeler ve ship kararları farklı çıkabilir. `soup ship`'in yazdığı kanıt dosyaları, yeni satır
+satır, fonksiyonla puanlanan veya judge ayrıntısını taşıyorsa 2. sürümdedir ve v0.77.x bunları
+reddeder.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -293,6 +293,7 @@ soup train  --config soup.yaml        # eğitin (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # toplu çıkarım
 soup chat   --model ./output          # etkileşimli sohbet
 soup serve  --model ./output          # OpenAI uyumlu API sunucusu
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon üzerinde yerel yoğun metin modeli / LoRA
 soup ui                               # yerel tarayıcı panosu
 soup merge  --adapter ./output        # LoRA'yı taban modele birleştirin
 soup export --model ./output --format gguf           # dağıtım için dışa aktarın

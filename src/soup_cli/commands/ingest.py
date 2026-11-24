@@ -24,7 +24,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils import ingest_sources as _ingest_sources
 from soup_cli.utils.ingest_sources import (
@@ -33,12 +35,22 @@ from soup_cli.utils.ingest_sources import (
     resolve_auth_env,
     validate_source_name,
 )
-from soup_cli.utils.paths import atomic_write_lines, ensure_distinct_paths, is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.paths import atomic_write_lines, is_under_cwd
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
 _DEFAULT_SINCE = "7d"
+
+
+# The typed --source and --output, a bad --since, the Langfuse host and the text
+# of a refused or failed pull come from outside the program, so every line that
+# carries them is printed as ``Text``: shown as typed, never read as markup or
+# ``:name:`` emoji, control characters removed (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
 
 
 class _LogsUnreadableError(Exception):
@@ -117,7 +129,7 @@ def ingest(
     try:
         canonical = validate_source_name(source)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     slack_url, discord_url = validate_webhook_flags(
@@ -154,33 +166,34 @@ def ingest(
         raise typer.Exit(2)
 
     if not is_under_cwd(logs):
-        console.print(f"[red]--logs '{escape(logs)}' is outside cwd — refusing[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is outside cwd — refusing", style="red")
+        )
         raise typer.Exit(1)
     logs_path = Path(logs)
     if not logs_path.exists():
-        console.print(f"[red]--logs not found: {escape(logs)}[/]")
+        console.print(Text(f"--logs not found: {strip_control(logs)}", style="red"))
         raise typer.Exit(1)
     if logs_path.is_dir():
-        console.print(f"[red]--logs '{escape(logs)}' is a directory, not an export file[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is a directory, not an export file", style="red")
+        )
         raise typer.Exit(1)
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
         console.print(
-            f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
+            Text(f"--output '{strip_control(output_path)}' is outside cwd — refusing", style="red")
         )
         raise typer.Exit(1)
 
     # Refuse before anything is opened for writing: the default --output
     # (traces.jsonl) is also a plausible --logs, and the write would empty it.
-    try:
-        ensure_distinct_paths(
-            [("--logs", str(logs_path))],
-            [("--output", str(output_path))],
-        )
-    except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(1) from exc
+    refuse_output_over_input(
+        [("--logs", str(logs_path))],
+        [("--output", str(output_path))],
+        console=console,
+    )
 
     _print_pii_reminder(canonical)
 
@@ -212,12 +225,14 @@ def ingest(
     try:
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except _LogsUnreadableError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(1) from exc
 
     console.print(
-        f"[green]Wrote {count} traces from {escape(canonical)} -> "
-        f"{escape(output_path.name)}[/]"
+        Text(
+            f"Wrote {count} traces from {canonical} -> {strip_control(output_path.name)}",
+            style="green",
+        )
     )
 
     emit_webhooks(
@@ -263,7 +278,7 @@ def _pull(
     try:
         enforce_under_cwd_and_no_symlink(str(output_path), "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from exc
 
     from soup_cli.utils import ingest_pull
@@ -272,23 +287,26 @@ def _pull(
     try:
         window = ingest_pull.parse_since(since_text)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
     try:
         credentials = ingest_pull.load_langfuse_credentials(
             os.environ, allow_private_host=allow_private_host
         )
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from None
     except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from None
 
     _print_pii_reminder(canonical)
     console.print(
-        f"[dim]Pulling GENERATION observations from {escape(credentials.host)} "
-        f"for the last {escape(since_text)}...[/]"
+        terminal_text(
+            f"Pulling GENERATION observations from {credentials.host} "
+            f"for the last {since_text}...",
+            "dim",
+        )
     )
 
     stats = ingest_pull.PullStats()
@@ -310,13 +328,16 @@ def _pull(
         # Streams to a staging file; the target only appears once the pull finished.
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
-        console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
+        _refuse(exc)
+        _refuse(f"Nothing was written to {output_path.name}.")
         raise typer.Exit(1) from None
 
     console.print(
-        f"[green]Wrote {written} traces from langfuse ({stats.generations} generations "
-        f"pulled) -> {escape(output_path.name)}[/]"
+        terminal_text(
+            f"Wrote {written} traces from langfuse ({stats.generations} generations "
+            f"pulled) -> {output_path.name}",
+            "green",
+        )
     )
     if stats.generations > written:
         console.print(

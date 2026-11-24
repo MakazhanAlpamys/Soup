@@ -91,39 +91,38 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.77.1 — a patch: `soup data` keeps its input, `soup plan` agrees with `soup train`, and
-GRPO trains on Apple Silicon.** Nothing in v0.77.0 is taken back. That release refuses
-settings v0.76 warned about or ignored, so a config that loaded on v0.76 can stop loading:
-coming from 0.76.x, run `soup doctor --config soup.yaml` first and read the
-[v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
+**v0.78.0 — a cut of `main` after v0.77.2: 271 pull requests, 218 of them from 48 people outside
+the maintainer.** It adds features and several rules that refuse input v0.77.2 accepted, so read the
+[v0.78.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) before
+upgrading a config or a script. Coming from 0.76.x, run `soup doctor --config soup.yaml` first and
+read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **`soup data` commands no longer write over their input.** Eighteen of them (`dedup`,
-  `filter`, `convert`, `merge`, `sample`, `pii`, `toxicity` and the rest) refuse an `--output`
-  that is the same file as an input, under any spelling, before they read anything, and a
-  default output name that the input already has is refused too. Write to a new file instead.
-- **`soup plan` and `soup apply` refuse the configs `soup train` refuses,** with the same
-  message, and write no plan.
-- **GRPO trains natively on Apple Silicon.** `task: grpo` with `backend: mlx` runs Soup's own
-  MLX loop on the objective the transformers path trains, with the built-in `accuracy` or
-  `format` reward. `soup infer --backend mlx` generates from MLX bases and native text LoRA
-  adapters without Torch.
-- **One peak-VRAM estimate** for `soup train`'s pre-flight, `soup profile` and `soup plan`,
-  calibrated on 39 measured runs ([record](benchmarks/gate-2049-resident-vram.md)). For dense
-  models up to about 3.5B parameters, the range it was fitted on, the pre-flight now refuses
-  some long-sequence, large-vocabulary runs it let through, and `--allow-oom-attempt` still
-  launches them. Outside that range (a larger or mixture-of-experts model, `medium` or
-  `selective` checkpointing, `use_liger` / `use_cut_ce`, `backend: unsloth`) a run that does
-  not fit gets the estimate as a warning and starts, unless its weights, the CUDA context and
-  the gradients and optimizer state of the parameters it trains are more than the card holds
-  (a 7B full fine-tune on 80 GB, Llama-3.1-70B in 4-bit on 24 GB): that run is refused there
-  too. LoRA runs and runs that train a subset (Spectrum, LISA, freezing) are judged on fewer
-  terms, and `--allow-oom-attempt` still launches a refused run.
-- **External programs start by an absolute path found on `PATH`.** The current directory and
-  relative `PATH` entries are no longer searched: a tool that only lives there needs its
-  directory on `PATH`.
-- **Also new.** `soup ship --progress jsonl`; unknown config keys written the way another
-  library names them get the Soup field (`learning_rate` suggests `lr`); and the Docker
-  example below passes `--yes`, which a non-interactive `soup train` needs since v0.77.0.
+- **A continual-learning loop.** `soup serve` gives every answer an id and takes feedback on it
+  (thumbs, ratings, edits); `soup loop` trains a candidate from that feedback, judges it with
+  `soup ship --gate loop-v2`, runs it as a canary and rolls back on its own.
+- **`soup ship` shows what its number is made of.** Better/worse/same counts per task, a per-row
+  audit file, `--task-mode reward --reward-fn` to score with a function you supply (a `.py` file is
+  executed), how much the adapter changes the base, and `--base-adapter` to compare two adapters.
+- **New commands.** `soup eval retention` (forgetting across model versions), `soup data leakage`
+  (train/eval overlap), `soup docs search` (offline), `soup prune-layer-cache`, and
+  `soup eval quant-check --performance`.
+- **More on Apple Silicon.** Native MLX chat, merge, selective loss masks, preprocessing caches,
+  vocabulary expansion, RoPE extension and dense Llama SFT.
+- **Layer streaming does more.** A forward-only inference mode, pre-quantised NF4 import, and BCO,
+  IPO and `task: preference` with a single loss train on a streamed base.
+- **VRAM estimates that fit short rows.** A padded SFT run is priced by its longest row, 8-bit
+  checkpointing, cuBLAS workspaces and a distillation teacher are charged, and the pre-flight says
+  why a fit is not checked.
+- **8 new recipes** (181 in all), and a Triton kernel library for Qwen2 QLoRA SFT (no config key).
+- **Text shown as typed.** Dozens more commands print paths and names with brackets and `:name:`
+  text kept and terminal control characters removed.
+
+**Behaviour changes to know.** A boolean in a numeric `training` field is refused. `--push-as`
+creates the repository private (`--push-public` to change that). An enabled eval gate on MLX,
+`prm`, `unlearn` or `moe_lora_routing` is refused. `soup serve --max-tokens` stops at 16384.
+`soup adapters merge` weights and the `tool_call_args_subset` score changed, so merges and ship
+verdicts can differ. Evidence files written by `soup ship` are version 2 when they carry the new
+per-row, function-scored or judge detail, and v0.77.x refuses those.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -289,6 +288,7 @@ soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/I
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
+soup serve  --backend mlx --model ./mlx-output  # native dense text model / LoRA on Apple Silicon
 soup ui                               # local browser dashboard
 soup merge  --adapter ./output        # merge LoRA into the base model
 soup export --model ./output --format gguf           # export for deployment

@@ -351,7 +351,8 @@ class TestAiderCLI:
         assert result.exit_code == 1
         assert "resolves outside the current working directory" in _plain(result.output)
 
-    def test_success_writes_soup_json_and_tracks_run(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("run_arg", ["run_aider_test", "run_aider"])
+    def test_success_writes_soup_json_and_tracks_run(self, tmp_path, monkeypatch, run_arg):
         import soup_cli.eval.aider_polyglot as aider_eval
 
         monkeypatch.chdir(tmp_path)
@@ -392,7 +393,7 @@ class TestAiderCLI:
                 "--exercises-dir",
                 "polyglot",
                 "--run-id",
-                "run_aider_test",
+                run_arg,
                 "--timeout",
                 "600",
                 "--num-tests",
@@ -408,6 +409,8 @@ class TestAiderCLI:
         saved = tracker.get_eval_results(run_id="run_aider_test")
         assert len(saved) == 1
         assert saved[0]["benchmark"] == "aider_polyglot"
+        if run_arg != "run_aider_test":
+            assert not tracker.get_eval_results(run_id=run_arg)
         tracker.close()
 
     def test_subprocess_failure_does_not_emit_summary(self, tmp_path, monkeypatch):

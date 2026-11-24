@@ -1,0 +1,73 @@
+{
+  "status": "pass",
+  "shape": "B2/S128/Hq4/Hkv1/D128, causal, dropout0, seed378",
+  "reference": "explicit FP64 attention/softmax and autograd; identical quantized inputs/dout",
+  "torch": "2.14.1+cu130",
+  "flash_attn": "2.8.3.post2",
+  "cuda": "13.0",
+  "gpu": "NVIDIA H200",
+  "reports": [
+    {
+      "dtype": "torch.float16",
+      "relative_l2_limit": 0.002,
+      "checks": {
+        "output": {
+          "fa2_max_absolute_error": 0.0008784173344786872,
+          "fa2_relative_l2_error": 0.00023928342192809003,
+          "sdpa_math_max_absolute_error": 0.0008784173344786872,
+          "sdpa_math_relative_l2_error": 0.00019853551721002257
+        },
+        "q_grad": {
+          "fa2_max_absolute_error": 0.001519834282583954,
+          "fa2_relative_l2_error": 0.00032075540240073696,
+          "sdpa_math_max_absolute_error": 0.0009290470543161788,
+          "sdpa_math_relative_l2_error": 0.00020738328865249
+        },
+        "k_grad": {
+          "fa2_max_absolute_error": 0.0028231384374488577,
+          "fa2_relative_l2_error": 0.0003795996773881131,
+          "sdpa_math_max_absolute_error": 0.0018773785671157839,
+          "sdpa_math_relative_l2_error": 0.00020719162838906763
+        },
+        "v_grad": {
+          "fa2_max_absolute_error": 0.0037072663251613847,
+          "fa2_relative_l2_error": 0.00037123736364070615,
+          "sdpa_math_max_absolute_error": 0.0019502053814210996,
+          "sdpa_math_relative_l2_error": 0.00021081883254869558
+        }
+      },
+      "passed": true
+    },
+    {
+      "dtype": "torch.bfloat16",
+      "relative_l2_limit": 0.01,
+      "checks": {
+        "output": {
+          "fa2_max_absolute_error": 0.006922300717419949,
+          "fa2_relative_l2_error": 0.0019228379801454235,
+          "sdpa_math_max_absolute_error": 0.005792722383044513,
+          "sdpa_math_relative_l2_error": 0.0015854890769284558
+        },
+        "q_grad": {
+          "fa2_max_absolute_error": 0.015493258355426143,
+          "fa2_relative_l2_error": 0.0025393394272048356,
+          "sdpa_math_max_absolute_error": 0.007626441159858555,
+          "sdpa_math_relative_l2_error": 0.0016647576104888533
+        },
+        "k_grad": {
+          "fa2_max_absolute_error": 0.0198649291145383,
+          "fa2_relative_l2_error": 0.003057291550107827,
+          "sdpa_math_max_absolute_error": 0.014049418242304768,
+          "sdpa_math_relative_l2_error": 0.0016877221039963686
+        },
+        "v_grad": {
+          "fa2_max_absolute_error": 0.027073957688919847,
+          "fa2_relative_l2_error": 0.0028718004594629077,
+          "sdpa_math_max_absolute_error": 0.015363324222906094,
+          "sdpa_math_relative_l2_error": 0.001657822789059518
+        }
+      },
+      "passed": true
+    }
+  ]
+}

@@ -18,7 +18,10 @@ from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.experiment.row_kinds import ROW_KIND_TRAIN
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -29,8 +32,20 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
+
+#: The refusal behind ``--resume`` / ``--hf-resume`` for ``task: ppo``. trl's
+#: experimental ``PPOTrainer.train()`` takes no checkpoint, so a resume request
+#: used to train again from step 0 over the files already in ``output``.
+RESUME_REFUSAL = (
+    "soup train --resume is not supported for task 'ppo': trl's PPOTrainer.train() takes "
+    "no checkpoint, so the run would start over from step 0 and write over the files "
+    "in the output directory. "
+    "Remove --resume to start a new run, or point output at a new directory to keep "
+    "the old one."
+)
 
 
 def _set_ppo_training_kwargs(
@@ -75,7 +90,6 @@ def _set_ppo_training_kwargs(
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
             "bf16": use_bf16,
             "fp16": use_fp16,
             "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
@@ -87,6 +101,27 @@ def _set_ppo_training_kwargs(
                 ppo_kwargs[name] = value
 
     return applied
+
+
+def _set_ppo_save_kwargs(
+    ppo_kwargs: dict[str, object], ppo_config_cls: type, tcfg: Any
+) -> None:
+    """Forward ``training.save_strategy`` / ``save_steps`` to the PPO config (#2575).
+
+    The keywords come from the shared :func:`save_kwargs`, each passed only when the
+    installed trl config takes it, as every other PPO setting is. A config class without
+    ``save_strategy`` is an old trl whose PPO trainer saves on its own schedule, so
+    ``epoch`` / ``no`` cannot be honoured there and is refused rather than ignored.
+    """
+    from soup_cli.trainer._trl_compat import config_accepts
+
+    ppo_kwargs.update(
+        save_kwargs(
+            tcfg,
+            accepts=lambda name: config_accepts(ppo_config_cls, name),
+            config_name=f"the installed {ppo_config_cls.__name__}",
+        )
+    )
 
 
 def _effective_ppo_setting(
@@ -287,9 +322,7 @@ class PPOTrainerWrapper:
         trl_train_ds = train_ds.select_columns(["input_ids", "attention_mask"])
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- PPO config ---
@@ -329,8 +362,7 @@ class PPOTrainerWrapper:
         if config_accepts(ppo_config_cls, "response_length"):
             ppo_kwargs["response_length"] = cfg.data.max_length
 
-        if config_accepts(ppo_config_cls, "save_total_limit"):
-            ppo_kwargs["save_total_limit"] = 3
+        _set_ppo_save_kwargs(ppo_kwargs, ppo_config_cls, tcfg)
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -714,7 +746,7 @@ class PPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -748,13 +780,15 @@ class PPOTrainerWrapper:
         )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         from soup_cli.utils.peft_wiring import (
@@ -788,7 +822,7 @@ class PPOTrainerWrapper:
 
         # #2197: TRL's PPO loop has no Trainer.train(), so nothing else switches
         # checkpointing on for the policy. 4bit/8bit already got it from
-        # prepare_model_for_kbit_training above, with its own kwargs.
+        # prepare_kbit_model above, with its own kwargs.
         if tcfg.quantization not in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
@@ -868,10 +902,23 @@ class PPOTrainerWrapper:
 
         if has_builtin_train:
             return self._train_builtin(display, tracker, run_id, resume_from_checkpoint)
+        if resume_from_checkpoint:
+            # The manual loop never reads a checkpoint: refuse, do not drop it.
+            raise ValueError(RESUME_REFUSAL)
         return self._train_manual(display, tracker, run_id)
 
     def _train_builtin(self, display, tracker, run_id, resume_from_checkpoint):
         """Train using trl >=0.28 built-in trainer.train() method."""
+        import inspect
+
+        # trl's experimental PPOTrainer.train() does not accept resume_from_checkpoint.
+        # `soup train` refuses a resume request for task: ppo before it loads anything
+        # (commands/train.py:_resume_refusal); a direct caller is refused here, before
+        # any state is touched, instead of being restarted from step 0.
+        train_params = inspect.signature(self.trainer.train).parameters
+        if resume_from_checkpoint and "resume_from_checkpoint" not in train_params:
+            raise ValueError(RESUME_REFUSAL)
+
         start = time.time()
 
         # If dataset wasn't accepted by constructor, set it on the trainer
@@ -894,12 +941,8 @@ class PPOTrainerWrapper:
                 )
             )
 
-        # trl experimental PPOTrainer.train() does not accept resume_from_checkpoint
-        import inspect
-
         from soup_cli.utils.v028_features import activation_offloading_context
 
-        train_params = inspect.signature(self.trainer.train).parameters
         with activation_offloading_context(
             self.config.training, self._output_dir,
         ):
@@ -909,19 +952,16 @@ class PPOTrainerWrapper:
                     fp16=getattr(self.trainer.args, "fp16", False),
                     bf16=getattr(self.trainer.args, "bf16", False),
                 )
-                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+                with manual_save_context(self.trainer, stop_after_save=True):
+                    self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
             else:
-                if resume_from_checkpoint:
-                    console.print(
-                        "[yellow]Warning: This PPOTrainer does not support "
-                        "resume_from_checkpoint -- starting from scratch.[/]"
-                    )
                 align_trainable_dtype_for_fp16(
                     self.trainer.model,
                     fp16=getattr(self.trainer.args, "fp16", False),
                     bf16=getattr(self.trainer.args, "bf16", False),
                 )
-                self.trainer.train()
+                with manual_save_context(self.trainer, stop_after_save=True):
+                    self.trainer.train()
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:
@@ -1024,6 +1064,7 @@ class PPOTrainerWrapper:
                         epoch=epoch + 1,
                         loss=log_entry["loss"],
                         lr=log_entry["lr"],
+                        kind=ROW_KIND_TRAIN,
                     )
 
         duration = time.time() - start

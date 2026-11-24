@@ -1,0 +1,6 @@
+{
+  "step_log.jsonl_sha256": "238c8944876b00860798c6ef235258bf0f2e42845ec5a7bfd4085b5945bdeef3",
+  "steps_logged": 300,
+  "torch_max_allocated_mib_max": 20126.74951171875,
+  "torch_max_reserved_mib_max": 24236.0
+}

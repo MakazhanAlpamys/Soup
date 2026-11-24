@@ -27,7 +27,7 @@ def why(
     Heuristic — looks at the SQLite-stored metric series and config and
     surfaces common pathologies (NaN loss, plateaus, divergence, bad LR).
     """
-    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
     from soup_cli.utils.why import diagnose
 
     tracker = ExperimentTracker()
@@ -40,7 +40,7 @@ def why(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {escape(run_id)}")
+            console.print(f"[red]{run_lookup_failure(tracker, run_id)}[/]", emoji=False)
             raise typer.Exit(1)
 
     metrics = tracker.get_metrics(target["run_id"])

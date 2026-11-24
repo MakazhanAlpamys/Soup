@@ -188,6 +188,11 @@
   "parameters": 873438784,
   "routed_experts": 0
  },
+ "Qwen/Qwen3.5-0.8B-Base": {
+  "model_type": "qwen3_5",
+  "parameters": 873438784,
+  "routed_experts": 0
+ },
  "Qwen/Qwen3.5-122B-A10B": {
   "model_type": "qwen3_5_moe",
   "parameters": 125086497008,
@@ -203,7 +208,17 @@
   "parameters": 2274069824,
   "routed_experts": 0
  },
+ "Qwen/Qwen3.5-2B-Base": {
+  "model_type": "qwen3_5",
+  "parameters": 2274069824,
+  "routed_experts": 0
+ },
  "Qwen/Qwen3.5-35B-A3B": {
+  "model_type": "qwen3_5_moe",
+  "parameters": 35951822704,
+  "routed_experts": 256
+ },
+ "Qwen/Qwen3.5-35B-A3B-Base": {
   "model_type": "qwen3_5_moe",
   "parameters": 35951822704,
   "routed_experts": 256
@@ -224,6 +239,11 @@
   "routed_experts": 0
  },
  "Qwen/Qwen3.5-9B": {
+  "model_type": "qwen3_5",
+  "parameters": 9653104368,
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.5-9B-Base": {
   "model_type": "qwen3_5",
   "parameters": 9653104368,
   "routed_experts": 0

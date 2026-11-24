@@ -7,8 +7,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import terminal_text
 
 console = Console()
 
@@ -19,6 +20,9 @@ def chat(
         "--model",
         "-m",
         help="Path to LoRA adapter directory or full model",
+    ),
+    backend: str = typer.Option(
+        "transformers", "--backend", help="Text backend: transformers or mlx",
     ),
     base_model: Optional[str] = typer.Option(
         None,
@@ -33,6 +37,7 @@ def chat(
     max_tokens: int = typer.Option(
         512,
         "--max-tokens",
+        min=1,
         help="Maximum number of tokens to generate",
     ),
     temperature: float = typer.Option(
@@ -67,6 +72,21 @@ def chat(
     ),
 ):
     """Chat with a fine-tuned model in the terminal."""
+    from soup_cli.utils.mlx_generation import reject_native_adapter, validate_native_options
+
+    if backend not in ("transformers", "mlx"):
+        raise typer.BadParameter("--backend must be transformers or mlx")
+    try:
+        if backend == "mlx":
+            validate_native_options(
+                temperature=temperature, max_tokens=max_tokens, device=device, hub=hub,
+            )
+        else:
+            reject_native_adapter(model)
+    except ValueError as exc:
+        console.print(terminal_text(exc, "red"))
+        raise typer.Exit(1) from exc
+
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before any path
     # resolution. Local paths and HF repo IDs are passed through unchanged.
     if hub and hub != "hf":
@@ -77,73 +97,87 @@ def chat(
                 model, base_model, hub, console=console
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(code=2) from exc
         except ImportError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(code=1) from exc
 
     model_path = Path(model)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
+        console.print(terminal_text(f"Model path not found: {model_path}", "red"))
         raise typer.Exit(1)
 
     # Detect if it's a LoRA adapter or full model
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
 
-    # Resolve base model
-    if is_adapter and not base_model:
-        base_model = _detect_base_model(adapter_config_path)
-        if not base_model:
-            console.print(
-                "[red]Cannot detect base model from adapter_config.json.[/]\n"
-                "Please specify with [bold]--base[/] flag."
+    if backend == "mlx":
+        from soup_cli.utils.mlx_generation import load_native_model
+
+        try:
+            model_obj, tokenizer = load_native_model(
+                str(model_path), base_model, trust_remote_code=trust_remote_code,
             )
-            raise typer.Exit(1)
+        except (ImportError, OSError, ValueError) as exc:
+            console.print(terminal_text(exc, "red"))
+            raise typer.Exit(1) from exc
+    else:
+        # Resolve base model
+        if is_adapter and not base_model:
+            base_model = _detect_base_model(adapter_config_path)
+            if not base_model:
+                console.print(
+                    "[red]Cannot detect base model from adapter_config.json.[/]\n"
+                    "Please specify with [bold]--base[/] flag."
+                )
+                raise typer.Exit(1)
 
-    # Detect device
-    if not device:
-        from soup_cli.utils.gpu import detect_device
+        # Detect device
+        if not device:
+            from soup_cli.utils.gpu import detect_device
 
-        device, _ = detect_device()
+            device, _ = detect_device()
 
-    console.print(
-        Panel(
-            f"Model:  [bold]{for_terminal(model_path)}[/]\n"
-            + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
-            + f"Device: [bold]{device}[/]\n"
-            f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
-            title="Loading model",
+        console.print(
+            Panel(
+                Text.assemble(
+                    "Model:  ", terminal_text(model_path, "bold"), "\n",
+                    Text.assemble("Base:   ", terminal_text(base_model, "bold"), "\n")
+                    if is_adapter else "",
+                    "Device: ", terminal_text(device, "bold"), "\n",
+                    "Type:   ", ("LoRA adapter" if is_adapter else "Full model", "bold"),
+                ),
+                title="Loading model",
+            )
         )
-    )
 
-    # Resolve --trust-remote-code (v0.36.0 Part B). Uses the base model id
-    # for LoRA adapters since that's what gets executed; otherwise the
-    # local model path.
-    from soup_cli.utils.trust_remote import (
-        model_requires_trust_remote_code,
-        resolve_trust_remote_code,
-    )
+        # Resolve --trust-remote-code (v0.36.0 Part B). Uses the base model id
+        # for LoRA adapters since that's what gets executed; otherwise the
+        # local model path.
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
 
-    probe_target = base_model or str(model_path)
-    requires = model_requires_trust_remote_code(str(model_path)) or False
-    resolved_trust = resolve_trust_remote_code(
-        probe_target,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=requires,
-    )
+        probe_target = base_model or str(model_path)
+        requires = model_requires_trust_remote_code(str(model_path)) or False
+        resolved_trust = resolve_trust_remote_code(
+            probe_target,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
 
-    # Load model + tokenizer
-    model_obj, tokenizer = _load_model(
-        model_path=str(model_path),
-        base_model=base_model,
-        is_adapter=is_adapter,
-        device=device,
-        trust_remote_code=resolved_trust,
-    )
+        # Load model + tokenizer
+        model_obj, tokenizer = _load_model(
+            model_path=str(model_path),
+            base_model=base_model,
+            is_adapter=is_adapter,
+            device=device,
+            trust_remote_code=resolved_trust,
+        )
 
     console.print("[bold green]Model loaded![/] Type your message. Commands:")
     console.print("  [dim]/quit[/]  - exit chat")
@@ -182,21 +216,35 @@ def chat(
             # Remove old system prompt if exists
             history = [msg for msg in history if msg["role"] != "system"]
             history.insert(0, {"role": "system", "content": new_system})
-            console.print(f"[dim]System prompt set: {for_terminal(new_system)}[/]\n")
+            console.print(terminal_text(f"System prompt set: {new_system}\n", "dim"))
             continue
 
         # Add user message
         history.append({"role": "user", "content": user_input})
 
         # Generate response
-        response = _generate(
-            model_obj, tokenizer, history,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        try:
+            if backend == "mlx":
+                from soup_cli.utils.mlx_generation import generate_native
+
+                response, _ = generate_native(
+                    model_obj, tokenizer, history,
+                    max_tokens=max_tokens, temperature=temperature,
+                )
+            else:
+                response = _generate(
+                    model_obj, tokenizer, history,
+                    max_tokens=max_tokens, temperature=temperature,
+                )
+        except (KeyboardInterrupt, EOFError):
+            if backend != "mlx":
+                raise
+            console.print("\n[dim]Goodbye![/]")
+            break
 
         history.append({"role": "assistant", "content": response})
-        console.print(f"[bold green]Assistant:[/] {for_terminal(response)}\n")
+        console.print(Text.assemble(("Assistant:", "bold green"), " ",
+                                    terminal_text(response), "\n"))
 
 
 def _detect_base_model(adapter_config_path: Path) -> Optional[str]:
@@ -233,17 +281,17 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
+        console.print(terminal_text(f"Loading base model: {base_model}...", "dim"))
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
             device_map=device_map,
             dtype=torch_dtype,
         )
-        console.print(f"[dim]Loading LoRA adapter: {for_terminal(model_path)}...[/]")
+        console.print(terminal_text(f"Loading LoRA adapter: {model_path}...", "dim"))
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
-        console.print(f"[dim]Loading model: {for_terminal(model_path)}...[/]")
+        console.print(terminal_text(f"Loading model: {model_path}...", "dim"))
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,

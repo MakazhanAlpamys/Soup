@@ -204,3 +204,37 @@ def test_streamed_tokenizer_load_keeps_user_trust_bound_revision_and_the_native_
     with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
         eval(compile(ast.Expression(body=calls[0]), "<streamed tokenizer load>", "eval"), env)
     assert seen == [BASE]
+
+
+@pytest.mark.parametrize("trainer", ["sft", "grpo"])
+def test_resident_tokenizer_load_keeps_user_trust_bound_revision_and_the_native_config(
+    trainer, monkeypatch,
+):
+    """#2104 review round 2, ask 3: the resident sft/grpo tokenizer call has the streamed
+    route's shape — the guarded native config (the resident route's own loader, not
+    ``AutoConfig`` under the user's flag), the user's trust flag, and the bound commit.
+    Executing the actual AST call node: dropping ``config=`` fails independently."""
+    path = ROOT / f"src/soup_cli/trainer/{trainer}.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    calls = _from_pretrained_calls(tree, "AutoTokenizer")
+    assert len(calls) == 1
+    seen = []
+    sentinel = object()
+
+    def load(model_id, *, config, trust_remote_code, revision):
+        assert model_id == BASE and revision == REVISION
+        assert config is sentinel
+        assert trust_remote_code is True
+        seen.append(model_id)
+
+    env = {
+        "cfg": SimpleNamespace(base=BASE),
+        "self": SimpleNamespace(_trust_remote_code=True),
+        "AutoTokenizer": SimpleNamespace(from_pretrained=load),
+        "resident_tokenizer_config": sentinel,
+        "base_revision_kwargs": provenance.base_revision_kwargs,
+    }
+    _bind_revision(monkeypatch)
+    with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
+        eval(compile(ast.Expression(body=calls[0]), "<resident tokenizer load>", "eval"), env)
+    assert seen == [BASE]

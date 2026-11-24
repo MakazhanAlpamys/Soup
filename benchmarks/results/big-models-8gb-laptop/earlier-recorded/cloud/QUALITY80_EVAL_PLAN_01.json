@@ -1,0 +1,25 @@
+{
+  "schema": "root-context80-preregistered-quality-plan-v1",
+  "status": "holdout_frozen_before_scoring",
+  "holdout": {
+    "path": "QUALITY80_HOLDOUT_01.json",
+    "sha256": "313400d0c6382d7cc4f02b53543f2cf9724bff9aead51173ba9b3b036fd799af",
+    "generator": "quality_holdout80.py",
+    "generator_sha256": "c637a62d321e108b1416b3ef1f0a69e837ae137d5ab8e94104378cf3c0588285",
+    "examples": 32,
+    "counterfactual_pairs": 16,
+    "visible_tokens": 8192
+  },
+  "starting_state": "ROOT_CONTEXT75_HANDOFF_01.json",
+  "matched_control": "ROOT_CONTEXT76_HANDOFF_01.json",
+  "native_reference": "ROOT_CONTEXT79_HANDOFF_01.json",
+  "weighted_first_step_reference": "ROOT_CONTEXT78_HANDOFF_01.json",
+  "training_design": "A is the archived four-step Stage76 run. B starts at the same Step 2 with the same four training rows and order, LR and live AdamW state, changes only the loss coefficients from [0.5,0.5] to [0.5,0], and requires exact native/staged Step 3 parity before further updates.",
+  "evaluation_design": "Authenticate and lock Step 2, A Step 6 and B Step 6 before scoring the same 32 independent paired cases. Training uses only the original frozen train split.",
+  "practical_advancement": {
+    "minimum_more_correct_than_control": 3,
+    "at_least_starting_state_accuracy": true,
+    "conditional_four_choice_nll_lower_than_both": true
+  },
+  "diagnostics": ["paired transitions", "counterfactual pair accuracy", "label NLL", "EOS NLL"]
+}

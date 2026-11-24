@@ -1,0 +1,26 @@
+{
+  "note": "SHA-256 of every recorded file compared with the value stored in the earlier run's result file. Counts and seconds are each check's own stdout.",
+  "qwen3_32b_nf4_source": {
+    "dir": "<ASSETS>\\qwen3-32b-nf4-7f721e74",
+    "recorded_files": 12,
+    "different_or_missing": 0,
+    "seconds": 18.4
+  },
+  "mistral_large_nf4_source": {
+    "dir": "<ASSETS>\\mistral123-nf4-a76e109f",
+    "recorded_files": 45,
+    "different_or_missing": 0,
+    "seconds": 66.8
+  },
+  "mistral_large_soup_store": {
+    "dir": "<ASSETS>\\mistral123-soup-full-a76e109f",
+    "recorded_files": 93,
+    "different_or_missing": 0,
+    "seconds": 75.9
+  },
+  "qwen3_32b_rebuilt_soup_store": {
+    "recorded_files": 69,
+    "different_or_missing": 0,
+    "seconds": 25.4
+  }
+}

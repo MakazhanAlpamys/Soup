@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -175,6 +176,76 @@ def _validate_top_k(top_k: object) -> int:
     if top_k < _MIN_TOP_K or top_k > _MAX_TOP_K:
         raise ValueError(f"top_k must be in [{_MIN_TOP_K}, {_MAX_TOP_K}]")
     return top_k
+
+
+_PEFT_KEY_PREFIX = "base_model.model."
+
+
+def peft_module_name(stem: str) -> str:
+    """The module name PEFT matches ``rank_pattern`` / ``alpha_pattern`` keys against.
+
+    ``stem`` is a saved LoRA tensor name without its ``.lora_A.weight`` /
+    ``.lora_B.weight`` suffix; PEFT saves those under a ``base_model.model.`` prefix.
+    """
+    return stem[len(_PEFT_KEY_PREFIX):] if stem.startswith(_PEFT_KEY_PREFIX) else stem
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    out = float(value)
+    return out if math.isfinite(out) else None
+
+
+def _pattern_value(patterns: Any, module: str, default: Any) -> Any:
+    """The ``rank_pattern`` / ``alpha_pattern`` value PEFT applies to ``module``.
+
+    Mirrors ``peft.utils.other.get_pattern_key``: the first key ``k`` for which
+    ``(.*\\.)?(k)$`` matches the module name wins, and no match keeps ``default``.
+    """
+    if not isinstance(patterns, Mapping):
+        return default
+    for key, value in patterns.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            if re.match(rf"(.*\.)?({key})$", module):
+                return value
+        except re.error:
+            continue
+    return default
+
+
+def lora_module_scaling(config: Mapping[str, Any], module: str) -> Optional[float]:
+    """The decode-time scaling PEFT gives ``module`` under an ``adapter_config.json``.
+
+    ``lora_alpha / r``, or ``lora_alpha / sqrt(r)`` with ``use_rslora``, after the
+    per-module ``rank_pattern`` / ``alpha_pattern`` overrides. ``module`` is the
+    module name PEFT matches those patterns against (``model.layers.0.self_attn.q_proj``).
+    Returns ``None`` when the config carries no usable ``r`` / ``lora_alpha``.
+    """
+    rank = _finite_number(_pattern_value(config.get("rank_pattern"), module, config.get("r")))
+    alpha = _finite_number(
+        _pattern_value(config.get("alpha_pattern"), module, config.get("lora_alpha"))
+    )
+    if rank is None or alpha is None or rank <= 0:
+        return None
+    if config.get("use_rslora"):
+        return alpha / math.sqrt(rank)
+    return alpha / rank
+
+
+def read_adapter_config_or_none(adapter_dir: str) -> Optional[dict]:
+    """``adapter_config.json`` as a dict, or ``None`` when it is absent or unusable.
+
+    Never refuses: a caller without a usable config keeps its previous behaviour.
+    """
+    from soup_cli.utils.adapter_arithmetic import _read_adapter_config_dict
+
+    try:
+        return _read_adapter_config_dict(adapter_dir)
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 READ_ADAPTER_DEPS: Tuple[str, ...] = ("numpy",)

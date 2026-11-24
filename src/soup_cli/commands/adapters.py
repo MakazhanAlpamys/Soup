@@ -455,6 +455,14 @@ def merge(
             )
             raise typer.Exit(2)
 
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths([("adapter", path) for path in adapters], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
     # spectral scan returns FAIL (or that cannot be scanned at all) unless the
     # operator passes --allow-unscanned. WARN is advisory-only. Runs BEFORE the
@@ -765,8 +773,8 @@ def arithmetic(
         read_adapter_lora_scaling,
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
-    from soup_cli.utils.adapter_merge import write_merged_adapter
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.adapter_merge import fold_lora_scaling, write_merged_adapter
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
     # 1. Parse the --adapter name=path map.
     name_re = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -810,6 +818,16 @@ def arithmetic(
 
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
+
+    # Refuse writing over a referenced adapter before any adapter is read (#2358).
+    try:
+        ensure_distinct_paths(
+            [(f"adapter {n}", path) for n, path in zip(referenced, ref_paths)],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     from soup_cli.utils.adapter_diff import (
         WRITE_ADAPTER_DEPS,
@@ -936,8 +954,12 @@ def arithmetic(
             "alpha_pattern": {},
         }
     else:
+        # The output keeps the first referenced adapter's config, so each other
+        # input's lora_B is rescaled to decode at that adapter's LoRA scaling.
         try:
-            merged, skipped = merge_task_arithmetic(weights_list, coeffs)
+            merged, skipped = merge_task_arithmetic(
+                fold_lora_scaling(weights_list, ref_paths), coeffs
+            )
         except ValueError as exc:
             console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
@@ -1619,19 +1641,152 @@ def adapter_pr(
     )
 
 
+def _closes_at_word_end(command: str, index: int) -> bool:
+    """Whether the ``'`` at ``index``, inside a word, opens a single-quoted group.
+
+    It does when the next ``'`` of the command ends a word (whitespace or the end
+    of the command follows it): ``--opt='a b'`` is ``--opt=a b``. Otherwise it is
+    a literal character, as an apostrophe is: ``don't``, ``a'b c``, ``O'Brien``,
+    an unclosed ``--opt='a b``, and ``don't stop 'x'`` (the next ``'`` opens a
+    word, it does not end one) keep it. So does a ``'`` followed by a ``"`` that
+    opens a double-quoted group before the next ``'``: in ``don't "James' file"``
+    the ``'`` of ``James'`` is inside that group, and ``don't`` stays one word.
+    A ``"`` after an odd number of backslashes is a literal character, as in
+    :func:`_split_windows_command`, and opens no group.
+    """
+    length = len(command)
+    position = index + 1
+    while position < length:
+        char = command[position]
+        if char == "\\":
+            run_end = position
+            while run_end < length and command[run_end] == "\\":
+                run_end += 1
+            if run_end < length and command[run_end] == '"' and (run_end - position) % 2:
+                position = run_end + 1
+            else:
+                position = run_end
+            continue
+        if char == '"':
+            return False
+        if char == "'":
+            return position + 1 == length or command[position + 1] in " \t"
+        position += 1
+    return False
+
+
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line according to Microsoft C runtime rules,
+    with single-quote grouping support for cross-platform compatibility.
+
+    A ``'`` that starts a word groups to the next ``'``. A ``'`` inside a word
+    groups only as :func:`_closes_at_word_end` says, so ``--opt='a b'`` groups as
+    ``--opt="a b"`` does. A ``'`` that ends a word (whitespace or the end of the
+    command follows it, as in ``dogs' and cats'``) never opens a group, and
+    neither does a ``'`` inside double quotes or after a backslash: each is a
+    literal character.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_dquote = False
+    in_squote = False
+    has_token = False
+
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+
+        if not in_dquote and not in_squote and char in (" ", "\t"):
+            if has_token:
+                args.append("".join(current))
+                current = []
+                has_token = False
+            index += 1
+            continue
+
+        if not in_dquote:
+            if in_squote:
+                if char == "'":
+                    in_squote = False
+                    index += 1
+                    continue
+                current.append(char)
+                index += 1
+                continue
+            elif char == "'" and (
+                not has_token
+                or (
+                    # A ' that ends a word (dogs') stays a literal character.
+                    index + 1 < length
+                    and command[index + 1] not in " \t"
+                    and _closes_at_word_end(command, index)
+                )
+            ):
+                in_squote = True
+                has_token = True
+                index += 1
+                continue
+
+        has_token = True
+
+        if char == "\\":
+            num_bs = 0
+            while index < length and command[index] == "\\":
+                num_bs += 1
+                index += 1
+
+            if index < length and command[index] == '"':
+                current.append("\\" * (num_bs // 2))
+                if num_bs % 2 != 0:
+                    current.append('"')
+                    index += 1
+                else:
+                    if in_dquote and index + 1 < length and command[index + 1] == '"':
+                        current.append('"')
+                        index += 2
+                    else:
+                        in_dquote = not in_dquote
+                        index += 1
+            else:
+                current.append("\\" * num_bs)
+                if index < length and command[index] == "'":
+                    # A backslash before ``'`` keeps it a literal character.
+                    current.append("'")
+                    index += 1
+            continue
+
+        if char == '"':
+            if in_dquote and index + 1 < length and command[index + 1] == '"':
+                current.append('"')
+                index += 2
+            else:
+                in_dquote = not in_dquote
+                index += 1
+            continue
+
+        current.append(char)
+        index += 1
+
+    if has_token:
+        args.append("".join(current))
+
+    if in_dquote or in_squote:
+        raise ValueError("No closing quotation")
+
+    return args
+
+
 def _split_bisect_eval_command(command: str, *, windows: Optional[bool] = None) -> list[str]:
     """Split the template before substitution, preserving native path spelling."""
     import shlex
 
     if windows is None:
         windows = os.name == "nt"
-    argv = shlex.split(command, posix=not windows)
     if windows:
-        argv = [
-            word[1:-1] if len(word) >= 2 and word.startswith('"') and word.endswith('"')
-            else word
-            for word in argv
-        ]
+        argv = _split_windows_command(command)
+    else:
+        argv = shlex.split(command, posix=True)
     if not argv or not argv[0]:
         raise ValueError("--eval-command must name a program")
     return argv
@@ -1652,6 +1807,9 @@ def adapter_bisect(
         help=(
             "Command template (no shell); '{ckpt}' is replaced with each "
             "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
+            "Quotes group words on every platform. On Windows a single quote groups "
+            "when it starts a word ('a b') or when its closing quote ends the word "
+            "(--opt='a b'); any other ' (don't) is a literal character. "
             "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
         ),
     ),

@@ -205,3 +205,23 @@ class TestMinillmOnPolicyCliFlag:
         out = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert result.exit_code != 0
         assert "minillm_teacher_mix_ratio" in out
+
+    def test_cli_on_policy_without_minillm_enabled_fails_config_validation(
+        self, tmp_path
+    ) -> None:
+        """Regression test for #2367: --minillm-on-policy without minillm_enabled exits 1."""
+        import re
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(_distill_yaml(), encoding="utf-8")
+        result = CliRunner().invoke(
+            app,
+            ["train", "--config", str(path), "--minillm-on-policy"],
+        )
+        assert result.exit_code == 1
+        clean = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+        assert "MiniLLM tunables ['minillm_on_policy'] require minillm_enabled=True" in clean

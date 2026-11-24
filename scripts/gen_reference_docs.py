@@ -645,6 +645,11 @@ def render_config_reference(model: type[BaseModel] | None = None) -> str:
         "The guides linked from the [docs index](README.md) explain what the settings do",
         "together; this page is the lookup table.",
         "",
+        "For fields directly under `training` and under `training.lora`, booleans",
+        "`true` and `false` (including YAML aliases such as `yes` and `no`) are refused",
+        "for scalar `int` and `float` fields. Write an explicit numeric value instead.",
+        "The `training.lora.r` field requires an integer, not `false`.",
+        "",
         "How to read a table:",
         "",
         "- **Key** is the full YAML path: `training.lora.r` is `r:` under `lora:` under",
@@ -1287,6 +1292,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{rel} is stale.")
             for line in _first_difference(committed, pages[rel]):
                 print(line)
+        print(
+            "A page is rendered from the code: edit the command's docstring or help= (or the "
+            "field's description), not the page, so a sentence written by hand is not lost "
+            "at the next regeneration."
+        )
         print(f"Run `{_REGENERATE}` and commit the result.")
         return 1
     for rel in stale:

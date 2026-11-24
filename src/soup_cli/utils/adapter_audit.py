@@ -21,6 +21,7 @@ run.
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -61,6 +62,13 @@ def _is_number(value: Any) -> bool:
     # which refuses both -- ValueError for NaN, OverflowError for inf, raised
     # out of the command (#763 review). A number the arithmetic cannot use is
     # not a number for this purpose.
+    #
+    # An int past the double range is such a number too, and `math.isfinite`
+    # says so by raising OverflowError while converting it -- the very error
+    # this guard exists to prevent (#2370). The bound is checked before the
+    # conversion, so the guard returns False for it.
+    if isinstance(value, int) and abs(value) > sys.float_info.max:
+        return False
     return math.isfinite(value)
 
 
@@ -384,7 +392,9 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     one run that most needs reporting -- #683 itself, handed a clean bill by
     the command written to catch it.
     """
-    asked = bool(data.get("train_on_responses_only", True))
+    asked = bool(data.get("train_on_responses_only", True)) or bool(
+        data.get("train_on_messages_with_train_field", False)
+    )
     prefix_mask = record.get("mask_prompt")
     token_mask = record.get("response_token_mask")
 

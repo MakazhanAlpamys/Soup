@@ -200,7 +200,11 @@ class TestInsideTheRange:
         assert "--allow-oom-attempt set: launching anyway." in text
         assert OUTSIDE not in text
 
-    def test_a_card_that_fits_is_let_through_without_a_word(self, shape_of, screen):
+    def test_a_card_that_fits_is_let_through_without_a_word(
+        self, shape_of, screen, monkeypatch
+    ):
+        # Offline, so no line is printed before a Hub request either (#2306).
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
         shape_of(_SMALL, _SMALL_PARAMS)
         assert _run(_yaml(), card=BIG_CARD) is None
         assert screen() == ""

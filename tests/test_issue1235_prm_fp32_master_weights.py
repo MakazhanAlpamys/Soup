@@ -549,9 +549,12 @@ class TestThePreflight:
         assert "exceeds 16.0 GB available" in out, out
         assert "weights 6.0 | optim 12.0 | grads 6.0" in out, out
 
-    def test_a_card_that_can_hold_them_is_not(self, printed):
+    def test_a_card_that_can_hold_them_is_not(self, printed, monkeypatch):
         """Control: the same run on an 80 GB card passes silently."""
         from soup_cli.commands.train import _hardware_fit_preflight
+
+        # Offline, so no line is printed before a Hub request either (#2306).
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
         _hardware_fit_preflight(
             self._cfg(), {"memory_total_bytes": 80 * 10**9}, allow_oom_attempt=False

@@ -77,6 +77,9 @@ def inside_the_calibrated_range(monkeypatch):
 
 @pytest.fixture
 def console(monkeypatch):
+    # Offline, so the line printed before a Hub request (#2306) is not among the
+    # renderables counted here.
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     fake = _Console()
     monkeypatch.setattr(train_mod, "console", fake)
     return fake
@@ -332,12 +335,14 @@ class TestTheSkipLine:
         assert console.printed == []
 
     @pytest.mark.parametrize("quant", ["gptq", "none"])
-    def test_the_other_reason_to_skip_stays_silent(self, console, quant):
-        # The line is about the format. batch_size: auto is skipped as before.
+    def test_auto_batch_says_the_fit_is_not_checked(self, console, quant):
         cfg = _cfg(quant, batch_size="auto")
         assert _build_hardware_fit_input(cfg) is None
         _hardware_fit_preflight(cfg, SMALL_CARD, allow_oom_attempt=False)
-        assert console.printed == []
+        assert [_plain(line) for line in console.printed] == [
+            "Pre-flight: the fit is not checked before training: "
+            "training.batch_size is auto, which is chosen after the model loads."
+        ]
 
     def test_hqq_with_batch_size_auto_still_gets_the_line(self, console):
         _hardware_fit_preflight(

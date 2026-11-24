@@ -7,7 +7,10 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.data.formats import split_embedding_negatives
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -19,6 +22,7 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -79,6 +83,11 @@ class EmbeddingTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #2556: one objective per split, decided before any model loads.
+        has_negatives = split_embedding_negatives(dataset["train"], "train")
+        if dataset.get("val"):
+            split_embedding_negatives(dataset["val"], "validation")
+
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
@@ -108,15 +117,12 @@ class EmbeddingTrainerWrapper:
             eval_ds = Dataset.from_list(dataset["val"])
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Determine loss function ---
         loss_type = tcfg.embedding_loss
         margin = tcfg.embedding_margin
-        has_negatives = "negative" in train_ds.column_names
 
         if loss_type == "triplet" and not has_negatives:
             console.print(
@@ -191,8 +197,7 @@ class EmbeddingTrainerWrapper:
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             "bf16": _bf16,
             "fp16": _fp16,
             "report_to": self.report_to,
@@ -264,7 +269,7 @@ class EmbeddingTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModel, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -302,13 +307,15 @@ class EmbeddingTrainerWrapper:
         )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         if tcfg.lora.r == 0:
@@ -429,7 +436,8 @@ class EmbeddingTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:
@@ -657,6 +665,9 @@ class _EmbeddingTrainer:
 
     def add_callback(self, callback):
         return self._trainer.add_callback(callback)
+
+    def remove_callback(self, callback: object) -> None:
+        self._trainer.remove_callback(callback)
 
     @property
     def state(self):

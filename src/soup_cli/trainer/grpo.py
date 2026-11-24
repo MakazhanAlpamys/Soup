@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -12,7 +13,9 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils import final_answer
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -29,6 +32,7 @@ from soup_cli.utils.mixed_precision import (
 )
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -66,7 +70,7 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
         _soup_fallback_warned: bool = False
 
         def _warn_fallback(self, reason: str) -> None:
-            """Emit a one-shot WARNING when the variant kernel falls back.
+            """Emit a one-shot warning when the variant kernel falls back.
 
             v0.71.11 #159 — when a TRL internal rename or a kernel error
             makes ``compute_loss`` delegate to the stock GRPO loss, the
@@ -149,6 +153,80 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
             tool_mask = _read_attr(inputs, "tool_mask")
             if mask is not None and tool_mask is not None:
                 mask = mask * tool_mask
+            global_token_count = None
+            num_processes = 1
+            use_global_dapo_normalizer = False
+            if self._soup_grpo_variant == "dapo":
+                count = _read_attr(inputs, "num_items_in_batch")
+                if hasattr(inputs, "get"):
+                    has_count = "num_items_in_batch" in inputs
+                else:
+                    has_count = hasattr(inputs, "num_items_in_batch")
+                count_reason = None
+                if not has_count:
+                    count_reason = "num_items_in_batch is missing"
+                elif count is None:
+                    count_reason = "num_items_in_batch is None"
+                elif isinstance(count, bool):
+                    count_reason = f"num_items_in_batch is boolean ({count!r})"
+                elif isinstance(count, (int, float)):
+                    if isinstance(count, float) and not math.isfinite(count):
+                        count_reason = f"num_items_in_batch is not finite ({count!r})"
+                    elif count <= 0:
+                        count_reason = f"num_items_in_batch is not positive ({count!r})"
+                else:
+                    import torch
+
+                    if torch.is_tensor(count):
+                        if count.ndim != 0:
+                            count_reason = (
+                                "num_items_in_batch tensor must be zero-dimensional "
+                                f"(shape={tuple(count.shape)!r})"
+                            )
+                        elif count.dtype == torch.bool or count.dtype.is_complex:
+                            count_reason = (
+                                "num_items_in_batch tensor must have a real numeric "
+                                f"dtype (dtype={count.dtype})"
+                            )
+                        else:
+                            count_value = count.detach().item()
+                            if isinstance(count_value, float) and not math.isfinite(
+                                count_value
+                            ):
+                                count_reason = (
+                                    "num_items_in_batch is not finite "
+                                    f"({count!r})"
+                                )
+                            elif count_value <= 0:
+                                count_reason = (
+                                    "num_items_in_batch is not positive "
+                                    f"({count!r})"
+                                )
+                    else:
+                        count_reason = (
+                            "num_items_in_batch must be an int, float, or "
+                            f"zero-dimensional numeric tensor (got {type(count).__name__}: "
+                            f"{count!r})"
+                        )
+                accelerator = getattr(self, "accelerator", None)
+                process_count = getattr(accelerator, "num_processes", 1)
+                valid_process_count = (
+                    isinstance(process_count, int)
+                    and not isinstance(process_count, bool)
+                    and process_count > 0
+                )
+                if count_reason is None and valid_process_count:
+                    global_token_count = count
+                    num_processes = process_count
+                    use_global_dapo_normalizer = True
+                else:
+                    if count_reason is None:
+                        count_reason = (
+                            "accelerator.num_processes must be a positive integer "
+                            f"(got {process_count!r})"
+                        )
+                    self._warn_fallback(count_reason)
+                    return None
 
             try:
                 variant_loss = apply_variant_loss(
@@ -160,6 +238,8 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                     delta=delta,
                     completion_mask=mask,
                     reference_logp=ref_logp,
+                    global_token_count=global_token_count,
+                    num_processes=num_processes,
                 )
             except (TypeError, ValueError) as exc:
                 self._warn_fallback(f"kernel error: {exc}")
@@ -182,12 +262,9 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
             metrics = getattr(self, "_metrics", None)
             if mean_kl is not None and metrics is not None:
                 metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
-            normalizer = (
-                getattr(self, "current_gradient_accumulation_steps", 1.0)
-                if mode == "train"
-                else 1.0
-            )
-            return variant_loss / normalizer
+            if mode == "train" and not use_global_dapo_normalizer:
+                return variant_loss / getattr(self, "current_gradient_accumulation_steps", 1.0)
+            return variant_loss
 
         def _compute_loss(self, model, inputs):
             loss = self._compute_variant_loss(model, inputs)
@@ -471,9 +548,7 @@ class GRPOTrainerWrapper:
             eval_ds = Dataset.from_list(eval_data)
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Calculate warmup steps from ratio (#1431) ---
@@ -525,8 +600,7 @@ class GRPOTrainerWrapper:
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             **self._build_precision_kwargs(),
             "report_to": self.report_to,
             "remove_unused_columns": False,
@@ -538,22 +612,6 @@ class GRPOTrainerWrapper:
             "num_generations": tcfg.num_generations,
             "max_completion_length": cfg.data.max_length,
         }
-
-        # v0.71.21 #124 — vLLM sleep mode: set TRL's GRPOConfig hook when the
-        # installed TRL exposes it; otherwise print a friendly advisory
-        # (Soup's own vLLM engine factory honors sleep_mode=True).
-        if tcfg.vllm_sleep_mode:
-            import inspect as _inspect
-
-            from soup_cli.utils.grpo_long_context import (
-                maybe_enable_trl_sleep_mode,
-            )
-
-            maybe_enable_trl_sleep_mode(
-                grpo_kwargs,
-                _inspect.signature(GRPOConfig).parameters,
-                console,
-            )
 
         # CPU support: set use_cpu and prevent empty generations
         if self.device == "cpu":
@@ -658,14 +716,44 @@ class GRPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from peft import TaskType, get_peft_model
+        from transformers import AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code,
-            **base_revision_kwargs(cfg.base),
+        # Same alignment as the streamed route (stream_setup.py): on the resident K2
+        # route the tokenizer is resolved against the guarded native config, so
+        # AutoTokenizer does not read config.json again under the user's
+        # trust_remote_code and, for a repository with an auto_map (Kimi K2), import
+        # and run its configuration module. Off the K2 route the call is unchanged.
+        from soup_cli.utils.kimi_k2 import (
+            load_resident_model_config,
+            uses_resident_kimi_k2_route,
         )
+
+        resident_tokenizer_config = (
+            load_resident_model_config(cfg.base, **base_revision_kwargs(cfg.base))
+            if uses_resident_kimi_k2_route(cfg.base)
+            else None
+        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                cfg.base,
+                **(
+                    {"config": resident_tokenizer_config}
+                    if resident_tokenizer_config is not None
+                    else {}
+                ),
+                trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
+            )
+        except Exception:
+            # Kimi K2's tokenizer is repository code that imports tiktoken: say so by name.
+            # Same wiring as the sft and streamed routes (#2104); print_ is K2-gated itself
+            # (the base's config.json must declare model_type: kimi_k2) and never raises.
+            from soup_cli.utils.kimi_k2 import print_kimi_k2_tokenizer_hint
+
+            print_kimi_k2_tokenizer_hint(cfg.base, console, **base_revision_kwargs(cfg.base))
+            raise
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -689,9 +777,12 @@ class GRPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            cfg.base, **model_kwargs,
-            **base_revision_kwargs(cfg.base),
+        from soup_cli.utils.kimi_k2 import load_resident_model
+
+        self.model = load_resident_model(
+            cfg.base,
+            model_kwargs={**model_kwargs, **base_revision_kwargs(cfg.base)},
+            console=console,
         )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
@@ -701,13 +792,15 @@ class GRPOTrainerWrapper:
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device, prefer_fp16=tcfg.grpo_fp16),
             )
 
         from soup_cli.utils.peft_wiring import (
@@ -838,7 +931,8 @@ class GRPOTrainerWrapper:
             if resume_from_checkpoint is not None:
                 reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         if self.config.training.relora_steps is None:

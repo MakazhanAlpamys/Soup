@@ -1,0 +1,26 @@
+{
+  "schema": "root-context73-rejected-attempt-v1",
+  "run_id": "l40s-strict-two-layer-sft8192-20261105-01",
+  "scope": "Two original Mistral Large 123B NF4 decoder layers, 8192 training tokens",
+  "status": "rejected",
+  "reason": "Both native VJPs reserved 4 MiB above the unchanged 6.25 GiB allocator cap",
+  "exact_tensors": 34,
+  "cap_bytes": 6710886400,
+  "native_peak_reserved_bytes": 6715080704,
+  "staged_peak_reserved_bytes": 3443523584,
+  "cleanup_allocated_bytes": 0,
+  "cleanup_reserved_bytes": 0,
+  "checkpoint_accepted": false,
+  "fresh_restore_executed": false,
+  "app_id": "ap-<redacted>",
+  "app_state": "stopped",
+  "active_tasks": 0,
+  "artifact_dir": "results/modal-l40s-strict-two-layer-sft-8192-01",
+  "raw_result_sha256": "33a94d283bc2b67d5180dc67befc040a1a4eede69d1c91a0570aa766f2ebcecc",
+  "summary_sha256": "6f452fd2fa1d3a5e65ec38a7e06d615fd7482ef250573d64f148a754fd19499f",
+  "replacement": {
+    "worker": "decoder_sft73_v2.py",
+    "sha256": "91a337747fc09e1ec94cd4f01160342a4108b32fb66a995fbcfe18465a355d2f",
+    "design": "Retain the native gradient edge and hash the exact BF16 output, then release that output storage before loading the incoming gradient and running the unchanged VJP"
+  }
+}

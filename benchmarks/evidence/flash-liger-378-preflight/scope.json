@@ -1,0 +1,9 @@
+{
+  "scope": "preflight only, not timed-matrix evidence",
+  "included": "four 8-step profiled/counted probes and independent FP64 kernel checks",
+  "pilot_source_commit": "26ffea17461d0d14a0d3641b93435343b54c29e1",
+  "counter_probes": 4,
+  "protocol_tests_passed": 10,
+  "full_matrix": "not run yet at the time of this preflight commit",
+  "first_strict_check": "One of 32768 BF16 K/V-grad elements differed from BF16 SDPA math by 0.014404296875 (atol 0.01, rtol 0.02); FP64 norm-error checks and raw errors are retained separately"
+}

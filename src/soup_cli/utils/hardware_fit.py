@@ -25,6 +25,8 @@ Public surface:
 - ``decide_hardware_fit(inp, *, available_vram_gb)`` -> ``HardwareFitReport``.
 - ``resolve_peft_mode(cfg, quant=None)`` -> ``str``.
 - ``hardware_fit_input_from_config(cfg, ...)`` -> ``HardwareFitInput | None``.
+- ``hardware_fit_input_or_reason(cfg, ...)`` -> ``HardwareFitInput | FitUnavailable``:
+  the same input, or the field that stops the estimate and why (#2306).
 """
 
 from __future__ import annotations
@@ -36,6 +38,9 @@ from typing import Any, Callable, Optional, Union
 from soup_cli.utils.model_shape import ModelShape
 from soup_cli.utils.vram_estimate import (
     BYTES_PER_PARAM_BY_QUANT,
+    DISTILL_DIVERGENCES,
+    DISTILL_KERNELS,
+    DISTILL_MODES,
     GB,
     OPTIMIZER_BYTES_PER_PARAM,
     OVERHEAD_FIXED_BYTES,
@@ -118,8 +123,28 @@ class HardwareFitInput:
     activation_offloading: Optional[str] = None
     #: The loader whose default LoRA targets and weight dtypes are being estimated.
     backend: str = "transformers"
+    #: A 4-bit or 8-bit run that keeps its embeddings, norms and untied head in fp32: a card
+    #: without bf16 hardware, or ``grpo_fp16`` (``RunSpec.kbit_fp32``, #2609).
+    kbit_fp32: bool = False
+    #: ``task: distill`` (#2909): the frozen teacher's shape and how the run uses it
+    #: (``RunSpec.teacher`` and its ``distill_*`` fields); ``None`` for any other task.
+    teacher_shape: Optional[ModelShape] = None
+    distill_mode: str = "token"
+    distill_kernel: str = "dense"
+    distill_chunk_size: Optional[int] = None
+    distill_divergence: str = "forward_kl"
 
     def __post_init__(self) -> None:
+        if self.teacher_shape is not None and not isinstance(self.teacher_shape, ModelShape):
+            raise TypeError("teacher_shape must be ModelShape")
+        if self.distill_mode not in DISTILL_MODES:
+            raise ValueError(f"unknown distill_mode {self.distill_mode!r}")
+        if self.distill_kernel not in DISTILL_KERNELS:
+            raise ValueError(f"unknown distill_kernel {self.distill_kernel!r}")
+        if self.distill_divergence not in DISTILL_DIVERGENCES:
+            raise ValueError(f"unknown distill_divergence {self.distill_divergence!r}")
+        if not isinstance(self.kbit_fp32, bool):
+            raise TypeError(f"kbit_fp32 must be bool, got {type(self.kbit_fp32).__name__}")
         if isinstance(self.params_b, bool):
             raise TypeError("params_b must be a number, not bool")
         if not isinstance(self.params_b, (int, float)):
@@ -175,6 +200,11 @@ class VRAMBreakdown:
     dequant_gb: float = 0.0
     #: How far the optimizer step's peak exceeds the forward/backward pass (#2277).
     optimizer_step_gb: float = 0.0
+    #: A distillation teacher's weights and the divergence over its logits, and with
+    #: ``distill_mode: sequence`` how far its generation exceeds training (#2909).
+    teacher_gb: float = 0.0
+    distill_gb: float = 0.0
+    teacher_generation_gb: float = 0.0
     #: The full estimate behind these numbers (terms in bytes, shape, notes).
     estimate: Optional[VramEstimate] = field(default=None, compare=False, repr=False)
 
@@ -182,7 +212,7 @@ class VRAMBreakdown:
         for fld in (
             "weights_gb", "optimizer_gb", "gradients_gb",
             "activations_gb", "overhead_gb", "adapters_gb", "logits_gb", "dequant_gb",
-            "optimizer_step_gb",
+            "optimizer_step_gb", "teacher_gb", "distill_gb", "teacher_generation_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -206,6 +236,9 @@ class VRAMBreakdown:
             + self.logits_gb
             + self.dequant_gb
             + self.optimizer_step_gb
+            + self.teacher_gb
+            + self.distill_gb
+            + self.teacher_generation_gb
         )
 
 
@@ -302,6 +335,8 @@ CALIBRATED_RANGE = "dense models of 3B and below on one 6 GB card"
 #: The largest dense model counted as inside it: the measured rows stop at 3.2B
 #: (Llama-3.2-3B), so a "3B" model is in and the next size up (4B) is not.
 CALIBRATED_MAX_PARAMS_B = 3.5
+#: What :func:`outside_calibrated_range` names for a ``task: distill`` run (#2909).
+DISTILLATION_STEP = "a distillation step"
 
 
 def outside_calibrated_range(
@@ -327,6 +362,12 @@ def outside_calibrated_range(
         reasons.append(f"fused-loss {noun} {' and '.join(sorted(inp.fused_loss))}")
     if backend == "unsloth":
         reasons.append("backend unsloth")
+    if inp.teacher_shape is not None:
+        # #2909: the teacher and divergence terms come from a few dozen rows measured on
+        # one card with one student, not from the fitted range above. The student's own
+        # estimate is still inside it: the pre-flight refuses a run whose student alone
+        # does not fit the card, as it did before the teacher was priced.
+        reasons.append(DISTILLATION_STEP)
     return tuple(reasons)
 
 
@@ -420,6 +461,9 @@ def unextrapolated_floor(
     processes = max(int(num_processes or 1), 1)
     param_share = processes if sharding in SHARDS_PARAMETERS else 1
     state_share = processes if sharding in SHARDS_TRAINING_STATE else 1
+    # #2909: a distillation teacher's weights stay out of the floor. The teacher is
+    # frozen and loaded with ``device_map="auto"``, which can keep part of it in CPU
+    # memory, so a run whose teacher alone exceeds the card can still start.
     floor = breakdown.weights_gb / param_share + OVERHEAD_FIXED_BYTES / GB
     terms = ["weights", "CUDA context"]
     tcfg = getattr(cfg, "training", None)
@@ -487,6 +531,19 @@ def checkpointing_for_task(
     return resolve_granularity(value, gpu_memory_gb=gpu_memory_gb) or False
 
 
+@dataclass(frozen=True)
+class FitUnavailable:
+    """Why the estimate cannot price a run (#2306).
+
+    ``field`` is the soup.yaml field that stops it (``None`` when no one field does);
+    ``reason`` is one line naming that field and the limit. Neither holds a value read
+    from the config (a model id, a path), so a caller can print the reason as it is.
+    """
+
+    field: Optional[str]
+    reason: str
+
+
 def hardware_fit_input_from_config(
     cfg: Any,
     *,
@@ -494,17 +551,50 @@ def hardware_fit_input_from_config(
     profile_defaults: bool = False,
     gpu_memory_gb: Optional[float] = None,
     on_hub_request: Optional[Callable[[], None]] = None,
+    kbit_fp32: bool = False,
 ) -> Optional[HardwareFitInput]:
     """The estimate's input for a ``SoupConfig``: the train pre-flight, ``soup profile``
     and the MCP ``profile`` tool all build it here, so they price the same run (#2049).
 
     Returns ``None`` when the run is not statically predictable (batch_size
     ``"auto"``, a quantization with no memory model, out-of-range dims), in which
-    case the pre-flight skips rather than guess. ``profile_defaults`` is ``soup
-    profile``'s reading instead: ``auto`` is priced at batch 4 and a quantization
-    with no memory model at bf16, as ``soup profile`` always did. ``gpu_memory_gb``
-    is the card's memory in GiB, which ``gradient_checkpointing: auto`` resolves on.
-    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
+    case the pre-flight skips rather than guess; :func:`hardware_fit_input_or_reason`
+    says which of those it is. ``profile_defaults`` is ``soup profile``'s reading
+    instead: ``auto`` is priced at batch 4 and a quantization with no memory model at
+    bf16, as ``soup profile`` always did. ``gpu_memory_gb`` is the card's memory in
+    GiB, which ``gradient_checkpointing: auto`` resolves on. ``on_hub_request`` is
+    called just before the first request to the Hub, if one is made. ``kbit_fp32`` is
+    True for a card without bf16 hardware, where a 4-bit or 8-bit run keeps peft's fp32
+    embeddings, norms and head (#2609); ``grpo_fp16`` implies it. Every other caller,
+    which knows no card, prices the bf16 default.
+    """
+    result = hardware_fit_input_or_reason(
+        cfg,
+        allow_network=allow_network,
+        profile_defaults=profile_defaults,
+        gpu_memory_gb=gpu_memory_gb,
+        on_hub_request=on_hub_request,
+        kbit_fp32=kbit_fp32,
+    )
+    return result if isinstance(result, HardwareFitInput) else None
+
+
+def hardware_fit_input_or_reason(
+    cfg: Any,
+    *,
+    allow_network: bool = True,
+    profile_defaults: bool = False,
+    gpu_memory_gb: Optional[float] = None,
+    on_hub_request: Optional[Callable[[], None]] = None,
+    kbit_fp32: bool = False,
+    price_teacher: bool = True,
+) -> Union[HardwareFitInput, FitUnavailable]:
+    """:func:`hardware_fit_input_from_config`, or the one cause that stops it (#2306).
+
+    The batch size, the sequence length and the quantization are checked before the
+    model is read, so a run the estimate cannot price makes no request to the Hub.
+    ``price_teacher=False`` leaves out a ``task: distill`` run's teacher, so the student
+    is priced alone (#2909).
     """
     from soup_cli.utils.model_shape import read_model_shape
 
@@ -512,23 +602,54 @@ def hardware_fit_input_from_config(
     bs = getattr(tcfg, "batch_size", None)
     if not isinstance(bs, int) or isinstance(bs, bool):
         if not profile_defaults:
-            return None  # "auto" resolves later — can't predict yet
+            # "auto" resolves later, once the model is loaded: can't predict yet.
+            return FitUnavailable(
+                "training.batch_size",
+                "training.batch_size is auto, which is chosen after the model loads",
+            )
         bs = PROFILE_AUTO_BATCH
+    if not _MIN_BATCH <= bs <= _MAX_BATCH:
+        # The schema asks only for 1 or more.
+        return FitUnavailable(
+            "training.batch_size",
+            f"training.batch_size is outside {_MIN_BATCH} to {_MAX_BATCH:,}, the range "
+            "the estimate prices",
+        )
     seq_len = getattr(cfg.data, "max_length", None)
-    if not isinstance(seq_len, int) or isinstance(seq_len, bool):
-        return None
-    if profile_defaults:
+    if profile_defaults and isinstance(seq_len, int) and not isinstance(seq_len, bool):
         seq_len = min(max(seq_len, _MIN_SEQ_LEN), _MAX_SEQ_LEN)
+    if (
+        not isinstance(seq_len, int)
+        or isinstance(seq_len, bool)
+        or not _MIN_SEQ_LEN <= seq_len <= _MAX_SEQ_LEN
+    ):
+        # A guard: the schema already bounds data.max_length to this range, so a
+        # validated config does not reach it.
+        return FitUnavailable(
+            "data.max_length",
+            f"data.max_length is outside {_MIN_SEQ_LEN} to {_MAX_SEQ_LEN:,}, the range "
+            "the estimate prices",
+        )
     quant = CONFIG_QUANT_TO_FIT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         if not profile_defaults:
-            return None
+            return FitUnavailable(
+                "training.quantization",
+                "training.quantization has no memory model in the estimate",
+            )
         quant = "none"
     shape = read_model_shape(
         getattr(cfg, "base", "") or "",
         allow_network=allow_network,
         on_hub_request=on_hub_request,
     )
+    # Compared as is: dividing a count too large for a float would raise here.
+    if shape.params > _MAX_PARAMS_B * GB:
+        return FitUnavailable(
+            "base",
+            f"the model in base has over {_MAX_PARAMS_B:,.0f}B parameters, the most the "
+            "estimate prices",
+        )
     peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _VALID_OPTIMIZERS:
@@ -537,6 +658,13 @@ def hardware_fit_input_from_config(
     from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 
     task = getattr(cfg, "task", "sft")
+    distill = (
+        _distill_inputs(cfg, task, allow_network=allow_network, on_hub_request=on_hub_request)
+        if price_teacher
+        else {}
+    )
+    if isinstance(distill, FitUnavailable):
+        return distill
     # Only the SFT-family trainer applies the fused losses (``trainer/sft.py``,
     # inherited by tts); on any other task the flags change nothing.
     fused_loss = (
@@ -565,9 +693,64 @@ def hardware_fit_input_from_config(
             fused_loss=fused_loss,
             backend=getattr(cfg, "backend", "transformers"),
             activation_offloading=getattr(tcfg, "activation_offloading", None),
+            kbit_fp32=bool(kbit_fp32 or (task == "grpo" and getattr(tcfg, "grpo_fp16", False))),
+            **distill,
         )
     except (ValueError, TypeError, ArithmeticError):
-        return None  # dims out of the predictor's supported range
+        # Any other input the estimate refuses: no one field is known to be the cause.
+        return FitUnavailable(None, "the run's inputs are outside the range the estimate prices")
+
+
+def _distill_inputs(
+    cfg: Any,
+    task: str,
+    *,
+    allow_network: bool,
+    on_hub_request: Optional[Callable[[], None]],
+) -> Union[dict, FitUnavailable]:
+    """The teacher a ``task: distill`` run loads and how it uses it (#2909).
+
+    ``trainer/distill.py`` loads ``training.teacher_model`` frozen beside the student, with
+    ``dtype="auto"``. With ``distill_mode: token`` it stays for the whole run, and each step
+    computes its divergence with ``_compute_distill_term`` (``dense``, or ``checkpoint``
+    with ``distill_checkpoint: true``, in chunks of ``distill_chunk_size``), or with the
+    ULD or MiniLLM loss when ``uld_strategy`` or ``minillm_enabled`` is set, which reads
+    neither chunk setting. With ``distill_mode: sequence`` it writes the training text
+    during setup and is freed. Returns the fields of :class:`HardwareFitInput`; none for
+    any other task.
+    """
+    if task != "distill":
+        return {}
+    tcfg = cfg.training
+    teacher = getattr(tcfg, "teacher_model", None)
+    if not isinstance(teacher, str) or not teacher:
+        return {}
+    from soup_cli.utils.model_shape import read_model_shape
+
+    shape = read_model_shape(
+        teacher, allow_network=allow_network, on_hub_request=on_hub_request
+    )
+    if shape.params > _MAX_PARAMS_B * GB:
+        return FitUnavailable(
+            "training.teacher_model",
+            f"the model in training.teacher_model has over {_MAX_PARAMS_B:,.0f}B "
+            "parameters, the most the estimate prices",
+        )
+    if getattr(tcfg, "uld_strategy", None) is not None:
+        kernel = "uld"
+    elif getattr(tcfg, "minillm_enabled", False):
+        kernel = "minillm"
+    elif getattr(tcfg, "distill_checkpoint", False):
+        kernel = "checkpoint"
+    else:
+        kernel = "dense"
+    return {
+        "teacher_shape": shape,
+        "distill_mode": str(getattr(tcfg, "distill_mode", None) or "token"),
+        "distill_kernel": kernel,
+        "distill_chunk_size": getattr(tcfg, "distill_chunk_size", None),
+        "distill_divergence": str(getattr(tcfg, "distill_divergence", None) or "forward_kl"),
+    }
 
 
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
@@ -595,6 +778,12 @@ def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
             fused_loss=inp.fused_loss,
             backend=inp.backend,
             activation_offloading=inp.activation_offloading,
+            kbit_fp32=inp.kbit_fp32,
+            teacher=inp.teacher_shape,
+            distill_mode=inp.distill_mode,
+            distill_kernel=inp.distill_kernel,
+            distill_chunk_size=inp.distill_chunk_size,
+            distill_divergence=inp.distill_divergence,
         ),
     )
     return breakdown_from_estimate(est)
@@ -611,6 +800,9 @@ def breakdown_from_estimate(est: VramEstimate) -> VRAMBreakdown:
         logits_gb=est.gb("logits"),
         dequant_gb=est.gb("dequant"),
         optimizer_step_gb=est.gb("optimizer_step"),
+        teacher_gb=est.gb("teacher"),
+        distill_gb=est.gb("distill"),
+        teacher_generation_gb=est.gb("teacher_generation"),
         estimate=est,
     )
 
@@ -670,6 +862,7 @@ def decide_hardware_fit(
 
 __all__ = [
     "VRAM_SAFETY_MARGIN",
+    "FitUnavailable",
     "HardwareFitInput",
     "HardwareFitReport",
     "VRAMBreakdown",
@@ -677,6 +870,7 @@ __all__ = [
     "decide_hardware_fit",
     "estimate_peak_vram_gb",
     "hardware_fit_input_from_config",
+    "hardware_fit_input_or_reason",
     "outside_calibrated_range",
     "validate_batch_size",
     "validate_seq_len",

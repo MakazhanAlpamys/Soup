@@ -7,9 +7,12 @@ import os
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.text import Text
 from rich.tree import Tree
 
 from soup_cli.registry.store import RegistryStore, validate_name
+from soup_cli.utils.registry import load_registry
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -23,7 +26,8 @@ def history(
     try:
         validate_name(name)
     except ValueError as exc:
-        console.print(f"[red]Invalid name: {escape(str(exc))}[/]")
+        # validate_name quotes the name as typed, so strip, escape and keep ":name:" literal.
+        console.print(f"[red]Invalid name: {for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(1) from exc
 
     with RegistryStore() as store:
@@ -38,8 +42,7 @@ def history(
             if _name_exists_in_dataset_registry(name):
                 console.print(
                     f"[dim]A dataset named '{escape(name)}' exists in the "
-                    f"local dataset registry — did you mean "
-                    f"`soup data registry` or `soup data inspect {escape(name)}`?[/]"
+                    "local dataset registry. Run `soup data registry` to see its path.[/]"
                 )
             console.print(
                 "[dim]`soup history` queries the *model* registry only.[/]"
@@ -81,17 +84,19 @@ def history(
                 br_node = node.add("[dim]branches[/]")
                 for art in branch_refs:
                     label = os.path.basename(art.get("path", "")) or "branch"
-                    br_node.add(f"[green]branch[/] [cyan]{escape(label)}[/]")
+                    # The label is a file name, which is not validated like a name or a tag.
+                    br_node.add(
+                        Text.from_markup(
+                            f"[green]branch[/] [cyan]{for_terminal(label)}[/]", emoji=False
+                        )
+                    )
 
         console.print(tree)
 
 
 def _name_exists_in_dataset_registry(name: str) -> bool:
-    """v0.40.1 Part D / N6 — check the dataset registry for `name`."""
+    """Look for an optional dataset hint without masking the model lookup result."""
     try:
-        from soup_cli.utils.registry import DatasetRegistry  # type: ignore
-
-        reg = DatasetRegistry()
-        return name in reg.list_names() if hasattr(reg, "list_names") else False
-    except Exception:  # noqa: BLE001 — registry may be missing / unreadable
+        return name in load_registry()
+    except (OSError, RuntimeError, ValueError):
         return False
