@@ -409,7 +409,7 @@ def _map_distill_rows(
                 from soup_cli.utils.distill import extract_prompt_messages
 
                 prompt = extract_prompt_messages(formatted.pop("messages"))
-                if not prompt:
+                if not any(message.get("role") != "system" for message in prompt):
                     raise ValueError(
                         "MiniLLM on-policy requires a non-empty prompt before the target "
                         "response; supply explicit prompt and response rows"

@@ -252,8 +252,11 @@ def test_row_transforms_run_once_for_both_representations(monkeypatch):
 
 
 @pytest.mark.parametrize("split", ["train", "val"])
-def test_empty_prompt_refusal_names_split_and_row(wrapper_factory, split):
+@pytest.mark.parametrize("system_prefix", [False, True], ids=["assistant-only", "system-only"])
+def test_empty_prompt_refusal_names_split_and_row(wrapper_factory, split, system_prefix):
     assistant_only = {"messages": [_ROW["messages"][-1]]}
+    if system_prefix:
+        assistant_only["messages"].insert(0, {"role": "system", "content": "hi"})
     rows = [_ROW, assistant_only]
     expected = (f"{split} row 2: MiniLLM on-policy requires a non-empty prompt before the "
                 "target response; supply explicit prompt and response rows")
@@ -264,8 +267,11 @@ def test_empty_prompt_refusal_names_split_and_row(wrapper_factory, split):
 
 
 @pytest.mark.parametrize("mode", ["plain", "offline"])
-def test_assistant_only_rows_still_train_without_on_policy(wrapper_factory, mode):
+@pytest.mark.parametrize("system_prefix", [False, True], ids=["assistant-only", "system-only"])
+def test_assistant_only_rows_still_train_without_on_policy(wrapper_factory, mode, system_prefix):
     row = {"messages": [_ROW["messages"][-1]]}
+    if system_prefix:
+        row["messages"].insert(0, {"role": "system", "content": "hi"})
     wrapper = wrapper_factory([row, row], validation=[row], mode=mode)
     assert "rollout_input_ids" not in wrapper.trainer.train_dataset.column_names
     before = {name: parameter.detach().clone()
@@ -275,6 +281,19 @@ def test_assistant_only_rows_still_train_without_on_policy(wrapper_factory, mode
     assert any(not torch.equal(before[name], parameter) for name, parameter in
                wrapper.model.named_parameters() if name in before)
     assert math.isfinite(wrapper.trainer.evaluate()["eval_loss"])
+
+
+@pytest.mark.parametrize("split", ["train", "val"])
+def test_system_user_prompt_keeps_existing_rollout_ids(wrapper_factory, split):
+    row = {"messages": [{"role": "system", "content": "hi"}, *_ROW["messages"]]}
+    wrapper = wrapper_factory([row], validation=[row])
+    dataset = (wrapper.trainer.train_dataset if split == "train"
+               else wrapper.trainer.eval_dataset)
+    expected = wrapper.tokenizer.apply_chat_template(
+        row["messages"][:-1], tokenize=True, add_generation_prompt=True, return_dict=True,
+    )["input_ids"]
+    assert dataset[0]["rollout_input_ids"] == expected
+    assert dataset[0]["rollout_attention_mask"] == [1] * len(expected)
 
 
 def test_no_rendered_prompt_tokens_names_row(monkeypatch):
