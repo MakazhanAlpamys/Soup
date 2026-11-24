@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
@@ -24,10 +25,16 @@ from soup_cli.utils.exit_codes import (
     GateCommand,
 )
 from soup_cli.utils.run_provenance import warn_stopped_inputs
+from soup_cli.utils.terminal import strip_control
 
 # v0.56.0 evidence-loader policy (review M6 fix).
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024  # 16 MiB
 _MAX_RUN_ID_LEN = 256
+
+
+def _print_error(console: Console, label: str, exc: object) -> None:
+    # A Text is not parsed as markup and has no emoji codes, so the message is shown as typed.
+    console.print(Text.assemble((label, "red"), " ", strip_control(exc)))
 
 
 def _validate_run_id(run_id: object) -> str:
@@ -104,10 +111,10 @@ def _write_json_output(
     try:
         enforce_under_cwd_and_no_symlink(output, field)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Invalid {field}:[/] {escape(str(exc))}")
+        _print_error(console, f"Invalid {field}:", exc)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
     atomic_write_text(json.dumps(payload, indent=2), output, field=field)
-    console.print(f"[green]Wrote {escape(output)}[/]")
+    console.print(Text(f"Wrote {strip_control(output)}", style="green"))
 
 
 def register(app: typer.Typer, console: Console) -> None:
@@ -167,7 +174,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             canonical = validate_battery_name(battery)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid battery:[/] {escape(str(exc))}")
+            _print_error(console, "Invalid battery:", exc)
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         spec = get_battery_spec(canonical)
@@ -197,7 +204,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 console.print(f"[red]{escape(str(exc))}[/]")
                 raise typer.Exit(EXIT_USAGE_ERROR) from exc
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
-                console.print(f"[red]Live behaviour diff failed:[/] {escape(str(exc))}")
+                _print_error(console, "Live behaviour diff failed:", exc)
                 raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
             table = Table(title=f"Behaviour Diff (live) — {canonical}")
             table.add_column("Stage", style="bold")
@@ -307,8 +314,12 @@ def register(app: typer.Typer, console: Console) -> None:
             canonical = validate_suite_name(suite)
         except (TypeError, ValueError) as exc:
             console.print(
-                f"[red]Invalid --suite:[/] {escape(str(exc))} "
-                f"(valid: {', '.join(list_suites())})"
+                Text.assemble(
+                    ("Invalid --suite:", "red"),
+                    " ",
+                    strip_control(exc),
+                    f" (valid: {', '.join(list_suites())})",
+                )
             )
             raise typer.Exit(2) from exc
 
@@ -332,7 +343,7 @@ def register(app: typer.Typer, console: Console) -> None:
                     limit=limit,
                 )
             except (RuntimeError, ValueError, TypeError) as exc:
-                console.print(f"[red]Capability run failed:[/] {escape(str(exc))}")
+                _print_error(console, "Capability run failed:", exc)
                 raise typer.Exit(2) from exc
             table = Table(title=f"Capability Suite (live) — {canonical}")
             table.add_column("Benchmark")
@@ -341,14 +352,14 @@ def register(app: typer.Typer, console: Console) -> None:
             for r in payload["results"]:
                 if "error" in r:
                     table.add_row(
-                        escape(str(r["benchmark"])),
-                        "[red]error[/]",
-                        escape(str(r["error"])),
+                        Text(strip_control(r["benchmark"])),
+                        Text("error", style="red"),
+                        Text(strip_control(r["error"])),
                     )
                 else:
                     table.add_row(
-                        escape(str(r["benchmark"])),
-                        escape(str(r.get("metric", ""))),
+                        Text(strip_control(r["benchmark"])),
+                        Text(strip_control(r.get("metric", ""))),
                         f"{r.get('score', float('nan')):.4f}",
                     )
             console.print(table)
@@ -399,7 +410,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             spec = load_checklist_spec(spec_path)
         except (TypeError, ValueError, OSError) as exc:
-            console.print(f"[red]Failed to load spec:[/] {escape(str(exc))}")
+            _print_error(console, "Failed to load spec:", exc)
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         if evidence is None:
@@ -431,7 +442,7 @@ def register(app: typer.Typer, console: Console) -> None:
         table.add_column("Verdict")
         for result in report.results:
             table.add_row(
-                escape(result.name),
+                Text(strip_control(result.name)),
                 result.kind,
                 str(result.passed),
                 str(result.total),
@@ -482,21 +493,27 @@ def register(app: typer.Typer, console: Console) -> None:
 
         if size not in IRT_PROFILES:
             console.print(
-                f"[red]Invalid --size: {escape(size)} "
-                f"(valid: {', '.join(sorted(IRT_PROFILES))})[/]"
+                Text(
+                    f"Invalid --size: {strip_control(size)} "
+                    f"(valid: {', '.join(sorted(IRT_PROFILES))})",
+                    style="red",
+                )
             )
             raise typer.Exit(2)
         if model not in SUPPORTED_IRT_MODELS:
             console.print(
-                f"[red]Invalid --model: {escape(model)} "
-                f"(valid: {', '.join(SUPPORTED_IRT_MODELS)})[/]"
+                Text(
+                    f"Invalid --model: {strip_control(model)} "
+                    f"(valid: {', '.join(SUPPORTED_IRT_MODELS)})",
+                    style="red",
+                )
             )
             raise typer.Exit(2)
 
         try:
             rows = load_response_rows(responses_path)
         except (TypeError, ValueError, OSError) as exc:
-            console.print(f"[red]Failed to load responses:[/] {escape(str(exc))}")
+            _print_error(console, "Failed to load responses:", exc)
             raise typer.Exit(2) from exc
 
         try:
