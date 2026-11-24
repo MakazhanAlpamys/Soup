@@ -27,7 +27,7 @@ top-five hits. Unneeded prototype aliases for near-duplicate, GPU-memory and
 OpenAI-compatible phrases were not retained. No fresh questions were used to
 choose these rules.
 
-## Pinned-docs v1 gate: declaration before scoring
+## Pinned-docs v1 gate
 
 `tests/fixtures/docs_search/pinned_docs_v1.json` is a new fixture, version 1,
 built from all 12 Markdown files at Soup commit
@@ -64,8 +64,10 @@ of only those two passages.
 `pinned_docs_v1-lock.json` fixes the fixture, source metadata, migration audit,
 rebuild script, evaluation script and candidate source hashes. Candidate
 `f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5` is unchanged. The lock and fixture
-are to be committed, pushed and declared in PR #3242 before either baseline or
-candidate is scored on v1. No v1 scores have been computed at this declaration.
+were committed and pushed in `a5ab5484`, then declared in PR #3242 at
+2026-11-24 09:13:47 UTC before either baseline or candidate was scored on v1.
+`pinned_docs_v1-execution.json` records the declaration identity and first-run
+start/end times. No locked file changed after the declaration or scoring.
 `candidate.json` remains the original development-freeze record, including the
 historical provenance status at that time.
 
@@ -82,7 +84,19 @@ python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/pinned_do
 
 The first command verifies a byte-identical rebuild and complete migration
 without scoring. `--write` regenerates the two artifacts. The second runs the
-option B gate; v1 results will be recorded after the public declaration.
+option B gate. The first declared execution returned exit code 0:
+
+| Pinned-docs v1, original 28 | Baseline | Candidate |
+| --- | --- | --- |
+| Hit@1 | 24/28 | 25/28 |
+| Hit@5 | 27/28 | 27/28 |
+| MRR@10 | 0.9151785714 | 0.9345238095 |
+| Recall@5 | 0.9642857143 | 0.9642857143 |
+
+There are no first-relevant-rank losses. `pinned_docs_v1-results.json` contains
+all 28 rows and both top-ten rankings. Exact aggregate metrics were recomputed
+from the saved rows without rerunning ranking; all four pass option B. This
+gate result does not satisfy the separate fresh-query Hit@5 requirement.
 
 ## Reproduce the separate current-section and development comparisons
 
@@ -200,7 +214,10 @@ The unresolved passage bodies are therefore not included in this PR candidate.
 The local exact-corpus replay remains historical numerical evidence. The
 maintainer's November 24 ruling makes pinned-docs v1 the gate instead. All old
 identities and hashes are preserved as metadata, with every replacement and
-target migration disclosed above; the historical score output is unchanged.
+target migration disclosed above. The historical output was renamed to
+`historical-original28-results.json` without changing its bytes; its legacy
+cohort identifier and numerical `gate` field describe that historical run,
+which is no longer the PR's gate.
 
 ## Verification and cost
 

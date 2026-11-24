@@ -1,0 +1,1069 @@
+{
+  "cohort": "original28-pinned-docs-v1",
+  "corpus_sha256": "b74bd91075ed90c6350a0ef59e61688dfc2e27e4a0afce832abe6eef32d23639",
+  "query_count": 28,
+  "gate": "option B: aggregate preservation, all individual losses disclosed",
+  "passed": true,
+  "require_hit5_gain": false,
+  "metrics": {
+    "baseline": {
+      "hit1": 0.8571428571428571,
+      "hit5": 0.9642857142857143,
+      "mrr10": 0.9151785714285714,
+      "recall5": 0.9642857142857143
+    },
+    "candidate": {
+      "hit1": 0.8928571428571429,
+      "hit5": 0.9642857142857143,
+      "mrr10": 0.9345238095238095,
+      "recall5": 0.9642857142857143
+    }
+  },
+  "rank_losses": [],
+  "per_query": [
+    {
+      "id": "soup_v3_001",
+      "query": "how do i stop training when eval drops past baseline?",
+      "targets": [
+        "evaluation::section_005"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "peft-and-efficiency::section_026",
+          "evaluation::section_005",
+          "training::section_010",
+          "evaluation::section_004",
+          "training::section_002",
+          "peft-and-efficiency::section_018",
+          "evaluation::section_009",
+          "serving-and-export::section_012",
+          "performance-and-quantization::section_013",
+          "evaluation::section_006"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "peft-and-efficiency::section_026",
+          "evaluation::section_005",
+          "training::section_010",
+          "evaluation::section_004",
+          "training::section_002",
+          "peft-and-efficiency::section_018",
+          "evaluation::section_009",
+          "serving-and-export::section_012",
+          "performance-and-quantization::section_013",
+          "evaluation::section_006"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_002",
+      "query": "train llama 8b on a 4gb card with layer streaming, what config keys",
+      "targets": [
+        "performance-and-quantization::section_010"
+      ],
+      "baseline": {
+        "rank": 8,
+        "top10": [
+          "performance-and-quantization::section_011",
+          "performance-and-quantization::section_014",
+          "performance-and-quantization::section_012",
+          "performance-and-quantization::section_013",
+          "training::section_002",
+          "peft-and-efficiency::section_017",
+          "performance-and-quantization::section_020",
+          "performance-and-quantization::section_010",
+          "peft-and-efficiency::section_005",
+          "training::section_034"
+        ]
+      },
+      "candidate": {
+        "rank": 6,
+        "top10": [
+          "performance-and-quantization::section_011",
+          "performance-and-quantization::section_014",
+          "performance-and-quantization::section_012",
+          "performance-and-quantization::section_013",
+          "training::section_002",
+          "performance-and-quantization::section_010",
+          "peft-and-efficiency::section_017",
+          "performance-and-quantization::section_020",
+          "peft-and-efficiency::section_005",
+          "training::section_034"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_003",
+      "query": "does dpo streaming build a second reference model in vram?",
+      "targets": [
+        "performance-and-quantization::section_014"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "performance-and-quantization::section_014",
+          "performance-and-quantization::section_012",
+          "performance-and-quantization::section_010",
+          "performance-and-quantization::section_013",
+          "performance-and-quantization::section_011",
+          "performance-and-quantization::section_032",
+          "training::section_000",
+          "backends-and-ops::section_002",
+          "backends-and-ops::section_040",
+          "serving-and-export::section_034"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "performance-and-quantization::section_014",
+          "performance-and-quantization::section_012",
+          "performance-and-quantization::section_010",
+          "performance-and-quantization::section_011",
+          "performance-and-quantization::section_013",
+          "performance-and-quantization::section_032",
+          "training::section_000",
+          "backends-and-ops::section_002",
+          "backends-and-ops::section_040",
+          "serving-and-export::section_034"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_004",
+      "query": "why does soup data lint flag length bias in my dpo pairs",
+      "targets": [
+        "data::section_030"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::section_030",
+          "evaluation::section_002",
+          "data::section_012",
+          "performance-and-quantization::section_014",
+          "data::section_015",
+          "backends-and-ops::section_007",
+          "backends-and-ops::section_026",
+          "evaluation::section_020",
+          "data::section_022",
+          "training::section_004"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::section_030",
+          "evaluation::section_002",
+          "data::section_012",
+          "backends-and-ops::section_026",
+          "performance-and-quantization::section_014",
+          "data::section_015",
+          "evaluation::section_020",
+          "backends-and-ops::section_007",
+          "data::section_022",
+          "training::section_004"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_005",
+      "query": "semantic dedup threshold 0.8 vs minhash, what should i use",
+      "targets": [
+        "data::section_001"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "data::section_002",
+          "data::section_001",
+          "data::section_013",
+          "data::section_000",
+          "data::section_019",
+          "performance-and-quantization::section_016",
+          "training::section_031",
+          "data::section_030",
+          "evaluation::section_009",
+          "evaluation::section_020"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::section_001",
+          "data::section_002",
+          "data::section_013",
+          "data::section_000",
+          "data::section_019",
+          "performance-and-quantization::section_016",
+          "training::section_031",
+          "data::section_030",
+          "evaluation::section_009",
+          "evaluation::section_020"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_006",
+      "query": "chat template doctor says eos missing in labels",
+      "targets": [
+        "data::section_029"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::section_029",
+          "serving-and-export::section_012",
+          "performance-and-quantization::section_018",
+          "training::section_010",
+          "training::section_042",
+          "training::section_018",
+          "backends-and-ops::section_007",
+          "training::section_009",
+          "serving-and-export::section_007",
+          "training::section_045"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::section_029",
+          "performance-and-quantization::section_018",
+          "serving-and-export::section_012",
+          "training::section_010",
+          "training::section_042",
+          "training::section_018",
+          "backends-and-ops::section_007",
+          "training::section_009",
+          "serving-and-export::section_007",
+          "training::section_045"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_007",
+      "query": "soup ship evidence json with config provenance, how does it replay",
+      "targets": [
+        "evaluation::section_011"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "evaluation::section_011",
+          "evaluation::section_010",
+          "compliance::section_000",
+          "evaluation::section_009",
+          "compliance::section_008",
+          "training::section_003",
+          "adapters-and-governance::section_011",
+          "commands::section_002",
+          "peft-and-efficiency::section_001",
+          "training::section_006"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "evaluation::section_011",
+          "evaluation::section_010",
+          "adapters-and-governance::section_011",
+          "evaluation::section_009",
+          "training::section_003",
+          "compliance::section_000",
+          "compliance::section_008",
+          "peft-and-efficiency::section_001",
+          "commands::section_002",
+          "training::section_006"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_008",
+      "query": "what does noise floor do in soup ship on gpu",
+      "targets": [
+        "evaluation::section_010"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "evaluation::section_010",
+          "evaluation::section_011",
+          "evaluation::section_016",
+          "training::section_001",
+          "evaluation::section_009",
+          "backends-and-ops::section_002",
+          "evaluation::section_002",
+          "training::section_006",
+          "serving-and-export::section_003",
+          "serving-and-export::section_012"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "evaluation::section_010",
+          "evaluation::section_011",
+          "evaluation::section_009",
+          "evaluation::section_016",
+          "training::section_001",
+          "backends-and-ops::section_002",
+          "evaluation::section_002",
+          "training::section_006",
+          "serving-and-export::section_003",
+          "evaluation::section_020"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_009",
+      "query": "hot swap lora adapter on running soup serve",
+      "targets": [
+        "serving-and-export::section_017"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::section_017",
+          "serving-and-export::section_019",
+          "backends-and-ops::section_014",
+          "commands::section_001",
+          "serving-and-export::section_001",
+          "evaluation::section_001",
+          "commands::section_002",
+          "training::section_046",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_004"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::section_017",
+          "serving-and-export::section_019",
+          "serving-and-export::section_001",
+          "backends-and-ops::section_014",
+          "training::section_046",
+          "evaluation::section_001",
+          "commands::section_001",
+          "adapters-and-governance::section_007",
+          "commands::section_002",
+          "adapters-and-governance::section_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_010",
+      "query": "vllm install downgraded torch, how do i check env drift",
+      "targets": [
+        "backends-and-ops::section_046"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::section_046",
+          "serving-and-export::section_012",
+          "evaluation::section_007",
+          "adapters-and-governance::section_001",
+          "data::section_011",
+          "models::section_008",
+          "serving-and-export::section_021",
+          "evaluation::section_000",
+          "backends-and-ops::section_045",
+          "evaluation::section_006"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::section_046",
+          "serving-and-export::section_012",
+          "evaluation::section_007",
+          "adapters-and-governance::section_001",
+          "data::section_011",
+          "models::section_008",
+          "serving-and-export::section_021",
+          "evaluation::section_000",
+          "backends-and-ops::section_045",
+          "evaluation::section_006"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_011",
+      "query": "serve q8_0 kv cache needs hqq, what if missing",
+      "targets": [
+        "serving-and-export::section_011"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "performance-and-quantization::section_030",
+          "serving-and-export::section_011",
+          "serving-and-export::section_002",
+          "serving-and-export::section_019",
+          "serving-and-export::section_012",
+          "serving-and-export::section_022",
+          "performance-and-quantization::section_000",
+          "serving-and-export::section_016",
+          "performance-and-quantization::section_008",
+          "performance-and-quantization::section_029"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "performance-and-quantization::section_030",
+          "serving-and-export::section_011",
+          "serving-and-export::section_002",
+          "serving-and-export::section_019",
+          "serving-and-export::section_012",
+          "serving-and-export::section_022",
+          "performance-and-quantization::section_000",
+          "serving-and-export::section_016",
+          "performance-and-quantization::section_008",
+          "performance-and-quantization::section_029"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_012",
+      "query": "build llama.cpp for quantized gguf export on windows",
+      "targets": [
+        "serving-and-export::section_003"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::section_003",
+          "serving-and-export::section_002",
+          "serving-and-export::section_006",
+          "serving-and-export::section_026",
+          "performance-and-quantization::section_027",
+          "performance-and-quantization::section_029",
+          "performance-and-quantization::section_034",
+          "serving-and-export::section_000",
+          "serving-and-export::section_007",
+          "performance-and-quantization::section_024"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "serving-and-export::section_003",
+          "serving-and-export::section_002",
+          "serving-and-export::section_006",
+          "serving-and-export::section_026",
+          "performance-and-quantization::section_027",
+          "performance-and-quantization::section_029",
+          "performance-and-quantization::section_034",
+          "serving-and-export::section_000",
+          "serving-and-export::section_007",
+          "performance-and-quantization::section_024"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_013",
+      "query": "merge adapters with cc-by-nc and apache, override reason gets logged?",
+      "targets": [
+        "adapters-and-governance::section_020"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_020",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_009",
+          "adapters-and-governance::section_001",
+          "peft-and-efficiency::section_003",
+          "serving-and-export::section_001",
+          "backends-and-ops::section_049",
+          "serving-and-export::section_034",
+          "training::section_002",
+          "performance-and-quantization::section_026"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_020",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_001",
+          "adapters-and-governance::section_009",
+          "peft-and-efficiency::section_003",
+          "serving-and-export::section_001",
+          "backends-and-ops::section_049",
+          "serving-and-export::section_034",
+          "training::section_002",
+          "performance-and-quantization::section_026"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_014",
+      "query": "scan adapter for rank-1 backdoor before merge",
+      "targets": [
+        "adapters-and-governance::section_016"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_016",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_000",
+          "adapters-and-governance::section_020",
+          "compliance::section_005",
+          "adapters-and-governance::section_003",
+          "training::section_002",
+          "serving-and-export::section_001",
+          "adapters-and-governance::section_001",
+          "commands::section_001"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_016",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_020",
+          "adapters-and-governance::section_000",
+          "compliance::section_005",
+          "serving-and-export::section_001",
+          "adapters-and-governance::section_003",
+          "training::section_002",
+          "adapters-and-governance::section_001",
+          "commands::section_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_015",
+      "query": "verify adapter signature against trusted public key",
+      "targets": [
+        "adapters-and-governance::section_017",
+        "compliance::section_005"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_017",
+          "adapters-and-governance::section_011",
+          "compliance::section_005",
+          "adapters-and-governance::section_000",
+          "data::section_006",
+          "serving-and-export::section_017",
+          "evaluation::section_008",
+          "training::section_031",
+          "commands::section_001",
+          "evaluation::section_016"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_017",
+          "adapters-and-governance::section_011",
+          "compliance::section_005",
+          "adapters-and-governance::section_000",
+          "data::section_006",
+          "serving-and-export::section_017",
+          "evaluation::section_008",
+          "training::section_031",
+          "commands::section_001",
+          "evaluation::section_016"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_016",
+      "query": "show lineage dag for a registry model name",
+      "targets": [
+        "adapters-and-governance::section_006"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_006",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_004",
+          "compliance::section_007",
+          "data::section_025",
+          "compliance::section_004",
+          "backends-and-ops::section_020",
+          "commands::section_001",
+          "adapters-and-governance::section_003",
+          "commands::section_002"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_006",
+          "data::section_025",
+          "compliance::section_007",
+          "adapters-and-governance::section_007",
+          "adapters-and-governance::section_004",
+          "compliance::section_004",
+          "backends-and-ops::section_020",
+          "commands::section_001",
+          "data::section_028",
+          "adapters-and-governance::section_003"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_017",
+      "query": "pack soup can and embed in-toto attestation",
+      "targets": [
+        "adapters-and-governance::section_008"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_008",
+          "compliance::section_004",
+          "adapters-and-governance::section_011",
+          "adapters-and-governance::section_002",
+          "compliance::section_007",
+          "peft-and-efficiency::section_013",
+          "evaluation::section_001",
+          "commands::section_001",
+          "data::section_001",
+          "adapters-and-governance::section_010"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_008",
+          "compliance::section_004",
+          "adapters-and-governance::section_011",
+          "adapters-and-governance::section_002",
+          "compliance::section_007",
+          "evaluation::section_001",
+          "peft-and-efficiency::section_013",
+          "commands::section_001",
+          "data::section_001",
+          "data::section_004"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_018",
+      "query": "disable audit log for one soup command",
+      "targets": [
+        "adapters-and-governance::section_014"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_014",
+          "compliance::section_003",
+          "compliance::section_000",
+          "adapters-and-governance::section_000",
+          "backends-and-ops::section_030",
+          "backends-and-ops::section_022",
+          "README::section_000",
+          "serving-and-export::section_024",
+          "backends-and-ops::section_011",
+          "adapters-and-governance::section_020"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_014",
+          "compliance::section_003",
+          "compliance::section_000",
+          "adapters-and-governance::section_000",
+          "backends-and-ops::section_030",
+          "backends-and-ops::section_022",
+          "serving-and-export::section_024",
+          "README::section_000",
+          "backends-and-ops::section_011",
+          "adapters-and-governance::section_020"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_019",
+      "query": "attach measured energy json to cyclonedx bom",
+      "targets": [
+        "adapters-and-governance::section_009",
+        "adapters-and-governance::section_010",
+        "compliance::section_004"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_010",
+          "compliance::section_004",
+          "adapters-and-governance::section_013",
+          "adapters-and-governance::section_009",
+          "adapters-and-governance::section_012",
+          "compliance::section_003",
+          "training::section_044",
+          "evaluation::section_008",
+          "adapters-and-governance::section_000",
+          "commands::section_001"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_010",
+          "compliance::section_004",
+          "adapters-and-governance::section_013",
+          "adapters-and-governance::section_009",
+          "compliance::section_003",
+          "adapters-and-governance::section_012",
+          "training::section_044",
+          "evaluation::section_008",
+          "adapters-and-governance::section_000",
+          "commands::section_001"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_020",
+      "query": "generate eu ai act annex xi from train with track-energy",
+      "targets": [
+        "adapters-and-governance::section_012",
+        "compliance::section_003"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "compliance::section_003",
+          "adapters-and-governance::section_012",
+          "adapters-and-governance::section_013",
+          "compliance::section_001",
+          "adapters-and-governance::section_000",
+          "adapters-and-governance::section_010",
+          "data::section_010",
+          "commands::section_001",
+          "README::section_000",
+          "data::section_012"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "compliance::section_003",
+          "adapters-and-governance::section_012",
+          "adapters-and-governance::section_013",
+          "compliance::section_001",
+          "adapters-and-governance::section_000",
+          "adapters-and-governance::section_010",
+          "data::section_010",
+          "commands::section_001",
+          "README::section_000",
+          "data::section_012"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_021",
+      "query": "airgap bundle with repro receipt embedded",
+      "targets": [
+        "adapters-and-governance::section_021"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_021",
+          "compliance::section_006",
+          "adapters-and-governance::section_000",
+          "compliance::section_000",
+          "adapters-and-governance::section_015",
+          "compliance::section_003",
+          "backends-and-ops::section_004",
+          "README::section_000",
+          "adapters-and-governance::section_017",
+          "evaluation::section_004"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "adapters-and-governance::section_021",
+          "compliance::section_006",
+          "adapters-and-governance::section_000",
+          "compliance::section_000",
+          "adapters-and-governance::section_015",
+          "compliance::section_003",
+          "backends-and-ops::section_004",
+          "README::section_000",
+          "adapters-and-governance::section_017",
+          "evaluation::section_004"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_022",
+      "query": "autopilot dry run with 24gb gpu budget",
+      "targets": [
+        "backends-and-ops::section_001"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::section_001",
+          "serving-and-export::section_029",
+          "performance-and-quantization::section_034",
+          "data::section_016",
+          "backends-and-ops::section_000",
+          "evaluation::section_002",
+          "adapters-and-governance::section_002",
+          "backends-and-ops::section_009",
+          "backends-and-ops::section_016",
+          "backends-and-ops::section_014"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::section_001",
+          "serving-and-export::section_029",
+          "performance-and-quantization::section_034",
+          "data::section_016",
+          "backends-and-ops::section_009",
+          "backends-and-ops::section_000",
+          "evaluation::section_002",
+          "adapters-and-governance::section_002",
+          "backends-and-ops::section_004",
+          "backends-and-ops::section_016"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_023",
+      "query": "find mlx recipes for apple silicon",
+      "targets": [
+        "backends-and-ops::section_002"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::section_002",
+          "backends-and-ops::section_013",
+          "backends-and-ops::section_000",
+          "backends-and-ops::section_031",
+          "peft-and-efficiency::section_020",
+          "serving-and-export::section_029",
+          "models::section_008",
+          "performance-and-quantization::section_003",
+          "performance-and-quantization::section_027",
+          "peft-and-efficiency::section_025"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "backends-and-ops::section_002",
+          "backends-and-ops::section_013",
+          "backends-and-ops::section_000",
+          "backends-and-ops::section_031",
+          "peft-and-efficiency::section_020",
+          "serving-and-export::section_029",
+          "models::section_008",
+          "performance-and-quantization::section_003",
+          "performance-and-quantization::section_027",
+          "peft-and-efficiency::section_025"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_024",
+      "query": "pre-tokenize dataset and reuse tokenized cache",
+      "targets": [
+        "data::section_018",
+        "data::section_027"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::section_027",
+          "data::section_018",
+          "data::section_017",
+          "backends-and-ops::section_038",
+          "data::section_005",
+          "serving-and-export::section_011",
+          "performance-and-quantization::section_030",
+          "adapters-and-governance::section_008",
+          "serving-and-export::section_016",
+          "serving-and-export::section_033"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::section_027",
+          "data::section_018",
+          "data::section_017",
+          "backends-and-ops::section_038",
+          "data::section_005",
+          "serving-and-export::section_011",
+          "performance-and-quantization::section_030",
+          "adapters-and-governance::section_008",
+          "serving-and-export::section_016",
+          "serving-and-export::section_033"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_025",
+      "query": "train from s3 jsonl with streaming and shuffle buffer",
+      "targets": [
+        "data::section_024"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "data::section_024",
+          "performance-and-quantization::section_012",
+          "training::section_038",
+          "performance-and-quantization::section_014",
+          "serving-and-export::section_023",
+          "performance-and-quantization::section_013",
+          "data::section_018",
+          "data::section_000",
+          "serving-and-export::section_019",
+          "evaluation::section_008"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "data::section_024",
+          "performance-and-quantization::section_012",
+          "training::section_038",
+          "performance-and-quantization::section_014",
+          "serving-and-export::section_023",
+          "performance-and-quantization::section_013",
+          "data::section_018",
+          "data::section_000",
+          "serving-and-export::section_019",
+          "evaluation::section_008"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_026",
+      "query": "grpo reward hack mitigation kl_control, what settings",
+      "targets": [
+        "training::section_004",
+        "training::section_005"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "training::section_005",
+          "training::section_004",
+          "training::section_014",
+          "training::section_028",
+          "training::section_000",
+          "training::section_033",
+          "training::section_012",
+          "training::section_031",
+          "training::section_021",
+          "training::section_030"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "training::section_005",
+          "training::section_004",
+          "training::section_014",
+          "training::section_028",
+          "training::section_000",
+          "training::section_012",
+          "training::section_033",
+          "training::section_031",
+          "training::section_021",
+          "training::section_030"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_027",
+      "query": "unlearn npo without retain set, why warning",
+      "targets": [
+        "training::section_006"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "training::section_006",
+          "training::section_001",
+          "backends-and-ops::section_026",
+          "backends-and-ops::section_045",
+          "serving-and-export::section_022",
+          "backends-and-ops::section_025",
+          "performance-and-quantization::section_008",
+          "peft-and-efficiency::section_013",
+          "training::section_000",
+          "performance-and-quantization::section_017"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "training::section_006",
+          "training::section_001",
+          "backends-and-ops::section_026",
+          "backends-and-ops::section_045",
+          "serving-and-export::section_022",
+          "backends-and-ops::section_025",
+          "performance-and-quantization::section_008",
+          "data::section_002",
+          "peft-and-efficiency::section_013",
+          "training::section_000"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_028",
+      "query": "online dpo with ollama judge, config example",
+      "targets": [
+        "training::section_015"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "training::section_015",
+          "evaluation::section_015",
+          "data::section_021",
+          "data::section_014",
+          "data::section_022",
+          "training::section_031",
+          "evaluation::section_005",
+          "serving-and-export::section_033",
+          "serving-and-export::section_007",
+          "data::section_005"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "training::section_015",
+          "evaluation::section_015",
+          "data::section_021",
+          "data::section_014",
+          "data::section_022",
+          "serving-and-export::section_007",
+          "training::section_031",
+          "evaluation::section_005",
+          "serving-and-export::section_033",
+          "data::section_005"
+        ]
+      }
+    }
+  ],
+  "fixture_sha256": "ad73c7d7f794296b49ef7ba6d7b8914b2e9d474e27d735e3aed7bf5b0183d898",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a"
+}
