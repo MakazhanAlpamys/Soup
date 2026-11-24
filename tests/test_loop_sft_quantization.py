@@ -678,6 +678,79 @@ class TestOfflineCache:
             total, "count from the cached safetensors headers"
         )
 
+    @staticmethod
+    def _symlinked_two_shard_snapshot(tmp_path, *, with_index):
+        """A two-shard snapshot laid out as the Hub cache does: shard names that are symlinks
+        into ``blobs/``. Returns the snapshot, the full count and the second shard's blob."""
+        blobs = tmp_path / "blobs"
+        blobs.mkdir()
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        names = {n: f"model-0000{n}-of-00002.safetensors" for n in (1, 2)}
+        if with_index:
+            index = {"weight_map": {"a": names[1], "b": names[2]}}
+            (snapshot / "model.safetensors.index.json").write_text(json.dumps(index))
+        total = 0
+        for n in (1, 2):
+            blob = blobs / f"blob{n}"
+            total += _write_safetensors(blob, {"ab"[n - 1]: [300, 200]})
+            (snapshot / names[n]).symlink_to(blob)
+        return snapshot, total, blobs / "blob2"
+
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_symlink_whose_blob_is_gone_is_not_counted_from_its_headers(
+        self, cache, tmp_path, monkeypatch, with_index
+    ):
+        """The name is still listed and numbered, but only one shard's headers can be read."""
+        snapshot, total, second_blob = self._symlinked_two_shard_snapshot(
+            tmp_path, with_index=with_index
+        )
+        second_blob.unlink()
+        cache(SMOL_135M, str(snapshot))
+        free = 100 * 1024**2
+        monkeypatch.setattr(lq, "free_vram_bytes", lambda: free)
+        subtotal = model_shape.read_model_shape("org/base", allow_network=False).params
+        assert 0 < subtotal < total  # control: the headers alone give the surviving shard
+        assert lq.estimated_need_bytes(subtotal) <= free  # control: the subtotal fits
+
+        value, note = lq.resolve_sft_quantization("auto", "org/base")
+
+        assert value == "4bit"
+        assert note == (
+            "sft quantization auto: 4bit (need 1.3 GB, free 0.1 GB; count from the cached "
+            "config.json, an estimate without biases; the cache holds only part of the "
+            "safetensors weights)"
+        )
+
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_a_cache_symlink_whose_blob_is_gone_with_no_countable_config_is_unknown(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, _, second_blob = self._symlinked_two_shard_snapshot(
+            tmp_path, with_index=with_index
+        )
+        second_blob.unlink()
+        cache({"model_type": "unknown-arch"}, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            None, "the cache holds only part of the safetensors weights"
+        )
+        assert lq.resolve_sft_quantization("auto", "org/base")[0] == "4bit"
+
+    @pytest.mark.requires_symlink
+    @pytest.mark.parametrize("with_index", [True, False], ids=["index", "numbered-shards"])
+    def test_cache_symlinks_with_every_blob_are_counted_from_their_headers(
+        self, cache, tmp_path, with_index
+    ):
+        snapshot, total, _ = self._symlinked_two_shard_snapshot(tmp_path, with_index=with_index)
+        cache(SMOL_135M, str(snapshot))
+
+        assert lq.count_parameters("org/base") == (
+            total, "count from the cached safetensors headers"
+        )
+
     @pytest.mark.parametrize(
         ("names", "complete"),
         [

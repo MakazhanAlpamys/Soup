@@ -79,8 +79,9 @@ def _holds_every_weight_file(snapshot: str) -> bool:
     """Whether a cached snapshot has every weight file of its checkpoint on disk.
 
     ``param_count_from_local_safetensors`` sums the files that are present, so a snapshot
-    whose index names a shard it lacks, or whose ``model-0000x-of-0000N`` shards are fewer
-    than ``N``, gives a subtotal. An unreadable index counts as incomplete.
+    whose index names a shard it lacks, whose ``model-0000x-of-0000N`` shards are fewer
+    than ``N``, or that lists a weight file that does not resolve to a file (a cache symlink
+    whose blob is gone) gives a subtotal. An unreadable index counts as incomplete.
     """
     from soup_cli.utils.checkpoint_files import checkpoint_files
 
@@ -89,6 +90,9 @@ def _holds_every_weight_file(snapshot: str) -> bool:
     except (OSError, ValueError):
         return False
     if selected.missing:
+        return False
+    # ``os.path.isfile`` follows the cache's symlinks into ``blobs/``, and refuses a dangling one.
+    if not all(os.path.isfile(os.path.join(snapshot, name)) for name in selected.weights):
         return False
     if selected.rule == "shards":
         numbers = set()
