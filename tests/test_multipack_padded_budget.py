@@ -130,6 +130,35 @@ def test_real_wrappers_bound_collated_positions(tmp_path, monkeypatch, tiny_base
             assert labels == original["labels"]
 
 
+@pytest.mark.parametrize("task", ["sft", "pretrain"])
+@pytest.mark.parametrize("padding_multiple", [None, 8])
+@pytest.mark.parametrize("lengths", [[66, 64], [66, 65, 64]], ids=["truncated", "exact-boundary"])
+def test_real_wrappers_price_prepared_rows(tmp_path, monkeypatch, tiny_base, task,
+                                         padding_multiple, lengths):
+    wrapper = _build_wrapper(
+        tmp_path, monkeypatch, tiny_base, task=task, lengths=lengths,
+        padding_multiple=padding_multiple,
+    )
+    trainer = wrapper.trainer
+    prepared_lengths = [len(row["input_ids"]) for row in trainer.train_dataset]
+    assert prepared_lengths == [min(length, 65) for length in lengths]
+    loader = trainer.get_train_dataloader()
+    batches = list(loader)
+    expected_count = len(lengths) if padding_multiple == 8 else len(lengths) - 1
+    assert len(loader) == len(batches) == expected_count
+    assert loader.batch_sampler._lengths == prepared_lengths
+    assert sorted(index for indices in loader.batch_sampler for index in indices) == list(
+        range(len(lengths)),
+    )
+    assert sum(batch["attention_mask"].sum().item() for batch in batches) == sum(prepared_lengths)
+    assert max(batch["input_ids"].numel() for batch in batches) <= 130
+    if padding_multiple == 8:
+        assert any(batch["input_ids"].shape[-1] == 72 for batch in batches)
+        assert all(batch["input_ids"].shape[0] == 1 for batch in batches)
+    else:
+        assert any(batch["input_ids"].shape == (2, 65) for batch in batches)
+
+
 def test_reported_512_token_fixture(tmp_path, tiny_base):
     from datasets import Dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer

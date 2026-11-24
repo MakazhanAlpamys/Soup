@@ -144,8 +144,10 @@ LoRA.
 Multipack uses **First-Fit-Decreasing bin packing** to group variable-length samples.
 For ordinary padded text SFT and pretraining, Soup splits those bins until each
 collated rectangle fits `batch_size × data.max_length` input positions. The cost is
-the number of rows times the longest row, rounded up using the selected TRL
-language-modeling collator's `pad_to_multiple_of` setting. Short rows can therefore
+the number of rows times the longest prepared row, rounded up using the selected
+TRL language-modeling collator's `pad_to_multiple_of` setting. Soup derives lengths
+from the trainer's `train_dataset`, which the DataLoader reads after TRL prepares
+and truncates rows, rather than from the original cache. Short rows can therefore
 share a batch with more rows than `batch_size`, provided their padded rectangle fits.
 
 ```yaml

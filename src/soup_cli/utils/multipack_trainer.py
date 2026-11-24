@@ -215,6 +215,8 @@ def make_multipack_trainer_class(base_cls: type) -> type:
                     pass  # Plain HF/custom collators also work without the optional TRL install.
                 else:
                     if isinstance(data_collator, DataCollatorForLanguageModeling):
+                        # TRL may truncate or otherwise prepare rows before collation.
+                        lengths = lengths_from_dataset(train_dataset)
                         padding_multiple = data_collator.pad_to_multiple_of
                         if padding_multiple is None:
                             padding_multiple = 1
