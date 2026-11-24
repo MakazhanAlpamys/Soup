@@ -2,8 +2,9 @@
 
 Draft implementation PR: [#3242](https://github.com/MakazhanAlpamys/Soup/pull/3242).
 
-This is a development candidate for draft implementation review. An eligible
-fresh query set with a Hit@5 gain is still required before a default change.
+The original-28 pinned-docs gate and the friend-supplied 30-question comparison
+both pass their declared checks. Friend-set Hit@5 improves from 29/30 to 30/30;
+its outside-tuning authorship is user-attested, as recorded below.
 The maintainer's [fixture ruling](https://github.com/MakazhanAlpamys/Soup/issues/3192#issuecomment-7126471247)
 replaces the original-corpus gate with a separately versioned fixture rebuilt
 entirely from pinned Soup docs. Option B applies to this new fixture. The
@@ -175,9 +176,10 @@ are in `supplemental10-results.json`; `supplemental10-execution.json` records th
 first run and pre-scoring fixture hash. No rule, query or label was changed in
 response. This result does not justify promotion of the candidate.
 
-An eligible fresh set with a top-five gain or an explicit maintainer amendment
-is still required. User approval of supplemental question text does not change
-its recorded authorship.
+The friend-supplied 30 below provide the fresh-set top-five gain on the user’s
+outside-tuning authorship attestation. The supplemental ten remain separate
+negative evidence; user approval of their text does not change their recorded
+authorship.
 
 Before the fresh set is scored, record the candidate commit, rule/source hash,
 documentation hashes, query provenance and target labels. Have a contributor
@@ -185,7 +187,7 @@ who is not tuning the rules supply the questions. Keep the set separate and
 require a Hit@5 increase before proposing a default change. If inspected fresh
 results are used to revise the candidate, obtain another fresh set.
 
-## Friend-supplied 30: declaration before scoring
+## Friend-supplied 30: frozen comparison
 
 On November 24 the user supplied 30 questions and target descriptions,
 attributed to a friend outside the project/tuning work. That attribution is
@@ -206,19 +208,45 @@ intents are not claimed to be novel.
 
 `friend30-lock.json` fixes the question/target fixture, mapping audit,
 evaluation tool and unchanged candidate source identities. Candidate `f40be434`
-was frozen before these questions were received. The fixture and lock will be
-committed, pushed and declared in PR #3242 before scoring either arm. No scores
-on these questions have been computed at this declaration.
+was frozen before these questions were received. The fixture and lock were
+committed and pushed in `fe823e9d`, then declared in PR #3242 at
+`2026-11-24T09:49:48Z` before either arm was scored.
+`friend30-execution.json` records the declaration and first-run identities.
+No locked file changed after scoring.
 
 The maintainer's fresh-query requirement is a strict Hit@5 gain, with the
 original-28 option B gate kept separate. The existing command below also checks
 aggregate preservation on this fresh set. Its utility exit status and the
-maintainer's fresh Hit@5 condition will both be reported, with all metrics and
+maintainer's fresh Hit@5 condition are both reported, with all metrics and
 every first-relevant-rank loss retained:
 
 ```bash
 python scripts/check_docs_search_ranking.py tests/fixtures/docs_search/friend30.json --require-hit5-gain
 ```
+
+The first declared run returned exit code 0. All four aggregates are preserved
+and the strict fresh Hit@5 gain is satisfied:
+
+| Friend 30 | Baseline | Candidate |
+| --- | --- | --- |
+| Hit@1 | 23/30 | 23/30 |
+| Hit@5 | 29/30 | 30/30 |
+| MRR@10 | 0.8381481481 | 0.8666666667 |
+| Recall@5 | 0.9500 | 1.0000 |
+
+The complete first-relevant-rank loss list has one row:
+
+| ID | Question | Old rank | New rank |
+| --- | --- | --- | --- |
+| FR11 | registry push idempotency key same key different config error | 1 | 2 |
+
+The new top-five hit is FR24, “mlx backend on mac training lora setup,” which
+moves 9 → 2. FR13 improves 5 → 1, and FR15 improves 3 → 2. The other 26
+first-relevant ranks are unchanged. Both supplied FR13 targets are retained;
+its second target also enters the top five. `friend30-results.json` stores all
+30 rows and both top-ten rankings. The original-28 pinned-docs v1 gate remains
+passing. Exact metrics and the complete loss list were recalculated from saved
+rows without rerunning ranking; candidate, questions and labels remain frozen.
 
 ## Historical corpus provenance and the approved rebuild
 
@@ -255,6 +283,12 @@ cohort identifier and numerical `gate` field describe that historical run,
 which is no longer the PR's gate.
 
 ## Verification and cost
+
+`.gitattributes` pins LF checkout for the files covered by frozen byte hashes.
+A `core.autocrlf=true` checkout originally changed all 11 locked file hashes;
+after the attribute fix, all 11 match the frozen identities. This verifies Git
+checkout conversion locally; it is not a Windows runtime test. No candidate,
+fixture or evaluation-script contents changed for this fix.
 
 Each of the six retained rule components was removed in turn: Mac/Macs,
 continue/resume, batch-size, contextual MLX, reference-free phrase and heading

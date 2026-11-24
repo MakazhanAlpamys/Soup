@@ -1,3 +1,10 @@
 tests/fixtures/recipe_config_snapshots.json text eol=lf
 benchmarks/evidence/flash-liger-378-h200/*.json text eol=lf
 benchmarks/evidence/flash-liger-378-preflight/*.json text eol=lf
+# Ranking-fixture locks must hash the same bytes on every platform.
+src/soup_cli/docs/*.py text eol=lf
+scripts/check_docs_search_ranking.py text eol=lf
+scripts/rebuild_docs_search_fixture.py text eol=lf
+tests/fixtures/docs_search/*.json text eol=lf
+benchmarks/docs-search-3192/*.json text eol=lf
+benchmarks/docs-search-3192/*.md text eol=lf

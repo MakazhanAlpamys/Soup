@@ -1,0 +1,29 @@
+{
+  "cohort": "friend30",
+  "fixture_freeze_commit": "fe823e9da0e24c8f6bbec3620cc40faeecf0a302",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "public_declaration": {
+    "pr_url": "https://github.com/MakazhanAlpamys/Soup/pull/3242",
+    "updated_at": "2026-11-24T09:49:48Z",
+    "body_sha256": "a6664933f45e87bef04da47195a073bc777f9f0c50cc31f18fa7c0ba0593ac47",
+    "freeze_commit": "fe823e9da0e24c8f6bbec3620cc40faeecf0a302"
+  },
+  "started_at": "2026-11-24T09:50:17.417523+00:00",
+  "fixture_sha256": "c7720c6e08a4bb7ebefe58c04cbab6e57f1dbb1a2d0782245516234cdb22948b",
+  "command": [
+    ".venv/bin/python",
+    "scripts/check_docs_search_ranking.py",
+    "tests/fixtures/docs_search/friend30.json",
+    "--require-hit5-gain",
+    "--output",
+    "benchmarks/docs-search-3192/friend30-results.json"
+  ],
+  "status": "first local execution complete",
+  "returncode": 0,
+  "finished_at": "2026-11-24T09:50:17.903554+00:00",
+  "hit5_counts": {
+    "baseline": 29,
+    "candidate": 30
+  },
+  "maintainer_fresh_hit5_gain": true
+}
