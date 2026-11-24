@@ -2619,6 +2619,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
+            prepare_lisa_checkpoint,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, self.config.training)
@@ -2627,6 +2628,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         attach_relora_callback(self.trainer, self.config.training)
         # LISA layerwise importance sampling (v0.71.34 #267).
         attach_lisa_callback(self.trainer, self.config.training)
+        prepare_lisa_checkpoint(self.trainer, self.config.training, resume_from_checkpoint)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(
             self.trainer, self.config.training, self._output_dir, console

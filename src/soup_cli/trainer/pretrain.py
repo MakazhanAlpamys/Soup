@@ -504,6 +504,9 @@ class PretrainTrainerWrapper:
                 "PretrainTrainerWrapper.train() called before setup(). "
                 "Call setup(dataset) first."
             )
+        from soup_cli.utils.peft_wiring import prepare_lisa_checkpoint
+
+        prepare_lisa_checkpoint(self.trainer, self.config.training, resume_from_checkpoint)
         start = time.time()
 
         # Add callback for live display and experiment tracking
