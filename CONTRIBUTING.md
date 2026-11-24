@@ -6,9 +6,13 @@ Thank you for your interest in contributing to Soup! We welcome bug reports, fea
 
 ### 1. Fork & Clone
 
+Fork [Soup](https://github.com/MakazhanAlpamys/Soup) on GitHub. Replace
+`YOUR_GITHUB_USERNAME` with your account name and clone the fork:
+
 ```bash
-git clone https://github.com/MakazhanAlpamys/Soup.git
+git clone https://github.com/YOUR_GITHUB_USERNAME/Soup.git
 cd Soup
+git remote add upstream https://github.com/MakazhanAlpamys/Soup.git
 ```
 
 ### 2. Set Up Development Environment
@@ -17,13 +21,36 @@ cd Soup
 dropped in #1805). CI runs exactly those three; `tests/test_requires_python_bound.py` derives
 the declared bound from the CI matrix, so widening one without the other fails the suite.
 
-Work inside a virtualenv, then install the project in editable mode with dev
-dependencies:
+Create a virtualenv with a supported Python interpreter. On macOS and Linux:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+source .venv/bin/activate
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` in place of
+`python` below. For bare tool commands, use that interpreter with
+`-m ruff`, `-m pytest`, or `-m pre_commit`.
+
+For docs, configuration and other work that only needs the core CLI, install
+the editable checkout and the standalone tools:
+
+```bash
+python -m pip install -e .
+python -m pip install ruff pytest pytest-cov
+```
+
+Install the full dev environment for training changes and the full test suite:
+
+```bash
+python -m pip install -e ".[dev]"
 ```
 
 The `venv` step is not optional on Debian 12, Ubuntu 23.04 or later: without it
@@ -33,13 +60,13 @@ stop pip writing into the system Python that `apt` manages
 *installing* Soup and the wrong tool here, since an editable checkout needs to be
 importable by the test suite rather than isolated from it.
 
-This installs:
+The `[dev]` install includes:
 - `pytest` for testing
-- `ruff` for linting + formatting
+- `ruff` for linting
 - `pytest-cov` for coverage
 - `httpx` for HTTP testing
 - `mypy` for type checking
-- `pre-commit` for the lint/format git hooks
+- `pre-commit` for lint and repository checks on staged files
 - the full training stack — `[dev]` self-references `[train]`, so `torch`,
   `transformers`, `peft`, `trl`, `datasets`, `bitsandbytes`, `accelerate` are
   pulled in too (since v0.71.0 these are an opt-in extra, not core deps)
@@ -50,19 +77,29 @@ This installs:
 
 ### 3. Verify Setup
 
-Run the test suite to confirm everything works:
+For a core-only install, run the focused version check:
 
 ```bash
-pytest tests/ -v --tb=short
+python -m pytest tests/test_version_sync.py --no-cov -q
 ```
 
-Run the linter:
+With `[dev]` installed, run the full suite:
 
 ```bash
-ruff check src/soup_cli/ scripts/ tests/ benchmarks/
+python -m pytest tests/ -v --tb=short
 ```
 
-If both pass — you're ready to contribute!
+Run the linter in either environment:
+
+```bash
+python -m ruff check src/soup_cli/ scripts/ tests/ benchmarks/
+```
+
+For the optional local Git hooks, run `python -m pre_commit install`. A
+core-only environment can add the tool with `python -m pip install pre-commit`.
+The `actionlint` workflow hook builds with Go. Current pre-commit can
+provision Go on the first run. If that download is blocked, install Go before
+running the workflow hook.
 
 ## Code Style
 
@@ -70,10 +107,10 @@ We use **ruff** for all code style and linting. Before committing, run:
 
 ```bash
 # Check for issues
-ruff check src/soup_cli/ scripts/ tests/ benchmarks/
+python -m ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 
 # Auto-fix issues
-ruff check --fix src/soup_cli/ scripts/ tests/
+python -m ruff check --fix src/soup_cli/ scripts/ tests/ benchmarks/
 ```
 
 ### Style Guidelines
@@ -142,6 +179,8 @@ examples/             - Real-world config examples and datasets
 
 ### All Tests
 
+Use the full `[dev]` environment for the suite.
+
 ```bash
 pytest tests/ -v --tb=short
 ```
@@ -149,14 +188,18 @@ pytest tests/ -v --tb=short
 ### Single Test File
 
 ```bash
-pytest tests/test_config.py -v
+pytest tests/test_config.py --no-cov -v
 ```
 
 ### Single Test
 
 ```bash
-pytest tests/test_data.py::test_detect_alpaca_format -v
+pytest tests/test_data.py::test_detect_alpaca_format --no-cov -v
 ```
+
+The project-wide coverage threshold applies by default. Use `--no-cov` for a
+focused run. Keep `pytest-cov` installed so pytest can read the configured
+coverage options.
 
 ### With Coverage
 
@@ -194,7 +237,9 @@ Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-tes
 
 ### Test Files
 
-> A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
+Put new tests in a relevant `tests/test_*.py` module and use `test_` function
+names for discovery. The table below is a representative sample. In the full
+dev environment, run `pytest tests/ --collect-only --no-cov -q` to list tests.
 
 Name a new test file after the module or feature it covers (`test_<module>.py`), not after
 an issue number or a version. Existing test files keep their names.
@@ -342,9 +387,11 @@ an issue number or a version. Existing test files keep their names.
 
 ## Claiming an Issue
 
-Comment on it saying you are taking it. GitHub only lets us set the formal
-assignee badge for repo collaborators, so the comment **is** the claim — it will
-look unassigned either way, and we treat the thread as the record.
+Comment on the issue saying you are taking it (for example, `I will take this`).
+Include a short plan naming the proposed change and the tests that would fail
+without it. GitHub only lets us set the formal assignee badge
+for repo collaborators, so the discussion thread records the plan and its
+confirmation.
 
 The current board is the pinned issue
 [#1945](https://github.com/MakazhanAlpamys/Soup/issues/1945), regenerated daily.
@@ -444,9 +491,10 @@ take it back.
 ### 1. Create a Branch
 
 ```bash
-git checkout -b feature/your-feature-name
+git fetch upstream
+git checkout -b feature/your-feature-name upstream/main
 # or
-git checkout -b fix/your-bug-fix
+git checkout -b fix/your-bug-fix upstream/main
 ```
 
 ### 2. Make Your Changes
@@ -470,15 +518,14 @@ page, keep either side and re-run `python scripts/gen_reference_docs.py`.
 
 ### 3. Run Tests & Lint
 
-Before pushing, ensure everything passes:
+Before pushing, run Ruff on the same directories as CI:
 
 ```bash
-# Lint first
-ruff check --fix src/soup_cli/ scripts/ tests/
-
-# Then run tests
-pytest tests/ -v --tb=short
+python -m ruff check --fix src/soup_cli/ scripts/ tests/ benchmarks/
 ```
+
+Use the command for your environment in [Verify Setup](#3-verify-setup),
+then run any focused tests that cover your change.
 
 ### 4. Commit
 
@@ -507,13 +554,11 @@ Then open a pull request on GitHub with:
 
 ## Pull Request Checklist
 
-When you open a PR, the GitHub template will show this checklist:
-
-- [ ] `ruff check src/soup_cli/ scripts/ tests/ benchmarks/` passes
-- [ ] `pytest tests/ -v` passes
-- [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
-- [ ] New tests added for new functionality
-- [ ] No breaking changes (or documented in PR description)
+Use the [GitHub pull request template](.github/pull_request_template.md). It
+asks for lint and test results, relevant docs updates, a changelog fragment
+when the change is user-visible, and the Apache-2.0 license confirmation.
+Include the checks you ran in the PR description. The CI lint command covers
+`src/soup_cli/`, `scripts/`, `tests/` and `benchmarks/`.
 
 Contributions are accepted under the Apache License, Version 2.0, the project's own terms (section 5 of the license): by opening a pull request you agree that your contribution is licensed that way and you keep your copyright; there is no CLA and no DCO sign-off for now.
 
@@ -644,7 +689,12 @@ and the tests on Ubuntu / Python 3.12 only. The required cells (Ubuntu on Python
 3.11 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
 maintainer adds the `ci:full` label at approval, and on every later push while
 the label stays. Until then the other `test (...)` checks show as *Expected* and
-the smoke jobs as *skipped*; neither is a failure on your side. A PR is merged
+the smoke jobs as *skipped*; neither is a failure on your side. The plan job reads
+the current pull request labels when it runs. If the read succeeds, the surviving
+run sees `ci:full` even when it was added just after the push. If the read fails,
+the job warns and falls back to the labels in its triggering event. If the required
+cells are still missing after that fallback, a maintainer removes and re-adds
+`ci:full`. A PR is merged
 only when those checks are green on its current head. After the merge, `main`
 runs the same quick set on every commit and the full matrix (every Python from
 3.11 to 3.13, with 3.11 on Ubuntu only) once a night; a push to a `release/**`
@@ -781,10 +831,10 @@ That is why a green tick can describe a `main` that no longer exists (#763's
 has already fixed. Neither is the contributor's fault, and neither clears by
 waiting.
 
-**If your PR is red for failures you do not touch:** merge or rebase onto current
-`origin/main` and push. That is the only way to rebuild the merge SHA for the
-test matrix. Maintainers will not `gh pr update-branch` onto a fork without
-asking.
+If CI fails in code outside your change, run `git fetch upstream`, then merge
+or rebase onto `upstream/main` and push the branch to `origin`. This rebuilds
+the merge SHA for the test matrix. Maintainers will not `gh pr update-branch`
+onto a fork without asking.
 
 **If your PR is green and `main` has moved:** the `merge-freshness` check is
 re-posted on every push to `main`. It rebuilds the merge with
