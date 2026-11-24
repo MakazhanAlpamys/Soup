@@ -28,7 +28,7 @@ from soup_cli.utils.soup_lock import SoupLock, compute_lock_closure, write_lock
 def _setup_eval_gate(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     pass_tasks_file = tmp_path / "gate_tasks_pass.jsonl"
     pass_tasks_file.write_text(
-        json.dumps({"prompt": "ping", "expected": ""}) + "\n",
+        json.dumps({"prompt": "ping", "expected": "pong"}) + "\n",
         encoding="utf-8",
     )
 
