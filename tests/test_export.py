@@ -132,3 +132,12 @@ def test_export_help():
     assert result.exit_code == 0
     assert "gguf" in result.output.lower()
     assert "quant" in result.output.lower()
+    # #3279: --output must say file-vs-directory per format and keep the
+    # GGUF default example tied to GGUF only. Normalize whitespace because
+    # rich wraps the option help across lines and inserts panel borders.
+    flat = " ".join(result.output.lower().replace("│", " ").replace("─", " ").split())
+    assert "a file for gguf" in flat
+    assert "<model-name>.<quant>.gguf" in flat
+    assert "a directory for onnx and tensorrt" in flat
+    assert "<model-name>_onnx" in flat
+    assert "<model-name>_trt" in flat
