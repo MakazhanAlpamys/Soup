@@ -441,24 +441,35 @@ def _read_asr_rows(path: Path) -> list[dict]:
     rows: list[dict] = []
     dropped = 0
     capped = False
-    with open(path, encoding="utf-8-sig") as f:
-        for raw_line in f:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                dropped += 1
-                continue
-            audio = obj.get("audio") if isinstance(obj, dict) else None
-            if not isinstance(audio, str) or not audio.strip():
-                dropped += 1
-                continue
-            rows.append(obj)
-            if len(rows) >= _MAX_ASR_ROWS:
-                capped = True
-                break
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    dropped += 1
+                    continue
+                audio = obj.get("audio") if isinstance(obj, dict) else None
+                if not isinstance(audio, str) or not audio.strip():
+                    dropped += 1
+                    continue
+                rows.append(obj)
+                if len(rows) >= _MAX_ASR_ROWS:
+                    capped = True
+                    break
+    except UnicodeDecodeError:
+        # e.g. a UTF-16 manifest written by PowerShell 5.1's ``>`` redirect.
+        # Name the file and the required encoding instead of a raw codec error.
+        console.print(Text.assemble(
+            "Error: cannot read ",
+            terminal_text(str(path)),
+            " as UTF-8. Save the ASR manifest as UTF-8 and retry.",
+            style="red",
+        ))
+        raise typer.Exit(1)
     if dropped:
         console.print(
             f"[yellow]Skipped {dropped} row(s) with no 'audio' path.[/]"

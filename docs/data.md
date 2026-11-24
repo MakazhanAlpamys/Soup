@@ -522,7 +522,7 @@ soup data generate --prompt "..." --provider ollama --model llama3.1
 soup data generate --prompt "..." --ollama-model llama3.1  # shorthand
 
 # Generate via Anthropic Claude API (set ANTHROPIC_API_KEY env var)
-soup data generate --prompt "..." --provider anthropic --model claude-3-haiku-20240307
+soup data generate --prompt "..." --provider anthropic --model claude-haiku-5-5
 
 # Generate via local vLLM server
 soup data generate --prompt "..." --provider vllm --model meta-llama/Llama-3.1-8B-Instruct
@@ -1320,6 +1320,16 @@ when no minimum is specified. With an explicit `--format`, an empty `.jsonl` fil
 or a `.json` file containing `[]` reports `0/0` and exits `0`, even with a positive
 minimum. Auto-detection on either input exits `3`. A 0-byte `.json` file fails JSON
 parsing.
+
+**PREVIEW.** Use `soup data validate ./data/train.jsonl --result-json` to
+request one UTF-8 `soup.command_result` v1 JSON object followed by a newline on
+stdout. Diagnostics and progress use stderr. The result includes the decision,
+numeric exit code, and row counts when validation completed. Known file loading
+failures emit a receipt and retain exit 1. An interrupt during validation emits
+`cancelled` and exits 130. Help and errors before command dispatch can exit
+without a receipt. The wheel includes `soup_cli/schemas/command-result-v1.json`.
+Readers should ignore unknown optional fields. Preview fields may change until
+an end-to-end consumer test passes.
 
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The

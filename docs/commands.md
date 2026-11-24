@@ -169,6 +169,7 @@ soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --gpu H100 --history  Estimate duration and cost from comparable local single-GPU SFT runs, with an observed range
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -404,6 +405,15 @@ soup --version                                Show version (prints the same text
 soup --verbose <command>                      Full traceback on errors
 ```
 
+### Estimating training time from local runs
+
+Pass `soup cost --history --gpu <label>` to use the median seconds per
+optimizer step from at least three comparable single-GPU text SFT runs. The
+reported range comes from the fastest and slowest of those runs. A matching run
+must have recorded that it started without resuming on one CUDA device. If
+there are too few matches or the step count cannot be estimated from rows and a
+fixed batch size, Soup gives its model-based estimate and explains the fallback.
+
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
 `--device` decides where these commands load the model. Without it, the
@@ -534,6 +544,8 @@ The server exposes 14 read-only tools — `advise`, `data_inspect`,
 `diagnose_evidence`, `ship_evidence` — each returning JSON. Two **plan-only**
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
+
+Every tool in `tools/list` carries MCP annotations. They describe **side effects**, with MCP's meaning (`readOnlyHint: true` = the tool does not modify its environment), and they are hints for the client, not enforcement. The **gate level** is a separate thing: read (always runs), plan (`--allow-mutating`) or execute (`--allow-execute`), 14 / 2 / 2 tools, kept on the tool table rather than read off the annotations; the engine itself will report it. Eight tools advertise `readOnlyHint: true`: `advise`, `data_inspect`, `data_validate`, `recipes_search`, `recipes_show`, `profile`, `diagnose_evidence` and `ship_evidence`. Six read-level tools can write benign state and advertise `readOnlyHint: false, destructiveHint: false` and no `idempotentHint` (a repeat call is not promised to change nothing; for example a registry read re-applies file permissions): `runs_list`, `runs_show`, `registry_list` and `registry_show` (opening the local database creates or migrates it, and reading a run rewrites a stale `running` row whose process is gone), `data_doctor` (it can fill the Hugging Face tokenizer cache) and `data_score` (the optional presidio engine can download a spaCy model); those last two also advertise `openWorldHint: true`, and `profile` advertises `openWorldHint: false` (it never downloads). `train_start` and `export` advertise `readOnlyHint: false, destructiveHint: false` (they run nothing; under `--allow-execute` `train_start` writes a new run directory under `.soup/mcp-runs/` and both issue a one-time token; neither deletes or overwrites a user file or a live plan, and issuing a token only drops expired plan tokens held in memory as housekeeping); `train_execute` and `export_execute` advertise `readOnlyHint: false, destructiveHint: true`.
 
 `--allow-execute` implies `--allow-mutating` and enables full background subprocess execution via two execution tools (`train_execute` and `export_execute`). Execution requires a server-issued one-time confirmation token returned during the planning phase (`train_start` or `export`). The token state is kept in-memory with a 5-minute TTL and is consumed before subprocess invocation.
 
