@@ -278,9 +278,19 @@ A task `name` must also be non-empty and free of NUL characters; a suite with
 such a name is refused at load time (`soup eval gate` exits `3`), before any
 model setup or verdict.
 
-Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+Each task's `threshold` must be a finite number from 0 to 1000 inclusive.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
 construction; use numeric `0` when a zero cutoff is intended.
+
+When you edit a loaded suite through the SDK, `run_gate` applies the same
+threshold rules and checks any supplied `scorer`. Use `exact`, `contains`,
+`answer`, `regex` or `semantic`. An invalid value raises `ValueError` before
+any task runs.
+
+For a `type: custom` task, set `tasks` to a JSONL file under the current
+working directory. Relative paths start from the working directory where you
+run Soup. If the path resolves outside it, the task fails without reading the
+file or generating answers, even if you assigned the path after loading the suite.
 
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
@@ -1434,8 +1444,8 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   `A-Z a-z 0-9 _ . -` and must start with a letter or digit. The file's SHA-256 is
   pinned in the ledger; if a registered file later changes, the run is refused (exit
   `3`) with a message naming the task and both hashes, because a silently swapped
-  control set would fake retention. Register the new file under a new task name
-  instead. The same name with the same bytes is a no-op, or updates the stored path if
+  control set would fake retention. Restore the original bytes to keep using that
+  ledger. The same name with the same bytes is a no-op, or updates the stored path if
   you moved the file: pass `--add-task NAME=NEWPATH` (a missing control file is refused
   with exactly that hint). The file is read once and the bytes that are hashed are the
   bytes that are parsed.
@@ -1458,6 +1468,13 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   lost or reset ledger makes every task new, so nothing can regress and the run exits
   `0`; in CI pass the flag so that cannot pass silently. Without the flag a run with no
   earlier version prints a warning that names it.
+
+**Correcting a registered control file.** If a control has a missing, null or blank
+`expected` value, fix the row or remove it. Start a fresh `--ledger NEW.json`,
+register the controls again with `--add-task`, and use `--record` to establish a
+new baseline. Leave off `--require-history` for that first record. The old ledger
+still checks every original control, so adding the corrected copy under another
+name leaves the unusable control in the old series.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
 the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
