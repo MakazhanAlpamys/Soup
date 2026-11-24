@@ -71,6 +71,7 @@ from soup_cli.utils.loop_log import (
 from soup_cli.utils.loop_prune import (
     DEFAULT_KEEP_LOG_LINES,
     DEFAULT_KEEP_RUNS,
+    VERSION_HISTORY_KEEP,
     build_prune_plan,
     daemon_is_running,
     execute_prune,
@@ -740,7 +741,11 @@ def prune_cmd(
     ),
     keep_log_lines: int = typer.Option(
         DEFAULT_KEEP_LOG_LINES, "--keep-log-lines", min=1,
-        help="Keep this many newest lines in each loop JSONL log (default: 10000).",
+        help=(
+            "Keep this many newest lines in each loop JSONL log "
+            f"(default: {DEFAULT_KEEP_LOG_LINES}); `versions.jsonl` always retains at least "
+            f"{VERSION_HISTORY_KEEP} rollback transitions."
+        ),
     ),
 ) -> None:
     """Safely prune loop artifacts. Detects detached daemons only; stop foreground watches first."""
