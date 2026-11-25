@@ -66,6 +66,89 @@ def test_hf_training_run_records_every_row_once(tmp_path, monkeypatch):
     assert run.steps() == list(range(1, len(dataset["train"]) + 1))
 
 
+def test_hf_rewind_preserves_fresh_and_resumed_training_row_order(
+    tmp_path,
+    monkeypatch,
+    aten_half_matmuls,
+    capsys,
+):
+    from transformers import TrainerCallback
+
+    from tests.test_issue341_seed_and_fullft import _tiny_llama_dir
+
+    class SaveResumePoints(TrainerCallback):
+        def on_step_end(self, args, state, control, **kwargs):
+            if state.global_step in (4, 5):
+                control.should_save = True
+
+    base = _tiny_llama_dir(tmp_path, n_layers=1)
+
+    def run(name, *, checkpoint=None, save=False, **training):
+        root = tmp_path / name
+        root.mkdir()
+        wrapper, dataset = _hf_wrapper(
+            root,
+            monkeypatch,
+            base=base,
+            epochs=2,
+            gradient_accumulation_steps=2,
+            seed=123,
+            data_seed=456,
+            **training,
+        )
+        wrapper.setup(dataset)
+        trainer = wrapper.trainer
+        rows_by_tokens = {
+            tuple(row["input_ids"]): index for index, row in enumerate(trainer.train_dataset)
+        }
+        assert len(rows_by_tokens) == len(dataset["train"]) == 8
+        seen = []
+        training_step = trainer.training_step
+
+        def capture_row(model, inputs, *args, **kwargs):
+            assert inputs["input_ids"].shape[0] == 1
+            tokens = inputs["input_ids"][0][inputs["attention_mask"][0].bool()]
+            seen.append(rows_by_tokens[tuple(tokens.tolist())])
+            return training_step(model, inputs, *args, **kwargs)
+
+        monkeypatch.setattr(trainer, "training_step", capture_row)
+        if save:
+            trainer.add_callback(SaveResumePoints())
+        try:
+            trainer.train(resume_from_checkpoint=str(checkpoint) if checkpoint else None)
+        finally:
+            wrapper._report_rewind()
+        log_path = root / "out" / RewindLog.FILENAME
+        recorded = []
+        if log_path.is_file():
+            recorded = [row for batch in read_rewind_log(log_path).batches for row in batch.rows]
+        return seen, recorded
+
+    fresh, recorded = run("recorded", save=True)
+    plain, plain_records = run("plain", rewind_log=False)
+    assert recorded == fresh
+    assert plain_records == []
+    for rows in (fresh, plain):
+        assert len(rows) == 16
+        assert sorted(rows[:8]) == sorted(rows[8:]) == list(range(8))
+
+    checkpoints = tmp_path / "recorded" / "out"
+    mismatches = []
+    for step in (4, 5):
+        checkpoint = checkpoints / f"checkpoint-{step}"
+        assert checkpoint.is_dir()
+        capsys.readouterr()
+        resumed, resumed_records = run(f"resume-{step}", checkpoint=checkpoint)
+        assert resumed_records == []
+        assert "resumed runs" in capsys.readouterr().out
+        expected = fresh[2 * step :]
+        if resumed != expected:
+            mismatches.append(f"checkpoint-{step}: {resumed} != {expected}")
+    if fresh != plain:
+        mismatches.append(f"fresh recorder on vs off: {fresh} != {plain}")
+    assert not mismatches, "\n".join(mismatches)
+
+
 # ------------------------------------------------------------------------ mlx --
 
 
