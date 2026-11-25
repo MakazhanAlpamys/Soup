@@ -1368,7 +1368,11 @@ jobs:
         # of any run but ubuntu / 3.11. The same two caps.
         if: env.RUN_SUITE == 'true' && (github.event_name == 'pull_request' || matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11') && steps.reuse.outputs.cache-hit != 'true'
         timeout-minutes: ${{ matrix.os == 'macos-latest' && 120 || 90 }}
-        run: pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300 --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
+        # Keep one comparable timing receipt in the existing Ubuntu 3.12 log.
+        run: >-
+          pytest tests/ -n logical --dist loadfile -v --tb=short -o faulthandler_timeout=300
+          --timeout=600 --timeout-method=thread --max-worker-restart=2 --junitxml=report.xml --no-cov
+          ${{ matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && '--durations=50' || '' }}
       - name: Upload coverage to Codecov
         # The cell that measures coverage, nowhere else: ubuntu / 3.11 of a run that is not a
         # pull request (release, nightly, manual dispatch), the same condition as "Run unit
