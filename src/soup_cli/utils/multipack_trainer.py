@@ -206,6 +206,21 @@ def make_multipack_trainer_class(base_cls: type) -> type:
                 num_workers = getattr(args, "dataloader_num_workers", 0) or 0
                 pin_memory = bool(getattr(args, "dataloader_pin_memory", False))
 
+            data_collator = getattr(self, "data_collator", None)
+            padding_multiple = None
+            if getattr(data_collator, "padding_free", None) is False:
+                try:
+                    from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+                except ImportError:
+                    pass  # Plain HF/custom collators also work without the optional TRL install.
+                else:
+                    if isinstance(data_collator, DataCollatorForLanguageModeling):
+                        # TRL may truncate or otherwise prepare rows before collation.
+                        lengths = lengths_from_dataset(train_dataset)
+                        padding_multiple = data_collator.pad_to_multiple_of
+                        if padding_multiple is None:
+                            padding_multiple = 1
+
             sampler = MultipackBatchSampler(
                 lengths=list(lengths),
                 # real_batches=False packs each bin to batch_size * max_seq_length
@@ -216,9 +231,9 @@ def make_multipack_trainer_class(base_cls: type) -> type:
                 real_batches=False,  # yield list[int] per pack — DataLoader-compatible
                 seed=int(seed),
                 drop_last=drop_last,
+                padding_multiple=padding_multiple,
             )
 
-            data_collator = getattr(self, "data_collator", None)
             loader = DataLoader(
                 train_dataset,
                 batch_sampler=sampler,

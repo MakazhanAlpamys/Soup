@@ -309,7 +309,7 @@ class TestShipPairwise:
 
         monkeypatch.setattr(
             "soup_cli.eval.custom.load_eval_tasks",
-            lambda path: [_Task("q1"), _Task("q2")],
+            lambda path, **_kwargs: [_Task("q1"), _Task("q2")],
         )
         monkeypatch.setattr(
             "soup_cli.eval.gate._parse_judge_url",

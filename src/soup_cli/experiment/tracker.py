@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS runs (
     log_path        TEXT,
     exit_code       INTEGER,
     loss_summary_kind TEXT,
-    error_message   TEXT
+    error_message   TEXT,
+    cost_history_eligible INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -246,6 +247,9 @@ class ExperimentTracker:
             ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
             ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
             ("runs", "error_message", "ALTER TABLE runs ADD COLUMN error_message TEXT"),
+            # NULL on old rows means the launch conditions were not recorded.
+            ("runs", "cost_history_eligible",
+             "ALTER TABLE runs ADD COLUMN cost_history_eligible INTEGER"),
             # Deliberately nullable with no default: a row written before this
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
@@ -297,6 +301,8 @@ class ExperimentTracker:
         gpu_info: dict,
         experiment_name: Optional[str] = None,
         run_id: Optional[str] = None,
+        *,
+        cost_history_eligible: bool | None = None,
     ) -> str:
         """Insert a new run and return its run_id."""
         run_id = run_id or generate_run_id()
@@ -314,11 +320,11 @@ class ExperimentTracker:
                 """UPDATE runs SET status = 'running', config_json = ?, device = ?,
                    device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?,
                    base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL,
-                   code_commit = NULL, code_dirty = NULL
+                   code_commit = NULL, code_dirty = NULL, cost_history_eligible = ?
                    WHERE run_id = ?""",
                 (
                     config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
-                    run_id,
+                    cost_history_eligible, run_id,
                 ),
             )
             conn.commit()
@@ -326,11 +332,12 @@ class ExperimentTracker:
         conn.execute(
             """INSERT INTO runs
                (run_id, experiment_name, created_at, status, config_json,
-                device, device_name, gpu_memory, base_model, task)
-               VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)""",
+                device, device_name, gpu_memory, base_model, task, cost_history_eligible)
+               VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, experiment_name, now, config_json,
                 device, device_name, gpu_memory, base_model, task,
+                cost_history_eligible,
             ),
         )
         conn.commit()

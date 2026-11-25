@@ -19,6 +19,7 @@ _exceptions = import_module(f"{_core.__package__}.exceptions")
 UsageError = _exceptions.UsageError
 MissingParameter = _exceptions.MissingParameter
 ParameterSource = _core.ParameterSource
+get_current_context = import_module(f"{_core.__package__}.globals").get_current_context
 
 
 def is_group(command: object) -> bool:

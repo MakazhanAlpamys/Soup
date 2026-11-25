@@ -927,6 +927,7 @@ Usage: `soup cost [OPTIONS]`
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--gpu`, `-g` | text |  |  | Filter by specific GPU (e.g., A100, H100, RTX 4090) |
 | `--json` | flag | off |  | Output as JSON for scripting |
+| `--history` | flag | off |  | Use comparable local SFT runs with one GPU selected by --gpu. |
 
 ## `soup data`
 
@@ -1670,6 +1671,7 @@ Usage: `soup data validate [OPTIONS] PATH`
 | `PATH` | text |  | yes | Path to dataset file |
 | `--format`, `-f` | text | `auto` |  | Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext |
 | `--min-valid-fraction` | float, 0.0 to 1.0 | `0.0` |  | Exit 2 when the fraction of valid rows is below this value |
+| `--result-json` | flag | off |  | Emit a machine-readable result (preview) |
 
 ## `soup delinearize-llama4`
 
@@ -2315,7 +2317,7 @@ Usage: `soup eval leaderboard [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--sort-by`, `-s` | text |  |  | Sort by specific benchmark (default: average) |
+| `--sort-by`, `-s` | text |  |  | Sort the table, JSON and CSV rows by one benchmark (default: average) |
 | `--format`, `-f` | text | `table` |  | Output format: table, json, csv |
 
 ### `soup eval lock`
@@ -2483,10 +2485,10 @@ Usage: `soup ingest [OPTIONS]`
 | `--source` | text |  | yes | Trace source: langfuse \| langsmith \| helicone \| openpipe \| otel \| openai-stored |
 | `--logs` | text |  |  | Path to JSONL trace export (one event per line). Required unless --pull. |
 | `--output`, `-o` | text |  |  | Output JSONL (default: traces.jsonl in cwd). |
-| `--pull` | flag | off |  | Fetch generations live from the Langfuse API instead of reading --logs (--source langfuse only). Reads LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a self-hosted instance. |
+| `--pull` | flag | off |  | Fetch live from the vendor's API instead of reading --logs (--source langfuse or langsmith). Langfuse: LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a self-hosted instance. LangSmith: LANGSMITH_API_KEY and LANGSMITH_PROJECT, plus LANGSMITH_ENDPOINT for another region or a self-hosted instance. |
 | `--since` | text |  |  | With --pull: how far back to fetch, e.g. 30m, 24h, 7d (default 7d, max 365d). |
-| `--max-pages` | integer, 1 to 10000 |  |  | With --pull: stop with an error, writing nothing, if results are still pending after this many pages of 100 generations (default 100). |
-| `--allow-private-host` | flag | off |  | With --pull: allow LANGFUSE_HOST to be a private or loopback address (self-hosted Langfuse). HTTPS is still required. |
+| `--max-pages` | integer, 1 to 10000 |  |  | With --pull: stop with an error, writing nothing, if results are still pending after this many pages of 100 generations or LLM runs (default 100). |
+| `--allow-private-host` | flag | off |  | With --pull: allow LANGFUSE_HOST or LANGSMITH_ENDPOINT to be a private or loopback address (self-hosted). HTTPS is still required. |
 | `--slack-url` | text |  |  | Optional Slack webhook URL — POSTed on completion. SSRF-validated. |
 | `--discord-url` | text |  |  | Optional Discord webhook URL — POSTed on completion. SSRF-validated. |
 
@@ -2909,7 +2911,7 @@ Usage: `soup mcp runs reconcile [OPTIONS]`
 
 ### `soup mcp serve`
 
-Start the MCP server (read-only tools by default).
+Start the MCP server (ungated tools available by default).
 
 Usage: `soup mcp serve [OPTIONS]`
 
@@ -3168,6 +3170,7 @@ Usage: `soup prune-layer-cache [OPTIONS]`
 | `--model` | text |  | yes | Base model id whose cache slots to inspect. |
 | `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
 | `--yes` | flag | off |  | Actually remove. Without it: dry run. |
+| `--keep` | text, repeatable |  |  | Protect a lowercase 40-hex commit. Repeat up to 64 times. |
 
 ## `soup prune-prompt`
 
@@ -3601,7 +3604,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank` | text |  |  | Path to a VeRA / VB-LoRA vector bank (JSON). Multi-tenant LoRA serving at MB-per-user: the per-token delta is v_u ⊙ Px, routed by the X-User-Id request header. Requires --backend transformers. (v0.71.12 #221) |
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
-| `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
+| `--kv-cache-type` | text |  |  | KV-cache type for decoding, on --backend transformers only: q8_0 (8-bit quantized cache, needs hqq), bf16 or f16 (cache dtype). fp8 is refused on every backend, Hopper GPUs included, and every other backend refuses this option. v0.71.14 (#140). |
 | `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
@@ -3832,6 +3835,7 @@ Usage: `soup train [OPTIONS]`
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
+| `--result-json` | flag | off |  | Emit a machine-readable dry-run result (preview). |
 
 ## `soup tui`
 

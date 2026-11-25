@@ -798,11 +798,17 @@ def sanitize_run_output_dir(
     if not output_dir or not isinstance(output_dir, str):
         return output_dir
 
-    if os.name != "nt" and ntpath.splitdrive(output_dir)[0]:
+    windows_drive = ntpath.splitdrive(output_dir)[0]
+    if os.name != "nt" and (windows_drive or output_dir.startswith("\\")):
         return ntpath.basename(output_dir.rstrip("/\\"))
 
     if base is None:
         base = Path.cwd()
+
+    if os.name == "nt" and windows_drive:
+        base_drive = ntpath.splitdrive(os.path.abspath(base))[0]
+        if ntpath.normcase(windows_drive) != ntpath.normcase(base_drive):
+            return ntpath.basename(output_dir.rstrip("/\\"))
 
     path_to_check = (
         output_dir if os.path.isabs(output_dir) else os.path.join(str(base), output_dir)

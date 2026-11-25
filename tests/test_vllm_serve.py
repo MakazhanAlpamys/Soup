@@ -69,22 +69,31 @@ class TestVllmDetection:
 class TestServeBackendFlag:
     """Test --backend flag in serve command."""
 
-    def test_invalid_backend_rejected(self, tmp_path):
-        """serve --backend invalid should fail."""
+    def test_invalid_backend_rejected(self, tmp_path, monkeypatch):
+        """An unknown backend is refused before model load."""
+        pytest.importorskip("fastapi")
+        uvicorn = pytest.importorskip("uvicorn")
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from soup_cli.commands import serve
+        from tests.conftest import strip_ansi
 
-        runner = CliRunner()
-        # Create a fake model dir
+        loader = MagicMock(side_effect=AssertionError("unexpected model load"))
+        server = MagicMock(side_effect=AssertionError("unexpected server startup"))
+        monkeypatch.setattr(serve, "_load_model", loader)
+        monkeypatch.setattr(uvicorn, "run", server)
         model_dir = tmp_path / "model"
         model_dir.mkdir()
 
-        result = runner.invoke(
+        result = CliRunner().invoke(
             app, ["serve", "--model", str(model_dir), "--backend", "invalid"]
         )
-        assert result.exit_code != 0
-        assert "unknown backend" in result.output.lower() or result.exit_code != 0
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "Unknown backend: invalid" in strip_ansi(result.output)
+        loader.assert_not_called()
+        server.assert_not_called()
 
     def test_vllm_backend_not_installed(self, tmp_path):
         """serve --backend vllm should fail if vllm not installed."""
@@ -190,45 +199,41 @@ class TestServeBackendFlag:
         mock_serve_vllm.assert_called_once()
         assert mock_serve_vllm.call_args.kwargs["vllm_cache_dtype"] == "bfloat16"
 
-    def test_vllm_hint_shown_when_available(self, tmp_path):
-        """When vllm is installed but not selected, show hint."""
-        from io import StringIO
+    def test_vllm_hint_shown_when_available(self, tmp_path, monkeypatch):
+        """The Transformers backend prints the alternative when vLLM is available."""
+        pytest.importorskip("fastapi")
+        uvicorn = pytest.importorskip("uvicorn")
+        from typer.testing import CliRunner
 
-        from rich.console import Console
+        from soup_cli.cli import app
+        from soup_cli.commands import serve
+        from soup_cli.utils import vllm
+        from tests.conftest import strip_ansi
 
-        from soup_cli.commands import serve as serve_mod
+        class ModelLoadReachedError(Exception):
+            """Stop at the local model-loading boundary."""
 
-        # Save original console
-        original_console = serve_mod.console
-        output = StringIO()
-        serve_mod.console = Console(file=output)
-
+        loader = MagicMock(side_effect=ModelLoadReachedError)
+        server = MagicMock(side_effect=AssertionError("unexpected server startup"))
+        monkeypatch.setattr(serve, "_load_model", loader)
+        monkeypatch.setattr(uvicorn, "run", server)
+        monkeypatch.setattr(vllm, "is_vllm_available", lambda: True)
         model_dir = tmp_path / "model"
         model_dir.mkdir()
 
-        try:
-            with patch("soup_cli.utils.vllm.is_vllm_available", return_value=True):
-                # Will fail at model loading but we can check for hint output
-                try:
-                    serve_mod.serve.__wrapped__(
-                        model=str(model_dir),
-                        base_model=None,
-                        port=8000,
-                        host="0.0.0.0",
-                        device="cpu",
-                        max_tokens_default=512,
-                        backend="transformers",
-                        tensor_parallel=1,
-                        gpu_memory_utilization=0.9,
-                    )
-                except (SystemExit, Exception):
-                    pass
-        finally:
-            serve_mod.console = original_console
+        result = CliRunner().invoke(
+            app,
+            [
+                "serve", "--model", str(model_dir), "--backend", "transformers",
+                "--device", "cpu",
+            ],
+        )
 
-        # Hint may or may not appear depending on how far execution gets
-        # The key test is that no crash happens
-        assert output.getvalue() is not None
+        assert isinstance(result.exception, ModelLoadReachedError), result.output
+        loader.assert_called_once()
+        server.assert_not_called()
+        output = " ".join(strip_ansi(result.output).split())
+        assert "Hint: vLLM is installed. Use --backend vllm" in output
 
     def test_default_backend_is_transformers(self):
         """Default backend should be transformers."""

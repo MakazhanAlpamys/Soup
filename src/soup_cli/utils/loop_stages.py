@@ -65,6 +65,7 @@ from soup_cli.utils.loop_holdout import (
     read_ledger,
     waiting_note,
 )
+from soup_cli.utils.loop_quantization import NOTE_PREFIX as QUANTIZATION_NOTE_PREFIX
 from soup_cli.utils.loop_quantization import resolve_sft_quantization
 from soup_cli.utils.loop_retry import hold_reason, train_inputs_fingerprint
 from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit, python_child_argv
@@ -873,8 +874,9 @@ def train_dpo_from_pairs(
     one), ``kto`` or ``sft``; ``_render_train_yaml`` writes the matching config. Returns
     ``{run_id, skipped, adapter_path}``, plus a ``notes`` entry when an sft recipe's
     ``quantization: auto`` was resolved (``sft quantization auto: none (need 3.0 GB, free
-    7.1 GB)``) and, before training starts, a ``paraphrases: 12 new for 6 edits, 3 dropped
-    (...)`` entry (see ``_paraphrase_step``). Skips (no run) when the
+    7.1 GB)``; the same text is ``quantization_note``) and, before training starts, a
+    ``paraphrases: 12 new for 6 edits, 3 dropped (...)`` entry (see ``_paraphrase_step``).
+    Skips (no run) when the
     harvest produced no rows, or not enough is NEW since the data cursor (see
     ``harvest_from_traces``): fewer new rows than ``state.min_new_pairs``, or, for an sft loop
     whose harvest reports the ``edits_or_rated`` rule (it has a feedback log), fewer than
@@ -943,8 +945,13 @@ def train_dpo_from_pairs(
         rendered = _render_train_yaml(state, str(pairs_path), output_dir, notes=train_notes)
     except ValueError as exc:
         return {**skip, "notes": f"base_model_unknown: {exc}; training skipped"}
+    # The quantization choice also goes on the train stage's progress line (the daemon's
+    # ``_emit_train_end``), so a person watching sees it, not only the iteration record.
+    quantization = [n for n in train_notes if n.startswith(QUANTIZATION_NOTE_PREFIX)]
     train_notes.extend(_paraphrase_step(state, ctx))
-    decided = {"notes": "; ".join(train_notes)} if train_notes else {}
+    decided: dict = {"notes": "; ".join(train_notes)} if train_notes else {}
+    if quantization:
+        decided["quantization_note"] = quantization[0]
     yaml_dir = Path(_ADAPTERS_DIR)
     yaml_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
@@ -1765,11 +1772,18 @@ def deploy_to_canary(
         }
     raw_endpoint = os.environ.get("SOUP_LOOP_SERVE_ENDPOINT")
     if not raw_endpoint:
-        return {
+        missing: dict[str, object] = {
             "deployed": False,
             "canary_verdict": None,
             "notes": "no SOUP_LOOP_SERVE_ENDPOINT configured",
         }
+        if state.pending_deploy is not None:
+            missing.update(
+                deferred=True,
+                notes="deploy waiting: no SOUP_LOOP_SERVE_ENDPOINT configured; "
+                "restore it to retry the saved candidate",
+            )
+        return missing
     from soup_cli.utils.drift_alarm import validate_webhook_url
 
     try:

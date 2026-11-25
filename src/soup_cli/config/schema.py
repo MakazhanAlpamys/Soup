@@ -244,6 +244,14 @@ _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
     "grace_codebook_dim",
 })
 
+_DATA_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
+    "raft_shuffle_seed",
+    "replay_ratio",
+    "replay_seed",
+})
+
+_SHIP_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({"noise_floor"})
+
 class LoraConfig(BaseModel):
     @field_validator("*", mode="before")
     @classmethod
@@ -543,6 +551,16 @@ class DataConfig(BaseModel):
             "local file paths to combine via data.interleave. (#443)"
         ),
     )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_DATA_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
 
     @field_validator("train", mode="before")
     @classmethod
@@ -1271,6 +1289,11 @@ class EvalGateConfig(BaseModel):
     Runs a declarative eval suite at epoch boundaries and halts training
     if any task regresses below ``regression_threshold`` vs the baseline.
     """
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
 
     enabled: bool = Field(
         default=False,
@@ -5206,6 +5229,16 @@ class ShipConfig(BaseModel):
     CLI flag always wins (CLI > config > hard default).
     """
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_SHIP_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
+
     task_eval: Optional[str] = Field(
         default=None,
         description="JSONL of leg-1 task-win eval tasks",
@@ -8328,8 +8361,10 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_vision_preference_format(self) -> "SoupConfig":
         """Refuse vision row formats for preference tasks until they have a row path."""
-        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
-        vision_preference_formats = {"llava", "sharegpt4v"}
+        preference_tasks = {
+            "dpo", "ipo", "simpo", "orpo", "bco", "preference", "kto", "reward_model",
+        }
+        vision_preference_formats = {"llava", "sharegpt4v", "video", "multimodal"}
         if self.task in preference_tasks and self.data.format in vision_preference_formats:
             raise ValueError(
                 f"task={self.task!r} with data.format={self.data.format!r} has no "

@@ -480,6 +480,8 @@ training:
 soup train --config soup.yaml
 ```
 
+**Single process only, for now.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), `soup train` refuses a `stream_layers: true` config at startup with "distributed layer streaming is not supported yet" ([#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585)); run it as one process, or set `stream_layers: false` to train resident across the cards.
+
 **Model and tokenizer code.** With `training.stream_layers: true`, Soup uses
 Transformers' own implementation for the model config, the meta skeleton used by
 setup probes, and the streamed model. `--trust-remote-code` still reaches the
@@ -1398,6 +1400,12 @@ the next run stops with the same message and leaves the copy in place.
 - `soup prune-layer-cache --model <base>` is a dry run: it lists the stale slots with sizes and exact paths. Only `--yes` removes them. Training never deletes.
 - Kept, never removed: the slot the run resolves to; the newest complete slot of the base (the `index.json` with the latest mtime), so a base with one complete slot never loses it; a slot with `index.json.resharding`; a slot holding a `.soup.*.tmp` file (a write in progress); a slot with no readable `index.json`.
 - Stripe folders sit outside the cache root. They are listed with sizes and are never deleted: remove them by hand.
+- Run pins are not discovered automatically. Pass `--keep <commit>` for each revision to
+  protect, in the dry run and with `--yes`. Repeat up to 64 times (duplicates count toward
+  the limit and are collapsed); commits must be full lowercase 40-hex strings. Protection
+  matches only `<this model's slug>@<commit>`, never a legacy bare-slug slot. A valid commit
+  with no matching slot stops the command with exit 1 before any deletion, so check the
+  model and commit if a pin is refused. Existing automatic protections still apply.
 
 ### Forward-only inference mode (API only, no CLI yet)
 

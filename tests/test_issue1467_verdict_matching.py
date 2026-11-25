@@ -94,7 +94,7 @@ def test_a_capitalised_rubric_criterion_is_found_under_any_reply_casing() -> Non
 
 def test_the_object_with_a_scores_key_wins_over_an_earlier_object() -> None:
     # _first_json_object, drop the preference for an object that has "scores"
-    reply = '{"note": "draft"} then ' + json.dumps(
+    reply = '{"winner": "B", "note": "draft"} then ' + json.dumps(
         {"scores": {"helpfulness": 5, "accuracy": 5, "safety": 5}, "reasoning": "final"}
     )
     scores, reasoning = _parse_judge_response(reply, DEFAULT_RUBRIC)

@@ -239,11 +239,10 @@ def _multinomial_sample(probs):
     return torch.multinomial(probs, num_samples=1)
 
 
-def _supports_kv_cache(model: object) -> bool:
-    """Capability probe: does ``model.forward`` explicitly take a KV cache?
+def _supports_forward_parameters(model: object, *names: str) -> bool:
+    """Probe explicit forward parameters, unwrapping PEFT only for inspection.
 
-    Requires BOTH ``past_key_values`` and ``use_cache`` to be declared as
-    explicit parameters (every HF ``*ForCausalLM`` does). A bare ``**kwargs``
+    Each requested name must be declared as an explicit parameter. A bare ``**kwargs``
     does NOT count — a model that merely swallows the kwarg would silently
     ignore the cache and the rollout would feed it a single token per step
     against an empty context. PEFT wrappers
@@ -269,7 +268,12 @@ def _supports_kv_cache(model: object) -> bool:
         params = inspect.signature(forward).parameters
     except (TypeError, ValueError):
         return False
-    return "past_key_values" in params and "use_cache" in params
+    return all(name in params for name in names)
+
+
+def _supports_kv_cache(model: object) -> bool:
+    """Require explicit cache parameters on the underlying model."""
+    return _supports_forward_parameters(model, "past_key_values", "use_cache")
 
 
 def minillm_on_policy_rollout(
@@ -323,6 +327,10 @@ def minillm_on_policy_rollout(
     ``use_cache`` and return no ``past_key_values``) transparently keep the
     legacy full re-forward path.
 
+    Prompt masks define real tokens even when pad and EOS ids are shared.
+    Padding is compacted to the left; models declaring ``position_ids`` receive
+    mask-derived per-row positions in both cached and full-prefix forwards.
+
     Returns ``(loss, num_steps)`` where ``loss`` is a scalar differentiable
     w.r.t. the student parameters and scaled by ``temperature**2`` (the
     Hinton convention shared with the offline term).
@@ -347,11 +355,23 @@ def minillm_on_policy_rollout(
 
     sampler = sample_fn or _multinomial_sample
     ratio = float(config.teacher_mix_ratio)
-    cur_ids = input_ids
+    if input_ids.ndim != 2 or not all(input_ids.shape):
+        raise ValueError("MiniLLM rollout input_ids must be a non-empty [batch, length] tensor")
     if attention_mask is None:
         cur_mask = torch.ones_like(input_ids)
     else:
         cur_mask = attention_mask
+    if cur_mask.shape != input_ids.shape:
+        raise ValueError("MiniLLM rollout attention_mask must match input_ids")
+    if not ((cur_mask == 0) | (cur_mask == 1)).all() or not cur_mask.any(dim=1).all():
+        raise ValueError("MiniLLM rollout requires a binary mask and a non-empty prompt per row")
+    # Compact padding to the left without interpreting shared pad/EOS token ids.
+    order = cur_mask.long().argsort(dim=1, stable=True)
+    cur_ids = input_ids.gather(1, order)
+    cur_mask = cur_mask.gather(1, order)
+    student_positions = _supports_forward_parameters(student_model, "position_ids")
+    teacher_positions = _supports_forward_parameters(teacher_model, "position_ids")
+    teacher_device = next(teacher_model.parameters(), input_ids).device
     cache_ok = (
         use_cache
         and _supports_kv_cache(student_model)
@@ -362,29 +382,41 @@ def minillm_on_policy_rollout(
     step_ids = cur_ids  # full prompt on the first step; the delta afterwards
     kl_terms = []
     for _ in range(int(max_new_tokens)):
+        positions = cur_mask.long().cumsum(dim=1).sub(1).masked_fill(cur_mask == 0, 0)
+        position_ids = positions[:, -step_ids.shape[1]:]
+        student_kwargs = {"position_ids": position_ids} if student_positions else {}
+        teacher_kwargs = (
+            {"position_ids": position_ids.to(teacher_device)} if teacher_positions else {}
+        )
         if cache_ok:
             s_out = student_model(
                 input_ids=step_ids,
                 attention_mask=cur_mask,
                 past_key_values=s_past,
                 use_cache=True,
+                **student_kwargs,
             )
         else:
-            s_out = student_model(input_ids=cur_ids, attention_mask=cur_mask)
+            s_out = student_model(
+                input_ids=cur_ids, attention_mask=cur_mask, **student_kwargs,
+            )
         s_logits = s_out.logits[:, -1, :] / t  # [B, Vs]  (grad ON)
         with torch.no_grad():
             if cache_ok:
                 te_out = teacher_model(
-                    input_ids=step_ids,
-                    attention_mask=cur_mask,
+                    input_ids=step_ids.to(teacher_device),
+                    attention_mask=cur_mask.to(teacher_device),
                     past_key_values=t_past,
                     use_cache=True,
+                    **teacher_kwargs,
                 )
             else:
                 te_out = teacher_model(
-                    input_ids=cur_ids, attention_mask=cur_mask
+                    input_ids=cur_ids.to(teacher_device),
+                    attention_mask=cur_mask.to(teacher_device),
+                    **teacher_kwargs,
                 )
-            te_logits = te_out.logits[:, -1, :] / t  # [B, Vt]  (grad OFF)
+            te_logits = te_out.logits[:, -1, :].to(s_logits.device) / t  # [B, Vt] (grad OFF)
         if cache_ok:
             new_s_past = getattr(s_out, "past_key_values", None)
             new_t_past = getattr(te_out, "past_key_values", None)
