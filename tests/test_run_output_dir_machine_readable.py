@@ -10,6 +10,7 @@ CLI commands (`soup runs show`) keep printing the full stored path.
 The database storage itself is unchanged.
 """
 
+import ntpath
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -249,6 +250,45 @@ class TestMcpRunsOutputDir:
         expected = {"runs": [public], "count": 1} if name == "runs_list" else public
         assert result == expected
         assert stored == original
+
+    @pytest.mark.parametrize("name", ["runs_list", "runs_show"])
+    @pytest.mark.parametrize(
+        ("case", "display"),
+        [
+            pytest.param("/soup-path-fixture/posix-model", "posix-model", id="posix"),
+            pytest.param(r"R:\soup-path-fixture\drive-model", "drive-model", id="drive"),
+            pytest.param(
+                r"\\soup-path-fixture\share\unc-model", "unc-model", id="unc",
+            ),
+            pytest.param(r"\soup-path-fixture\rooted-model", "rooted-model", id="rooted"),
+            pytest.param("under-cwd", os.path.join("run", "model"), id="under-cwd"),
+            pytest.param("outside-cwd", "outside-model", id="outside-cwd"),
+            pytest.param("org/hub-model", "org/hub-model", id="hub"),
+            pytest.param(123, 123, id="non-string"),
+        ],
+    )
+    def test_run_paths_use_client_display_names(self, name, case, display, monkeypatch):
+        values = {
+            "under-cwd": str(self.project_dir / "run" / "model"),
+            "outside-cwd": str(self.outside_dir / "outside-model"),
+        }
+        value = values.get(case, case)
+        stored = {"run_id": "run_fixture", "base_model": value, "output_dir": value}
+        tracker = SimpleNamespace(
+            list_runs=lambda *, limit: [stored],
+            get_run=lambda run_id: stored,
+            close=lambda: None,
+        )
+        monkeypatch.setattr("soup_cli.experiment.tracker.ExperimentTracker", lambda: tracker)
+        args = {"run_id": "run_fixture"} if name == "runs_show" else {}
+        result = reg.call_tool(name, args)
+        run = result["runs"][0] if name == "runs_list" else result
+        output_display = os.path.normpath(display) if case == "org/hub-model" else display
+        for field, expected in (("output_dir", output_display), ("base_model", display)):
+            assert run[field] == expected, field
+            if isinstance(run[field], str):
+                assert not os.path.isabs(run[field]) and not ntpath.isabs(run[field]), field
+        assert stored["output_dir"] == stored["base_model"] == value
 
 
 class TestCliRunsShowAndStorageUnchanged:

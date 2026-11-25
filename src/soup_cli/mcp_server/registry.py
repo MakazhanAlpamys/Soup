@@ -582,7 +582,7 @@ def _run_summary(row: dict) -> dict:
         summary["output_dir"] = sanitize_run_output_dir(summary["output_dir"])
     base_model = summary.get("base_model")
     if isinstance(base_model, str) and (
-        os.path.isabs(base_model) or ntpath.splitdrive(base_model)[0]
+        base_model.startswith(("/", "\\")) or ntpath.splitdrive(base_model)[0]
     ):
         summary["base_model"] = sanitize_run_output_dir(base_model)
     summary["has_error"] = bool(row.get("error_message"))
