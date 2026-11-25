@@ -441,8 +441,8 @@ jobs:
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             echo "CI mode is **$mode**." >> "$GITHUB_STEP_SUMMARY"
             if [ "$mode" = Quick ] && [ "$EVENT_NAME" = pull_request ]; then
-              echo 'An existing `ci:full` label is left in place and does not approve this run.' >> "$GITHUB_STEP_SUMMARY"
-              echo 'A maintainer can remove and re-add `ci:full` on the current head to start all required cells and smokes.' >> "$GITHUB_STEP_SUMMARY"
+              echo "An existing \`ci:full\` label is left in place and does not approve this run." >> "$GITHUB_STEP_SUMMARY"
+              echo "A maintainer can remove and re-add \`ci:full\` on the current head to start all required cells and smokes." >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
           {
