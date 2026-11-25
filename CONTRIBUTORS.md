@@ -1696,6 +1696,9 @@ Listed by first contribution. PR numbers link the work.
 - **Jay** ([@jay23606](https://github.com/jay23606))
   - Preserved the quant-check generation error when a generator lacks a cleanup method. ([#3191](https://github.com/MakazhanAlpamys/Soup/pull/3191))
 
+- **Thejesh** ([@thejesh23](https://github.com/thejesh23))
+  - Restored Trainer accumulation normalization for classifier, reranker and cross-encoder losses. ([#3207](https://github.com/MakazhanAlpamys/Soup/pull/3207))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
