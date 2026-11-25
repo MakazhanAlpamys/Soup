@@ -642,6 +642,8 @@ fallback for chat templates. An adapter-local tokenizer still has priority for
 the chat template. For an older adapter with no matching recorded commit, a local
 base, a different `--base` override, or a ModelScope base, startup reports the
 base revision as unknown and uses the existing loaders.
+If vLLM cannot load the recorded commit, server startup fails without retrying
+at the current Hub revision. Cache that exact commit before serving offline.
 
 Compatible with OpenAI SDK:
 ```python

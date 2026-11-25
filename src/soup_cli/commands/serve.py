@@ -1356,7 +1356,7 @@ def _serve_vllm(
         if base_revision is not None:
             console.print(f"[dim]Base revision: {base_revision} (recorded run)[/]")
         else:
-            console.print("[dim]Base revision: unknown (no matching Hub commit)[/]")
+            console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
 
     console.print("[dim]Initializing vLLM engine...[/]")
     engine, engine_model_name = create_vllm_engine(

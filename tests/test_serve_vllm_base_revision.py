@@ -22,7 +22,9 @@ _COMMIT = "a" * 40
         "pinned-fallback",
         "pinned-local-tokenizer",
         "pinned-equal-adapter-revision",
+        "pinned-unavailable-commit",
         "conflicting-adapter-revision",
+        "mismatched-record",
         "override",
         "local-base",
         "legacy",
@@ -61,7 +63,7 @@ def test_serve_vllm_uses_only_the_matching_recorded_hub_base(tmp_path, monkeypat
             {
                 "schema_version": 1,
                 "run_id": "train-run",
-                "base_model": configured_base,
+                "base_model": "other-org/base" if case == "mismatched-record" else configured_base,
                 "base_revision": _COMMIT,
                 "base_revision_source": "cache_path" if case == "cache-hint" else "hub_commit",
             },
@@ -76,7 +78,15 @@ def test_serve_vllm_uses_only_the_matching_recorded_hub_base(tmp_path, monkeypat
         command.extend(["--base", _BASE])
 
     args = Mock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs))
-    start_engine = Mock()
+    failure = OSError("recorded revision is not cached")
+
+    def load_engine(engine_args):
+        revision = getattr(engine_args, "revision", None)
+        if case == "pinned-unavailable-commit" and revision == _COMMIT:
+            raise failure
+        return Mock()
+
+    start_engine = Mock(side_effect=load_engine)
     monkeypatch.setitem(
         sys.modules,
         "vllm",
@@ -102,12 +112,11 @@ def test_serve_vllm_uses_only_the_matching_recorded_hub_base(tmp_path, monkeypat
 
     result = CliRunner().invoke(app, command)
 
-    assert result.exit_code == 0, (result.output, repr(result.exception))
     engine_args = args.call_args.kwargs
     assert engine_args["model"] == expected_model
     assert engine_args.get("enable_lora", False) is (case != "full-model")
+    args.assert_called_once()
     start_engine.assert_called_once()
-    uvicorn.run.assert_called_once()
     pins_expected = case.startswith("pinned-")
     output = " ".join(strip_ansi(result.output).split())
     if pins_expected:
@@ -119,7 +128,17 @@ def test_serve_vllm_uses_only_the_matching_recorded_hub_base(tmp_path, monkeypat
         assert "tokenizer_revision" not in engine_args
         assert "(recorded run)" not in output
         if case != "full-model":
-            assert "Base revision: unknown" in output
+            assert "Base revision: unknown (legacy, local source or base override)" in output
+
+    if case == "pinned-unavailable-commit":
+        assert result.exit_code != 0
+        assert result.exception is failure
+        uvicorn.run.assert_not_called()
+        tokenizer_load.assert_not_called()
+        return
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    uvicorn.run.assert_called_once()
 
     first, *fallback = tokenizer_load.call_args_list
     assert first.args == (str(artifact),)
