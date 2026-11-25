@@ -21,6 +21,7 @@
 
 **Contents:**
 
+- [Machine-readable training preflight](#machine-readable-training-preflight)
 - [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
@@ -66,6 +67,32 @@ Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
 `backend: transformers` rather than `backend: unsloth`. The vision and audio setup
 paths do not use Unsloth; requesting it is refused at config load instead of
 silently falling back to transformers. Text SFT continues to support Unsloth.
+
+## Machine-readable training preflight
+
+**PREVIEW.** Run a local preflight with an explicit dry run:
+
+```sh
+soup train --config soup.yaml --dry-run --result-json
+```
+
+Once the command options parse, stdout contains one UTF-8 `soup.command_result` v1 JSON
+object and a newline. Human-readable diagnostics go to stderr. The preflight validates the
+configuration and data before training. Cloud, distributed launch, live LR search and
+execution-only options are refused with exit 2. Other covered outcomes keep their existing
+CLI exit codes. An interrupt returns 130. A zero exit before readiness has result status
+`failed` with reason `soup.train.preflight_incomplete`.
+
+The result records observed row counts and supported resolved settings. When evaluated,
+`vram.available_gb` reports total device capacity in decimal GB, and the analytical peak
+and required capacity describe the estimate used for the fit decision. Unavailable or
+unresolved fields are null. Disk usage and training wall time have no estimate on this path.
+For a supported single local data file, the result includes a SHA-256 only when bounded
+observations before and after loading agree. That hash describes source bytes. The config
+digest remains null until preflight binds the effective config to execution.
+
+The preview schema is packaged as `soup_cli/schemas/command-result-v1.json`. A parser error
+before command dispatch uses the standard usage diagnostic and exit code.
 
 ## Validation split & evaluation (`training.eval_steps`)
 

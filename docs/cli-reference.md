@@ -3835,6 +3835,7 @@ Usage: `soup train [OPTIONS]`
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
+| `--result-json` | flag | off |  | Emit a machine-readable dry-run result (preview). |
 
 ## `soup tui`
 
