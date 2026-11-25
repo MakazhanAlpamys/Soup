@@ -1940,10 +1940,14 @@ def download_dataset(
 
         try:
             src_fmt = detect_format(data)
-        except ValueError:
-            src_fmt = None
+        except ValueError as exc:
+            console.print(
+                f"[red]{for_terminal(exc)}[/]\n"
+                "Omit --format to write the downloaded rows unchanged."
+            )
+            raise typer.Exit(1) from exc
 
-        if src_fmt and src_fmt != fmt:
+        if src_fmt != fmt:
             converted = []
             for row in data:
                 messages = format_to_messages(row, src_fmt)
