@@ -133,14 +133,15 @@ in `tests/test_v07138.py`, and a fenced `{"k": "v"}` in
 `tests/test_issue316_suites.py`. That is the behaviour this change removes. Both
 now answer each prompt with a value of its requested shape, and the fenced test
 still checks the #316 fence repair. `tests/test_v07138.py` also pins that the
-constant reply scores below 0.1.
+constant reply scores exactly 1/40.
 
 ## Baseline provenance
 
 This is a scorer change, unlike the earlier #1192 fixture revisions.
-`BUNDLED_SCORER_REVISION` moves from 7 to 8, so a baseline stamped at revision
-7 warns rather than being compared on the old scale, and the deterministic
-fingerprint moves. Its corpus used to answer `{"ok": true}` or prose; it now
+`BUNDLED_SCORER_REVISION` moves from 7 to 8. A baseline stamped at revision 7
+still loads and is compared, with a warning about the revision mismatch; its
+`mini_format_json` score was measured under the container-only rule, so
+re-measure it. The deterministic fingerprint moves. Its corpus used to answer `{"ok": true}` or prose; it now
 answers each row with a right-shape value, a valid but wrong-shape container,
 or prose, in turn. It scores 0.350 (14/40), and would score 0.675 (27/40) with
 the shape check removed; a test pins that removing the check moves the hash.
