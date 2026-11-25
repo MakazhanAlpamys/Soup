@@ -303,7 +303,6 @@ def render_lambda_stub(
         "                f'local training input changed after planning: {source}'",
         "            )",
         "",
-        "def _launch_payload(region, ssh_key_name):",
         "def _launch_payload(region, ssh_key_name, name):",
         "    return {",
         "        'region_name': region,",
