@@ -43,6 +43,7 @@ from soup_cli.utils.exit_codes import (
     GateCommand,
 )
 from soup_cli.utils.paths import ensure_distinct_paths, is_under_cwd
+from soup_cli.utils.redaction import url_without_userinfo
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal, terminal_text
 
@@ -4273,12 +4274,13 @@ def best_of_n(
             },
         )
 
+    judge_label = url_without_userinfo(judge) if judge else "offline artifact"
     console.print(
         Panel(
             f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
             f"Prompts:      [bold]{len(prompt_records)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
-            f"Judge:        [bold]{_escape(judge) if judge else 'offline artifact'}[/]\n"
+            f"Judge:        [bold]{for_terminal(judge_label)}[/]\n"
             f"Checkpoint:   [bold]"
             f"{_escape(os.path.relpath(checkpoint_path)) if checkpoint_path else '-'}[/]",
             title="soup data best-of-n — plan",
