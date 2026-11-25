@@ -115,6 +115,12 @@ class TestMatchesExpect:
         assert _matches_expect(1.5, {"type": "number"})
         assert not _matches_expect(1.5, {"type": "integer"})
 
+    def test_object_literals_compare_as_json(self):
+        # The fixtures do not compare whole, nonempty objects.
+        assert not suites._same_json({"a": True}, {"a": 1})
+        assert not suites._same_json({"a": [False]}, {"a": [0]})
+        assert suites._same_json({"a": 1, "b": [True, None]}, {"b": [True, None], "a": 1})
+
     def test_unknown_type_raises_so_the_row_scores_as_failed(self):
         with pytest.raises(KeyError):
             _matches_expect({}, {"type": "objekt"})
