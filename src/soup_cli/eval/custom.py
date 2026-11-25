@@ -134,10 +134,15 @@ def parse_eval_task_lines(
             row = json.loads(line)
         except json.JSONDecodeError as exc:
             # The decoder saw the stripped row: shift its offset back by the row's
-            # indentation, so the column is the one in the file (#3326).
-            indent = len(raw_line) - len(raw_line.lstrip())
+            # indentation, so the column is the one in the file (#3326). An error
+            # at the end of the stripped row sits after the row's last physical
+            # character, trailing whitespace included.
+            if exc.pos >= len(line):
+                column = len(raw_line.rstrip("\r\n")) + 1
+            else:
+                column = len(raw_line) - len(raw_line.lstrip()) + exc.pos + 1
             raise ValueError(
-                f"Invalid JSON on line {line_num}, column {indent + exc.pos + 1}: {exc.msg}"
+                f"Invalid JSON on line {line_num}, column {column}: {exc.msg}"
             ) from exc
 
         if not isinstance(row, dict):

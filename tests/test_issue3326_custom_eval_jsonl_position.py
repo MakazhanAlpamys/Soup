@@ -31,10 +31,16 @@ def _load(tmp_path: Path, content: bytes):
             "Invalid JSON on line 2, column 14: Expecting value",
         ),
         (b'\t{"prompt": }\n', "Invalid JSON on line 1, column 13: Expecting value"),
-        # An incomplete row: the error sits right after its last character.
+        # An incomplete row: the error sits right after its last physical
+        # character, trailing whitespace included (the decoder saw the end of
+        # the stripped row).
         (
             b'{"prompt": "x"   \n',
-            "Invalid JSON on line 1, column 15: Expecting ',' delimiter",
+            "Invalid JSON on line 1, column 18: Expecting ',' delimiter",
+        ),
+        (
+            b'  {"prompt": \t  \r\n',
+            "Invalid JSON on line 1, column 17: Expecting value",
         ),
     ],
 )
