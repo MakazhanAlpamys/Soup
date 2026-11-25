@@ -1276,7 +1276,7 @@ def train(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Validate config and data without training",
+        help="Validate config and data without training. Cannot be combined with --find-lr.",
     ),
     resume: str = typer.Option(
         None,
@@ -1660,6 +1660,14 @@ def train(
 
     # --- LR range finder fast path ---
     if find_lr:
+        if dry_run:
+            # #3270: the sweep below trains the model, which a dry run promises not to do.
+            console.print(
+                "[red]--dry-run cannot be combined with --find-lr:[/] "
+                "--find-lr runs a live learning-rate sweep. Drop --find-lr to validate "
+                "the config and data, or drop --dry-run to run the sweep."
+            )
+            raise typer.Exit(2)
         if cloud:
             _refuse_cloud_flags(["--find-lr"])
 
