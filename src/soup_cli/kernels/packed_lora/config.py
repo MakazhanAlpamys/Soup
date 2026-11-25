@@ -204,6 +204,8 @@ def packed_lora_problem(config, block):
              "the kernels already remove the padding inside each batch"),
             ("training.multipack", tcfg.multipack,
              "the kernels already remove the padding inside each batch"),
+            ("training.prefix_tree", getattr(tcfg, "prefix_tree", False),
+             "prefix-tree batches own the dataloader and the attention mask the kernels replace"),
             ("training.neftune_alpha", tcfg.neftune_alpha is not None,
              "the kernels read the embedding table directly, around NEFTune's noise"),
             ("training.stream_layers", tcfg.stream_layers,

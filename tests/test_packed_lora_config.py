@@ -232,7 +232,7 @@ class TestWhatItRefuses:
         ("use_liger", True), ("use_cut_ce", True), ("fast_lora", True), ("use_flash_attn", True),
         ("packing", True), ("multipack", True), ("neftune_alpha", 5.0), ("stream_layers", True),
         ("activation_offloading", "cpu"), ("use_galore", True), ("use_lorafa", True),
-        ("lisa_enabled", True),
+        ("lisa_enabled", True), ("prefix_tree", True),
     ])
     def test_training_switches_that_clash(self, field, value):
         assert _problem(**{field: value}).startswith(
