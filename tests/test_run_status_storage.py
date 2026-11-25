@@ -8,6 +8,7 @@ from threading import Barrier
 
 import pytest
 
+from soup_cli.experiment import tracker as tracker_module
 from soup_cli.experiment.tracker import ExperimentTracker, RunStatusStorageError
 from soup_cli.utils.command_result import MAX_COMMAND_RESULT_BYTES
 from soup_cli.utils.run_status import RunStatus, encode_run_status
@@ -272,3 +273,168 @@ def test_a_failed_sqlite_update_rolls_back_both_state_and_snapshot(tmp_path):
             conn.execute("DROP TRIGGER fail_status")
         assert tracker.claim_run_status(_OWNER, launching, running)
         assert tracker.get_run_status("run-one") == running
+
+
+def _prior_status_schema(path):
+    with closing(ExperimentTracker(path)) as tracker:
+        _start(tracker)
+    with closing(sqlite3.connect(path)) as conn:
+        for column in _COLUMNS.split(", "):
+            conn.execute(f"ALTER TABLE runs DROP COLUMN {column}")
+
+
+def _read_legacy_views(tracker):
+    run = tracker.get_run("run-one")
+    assert run["run_id"] == "run-one"
+    assert tracker.list_runs() == [run]
+    assert tracker.list_active_execution_runs() == [run]
+
+
+def _expect_upgrade_error(tracker, reason):
+    launching = _snapshot()
+    running = _snapshot("running", seconds=1)
+    later = _snapshot("running", seconds=2)
+    for method, args in (
+        (tracker.get_run_status, ("run-one",)),
+        (tracker.initialize_run_status, (_OWNER, launching)),
+        (tracker.claim_run_status, (_OWNER, launching, running)),
+        (tracker.update_run_status, (_OWNER, running, later)),
+    ):
+        with pytest.raises(RunStatusStorageError, match=f"could not be upgraded.*{reason}"):
+            method(*args)
+
+
+def test_read_only_legacy_database_preserves_read_views(tmp_path):
+    path = tmp_path / "read-only.sqlite"
+    _prior_status_schema(path)
+
+    mode = path.stat().st_mode
+    try:
+        path.chmod(0o444)
+    except OSError:
+        pytest.skip("cannot make the database file read-only on this system")
+    try:
+        with closing(sqlite3.connect(path)) as conn:
+            try:
+                conn.execute("UPDATE runs SET total_steps = 100")
+            except sqlite3.OperationalError as exc:
+                if exc.sqlite_errorcode & 0xFF != sqlite3.SQLITE_READONLY:
+                    raise
+            else:
+                pytest.skip("SQLite can still write to a read-only file on this system")
+
+        with closing(ExperimentTracker(path)) as tracker:
+            _read_legacy_views(tracker)
+            _expect_upgrade_error(tracker, "read-only")
+    finally:
+        path.chmod(mode)
+
+    with closing(ExperimentTracker(path)) as tracker:
+        assert tracker.get_run_status("run-one") is None
+
+
+@pytest.mark.parametrize("journal_mode", ["wal", "delete"])
+def test_locked_legacy_database_preserves_read_views_and_can_retry(
+    tmp_path, monkeypatch, journal_mode
+):
+    path = tmp_path / "locked-legacy.sqlite"
+    _prior_status_schema(path)
+    connect = sqlite3.connect
+
+    def connect_with_short_timeout(*args, **kwargs):
+        return connect(*args, timeout=0.01, **kwargs)
+
+    with closing(connect(path)) as writer:
+        assert writer.execute(f"PRAGMA journal_mode={journal_mode}").fetchone() == (
+            journal_mode,
+        )
+        with writer:
+            writer.execute("UPDATE runs SET pid = 42")
+        writer.execute("BEGIN IMMEDIATE")
+        monkeypatch.setattr(sqlite3, "connect", connect_with_short_timeout)
+        monkeypatch.setattr(tracker_module, "_process_is_alive", lambda pid: False)
+        with closing(ExperimentTracker(path)) as tracker:
+            run = tracker.get_run("run-one")
+            assert (run["run_id"], run["status"]) == ("run-one", "terminated")
+            assert tracker.list_runs() == [run]
+            assert tracker.list_active_execution_runs() == [run]
+            assert writer.execute("SELECT status FROM runs").fetchone() == ("running",)
+            _expect_upgrade_error(tracker, "locked")
+            writer.rollback()
+            tracker.init_db()
+            assert tracker.get_run_status("run-one") is None
+            assert tracker.get_run("run-one")["status"] == "terminated"
+            assert tracker.list_active_execution_runs() == []
+
+
+def test_corrupt_database_has_fixed_diagnostic_and_leaves_file_untouched(tmp_path):
+    path = tmp_path / "corrupt.sqlite"
+    contents = b"not a SQLite database" * 64
+    path.write_bytes(contents)
+
+    with pytest.raises(
+        RunStatusStorageError,
+        match=r"^experiment database is corrupt\. Restore it from a backup\.$",
+    ):
+        ExperimentTracker(path)
+
+    assert path.read_bytes() == contents
+    assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
+
+
+def test_run_status_upgrade_rolls_back_if_a_later_alter_fails(tmp_path, monkeypatch):
+    path = tmp_path / "upgrade-rollback.sqlite"
+    _prior_status_schema(path)
+    connect = sqlite3.connect
+    first_column = _COLUMNS.split(", ")[0]
+
+    class InterruptedMigration(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if f"ALTER TABLE runs ADD COLUMN {first_column}" in sql:
+                super().execute(sql, parameters).close()
+                error = sqlite3.DatabaseError("unexpected private diagnostic")
+                error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+                raise error
+            return super().execute(sql, parameters)
+
+    def connect_with_interruption(*args, **kwargs):
+        return connect(*args, factory=InterruptedMigration, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect_with_interruption)
+    with pytest.raises(
+        RunStatusStorageError,
+        match=r"^experiment database is corrupt\. Restore it from a backup\.$",
+    ):
+        ExperimentTracker(path)
+    with closing(connect(path)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        assert not columns.intersection(_COLUMNS.split(", "))
+
+
+def test_status_writes_report_actionable_error_after_busy_timeout(tmp_path):
+    path = tmp_path / "write-lock.sqlite"
+    with closing(ExperimentTracker(path)) as tracker, closing(sqlite3.connect(path)) as writer:
+        _start(tracker)
+        tracker._get_conn().execute("PRAGMA busy_timeout=10")
+        before = _row(path)
+        launching = _snapshot()
+
+        writer.execute("BEGIN IMMEDIATE")
+        with pytest.raises(
+            RunStatusStorageError, match=r"database is locked\. Retry after the other writer"
+        ):
+            tracker.initialize_run_status(_OWNER, launching)
+        assert _row(path) == before
+        writer.rollback()
+
+        assert tracker.initialize_run_status(_OWNER, launching)
+        before = _row(path)
+        running = _snapshot("running", seconds=1)
+        writer.execute("BEGIN IMMEDIATE")
+        with pytest.raises(
+            RunStatusStorageError, match=r"database is locked\. Retry after the other writer"
+        ):
+            tracker.claim_run_status(_OWNER, launching, running)
+        assert _row(path) == before
+        writer.rollback()
+        assert tracker.claim_run_status(_OWNER, launching, running)

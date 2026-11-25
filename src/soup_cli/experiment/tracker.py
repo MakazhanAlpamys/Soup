@@ -13,8 +13,8 @@ import json
 import os
 import secrets
 import sqlite3
-from collections.abc import Callable, Iterable
-from contextlib import closing
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
@@ -43,7 +43,11 @@ _STATUS_RUNNING = "running"
 _STATUS_TERMINATED = "terminated"
 _STATUS_LAUNCHING = "launching"
 
-_RUN_STATUS_COLUMNS = frozenset({"run_status_owner", "run_status_state", "run_status_json"})
+_RUN_STATUS_COLUMNS = ("run_status_owner", "run_status_state", "run_status_json")
+_SQLITE_LOCK_CODES = {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+_SQLITE_UNWRITABLE_CODES = _SQLITE_LOCK_CODES | {sqlite3.SQLITE_READONLY}
+_SQLITE_CORRUPT_CODES = {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}
+_CORRUPT_DATABASE_ERROR = "experiment database is corrupt. Restore it from a backup."
 _RUN_STATUS_UPDATES = {
     "launching": {"launching", "failed", "cancelled", "orphaned"},
     "running": {"running", "finalizing", "failed", "cancelled", "orphaned"},
@@ -52,7 +56,7 @@ _RUN_STATUS_UPDATES = {
 
 
 class RunStatusStorageError(RuntimeError):
-    """The row has a status record that cannot be read safely."""
+    """The tracker cannot safely read or persist a run status."""
 
 
 class ActiveLaunchingRunError(RuntimeError):
@@ -159,6 +163,11 @@ CREATE INDEX IF NOT EXISTS idx_forgetting_run_id ON forgetting_eval(run_id);
 """
 
 
+def _sqlite_primary_code(exc: sqlite3.DatabaseError) -> int:
+    """Resolve extended SQLite error codes to their primary result code."""
+    return getattr(exc, "sqlite_errorcode", 0) & 0xFF
+
+
 def _get_db_path() -> Path:
     """Return path to experiments DB, creating parent dir if needed."""
 
@@ -223,16 +232,34 @@ class ExperimentTracker:
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or _get_db_path()
         self._conn: Optional[sqlite3.Connection] = None
+        self._run_status_upgrade_error: str | None = None
         self._ensure_schema()
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("PRAGMA journal_mode=WAL").close()
+            except sqlite3.DatabaseError as exc:
+                # A readable database can keep its current journal mode if switching
+                # modes would require a write.
+                if _sqlite_primary_code(exc) not in _SQLITE_UNWRITABLE_CODES:
+                    conn.close()
+                    raise
+            self._conn = conn
         return self._conn
 
     def _ensure_schema(self) -> None:
+        try:
+            self._initialize_schema()
+        except sqlite3.DatabaseError as exc:
+            self.close()
+            if _sqlite_primary_code(exc) in _SQLITE_CORRUPT_CODES:
+                raise RunStatusStorageError(_CORRUPT_DATABASE_ERROR) from None
+            raise
+
+    def _initialize_schema(self) -> None:
         """Create tables if they don't exist.
 
         Lazy migration adds nullable run provenance, the v0.34.0 cost columns and ``val_loss``
@@ -289,9 +316,6 @@ class ExperimentTracker:
             # columns by name, so both orders work without rebuilding any table.
             ("metrics", "reward", "ALTER TABLE metrics ADD COLUMN reward REAL"),
             ("metrics", "reward_std", "ALTER TABLE metrics ADD COLUMN reward_std REAL"),
-            ("runs", "run_status_owner", "ALTER TABLE runs ADD COLUMN run_status_owner TEXT"),
-            ("runs", "run_status_state", "ALTER TABLE runs ADD COLUMN run_status_state TEXT"),
-            ("runs", "run_status_json", "ALTER TABLE runs ADD COLUMN run_status_json TEXT"),
         ):
             existing = {
                 row[1]
@@ -308,13 +332,40 @@ class ExperimentTracker:
                 if "duplicate column" not in str(exc).lower():
                     raise
         conn.commit()
-        # Preserve the legacy row shape, even for older physical layouts. Do
-        # not fetch private status bytes for legacy readers or their selectors.
+        run_columns = [row[1] for row in conn.execute("PRAGMA table_info(runs)")]
+        # Preserve the legacy row shape and exclude private status bytes.
         self._legacy_run_columns = ", ".join(
-            '"' + row[1].replace('"', '""') + '"'
-            for row in conn.execute("PRAGMA table_info(runs)")
-            if row[1].lower() not in _RUN_STATUS_COLUMNS
+            '"' + column.replace('"', '""') + '"'
+            for column in run_columns
+            if column.lower() not in _RUN_STATUS_COLUMNS
         )
+        if not set(_RUN_STATUS_COLUMNS).issubset(column.lower() for column in run_columns):
+            self._upgrade_run_status_schema(conn)
+        else:
+            self._run_status_upgrade_error = None
+
+    def _upgrade_run_status_schema(self, conn: sqlite3.Connection) -> None:
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                # Recheck with the write lock held in case another tracker upgraded first.
+                existing = {row[1].lower() for row in conn.execute("PRAGMA table_info(runs)")}
+                for column in _RUN_STATUS_COLUMNS:
+                    if column not in existing:
+                        conn.execute(f"ALTER TABLE runs ADD COLUMN {column} TEXT")
+        except sqlite3.DatabaseError as exc:
+            code = _sqlite_primary_code(exc)
+            if code == sqlite3.SQLITE_READONLY:
+                reason = "it is read-only. Reopen a writable copy."
+            elif code in _SQLITE_LOCK_CODES:
+                reason = "it is locked. Retry after the other writer finishes."
+            else:
+                raise
+            self._run_status_upgrade_error = (
+                f"experiment database could not be upgraded for run status because {reason}"
+            )
+        else:
+            self._run_status_upgrade_error = None
 
     def init_db(self) -> None:
         """Public alias for schema initialization (v0.25.0+)."""
@@ -666,25 +717,46 @@ class ExperimentTracker:
         )
         conn.commit()
 
+    @contextmanager
+    def _run_status_connection(self) -> Iterator[sqlite3.Connection]:
+        if self._run_status_upgrade_error is not None:
+            raise RunStatusStorageError(self._run_status_upgrade_error)
+        try:
+            yield self._get_conn()
+        except sqlite3.DatabaseError as exc:
+            code = _sqlite_primary_code(exc)
+            if code in _SQLITE_LOCK_CODES:
+                raise RunStatusStorageError(
+                    "experiment database is locked. Retry after the other writer finishes."
+                ) from None
+            if code == sqlite3.SQLITE_READONLY:
+                raise RunStatusStorageError(
+                    "experiment database is read-only. Reopen a writable copy."
+                ) from None
+            if code in _SQLITE_CORRUPT_CODES:
+                raise RunStatusStorageError(_CORRUPT_DATABASE_ERROR) from None
+            raise
+
     def get_run_status(self, run_id: str) -> RunStatus | None:
         """Read the bounded snapshot for one full run ID."""
         from soup_cli.utils.command_result import MAX_COMMAND_RESULT_BYTES
         from soup_cli.utils.run_status import decode_run_status
 
-        row = self._get_conn().execute(
-            """SELECT run_status_owner IS NULL AND run_status_state IS NULL
-                          AND run_status_json IS NULL AS is_legacy,
-                      typeof(run_status_owner) = 'text' AND length(run_status_owner) > 0
-                          AS has_owner,
-                      CASE WHEN typeof(run_status_state) = 'text'
-                           AND length(CAST(run_status_state AS BLOB)) <= 16
-                           THEN CAST(run_status_state AS BLOB) END AS state,
-                      CASE WHEN typeof(run_status_json) = 'text'
-                           AND length(CAST(run_status_json AS BLOB)) <= ?
-                           THEN CAST(run_status_json AS BLOB) END AS payload
-               FROM runs WHERE run_id = ?""",
-            (MAX_COMMAND_RESULT_BYTES, run_id),
-        ).fetchone()
+        with self._run_status_connection() as conn:
+            row = conn.execute(
+                """SELECT run_status_owner IS NULL AND run_status_state IS NULL
+                              AND run_status_json IS NULL AS is_legacy,
+                          typeof(run_status_owner) = 'text' AND length(run_status_owner) > 0
+                              AS has_owner,
+                          CASE WHEN typeof(run_status_state) = 'text'
+                               AND length(CAST(run_status_state AS BLOB)) <= 16
+                               THEN CAST(run_status_state AS BLOB) END AS state,
+                          CASE WHEN typeof(run_status_json) = 'text'
+                               AND length(CAST(run_status_json AS BLOB)) <= ?
+                               THEN CAST(run_status_json AS BLOB) END AS payload
+                   FROM runs WHERE run_id = ?""",
+                (MAX_COMMAND_RESULT_BYTES, run_id),
+            ).fetchone()
         if row is None or row["is_legacy"]:
             return None
         if not row["has_owner"] or row["payload"] is None:
@@ -706,16 +778,12 @@ class ExperimentTracker:
         if not isinstance(owner, str) or not owner:
             raise ValueError("run status requires an owner")
         payload = encode_run_status(status).decode("utf-8")
-        conn = self._get_conn()
-        with conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.execute(
-                """UPDATE runs SET run_status_owner = ?, run_status_state = ?, run_status_json = ?
-                   WHERE run_id = ? AND run_status_owner IS NULL
-                     AND run_status_state IS NULL AND run_status_json IS NULL""",
-                (owner, status.state, payload, status.run_id),
-            )
-        return cursor.rowcount == 1
+        return self._execute_run_status_update(
+            """UPDATE runs SET run_status_owner = ?, run_status_state = ?, run_status_json = ?
+               WHERE run_id = ? AND run_status_owner IS NULL
+                 AND run_status_state IS NULL AND run_status_json IS NULL""",
+            (owner, status.state, payload, status.run_id),
+        )
 
     def claim_run_status(self, owner: str, expected: RunStatus, status: RunStatus) -> bool:
         """Claim the matching launch reservation by recording the first running snapshot."""
@@ -747,15 +815,17 @@ class ExperimentTracker:
             return False
         before = encode_run_status(expected).decode("utf-8")
         after = encode_run_status(status).decode("utf-8")
-        conn = self._get_conn()
-        with conn:
+        return self._execute_run_status_update(
+            """UPDATE runs SET run_status_state = ?, run_status_json = ?
+               WHERE run_id = ? AND run_status_owner = ?
+                 AND run_status_state = ? AND run_status_json = ?""",
+            (status.state, after, status.run_id, owner, expected.state, before),
+        )
+
+    def _execute_run_status_update(self, sql: str, parameters: tuple[str, ...]) -> bool:
+        with self._run_status_connection() as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.execute(
-                """UPDATE runs SET run_status_state = ?, run_status_json = ?
-                   WHERE run_id = ? AND run_status_owner = ?
-                     AND run_status_state = ? AND run_status_json = ?""",
-                (status.state, after, status.run_id, owner, expected.state, before),
-            )
+            cursor = conn.execute(sql, parameters)
         return cursor.rowcount == 1
 
     def _reconcile_orphaned_run(self, run: dict) -> dict:
@@ -773,9 +843,11 @@ class ExperimentTracker:
             and pid is not None
             and not _process_is_alive(pid)
         ):
-            self.finish_execution(
-                run["run_id"], status=_STATUS_TERMINATED, exit_code=None
-            )
+            # A readable legacy database may temporarily refuse writes.
+            if self._run_status_upgrade_error is None:
+                self.finish_execution(
+                    run["run_id"], status=_STATUS_TERMINATED, exit_code=None
+                )
             run["status"] = _STATUS_TERMINATED
             run["exit_code"] = None
         return run
