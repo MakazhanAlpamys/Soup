@@ -622,14 +622,41 @@ def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
     return [shard_dir] + [os.path.join(root, name) for root in stripe_roots]
 
 
+def contained_leaf(root: str, name: str) -> str:
+    """``root``/``name``, refused unless the file itself resolves inside ``root``.
+
+    ``name`` must be a bare file name. The check is on the RESOLVED leaf (``realpath`` of the
+    file, then ``commonpath`` against the resolved root), not on its directory, so a shard
+    that is a symlink to a file outside the store is refused too.
+    """
+    if not name or name in (".", "..") or name != os.path.basename(name.replace("\\", "/")):
+        raise ValueError(f"shard file name {name!r} is not a bare file name")
+    path = os.path.join(root, name)
+    real_root = os.path.realpath(root)
+    real_leaf = os.path.realpath(path)
+    try:
+        inside = os.path.commonpath([real_root, real_leaf]) == real_root
+    except ValueError:  # different drives on Windows
+        inside = False
+    if not inside or real_leaf == real_root:
+        raise ValueError(f"shard file {name!r} resolves outside the store root {root!r}")
+    return path
+
+
 def layer_paths(shard_dir: str, index: "ShardIndex") -> List[str]:
     """Where each decoder layer's file lives. Every caller that used to build a layer path
     from ``shard_dir`` alone goes through this, so a striped cache is never half-understood."""
     placement = tuple(getattr(index, "layer_roots", ()) or ())
     if not placement:
-        return [layer_shard_path(shard_dir, idx) for idx in range(index.n_layers)]
+        return [
+            contained_leaf(shard_dir, os.path.basename(layer_shard_path(shard_dir, idx)))
+            for idx in range(index.n_layers)
+        ]
     dirs = stripe_dirs(shard_dir, tuple(index.stripe_roots))
-    return [layer_shard_path(dirs[root], idx) for idx, root in enumerate(placement)]
+    return [
+        contained_leaf(dirs[root], os.path.basename(layer_shard_path(dirs[root], idx)))
+        for idx, root in enumerate(placement)
+    ]
 
 
 def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
@@ -638,7 +665,7 @@ def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
         return {}
     paths = layer_paths(shard_dir, index)
     return {
-        layer: os.path.join(os.path.dirname(paths[layer]), expert_shard_name(layer))
+        layer: contained_leaf(os.path.dirname(paths[layer]), expert_shard_name(layer))
         for layer in index.expert_layers
     }
 

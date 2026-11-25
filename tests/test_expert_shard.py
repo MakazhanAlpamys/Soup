@@ -586,3 +586,74 @@ def test_a_duplicate_tensor_name_in_a_safetensors_header_is_refused(tmp_path):
     path.write_bytes(struct.pack("<Q", len(body)) + body + bytes(8))
     with pytest.raises(ValueError, match="duplicate key 'a'"):
         read_header_with_identity(str(path))
+
+
+# --------------------------------------------------------------------------
+# containment: the RESOLVED file must sit inside the store root
+# --------------------------------------------------------------------------
+def test_a_symlinked_experts_file_pointing_outside_the_store_is_refused(tmp_path):
+    import os
+
+    from soup_cli.utils.layer_shard import expert_paths
+
+    _, out, index = _main_cache(tmp_path)
+    leaf = out / "experts_000.safetensors"
+    outside = tmp_path / "outside.safetensors"
+    outside.write_bytes(leaf.read_bytes())
+    leaf.unlink()
+    try:
+        os.symlink(outside, leaf)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+    with pytest.raises(ValueError, match="experts_000.safetensors' resolves outside the store"):
+        expert_paths(str(out), index)
+
+
+def test_a_symlinked_layer_file_pointing_outside_the_store_is_refused(tmp_path):
+    import os
+
+    from soup_cli.utils.layer_shard import layer_paths
+
+    _, out, index = _main_cache(tmp_path)
+    leaf = out / "layer_000.safetensors"
+    outside = tmp_path / "outside_layer.safetensors"
+    outside.write_bytes(leaf.read_bytes())
+    leaf.unlink()
+    try:
+        os.symlink(outside, leaf)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+    with pytest.raises(ValueError, match="layer_000.safetensors' resolves outside the store"):
+        layer_paths(str(out), index)
+
+
+def test_a_symlink_that_stays_inside_the_store_is_accepted(tmp_path):
+    import os
+
+    from soup_cli.utils.layer_shard import expert_paths
+
+    _, out, index = _main_cache(tmp_path)
+    leaf = out / "experts_000.safetensors"
+    moved = out / "moved.bin"
+    leaf.rename(moved)
+    try:
+        os.symlink(moved, leaf)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+    assert expert_paths(str(out), index)[0] == str(leaf)
+
+
+@pytest.mark.parametrize("name", ["..", ".", "", "../x.safetensors", "a/b.safetensors", "a\b"])
+def test_a_shard_file_name_that_is_not_bare_is_refused(tmp_path, name):
+    from soup_cli.utils.layer_shard import contained_leaf
+
+    with pytest.raises(ValueError, match="is not a bare file name"):
+        contained_leaf(str(tmp_path), name)
+
+
+def test_a_bare_name_inside_the_root_is_accepted(tmp_path):
+    from soup_cli.utils.layer_shard import contained_leaf
+
+    assert contained_leaf(str(tmp_path), "experts_000.safetensors") == str(
+        tmp_path / "experts_000.safetensors"
+    )
