@@ -604,6 +604,9 @@ def large_shard_path(out_dir: str, key: str) -> str:
 STRIPE_MARKER_NAME = "stripe.json"
 #: A marker Soup writes is ~250 bytes; anything past this is not one, and is not parsed.
 _MAX_STRIPE_MARKER_BYTES = 4096
+#: A shard index lists every layer key and quant spec; a 1T-class store stays well
+#: under a few MB, so this bounds a hostile file without limiting a real one.
+_MAX_INDEX_BYTES = 64 * 2**20
 
 
 def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
@@ -713,9 +716,26 @@ def _stripe_marker_problem(
 
 def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardIndex:
     """Read a shard index. Raises on a missing or malformed index."""
+    from soup_cli.utils.safetensors_reader import reject_duplicate_keys
+
     path = os.path.join(out_dir, index_name)
-    with open(path, encoding="utf-8") as handle:
-        payload = json.load(handle)
+    with open(path, "rb") as handle:
+        raw = handle.read(_MAX_INDEX_BYTES + 1)
+    if len(raw) > _MAX_INDEX_BYTES:
+        raise ValueError(
+            f"shard index {path} is larger than {_MAX_INDEX_BYTES} bytes; "
+            f"refusing to parse it"
+        )
+    try:
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"shard index {path} is not valid UTF-8 ({exc})") from exc
+    except ValueError as exc:
+        if isinstance(exc, json.JSONDecodeError):
+            raise ValueError(f"shard index {path} is not valid JSON ({exc})") from exc
+        raise ValueError(f"shard index {path} is not valid ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"shard index {path} is not a JSON object")
     # `quant` defaults to "none" so a v0.72.0/.1 bf16 cache stays valid for a
     # bf16 request rather than forcing every existing user to re-shard.
     specs = payload.get("quant_specs") or {}

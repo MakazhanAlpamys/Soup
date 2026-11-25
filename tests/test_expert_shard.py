@@ -535,3 +535,54 @@ def test_writer_refuses_nf4_code_tables_that_differ_between_experts(tmp_path, mo
     with pytest.raises(ValueError, match="the NF4 code table differs at"):
         _write_nf4(tmp_path, monkeypatch, drifting, count=2)
     assert not (tmp_path / "x.safetensors").exists()
+
+
+# --------------------------------------------------------------------------
+# untrusted index and header text: bounded, no silent duplicate keys
+# --------------------------------------------------------------------------
+def test_an_oversized_shard_index_is_refused_before_parsing(tmp_path, monkeypatch):
+    from soup_cli.utils import layer_shard
+
+    _, out, _ = _main_cache(tmp_path)
+    size = (out / "index.json").stat().st_size
+    monkeypatch.setattr(layer_shard, "_MAX_INDEX_BYTES", size - 1)
+    with pytest.raises(ValueError, match=r"is larger than \d+ bytes; refusing to parse it"):
+        layer_shard.read_shard_index(str(out))
+    monkeypatch.setattr(layer_shard, "_MAX_INDEX_BYTES", size)
+    assert layer_shard.read_shard_index(str(out)).expert_count == 4
+
+
+def test_a_duplicate_key_in_the_shard_index_is_refused(tmp_path):
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    _, out, _ = _main_cache(tmp_path)
+    path = out / "index.json"
+    text = path.read_text()
+    assert text.rstrip().endswith("}")
+    path.write_text(text.rstrip()[:-1] + ', "expert_count": 1}')
+    with pytest.raises(ValueError, match="duplicate key 'expert_count'"):
+        read_shard_index(str(out))
+
+
+def test_a_shard_index_that_is_not_an_object_is_refused(tmp_path):
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    _, out, _ = _main_cache(tmp_path)
+    (out / "index.json").write_text("[1, 2]")
+    with pytest.raises(ValueError, match="is not a JSON object"):
+        read_shard_index(str(out))
+
+
+def test_a_duplicate_tensor_name_in_a_safetensors_header_is_refused(tmp_path):
+    import struct
+
+    from soup_cli.utils.safetensors_reader import read_header_with_identity
+
+    body = (
+        '{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},'
+        '"a":{"dtype":"F32","shape":[1],"data_offsets":[4,8]}}'
+    ).encode()
+    path = tmp_path / "dup.safetensors"
+    path.write_bytes(struct.pack("<Q", len(body)) + body + bytes(8))
+    with pytest.raises(ValueError, match="duplicate key 'a'"):
+        read_header_with_identity(str(path))
