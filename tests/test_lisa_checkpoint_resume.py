@@ -16,6 +16,15 @@ def torch_cpu(monkeypatch):
     monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
     pytest.importorskip("transformers")
     torch = pytest.importorskip("torch")
+    from transformers import TrainingArguments
+
+    post_init = TrainingArguments.__post_init__
+
+    def cpu_post_init(args: TrainingArguments) -> None:
+        args.use_cpu = True
+        post_init(args)
+
+    monkeypatch.setattr(TrainingArguments, "__post_init__", cpu_post_init)
     previous = torch.get_num_threads()
     torch.set_num_threads(1)
     yield torch
@@ -48,6 +57,8 @@ def _wrapper(task, path, monkeypatch):
             "one cat ran", "two dog ran", "cat sat fast", "red cat blue",
         ))
     wrapper.setup(data)
+    assert wrapper.trainer.args.device.type == "cpu"
+    assert next(wrapper.trainer.model.parameters()).device.type == "cpu"
     # Keep both checkpoint steps for the comparison on this tiny run.
     wrapper.trainer.args.save_total_limit = 8
     wrapper.trainer.args.disable_tqdm = True
@@ -278,6 +289,33 @@ def _checkpoint(callback, model, folder):
     path = folder / "trainer_state.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize("task", ["sft", "pretrain"])
+def test_wrapper_refuses_reuse_after_lisa_policy_changes(task, tmp_path, monkeypatch, torch_cpu):
+    from soup_cli.utils.lisa import LisaCallback, LisaResumeError
+    from soup_cli.utils.peft_wiring import attach_lisa_callback, prepare_lisa_checkpoint
+
+    wrapper = _wrapper(task, tmp_path / "run", monkeypatch)
+    trainer = wrapper.trainer
+    config = wrapper.config.training
+    assert attach_lisa_callback(trainer, config)
+    (callback,) = [cb for cb in trainer.callback_handler.callbacks if isinstance(cb, LisaCallback)]
+    prepare_lisa_checkpoint(trainer, config, None)
+    _checkpoint(callback, trainer.model, tmp_path)
+
+    monkeypatch.setattr(trainer, "train", lambda **_: pytest.fail("Trainer.train was called"))
+    config.lisa_interval_steps = 4
+    with pytest.raises(LisaResumeError, match="attached callback policy does not match"):
+        wrapper.train(resume_from_checkpoint=str(tmp_path))
+    assert callback.policy.interval_steps == 2
+
+    config.lisa_interval_steps = 2
+    assert attach_lisa_callback(trainer, config)
+    assert [
+        cb for cb in trainer.callback_handler.callbacks if isinstance(cb, LisaCallback)
+    ] == [callback]
+    prepare_lisa_checkpoint(trainer, config, str(tmp_path))
 
 
 def test_compiled_lisa_checkpoint_uses_unwrapped_parameter_names(tmp_path, torch_cpu):
