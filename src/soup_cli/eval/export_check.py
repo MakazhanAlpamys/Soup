@@ -36,6 +36,7 @@ formats are refused with exit 3 and a diagnostic naming the limitation.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -270,6 +271,25 @@ class ExportCheckPromptRow:
     verdict: str
 
 
+class NonFiniteNLLError(RuntimeError):
+    """Raised when a model stage produces a NaN or infinite NLL."""
+
+    def __init__(self, stage: str, value: float) -> None:
+        self.stage = stage
+        self.value = value
+        super().__init__(
+            f"Computed NLL for {stage} model is non-finite ({value!r}); "
+            "cannot evaluate export fidelity."
+        )
+
+
+def _validate_finite_nll(stage: str, value: float) -> float:
+    """Validate that a computed NLL for *stage* is finite."""
+    if isinstance(value, bool) or not math.isfinite(value):
+        raise NonFiniteNLLError(stage, value)
+    return value
+
+
 @dataclass(frozen=True)
 class ExportCheckResult:
     """Aggregate result returned by :func:`run_export_check`."""
@@ -288,6 +308,14 @@ class ExportCheckResult:
 
     def to_json(self) -> str:
         import json
+
+        for stage, val in (
+            ("base", self.base_nll),
+            ("reference", self.ref_nll),
+            ("exported", self.exported_nll),
+        ):
+            if val is not None:
+                _validate_finite_nll(stage, val)
 
         # JSON is emitted directly to the terminal by the CLI. Sanitize only
         # this render-time copy so model comparison and result objects retain
@@ -311,7 +339,7 @@ class ExportCheckResult:
         }
         if self.stub:
             payload["stub"] = True
-        return json.dumps(payload, indent=2)
+        return json.dumps(payload, indent=2, allow_nan=False)
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +559,14 @@ def _aggregate_rows_and_nll(
         else 0.0
     )
 
+    for stage, val in (
+        ("base", base_nll_val),
+        ("reference", ref_nll_val),
+        ("exported", exp_nll_val),
+    ):
+        if val is not None:
+            _validate_finite_nll(stage, val)
+
     nll_delta_lost = False
     all_nlls_present = (
         base_nll_val is not None and ref_nll_val is not None and exp_nll_val is not None
@@ -626,7 +662,7 @@ def run_export_check_from_factories(
     base_outputs = [base_eval.generate(p) for p in effective_prompts]
     base_nll_val: Optional[float] = None
     if compute_nll and not stub:
-        base_nll_val = base_eval.compute_nll(effective_prompts)
+        base_nll_val = _validate_finite_nll("base", base_eval.compute_nll(effective_prompts))
     del base_eval
     gc.collect()
 
@@ -635,7 +671,7 @@ def run_export_check_from_factories(
     ref_outputs = [ref_eval.generate(p) for p in effective_prompts]
     ref_nll_val: Optional[float] = None
     if compute_nll and not stub:
-        ref_nll_val = ref_eval.compute_nll(effective_prompts)
+        ref_nll_val = _validate_finite_nll("reference", ref_eval.compute_nll(effective_prompts))
     del ref_eval
     gc.collect()
 
@@ -644,7 +680,7 @@ def run_export_check_from_factories(
     exp_outputs = [exp_eval.generate(p) for p in effective_prompts]
     exp_nll_val: Optional[float] = None
     if compute_nll and not stub:
-        exp_nll_val = exp_eval.compute_nll(effective_prompts)
+        exp_nll_val = _validate_finite_nll("exported", exp_eval.compute_nll(effective_prompts))
     del exp_eval
     gc.collect()
 
@@ -715,9 +751,9 @@ def run_export_check(
     ref_nll_val: Optional[float] = None
     exp_nll_val: Optional[float] = None
     if compute_nll and not stub:
-        base_nll_val = base_eval.compute_nll(effective_prompts)
-        ref_nll_val = ref_eval.compute_nll(effective_prompts)
-        exp_nll_val = exp_eval.compute_nll(effective_prompts)
+        base_nll_val = _validate_finite_nll("base", base_eval.compute_nll(effective_prompts))
+        ref_nll_val = _validate_finite_nll("reference", ref_eval.compute_nll(effective_prompts))
+        exp_nll_val = _validate_finite_nll("exported", exp_eval.compute_nll(effective_prompts))
 
     return _aggregate_rows_and_nll(
         prompts=effective_prompts,

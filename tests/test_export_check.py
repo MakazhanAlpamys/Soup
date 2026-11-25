@@ -16,7 +16,11 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.eval.export_check import (
+    ExportCheckResult,
     FunctionModelEvaluator,
+    GenerationOutput,
+    NonFiniteNLLError,
+    _aggregate_rows_and_nll,
     _char_overlap_ratio,
     _first_divergent_pos,
     _first_divergent_token,
@@ -318,6 +322,41 @@ class TestRunExportCheck:
                 prompts=["prompt 1"],
             )
 
+    @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("stage", ["base", "reference", "exported"])
+    def test_non_finite_nll_raises_naming_stage(self, stage, bad_val):
+        def make_eval(label: str):
+            out = "base response" if label == "base" else "adapted response"
+            val = bad_val if label == stage else 0.5
+            return FunctionModelEvaluator(
+                lambda _p, o=out: o,
+                nll_fn=lambda _texts, v=val: v,
+            )
+
+        with pytest.raises(NonFiniteNLLError, match=stage):
+            run_export_check(
+                base_gen=make_eval("base"),
+                ref_gen=make_eval("reference"),
+                exported_gen=make_eval("exported"),
+                prompts=["prompt 1"],
+            )
+
+    @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("stage", ["base", "reference", "exported"])
+    def test_aggregate_rejects_non_finite_nll_before_decision(self, stage, bad_val):
+        with pytest.raises(NonFiniteNLLError, match=stage):
+            _aggregate_rows_and_nll(
+                prompts=["prompt 1"],
+                base_outputs=[GenerationOutput("base", [1])],
+                ref_outputs=[GenerationOutput("adapted", [2])],
+                exp_outputs=[GenerationOutput("adapted", [2])],
+                base_nll_val=bad_val if stage == "base" else 0.5,
+                ref_nll_val=bad_val if stage == "reference" else 0.4,
+                exp_nll_val=bad_val if stage == "exported" else 0.4,
+                min_agreement=0.80,
+                stub=False,
+            )
+
 
 class TestJSONTerminalSafety:
     def test_json_render_sanitizes_prompt_and_outputs_without_mutating_result(self):
@@ -341,6 +380,23 @@ class TestJSONTerminalSafety:
         assert result.rows[0].prompt == prompt
         assert result.rows[0].base_output == base_output
         assert result.rows[0].ref_output == ref_output
+
+    @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("stage", ["base", "reference", "exported"])
+    def test_to_json_refuses_non_finite_nll(self, stage, bad_val):
+        result = ExportCheckResult(
+            rows=[],
+            overall_agreement=1.0,
+            exact_match_rate=1.0,
+            active_prompt_count=1,
+            delta_lost=False,
+            passed=True,
+            base_nll=bad_val if stage == "base" else 0.5,
+            ref_nll=bad_val if stage == "reference" else 0.4,
+            exported_nll=bad_val if stage == "exported" else 0.4,
+        )
+        with pytest.raises(NonFiniteNLLError, match=stage):
+            result.to_json()
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +668,47 @@ class TestExportCheckCLI:
             assert result.exit_code == EXIT_RUNTIME_ERROR
             assert "nll boom" in _clean_output(result.output)
 
+    @pytest.mark.parametrize("allow_stub", [False, True])
+    @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("stage", ["base", "reference", "exported"])
+    def test_cli_non_finite_nll_exits_runtime_error_without_stub_fallback(
+        self, tmp_path, monkeypatch, stage, bad_val, allow_stub
+    ):
+        monkeypatch.chdir(tmp_path)
+        adapter_dir, exported_dir = self._setup_dirs(tmp_path)
+        prompts = tmp_path / "prompts.txt"
+        prompts.write_text("prompt 1\n", encoding="utf-8")
+
+        def make_eval(label: str):
+            out = "base response" if label == "base" else "adapted response"
+            val = bad_val if label == stage else 0.5
+            return FunctionModelEvaluator(
+                lambda _p, o=out: o,
+                nll_fn=lambda _texts, v=val: v,
+            )
+
+        with patch("soup_cli.eval.export_check.make_hf_evaluator") as mock_hf_eval, \
+             patch("soup_cli.eval.export_check.make_hf_adapter_evaluator") as mock_ref_eval:
+            mock_hf_eval.side_effect = [make_eval("base"), make_eval("exported")]
+            mock_ref_eval.return_value = make_eval("reference")
+
+            argv = [
+                "eval", "export-check",
+                "--adapter", str(adapter_dir),
+                "--exported", str(exported_dir),
+                "--prompts", str(prompts),
+                "--format", "json",
+            ]
+            if allow_stub:
+                argv.append("--allow-stub")
+
+            result = runner.invoke(app, argv)
+            assert result.exit_code == EXIT_RUNTIME_ERROR
+            cleaned = _clean_output(result.output)
+            assert f"Computed NLL for {stage} model is non-finite" in cleaned
+            assert "deterministic stubs" not in cleaned
+            assert "Failed to load models" not in cleaned
+
 
 # ---------------------------------------------------------------------------
 # Offline Tiny-Model Integration Tests (tests._tiny_hf_models)
@@ -838,3 +935,34 @@ class TestSequentialLoading:
                 exported_factory=make_factory("exp"),
                 prompts=["prompt 1"],
             )
+
+    @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("stage", ["base", "reference", "exported"])
+    def test_sequential_non_finite_nll_raises_naming_stage(self, stage, bad_val):
+        called: list[str] = []
+
+        def make_factory(label: str):
+            def factory():
+                called.append(label)
+                out = "base response" if label == "base" else "adapted response"
+                val = bad_val if label == stage else 0.5
+                return FunctionModelEvaluator(
+                    lambda _p, o=out: o,
+                    nll_fn=lambda _texts, v=val: v,
+                )
+            return factory
+
+        with pytest.raises(NonFiniteNLLError, match=stage):
+            run_export_check_from_factories(
+                base_factory=make_factory("base"),
+                ref_factory=make_factory("reference"),
+                exported_factory=make_factory("exported"),
+                prompts=["prompt 1"],
+            )
+
+        if stage == "base":
+            assert called == ["base"]
+        elif stage == "reference":
+            assert called == ["base", "reference"]
+        else:
+            assert called == ["base", "reference", "exported"]

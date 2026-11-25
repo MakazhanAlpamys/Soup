@@ -230,6 +230,7 @@ def register(app: typer.Typer, console: Console) -> None:
         from soup_cli.eval.export_check import (
             FunctionModelEvaluator,
             HFCausalLMEvaluator,
+            NonFiniteNLLError,
             make_hf_adapter_evaluator,
             make_hf_evaluator,
             run_export_check_from_factories,
@@ -285,6 +286,9 @@ def register(app: typer.Typer, console: Console) -> None:
                 min_agreement=min_agreement,
                 stub=is_stub,
             )
+        except NonFiniteNLLError as exc:
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             # Model loading failed inside a factory (e.g. missing weights, bad path).
             if not allow_stub:
