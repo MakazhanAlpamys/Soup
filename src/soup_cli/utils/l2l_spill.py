@@ -1287,8 +1287,8 @@ def check_weights_disk(
     if same:
         note = (
             f"the spill directory {spill_dir} shares a physical disk with the layer cache "
-            f"({'; '.join(same)}). A4 measured the step 13% slower with the spill on the "
-            "weights' drive (one RTX 3090 VM; it may differ here)."
+            f"({'; '.join(same)}). Spill writes and weight reads then compete for one drive, "
+            "which adds time to every step; how much depends on the drive."
         )
     else:
         note = (
@@ -1299,22 +1299,27 @@ def check_weights_disk(
     say(f"[yellow]L2L: {for_terminal(note)}[/]", notify)
 
 
+def _allowed_roots() -> Tuple[str, ...]:
+    """$HOME, $CWD and $TMPDIR, the roots a spill directory may live under."""
+    import tempfile
+
+    return (os.path.expanduser("~"), os.getcwd(), tempfile.gettempdir())
+
+
 def _outside_allowed_roots(directory: str) -> Optional[str]:
     """The reason ``directory`` is refused, or None when it resolves under $HOME, $CWD or
     $TMPDIR (the bound ``layer_shard`` applies to the shard directory). ``realpath`` +
     ``commonpath`` through ``paths.is_under``, so symlinks and Windows short names resolve."""
-    import tempfile
-
     from soup_cli.utils.paths import is_under
+    from soup_cli.utils.terminal import for_terminal
 
     if "\x00" in directory:
         return "the path contains a null byte"
-    bounds = (os.path.expanduser("~"), os.getcwd(), tempfile.gettempdir())
-    if any(is_under(directory, bound) for bound in bounds):
+    if any(is_under(directory, bound) for bound in _allowed_roots()):
         return None
     return (
-        f"{directory} resolves to {os.path.realpath(directory)}, which is outside $HOME, "
-        "$CWD and $TMPDIR, the only places the spill may be written"
+        f"{for_terminal(directory)} resolves to {for_terminal(os.path.realpath(directory))}, "
+        "which is outside $HOME, $CWD and $TMPDIR, the only places the spill may be written"
     )
 
 
@@ -1332,9 +1337,11 @@ def prepare_spill_dir(
     directory, the reason and the fix."""
 
     def refuse(reason: str) -> SpillRefusedError:
+        from soup_cli.utils.terminal import for_terminal
+
         return SpillRefusedError(
             f"training.l2l has to spill {spill_layers} layers of activations "
-            f"({_size(file_bytes)}) to {directory}, but {reason}. {_FIX}"
+            f"({_size(file_bytes)}) to {for_terminal(directory)}, but {reason}. {_FIX}"
         )
 
     outside = _outside_allowed_roots(directory)

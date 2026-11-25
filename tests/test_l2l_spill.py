@@ -1029,44 +1029,92 @@ def test_ram_stacked_and_network_filesystems_are_refused(tmp_path, monkeypatch, 
     assert "training.l2l_spill_dir" in message
 
 
-def _outside_roots_dir(tmp_path):
-    """A real directory that is under none of $HOME, $CWD and $TMPDIR, or a skip."""
-    import tempfile
+@pytest.fixture()
+def roots(tmp_path, monkeypatch):
+    """(allowed, outside): two real directories under tmp_path; only ``allowed`` is an allowed
+    root, so a run without the guard still writes nowhere outside tmp_path."""
+    from soup_cli.utils import l2l_spill
 
-    from soup_cli.utils.paths import is_under
-
-    roots = (os.path.expanduser("~"), os.getcwd(), tempfile.gettempdir())
-    anchor = os.path.abspath(os.sep)
-    candidate = os.path.join(anchor, f"soup-l2l-outside-{os.getpid()}")
-    if any(is_under(candidate, root) for root in roots):
-        pytest.skip("the drive root is itself under an allowed root")
-    return candidate
+    allowed, outside = tmp_path / "allowed", tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    monkeypatch.setattr(l2l_spill, "_allowed_roots", lambda: (str(allowed),))
+    return allowed, outside
 
 
-def test_a_spill_dir_outside_the_allowed_roots_is_refused_and_not_created(tmp_path):
+def _short_name(path) -> str:
+    """The 8.3 form of ``path`` (Windows), or a skip when the volume has none."""
+    import ctypes
+
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer)):
+        pytest.skip("8.3 short names are disabled on this volume")
+    if buffer.value.lower() == str(path).lower():
+        pytest.skip("8.3 short names are disabled on this volume")
+    return buffer.value
+
+
+def test_a_spill_dir_outside_the_allowed_roots_is_refused_and_not_created(roots):
     from soup_cli.utils.l2l_spill import SpillRefusedError
 
-    outside = _outside_roots_dir(tmp_path)
+    _allowed, outside = roots
+    target = outside / "spill"
     with pytest.raises(SpillRefusedError) as caught:
-        _prepare(outside)
+        _prepare(target)
     message = str(caught.value)
-    assert outside in message
+    assert str(target) in message
     assert "outside $HOME, $CWD and $TMPDIR" in message
     assert "training.l2l_spill_dir" in message
-    assert not os.path.exists(outside)
+    assert not target.exists()
 
 
-def test_a_symlink_out_of_the_allowed_roots_is_refused(tmp_path):
+def test_a_dir_inside_the_allowed_root_is_accepted(monkeypatch, direct_dir):
+    from soup_cli.utils import l2l_spill
+
+    monkeypatch.setattr(l2l_spill, "_allowed_roots", lambda: (direct_dir,))
+    target = os.path.join(direct_dir, "spill")
+    assert _prepare(target) == os.path.realpath(target)
+
+
+def test_a_symlink_out_of_the_allowed_roots_is_refused(roots):
     from soup_cli.utils.l2l_spill import SpillRefusedError
 
-    outside = _outside_roots_dir(tmp_path)
-    link = tmp_path / "link"
+    allowed, outside = roots
+    link = allowed / "link"
     try:
-        os.symlink(os.path.dirname(outside), link, target_is_directory=True)
+        os.symlink(outside, link, target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip("symlinks are not available")
     with pytest.raises(SpillRefusedError, match=r"outside \$HOME, \$CWD and \$TMPDIR"):
         _prepare(link / "spill")
+    assert not (outside / "spill").exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 short names exist on Windows only")
+def test_a_windows_short_name_of_a_dir_outside_the_roots_is_refused(roots):
+    from soup_cli.utils.l2l_spill import SpillRefusedError
+
+    _allowed, outside = roots
+    long_outside = outside / "a-directory-with-a-long-name"
+    long_outside.mkdir()
+    short = _short_name(long_outside)
+    with pytest.raises(SpillRefusedError, match=r"outside \$HOME, \$CWD and \$TMPDIR"):
+        _prepare(os.path.join(short, "spill"))
+    assert not (long_outside / "spill").exists()
+
+
+def test_the_refusal_escapes_control_bytes_in_the_path(roots):
+    from soup_cli.utils.l2l_spill import SpillRefusedError
+    from soup_cli.utils.terminal import for_terminal
+
+    _allowed, outside = roots
+    hostile = str(outside / "a\x1b[31mb")
+    with pytest.raises(SpillRefusedError) as caught:
+        _prepare(hostile)
+    message = str(caught.value)
+    assert "\x1b" not in message
+    assert for_terminal(hostile) in message
+    assert not os.path.exists(hostile)
 
 
 def test_a_null_byte_in_the_spill_dir_is_refused(tmp_path):
@@ -1272,7 +1320,8 @@ def test_an_explicit_dir_on_the_weights_disk_or_an_unknown_one_warns(tmp_path, d
              weight_dirs=[str(tmp_path / "shards")], notify=lines.append)
     assert len(lines) == 1
     if layout == "same":
-        assert "13% slower" in lines[0]
+        assert "adds time to every step" in lines[0]
+        assert "13%" not in lines[0] and "3090" not in lines[0]
     else:
         assert "could not verify" in lines[0]
 
