@@ -733,6 +733,12 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
     expert_layout = str(payload.get("expert_layout", ""))
     if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
         raise ValueError(f"unknown expert_layout {expert_layout!r}")
+    # An index written by the soup-rnd runtime stamps ``expert_layout_version``
+    # (and ``fp32_keys`` / ``stacked_experts``, which this reader does not need).
+    # This writer never emits it, so absence is the version 1 this reader knows.
+    layout_version = payload.get("expert_layout_version", 1)
+    if isinstance(layout_version, bool) or layout_version != 1:
+        raise ValueError(f"unsupported expert layout version {layout_version!r}")
     expert_layers = tuple(int(layer) for layer in (payload.get("expert_layers") or ()))
     if list(expert_layers) != sorted(set(expert_layers)) or any(
         not 0 <= layer < n_layers for layer in expert_layers
