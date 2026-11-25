@@ -3789,7 +3789,7 @@ Usage: `soup train [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--name`, `-n` | text |  |  | Experiment name (auto-generated if not set) |
-| `--dry-run` | flag | off |  | Validate config and data without training |
+| `--dry-run` | flag | off |  | Validate config and data without training. Cannot be combined with --find-lr. |
 | `--resume`, `-r` | text |  |  | Resume from checkpoint: path to checkpoint dir ('auto' for latest); on the MLX backend, a path to a .safetensors adapter file instead. Not supported when training.relora_steps is configured, for task: unlearn or task: ppo, and on backend: mlx for a full fine-tune (lora.r: 0) or task: grpo |
 | `--wandb` | flag | off |  | Enable Weights &amp; Biases logging |
 | `--tensorboard` | flag | off |  | Enable TensorBoard logging (logs to output_dir/runs/) |
