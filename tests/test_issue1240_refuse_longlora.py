@@ -186,7 +186,7 @@ _OLDER_GATES = {
     # "ring-attention" used to be an older gate here, but #2044 now refuses
     # use_ring_attention: true at config load, so that config can no longer be
     # a valid control. Its interaction with #1240 is pinned in
-    # tests/test_issue2044_refuse_ring_attention.py instead.
+    # tests/test_config_ring_attention_refusal.py instead.
     "full-ft-lora-conflict": {"training_extra": "  lora: {r: 0}\n"},
     "spectrum-lora-conflict": {
         "training_extra": "  unfrozen_parameters: [model.layers.0.mlp.down_proj]\n"
