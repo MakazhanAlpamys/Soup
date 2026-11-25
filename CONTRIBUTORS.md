@@ -1714,6 +1714,9 @@ Listed by first contribution. PR numbers link the work.
   - Restored Trainer accumulation normalization for classifier, reranker and cross-encoder losses. ([#3207](https://github.com/MakazhanAlpamys/Soup/pull/3207))
   - Restored Trainer accumulation normalization for the MoLE router loss and its gradient. ([#3208](https://github.com/MakazhanAlpamys/Soup/pull/3208))
 
+- **Artem Kremko** ([@trustkrem](https://github.com/trustkrem))
+  - Added the PEFT and torchao compatibility finding to `soup doctor`. ([#3230](https://github.com/MakazhanAlpamys/Soup/pull/3230))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
