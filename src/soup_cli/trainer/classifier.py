@@ -54,6 +54,7 @@ from soup_cli.utils.mixed_precision import (
 )
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -550,9 +551,7 @@ class ClassifierTrainerWrapper:
         self.train_dataset = train_ds
         self.eval_dataset = eval_ds
 
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
@@ -610,6 +609,10 @@ class ClassifierTrainerWrapper:
             data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
             compute_metrics=compute_metrics,
         )
+        # The sequence-classification loss is a per-micro-batch mean that never
+        # reads num_items_in_batch, so keep training_step's 1 / G division (as
+        # prm.py does for #1444); left True, loss and gradient came out G times.
+        self.trainer.model_accepts_loss_kwargs = False
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR

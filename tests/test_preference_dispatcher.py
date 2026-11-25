@@ -30,7 +30,7 @@ class TestPreferenceStreaming:
                 "stream_layers": True,
                 "quantization": "none",
                 "batch_size": 1,
-                **({"preference_loss": loss} if task == "preference" else {}),
+                **({"preference_loss": loss} if task == "preference" and loss is not None else {}),
                 **training,
             },
         )
@@ -45,6 +45,40 @@ class TestPreferenceStreaming:
         assert cfg.task == "preference"
         assert cfg.training.preference_loss == loss
         assert cfg.training.stream_layers is True
+
+    def test_missing_scalar_loss_names_the_field_and_choices(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(
+            "base: some-model\ntask: preference\ndata:\n  train: data.jsonl\n  format: dpo\n"
+            "training:\n  stream_layers: true\n  quantization: none\n  batch_size: 1\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "data.jsonl").write_text(
+            '{"prompt":"Compare","chosen":"Yes","rejected":"No"}\n', encoding="utf-8",
+        )
+
+        result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+        output = " ".join(strip_ansi(result.output).split())
+        assert result.exit_code == 1, (output, result.exception)
+        assert output.endswith(
+            "Config validation error: training.stream_layers with task='preference' "
+            "requires a single training.preference_loss. "
+            "Choose one of bco, dpo, ipo, orpo, simpo."
+        )
+
+    def test_missing_loss_without_streaming_names_both_loss_fields(self):
+        with pytest.raises(ValidationError) as caught:
+            self.config(stream_layers=False)
+        assert caught.value.errors()[0]["msg"] == (
+            "Value error, task='preference' requires either training.preference_loss "
+            "(in {dpo, simpo, orpo, ipo, bco}) or "
+            "training.preference_loss_weights (multi-objective dict)."
+        )
 
     def test_weighted_losses_are_refused_by_name(self):
         with pytest.raises(ValidationError) as caught:

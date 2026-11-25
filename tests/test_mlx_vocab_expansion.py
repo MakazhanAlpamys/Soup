@@ -651,7 +651,7 @@ class TestConsumerRefusals:
 
         # Case A: has added_tokens.safetensors
         (tmp_path / "added_tokens.safetensors").write_text("stub", encoding="utf-8")
-        with pytest.raises(ValueError, match="Native MLX generation does not currently support"):
+        with pytest.raises(ValueError, match=r"expanded vocabularies \(#3089\)"):
             read_native_adapter(tmp_path)
 
         (tmp_path / "added_tokens.safetensors").unlink()
@@ -660,7 +660,7 @@ class TestConsumerRefusals:
         (tmp_path / "adapter_config.json").write_text(
             json.dumps({"model": "org/base", "vocab_expansion": True}), encoding="utf-8"
         )
-        with pytest.raises(ValueError, match="Native MLX generation does not currently support"):
+        with pytest.raises(ValueError, match=r"expanded vocabularies \(#3089\)"):
             read_native_adapter(tmp_path)
 
     def test_soup_merge_refuses_expanded_vocab(self, tmp_path, monkeypatch):
@@ -684,7 +684,7 @@ class TestConsumerRefusals:
             app, ["merge", "--adapter", str(adapter_dir), "--output", str(out_dir)]
         )
         assert res.exit_code != 0
-        refusal_msg = "soup merge does not support adapters with expanded vocabularies (#1988)"
+        refusal_msg = "soup merge does not support adapters with expanded vocabularies (#3089)"
         assert refusal_msg in res.output
 
         (adapter_dir / "added_tokens.safetensors").unlink()
@@ -702,7 +702,7 @@ class TestConsumerRefusals:
 
         (adapter_dir / "adapter_config.json").unlink()
 
-        # Case C: --backend mlx with added_tokens.safetensors (#1988, #2124)
+        # Case C: --backend mlx with added_tokens.safetensors (#3089, #2124)
         (adapter_dir / "added_tokens.safetensors").write_text("stub", encoding="utf-8")
         (adapter_dir / "adapter_config.json").write_text(
             json.dumps({
@@ -721,7 +721,7 @@ class TestConsumerRefusals:
 
         (adapter_dir / "added_tokens.safetensors").unlink()
 
-        # Case D: --backend mlx with vocab_expansion: true in adapter_config.json (#1988, #2124)
+        # Case D: --backend mlx with vocab_expansion: true in adapter_config.json (#3089, #2124)
         (adapter_dir / "adapter_config.json").write_text(
             json.dumps({
                 "model": "org/base",

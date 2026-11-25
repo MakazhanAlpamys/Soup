@@ -97,6 +97,8 @@ def test_run_confirmation_keeps_metadata_and_indentation(archive, monkeypatch):
         "",
         "Recipe: demo",
         f"Author: {RAW}",
+        "Output: ./output",
+        "Training data: (not set)",
         "",
         "Pass --yes to confirm.",
     ]

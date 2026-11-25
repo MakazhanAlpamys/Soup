@@ -829,7 +829,7 @@ class _Task:
 def _patch_judge(monkeypatch, tasks, scorer):
     from soup_cli.eval.judge import JudgeEvaluator, JudgeScore
 
-    monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks", lambda path: tasks)
+    monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks", lambda path, **_kwargs: tasks)
     monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
 
     def evaluate(self, prompt, response, category="default"):
@@ -880,7 +880,7 @@ def test_pairwise_has_no_rows_but_counts_truncation_from_both_answers(monkeypatc
     from soup_cli.eval.judge import JudgeEvaluator
 
     monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks",
-                        lambda path: [_Task(f"p{i}") for i in range(4)])
+                        lambda path, **_kwargs: [_Task(f"p{i}") for i in range(4)])
     monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
     monkeypatch.setattr(JudgeEvaluator, "compare_pair", lambda *args, **kwargs: 1)
     win = ship_cmd._leg1_pairwise(
@@ -929,7 +929,7 @@ def test_judge_score_without_per_row_scores_has_flags_but_no_rows(monkeypatch):
     from soup_cli.eval.judge import JudgeEvaluator
 
     monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks",
-                        lambda path: [_Task("p0"), _Task("p1")])
+                        lambda path, **_kwargs: [_Task("p0"), _Task("p1")])
     monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
 
     class _Overall:
@@ -1175,7 +1175,7 @@ def test_a_bad_per_row_judge_score_leaves_the_detail_out_and_the_verdict_alone(
 ):
     prompts = ["p0", "p1", "p2"]
     monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks",
-                        lambda path: [_Task(prompt) for prompt in prompts])
+                        lambda path, **_kwargs: [_Task(prompt) for prompt in prompts])
     _judge_with_row_scores(monkeypatch, [3.0, bad, 3.0])
     win = ship_cmd._leg1_judge(
         lambda prompt: GeneratedText("a", truncated=False),
@@ -1239,7 +1239,7 @@ def test_a_failing_pairwise_detail_is_display_only_too(monkeypatch, capsys):
     from soup_cli.eval.judge import JudgeEvaluator
 
     monkeypatch.setattr("soup_cli.eval.custom.load_eval_tasks",
-                        lambda path: [_Task(f"p{i}") for i in range(4)])
+                        lambda path, **_kwargs: [_Task(f"p{i}") for i in range(4)])
     monkeypatch.setattr("soup_cli.eval.gate._parse_judge_url", lambda url: ("ollama", "m", None))
     monkeypatch.setattr(JudgeEvaluator, "compare_pair", lambda *args, **kwargs: 1)
 

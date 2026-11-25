@@ -518,6 +518,92 @@ class TestMalformedLines:
         assert harvest().skipped_lines == 2
 
 
+#: A UUID with hex letters in it, so that its uppercase form is another string.
+HEX_UUID = "6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5"
+NOT_UUIDS = [
+    "abc",
+    HEX_UUID.upper(),
+    "{" + HEX_UUID + "}",
+    HEX_UUID.replace("-", ""),
+    HEX_UUID + "\n",
+]
+
+
+class TestIdsAreUuids:
+    """``id`` and ``response_id`` are lowercase canonical UUIDs (docs/loop-formats.md)."""
+
+    @pytest.mark.parametrize("bad", NOT_UUIDS)
+    def test_a_feedback_line_whose_response_id_is_not_a_uuid_is_skipped_and_counted(
+        self, cwd, bad
+    ):
+        logs([conv(1), conv(2)],
+             [thumb(1, 1, 1), {**thumb(2, 2, 1), "response_id": bad}])
+
+        out = harvest()
+
+        assert rows(out.datasets.kto) == [kto_row(ANSWER, True)]
+        assert out.skipped_lines == 1
+        assert out.datasets.unknown_response == 0  # skipped, not read as an unknown answer
+
+    @pytest.mark.parametrize("bad", NOT_UUIDS)
+    def test_a_conversation_line_whose_id_is_not_a_uuid_is_skipped_and_counted(self, cwd, bad):
+        logs([conv(1), {**conv(2), "id": bad}], [thumb(1, 1, 1)])
+
+        out = harvest()
+
+        assert rows(out.datasets.kto) == [kto_row(ANSWER, True)]
+        assert (out.answers, out.skipped_lines) == (1, 1)
+
+    def test_a_valid_uuid_is_read(self, cwd):
+        logs([conv(1)], [thumb(1, 1, 1)])
+
+        out = harvest()
+
+        assert rows(out.datasets.kto) == [kto_row(ANSWER, True)]
+        assert (out.answers, out.skipped_lines) == (1, 0)
+
+    def test_a_pair_sharing_a_non_uuid_id_gives_nothing_and_both_lines_are_counted(self, cwd):
+        logs([{**conv(1), "id": "abc"}], [{**edit(1, 1), "response_id": "abc"}])
+
+        out = harvest()
+
+        assert (out.datasets.dpo, out.datasets.kto, out.datasets.sft) == ([], [], [])
+        assert out.datasets.edits == []
+        assert (out.answers, out.skipped_lines) == (0, 2)
+
+    def test_the_same_pair_with_a_valid_uuid_gives_the_rows(self, cwd):
+        logs([conv(1)], [edit(1, 1)])
+
+        out = harvest()
+
+        assert [item.id for item in out.datasets.edits] == [uid(1)]
+        assert len(out.datasets.dpo) == 1
+        assert (out.answers, out.skipped_lines) == (1, 0)
+
+    def test_the_conversation_id_is_still_the_clients_own_key(self, cwd):
+        logs([{**conv(1), "conversation_id": "Chat ABC/7"}], [thumb(1, 1, 1)])
+
+        out = harvest()
+
+        assert rows(out.datasets.kto) == [kto_row(ANSWER, True)]
+        assert out.skipped_lines == 0
+
+    def test_the_skipped_lines_reach_the_harvest_report(self, cwd):
+        logs([conv(1), {**conv(2), "id": "abc"}],
+             [thumb(1, 1, 1), {**thumb(2, 2, 1), "response_id": "abc"}])
+
+        out = ls.harvest_from_traces(_state(train_method="kto"))
+
+        assert out["feedback_lines_skipped"] == 2
+        assert out["feedback_unknown_response"] == 0
+        assert out["pairs_harvested"] == 1
+
+    def test_the_reader_and_the_paraphrase_record_check_share_one_pattern(self):
+        import soup_cli.utils.loop_paraphrase as lp
+
+        assert lp._UUID is lf._UUID
+
+
 # ---------------------------------------------------------------------------
 # The three datasets
 # ---------------------------------------------------------------------------

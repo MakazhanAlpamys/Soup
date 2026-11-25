@@ -1348,6 +1348,20 @@ class TestTrainStage:
         assert second.calls == [] and len(read_lines()) == 2
         assert "paraphrases" not in out.get("notes", "")  # nothing was done: no note
 
+    def test_an_edit_whose_answer_id_is_not_a_uuid_is_never_paraphrased(self, serving, monkeypatch):
+        # The record check needs a UUID response_id, so such a record would be written again
+        # every iteration and never read back: the readers skip the id instead.
+        write_jsonl(TRACES, [{**conversation(1), "id": "abc"}, conversation(2)])
+        write_jsonl(FEEDBACK, [{**edit_line(1), "response_id": "abc"}, edit_line(2)])
+        state = _state(train_method="sft", min_new_edits=1)
+        first, second = Transport(), Transport()
+
+        train(state, monkeypatch, transport=first)
+        train(state, monkeypatch, transport=second)
+
+        assert len(first.calls) == 1 and second.calls == []
+        assert [line["response_id"] for line in read_lines()] == [uid(2)]
+
     def test_only_the_new_edit_is_paraphrased_the_next_time(self, serving, monkeypatch):
         corrections(1)
         state = _state(train_method="sft", min_new_edits=1)

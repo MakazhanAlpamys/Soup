@@ -258,13 +258,15 @@ class MultipackBatchSampler:
     Two modes:
 
     * ``real_batches=False`` — each yielded value is a flat list of indices
-      (one bin), to be flattened by the collator into a single packed
-      sequence. Axolotl's ``multipack_real_batches=False`` trick.
+      (one bin). The collator determines the tensor representation.
     * ``real_batches=True`` — each yielded value is a list of bins
       (length ``<= batch_size``), where each bin is a list of indices.
       The collator stacks bins along the batch dimension.
 
-    Determinism: a fixed ``seed`` produces a stable batch order across runs.
+    ``padding_multiple`` splits bins to bound their padded rectangular cost;
+    ``1`` pads only to the longest row, and ``None`` keeps sum-based packing.
+    Splitting happens before shuffling, so iteration and length share the
+    same cached batches. A fixed ``seed`` produces a stable order across runs.
     """
 
     def __init__(
@@ -275,6 +277,8 @@ class MultipackBatchSampler:
         real_batches: bool = True,
         seed: int = 0,
         drop_last: bool = False,
+        *,
+        padding_multiple: int | None = None,
     ) -> None:
         batch_max_len = _check_int("batch_max_len", batch_max_len)
         batch_size = _check_int("batch_size", batch_size)
@@ -287,6 +291,10 @@ class MultipackBatchSampler:
             raise ValueError(
                 f"batch_size must be positive, got {batch_size}"
             )
+        if padding_multiple is not None:
+            _check_int("padding_multiple", padding_multiple)
+            if padding_multiple <= 0:
+                raise ValueError("padding_multiple must be positive")
         if not lengths:
             raise ValueError("lengths must be non-empty")
 
@@ -301,6 +309,24 @@ class MultipackBatchSampler:
         self._drop_last = bool(drop_last)
 
         bins = ffd_bin_pack(self._lengths, batch_max_len)
+        if padding_multiple is not None:
+            padded_bins: list[list[int]] = []
+            for bin_indices in bins:
+                offset = 0
+                while offset < len(bin_indices):
+                    row_index = bin_indices[offset]
+                    length = self._lengths[row_index]
+                    width = ((length + padding_multiple - 1) // padding_multiple) * padding_multiple
+                    rows_per_batch = batch_max_len // width
+                    if rows_per_batch == 0:
+                        raise ValueError(
+                            f"padded lengths[{row_index}]={width} "
+                            f"exceeds batch_max_len={batch_max_len}"
+                        )
+                    # FFD inserts lengths in decreasing order, so the first row is widest.
+                    padded_bins.append(bin_indices[offset:offset + rows_per_batch])
+                    offset += rows_per_batch
+            bins = padded_bins
         # Shuffle the packed bins deterministically — keeps inter-bin order
         # randomised across epochs while preserving the FFD packing.
         rng = random.Random(seed)

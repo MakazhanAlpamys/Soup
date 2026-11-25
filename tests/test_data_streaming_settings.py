@@ -26,7 +26,7 @@ def test_shard_count_is_refused_at_config_load(train, settings, shards):
     with pytest.raises(ValueError) as error:
         _load_data(train, shards=shards, **settings)
     assert (
-        "data.shards is refused as of v0.79.0. A shard count alone does not select "
+        "data.shards is refused. A shard count alone does not select "
         "which shard to keep. Remove data.shards."
     ) in str(error.value)
 

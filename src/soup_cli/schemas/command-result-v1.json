@@ -1,0 +1,851 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "description": "Wire reference to an artifact already verified under the reporting root.",
+      "properties": {
+        "kind": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "relative_path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "schema_version": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Version"
+        }
+      },
+      "required": [
+        "kind",
+        "relative_path"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "DataValidateResult": {
+      "properties": {
+        "format": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.-]*$",
+          "title": "Format",
+          "type": "string"
+        },
+        "invalid": {
+          "minimum": 0,
+          "title": "Invalid",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "valid": {
+          "minimum": 0,
+          "title": "Valid",
+          "type": "integer"
+        },
+        "valid_fraction": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Valid Fraction"
+        }
+      },
+      "required": [
+        "format",
+        "total",
+        "valid",
+        "invalid",
+        "valid_fraction"
+      ],
+      "title": "DataValidateResult",
+      "type": "object"
+    },
+    "PreflightDisk": {
+      "properties": {
+        "estimated_checkpoints_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Checkpoints Gb"
+        },
+        "estimated_output_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Output Gb"
+        }
+      },
+      "title": "PreflightDisk",
+      "type": "object"
+    },
+    "PreflightEstimateBasis": {
+      "properties": {
+        "disk": {
+          "default": "unavailable",
+          "enum": [
+            "checkpoint_projection",
+            "unavailable"
+          ],
+          "title": "Disk",
+          "type": "string"
+        },
+        "vram": {
+          "default": "unavailable",
+          "enum": [
+            "analytical_model",
+            "unavailable"
+          ],
+          "title": "Vram",
+          "type": "string"
+        },
+        "wall_time": {
+          "default": "unavailable",
+          "enum": [
+            "local_timing_profile",
+            "unavailable"
+          ],
+          "title": "Wall Time",
+          "type": "string"
+        }
+      },
+      "title": "PreflightEstimateBasis",
+      "type": "object"
+    },
+    "PreflightInputDigests": {
+      "properties": {
+        "config_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Sha256"
+        },
+        "data_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Sha256"
+        }
+      },
+      "title": "PreflightInputDigests",
+      "type": "object"
+    },
+    "PreflightResolved": {
+      "properties": {
+        "adapter_rank": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter Rank"
+        },
+        "backend": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "pattern": "^[a-z][a-z0-9_.]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Backend"
+        },
+        "base_model": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Model"
+        },
+        "batch_size_per_device": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Batch Size Per Device"
+        },
+        "context_length": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Length"
+        },
+        "device_name": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Name"
+        },
+        "effective_batch_size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Batch Size"
+        },
+        "epochs": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epochs"
+        },
+        "max_steps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Steps"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "pattern": "^[a-z][a-z0-9_.]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task"
+        }
+      },
+      "title": "PreflightResolved",
+      "type": "object"
+    },
+    "PreflightVram": {
+      "properties": {
+        "available_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available Gb"
+        },
+        "estimated_peak_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Peak Gb"
+        },
+        "margin_fraction": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Margin Fraction"
+        },
+        "required_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Gb"
+        }
+      },
+      "title": "PreflightVram",
+      "type": "object"
+    },
+    "ResultDetails": {
+      "description": "Typed details for data validation and training preflight.",
+      "properties": {
+        "actual": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual"
+        },
+        "available_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available Gb"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "enum": [
+                "unreadable",
+                "yaml_parse",
+                "yaml_limit",
+                "wrong_root",
+                "validation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "errors": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/_ConfigError"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Errors"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "required_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Gb"
+        },
+        "skipped": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        }
+      },
+      "title": "ResultDetails",
+      "type": "object"
+    },
+    "ResultReason": {
+      "properties": {
+        "code": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResultDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fix": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Fix",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "fix"
+      ],
+      "title": "ResultReason",
+      "type": "object"
+    },
+    "TrainPreflightData": {
+      "description": "Measurements and estimates from a reached local training preflight.",
+      "properties": {
+        "disk": {
+          "$ref": "#/$defs/PreflightDisk"
+        },
+        "dry_run": {
+          "const": true,
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "estimate_basis": {
+          "$ref": "#/$defs/PreflightEstimateBasis"
+        },
+        "estimated_wall_time_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Wall Time S"
+        },
+        "input_digests": {
+          "$ref": "#/$defs/PreflightInputDigests"
+        },
+        "resolved": {
+          "$ref": "#/$defs/PreflightResolved"
+        },
+        "training_rows": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Training Rows"
+        },
+        "validation_rows": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validation Rows"
+        },
+        "vram": {
+          "$ref": "#/$defs/PreflightVram"
+        }
+      },
+      "required": [
+        "dry_run"
+      ],
+      "title": "TrainPreflightData",
+      "type": "object"
+    },
+    "_ConfigError": {
+      "properties": {
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "maxLength": 96,
+                "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*|<key>)$",
+                "type": "string"
+              },
+              {
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
+          },
+          "maxItems": 16,
+          "title": "Loc",
+          "type": "array"
+        },
+        "type": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "type"
+      ],
+      "title": "_ConfigError",
+      "type": "object"
+    }
+  },
+  "description": "Command result v1. Producers validate strictly. Reader schemas allow optional additions.",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "maxItems": 32,
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "child": {
+      "default": null,
+      "title": "Child",
+      "type": "null"
+    },
+    "command": {
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9_.]*$",
+      "title": "Command",
+      "type": "string"
+    },
+    "data": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DataValidateResult"
+        },
+        {
+          "$ref": "#/$defs/TrainPreflightData"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Data"
+    },
+    "decision": {
+      "anyOf": [
+        {
+          "enum": [
+            "valid",
+            "invalid",
+            "pass",
+            "fail",
+            "ship",
+            "dont_ship"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decision"
+    },
+    "duration_s": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration S"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Code"
+    },
+    "phase": {
+      "enum": [
+        "preflight",
+        "validate",
+        "evaluate",
+        "plan",
+        "execute",
+        "launch",
+        "export",
+        "finalize",
+        "transport"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "reasons": {
+      "items": {
+        "$ref": "#/$defs/ResultReason"
+      },
+      "maxItems": 32,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "schema": {
+      "const": "soup.command_result",
+      "title": "Schema",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "soup_version": {
+      "maxLength": 96,
+      "minLength": 1,
+      "title": "Soup Version",
+      "type": "string"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$",
+      "title": "Started At"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "blocked",
+        "refused",
+        "failed",
+        "cancelled"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "truncated": {
+      "additionalProperties": {
+        "exclusiveMinimum": 0,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "pattern": "^(?:/(?:[^~/]|~[01])*)+$"
+      },
+      "title": "Truncated",
+      "type": "object"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/ResultReason"
+      },
+      "maxItems": 32,
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "soup_version",
+    "command",
+    "phase",
+    "status"
+  ],
+  "title": "CommandResult",
+  "type": "object"
+}

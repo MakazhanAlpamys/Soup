@@ -273,6 +273,14 @@ DECLARED_SINKS: dict[tuple[str, str], DeclaredSink] = {
             "(HTTPS only, rejects private hosts unless explicitly opted in)"
         ),
     ),
+    ("utils/ingest_pull_langsmith.py", "_urllib_transport"): DeclaredSink(
+        calls=("urllib.request.build_opener",),
+        gate=("resolve_langsmith_host", "validate_webhook_url"),
+        reason=(
+            "resolve_langsmith_host routes LANGSMITH_ENDPOINT through validate_webhook_url "
+            "(HTTPS only, rejects private hosts unless explicitly opted in)"
+        ),
+    ),
     ("utils/loop_stages.py", "_post_activate"): DeclaredSink(
         calls=("httpx.post",),
         gate=("deploy_to_canary", "validate_webhook_url"),

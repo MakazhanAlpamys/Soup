@@ -205,9 +205,17 @@ def quickstart(
         rendered = DEMO_CONFIG.replace(_DEFAULT_MODEL, model_id)
         # When --output is set, retarget data + run dirs into that dir.
         if output is not None:
+            import yaml
+
+            train_scalar, output_scalar = (
+                yaml.safe_dump(
+                    str(path), default_style='"', allow_unicode=False, width=float("inf")
+                ).removesuffix("\n")
+                for path in (data_path, out_dir / "quickstart_output")
+            )
             rendered = rendered.replace(
-                "./quickstart_data.jsonl", str(data_path)
-            ).replace("./quickstart_output", str(out_dir / "quickstart_output"))
+                "  train: ./quickstart_data.jsonl\n", f"  train: {train_scalar}\n"
+            ).replace("\noutput: ./quickstart_output\n", f"\noutput: {output_scalar}\n")
         config_path.write_text(rendered, encoding="utf-8")
         console.print(f"[green]Created:[/] {for_terminal(config_path)}", emoji=False)
     # Also write a `soup.yaml` symlink-style alias for tools that look for it.

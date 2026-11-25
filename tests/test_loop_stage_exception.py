@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from soup_cli.utils import loop_retry
 from soup_cli.utils.loop_daemon import WatchConfig, run_once, watch
 from soup_cli.utils.loop_log import LoopLog
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
@@ -749,3 +750,54 @@ class TestWhatStatusSays:
             "attempt until the data, the recipe or the base model changes, or soup loop "
             "resume clears it"
         )
+
+
+def test_a_training_only_streak_stays_valid_at_the_persisted_limit(cwd):
+    """#3221: a returned training failure at a streak of 100 must not emit 101."""
+    streak = {
+        "inputs": loop_retry.stage_error_fingerprint("train"),
+        "attempts": 100,
+        "last_at": PAST,
+        "retry_after": PAST,
+        "held": False,
+        "reason": "stage error: the train stage failed: train failed",
+        "has_non_train_failure": False,
+    }
+    failed = {
+        "run_id": None, "skipped": False, "failed": True,
+        "train_inputs": "a" * 64,
+        "failure": "train failed", "notes": "train failed",
+    }
+    state = _state(failed_stage=streak)
+
+    state, _, _ = run_once(state, Pipeline(train_result=failed).config())
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 100
+    assert state.failed_stage["has_non_train_failure"] is False
+    assert state.failed_stage["held"] is False
+
+
+def test_a_raised_stage_after_a_saturated_training_streak_stays_valid(cwd):
+    """#3221 second read: the raised-stage branch must cap too and end held."""
+    streak = {
+        "inputs": loop_retry.stage_error_fingerprint("train"),
+        "attempts": 100,
+        "last_at": PAST,
+        "retry_after": PAST,
+        "held": False,
+        "reason": "stage error: the train stage failed: train failed",
+        "has_non_train_failure": False,
+    }
+    state = _state(failed_stage=streak)
+
+    state, _, _ = run_once(state, Pipeline(raising="harvest").config())
+
+    assert state.failed_stage is not None
+    assert state.failed_stage["attempts"] == 100
+    assert state.failed_stage["held"] is True
+    assert state.failed_stage["has_non_train_failure"] is True
+
+    path = str(cwd / ".soup" / "loop.yaml")
+    write_state(state, path)
+    assert read_state(path).failed_stage["attempts"] == 100

@@ -355,6 +355,42 @@ def load_yaml_limited(source: str | bytes, what: str, *, max_bytes: int) -> obje
     return data
 
 
+_VALUE_TAG = "tag:yaml.org,2002:value"
+
+
+class _DuplicateScanLoader(_LimitedLoader):
+    """Resolve root merge precedence while preserving the authored mappings."""
+
+    def __init__(self, stream: str | bytes, *, node_budget: int) -> None:
+        super().__init__(stream, node_budget=node_budget)
+        self._original_pairs: dict[yaml.MappingNode, list[tuple[yaml.Node, yaml.Node]]] = {}
+        self._value_keys: set[yaml.Node] = set()
+
+    def flatten_mapping(self, node: yaml.MappingNode) -> None:
+        if node not in self._original_pairs:
+            self._original_pairs[node] = node.value.copy()
+            self._value_keys.update(key for key, _ in node.value if key.tag == _VALUE_TAG)
+        super().flatten_mapping(node)
+
+    def root_value(self, root: yaml.MappingNode, name: str) -> yaml.Node | None:
+        try:
+            self.flatten_mapping(root)
+            for key, value in reversed(root.value):
+                if (
+                    isinstance(key, yaml.ScalarNode)
+                    and key.tag == "tag:yaml.org,2002:str"
+                    and key.value == name
+                ):
+                    return value
+            return None
+        finally:
+            # A task may also be a root merge source through a YAML alias.
+            for node, pairs in self._original_pairs.items():
+                node.value = pairs
+            for key in self._value_keys:
+                key.tag = _VALUE_TAG
+
+
 def duplicate_keys_in_sequence_mappings(
     source: str | bytes,
     what: str,
@@ -362,7 +398,7 @@ def duplicate_keys_in_sequence_mappings(
     sequence_key: str,
     max_bytes: int,
 ) -> list[tuple[str, int]]:
-    """Return repeated scalar keys in mappings inside one named sequence.
+    """Return repeated scalar keys in mappings of the effective named sequence.
 
     YAML merge keys are ignored because an explicit key is allowed to override
     a merged default. The input is size and nesting bounded, and parsing stays
@@ -377,9 +413,12 @@ def duplicate_keys_in_sequence_mappings(
     if source_bytes > max_bytes:
         raise _size_error(what, max_bytes)
 
-    loader = _LimitedLoader(source, node_budget=source_bytes + ALIAS_EXPANSION_SLACK)
+    loader = _DuplicateScanLoader(source, node_budget=source_bytes + ALIAS_EXPANSION_SLACK)
     try:
         root = loader.get_single_node()
+        sequence_node = (
+            loader.root_value(root, sequence_key) if isinstance(root, yaml.MappingNode) else None
+        )
     except _TooDeepError:
         raise _nesting_error(what) from None
     except _MergeChainError:
@@ -397,18 +436,6 @@ def duplicate_keys_in_sequence_mappings(
     finally:
         loader.dispose()
 
-    if not isinstance(root, yaml.MappingNode):
-        return []
-    sequence_node: yaml.Node | None = None
-    for key_node, value_node in root.value:
-        if (
-            isinstance(key_node, yaml.ScalarNode)
-            and key_node.tag == "tag:yaml.org,2002:str"
-            and key_node.value == sequence_key
-        ):
-            # Match safe_load: when a root key is repeated, its last value is
-            # the one used to build the resulting mapping.
-            sequence_node = value_node
     if not isinstance(sequence_node, yaml.SequenceNode):
         return []
 
