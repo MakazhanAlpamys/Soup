@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -73,6 +74,8 @@ def list_base_slots(
     model: str,
     cache_dir: Optional[str] = None,
     current_slot: Optional[str] = None,
+    *,
+    keep_revisions: Collection[str] = (),
 ) -> list[CacheSlot]:
     """Every slot of ``model``'s base under the cache root, sorted by name.
 
@@ -90,6 +93,7 @@ def list_base_slots(
     root = resolve_cache_root(cache_dir)
     slug = model_slug(model)
     current = os.path.basename(os.path.normpath(current_slot)) if current_slot else None
+    pinned = {f"{slug}@{revision}" for revision in keep_revisions}
     mtimes: dict[str, float] = {}
     slots: list[CacheSlot] = []
     try:
@@ -123,6 +127,8 @@ def list_base_slots(
                 if index is not None:
                     stripes = _stripes(path, index)
                     mtimes[entry.name] = os.stat(os.path.join(path, "index.json")).st_mtime
+            if not reason and entry.name in pinned:
+                reason = "explicit --keep pin"
             slots.append(CacheSlot(entry.name, path, size, bool(reason), reason, stripes))
         except OSError:
             continue
@@ -142,12 +148,21 @@ def prune_slots(
     current_slot: Optional[str] = None,
     *,
     confirm: bool,
+    keep_revisions: Collection[str] = (),
 ) -> list[tuple[CacheSlot, Optional[str]]]:
     """Unreferenced slots and what happened to each: ``None`` = removed (or, with
     ``confirm=False``, would be removed), else the error. Re-scans, so a slot that became
     referenced since the caller last looked is kept."""
     results: list[tuple[CacheSlot, Optional[str]]] = []
-    for slot in list_base_slots(model, cache_dir, current_slot):
+    slots = list_base_slots(model, cache_dir, current_slot, keep_revisions=keep_revisions)
+    if keep_revisions:
+        from soup_cli.utils.layer_shard import model_slug
+
+        names = {slot.name for slot in slots}
+        missing = sorted(r for r in keep_revisions if f"{model_slug(model)}@{r}" not in names)
+        if missing:
+            raise ValueError("No cache slot for --keep commit(s): " + ", ".join(missing))
+    for slot in slots:
         if slot.referenced:
             continue
         if not confirm:

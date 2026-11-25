@@ -17,10 +17,12 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial, wraps
@@ -32,6 +34,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from soup_cli.utils import final_answer
+from soup_cli.utils.process_tree import ProcessTree, popen_kwargs
 from soup_cli.utils.terminal import strip_control as for_terminal
 
 console = Console()
@@ -395,6 +398,48 @@ class SandboxIsolationError(PermissionError):
     """
 
 
+#: How long removing the sandbox directory is retried while something still holds it.
+_DIRECTORY_RELEASE_SECONDS = 2.0
+
+
+def _remove_directory(path: str, wait_seconds: float) -> None:
+    """Remove ``path``, retrying while a process that was just ended still holds it.
+
+    Windows releases a working directory a moment after the process that used it has
+    ended. Never raises: a directory that is still held after ``wait_seconds`` is left
+    behind, because one completion must not abort a training run.
+    """
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                shutil.rmtree(path, ignore_errors=True)
+                return
+            time.sleep(0.02)
+
+
+@contextlib.contextmanager
+def _sandbox_directory():
+    """A fresh working directory for one sandboxed run, removed (with retries) afterwards.
+
+    ``TemporaryDirectory`` makes the first attempt (it also resets the permissions of
+    read-only files and directories the code left behind) and never raises here; a
+    directory that a just-ended process still held at that moment is then retried.
+    """
+    created = tempfile.TemporaryDirectory(prefix="soup-sandbox-", ignore_cleanup_errors=True)
+    try:
+        yield created.name
+    finally:
+        created.cleanup()
+        if os.path.isdir(created.name):
+            _remove_directory(created.name, _DIRECTORY_RELEASE_SECONDS)
+
+
 def _run_sandboxed_subprocess(
     argv: list[str],
     preexec_fn: Callable[[], None] | None = None,
@@ -402,14 +447,22 @@ def _run_sandboxed_subprocess(
     timeout_seconds: int = CODE_EXEC_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
 ) -> SandboxProcessResult:
-    """Execute a sandboxed subprocess under concurrency limit with streaming kill-on-overflow."""
+    """Execute a sandboxed subprocess under concurrency limit with streaming kill-on-overflow.
+
+    The child runs as a :class:`~soup_cli.utils.process_tree.ProcessTree`: when it times
+    out, floods its output, or simply exits, the processes it started are ended with it,
+    so none outlives the call, keeps the output pipes open or (Windows) keeps the
+    sandbox directory in use. The directory is removed afterwards with retries; one that
+    is still held is left behind rather than raising: one completion must not abort a
+    training run.
+    """
     if _get_isolation_strategy() == "sandbox-exec" and sys.platform == "darwin":
         argv = [_MACOS_SANDBOX_EXEC, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
     if env is None:
         env = _get_safe_sandbox_env()
 
-    with _SANDBOX_SEMAPHORE, tempfile.TemporaryDirectory(prefix="soup-sandbox-") as tmpdir:
+    with _SANDBOX_SEMAPHORE, _sandbox_directory() as tmpdir:
         try:
             proc = subprocess.Popen(
                 argv,
@@ -418,6 +471,7 @@ def _run_sandboxed_subprocess(
                 cwd=tmpdir,
                 preexec_fn=preexec_fn,
                 env=env,
+                **popen_kwargs(),
             )
         except (PermissionError, OSError, subprocess.SubprocessError) as exc:
             return SandboxProcessResult(
@@ -427,75 +481,119 @@ def _run_sandboxed_subprocess(
                 launch_failed=True,
             )
 
-        stdout_chunks: list[bytes] = []
-        stderr_chunks: list[bytes] = []
-        output_exceeded = False
-        lock = threading.Lock()
-
-        def _reader(stream, chunks: list[bytes]) -> None:
-            nonlocal output_exceeded
-            try:
-                while True:
-                    chunk = stream.read(4096)
-                    if not chunk:
-                        break
-                    with lock:
-                        chunks.append(chunk)
-                        total = sum(len(c) for c in stdout_chunks) + sum(
-                            len(c) for c in stderr_chunks
-                        )
-                        if total > max_output_bytes:
-                            output_exceeded = True
-                            with contextlib.suppress(Exception):
-                                proc.kill()
-                            break
-            finally:
-                stream.close()
-
-        t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_chunks))
-        t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_chunks))
-        t_out.daemon = True
-        t_err.daemon = True
-        t_out.start()
-        t_err.start()
-
         try:
-            proc.wait(timeout=timeout_seconds)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            timed_out = True
+            tree = ProcessTree(proc)
+        except BaseException:
+            # No tree to end it with: do not leave the child running.
             with contextlib.suppress(Exception):
                 proc.kill()
-            with contextlib.suppress(Exception):
                 proc.wait(timeout=1.0)
+            for stream in (proc.stdout, proc.stderr):
+                with contextlib.suppress(Exception):
+                    stream.close()
+            raise
+        try:
+            return _collect_sandbox_result(proc, tree, max_output_bytes, timeout_seconds)
+        finally:
+            # Also reached when the caller is interrupted: nothing the child started
+            # is left running, and (Windows) the job has released the directory.
+            tree.kill()
+            if sys.platform != "win32":
+                # An unreaped leader still answers the group probe, so without this
+                # ``wait_gone`` would spend all of its time on an interrupted run.
+                with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                    proc.wait(timeout=_REAP_SECONDS)
+            tree.wait_gone(_PROCESS_TREE_GONE_SECONDS)
+            tree.close()
 
-        t_out.join(timeout=1.0)
-        t_err.join(timeout=1.0)
 
-        if timed_out:
-            return SandboxProcessResult(None, "", "", timed_out=True)
+#: Longest wait, after the kill, for the processes of a Windows job to release the
+#: sandbox directory before it is removed.
+_PROCESS_TREE_GONE_SECONDS = 2.0
+#: Longest wait for a killed child to be reaped (POSIX); SIGKILL ends it at once.
+_REAP_SECONDS = 1.0
+#: Longest wait for a reader thread to reach end-of-file once the tree has been ended.
+_READER_JOIN_SECONDS = 1.0
 
-        if output_exceeded:
-            return SandboxProcessResult(
-                proc.returncode if proc.returncode is not None else 1,
-                "",
-                "sandbox output exceeded limit",
-                output_exceeded=True,
-            )
 
-        raw_out = b"".join(stdout_chunks)
-        raw_err = b"".join(stderr_chunks)
-        if len(raw_out) + len(raw_err) > max_output_bytes:
-            return SandboxProcessResult(
-                proc.returncode if proc.returncode is not None else 1,
-                "",
-                "sandbox output exceeded limit",
-                output_exceeded=True,
-            )
+def _collect_sandbox_result(
+    proc: subprocess.Popen,
+    tree: ProcessTree,
+    max_output_bytes: int,
+    timeout_seconds: int,
+) -> SandboxProcessResult:
+    """Read ``proc``'s output until it ends, is killed for running too long, or floods."""
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    output_exceeded = False
+    lock = threading.Lock()
 
-        stdout = raw_out.decode("utf-8", errors="replace").strip()
-        stderr = raw_err.decode("utf-8", errors="replace").strip()
-        return SandboxProcessResult(proc.returncode, stdout, stderr)
+    def _reader(stream, chunks: list[bytes]) -> None:
+        nonlocal output_exceeded
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    break
+                with lock:
+                    chunks.append(chunk)
+                    total = sum(len(c) for c in stdout_chunks) + sum(
+                        len(c) for c in stderr_chunks
+                    )
+                    if total > max_output_bytes:
+                        output_exceeded = True
+                        with contextlib.suppress(Exception):
+                            proc.kill()
+                        break
+        finally:
+            stream.close()
+
+    t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_chunks))
+    t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_chunks))
+    t_out.daemon = True
+    t_err.daemon = True
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout_seconds)
+        timed_out = False
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    # Whether the child ended or ran too long, end everything it started before the
+    # readers are joined: a process that is still holding the pipes open would keep
+    # them from reaching end-of-file.
+    tree.kill()
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=1.0)
+
+    t_out.join(timeout=_READER_JOIN_SECONDS)
+    t_err.join(timeout=_READER_JOIN_SECONDS)
+
+    if timed_out:
+        return SandboxProcessResult(None, "", "", timed_out=True)
+
+    if output_exceeded:
+        return SandboxProcessResult(
+            proc.returncode if proc.returncode is not None else 1,
+            "",
+            "sandbox output exceeded limit",
+            output_exceeded=True,
+        )
+
+    raw_out = b"".join(stdout_chunks)
+    raw_err = b"".join(stderr_chunks)
+    if len(raw_out) + len(raw_err) > max_output_bytes:
+        return SandboxProcessResult(
+            proc.returncode if proc.returncode is not None else 1,
+            "",
+            "sandbox output exceeded limit",
+            output_exceeded=True,
+        )
+
+    stdout = raw_out.decode("utf-8", errors="replace").strip()
+    stderr = raw_err.decode("utf-8", errors="replace").strip()
+    return SandboxProcessResult(proc.returncode, stdout, stderr)
 
 
 # The program ``/v1/tools/python`` starts: the network guard, then the caller's
@@ -552,7 +650,9 @@ def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
     Security posture (best-effort, NOT a strong sandbox):
-    - Hard wall-clock timeout via subprocess.
+    - Hard wall-clock timeout via subprocess; on timeout, on an output flood and on
+      exit the processes the code started are ended with it (a process group on
+      POSIX, a job object on Windows; see ``utils/process_tree.py``).
     - POSIX ``RLIMIT_AS`` (address space) and ``RLIMIT_CPU`` via preexec_fn.
     - Output truncated to ``MAX_CODE_OUTPUT_BYTES``.
     - Python-level socket monkey-patch (bypassable via os.system / ctypes).

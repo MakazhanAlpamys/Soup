@@ -480,6 +480,8 @@ training:
 soup train --config soup.yaml
 ```
 
+**Single process only, for now.** Under `torchrun`, `accelerate launch` or `deepspeed` (`WORLD_SIZE` above 1), `soup train` refuses a `stream_layers: true` config at startup with "distributed layer streaming is not supported yet" ([#2585](https://github.com/MakazhanAlpamys/Soup/issues/2585)); run it as one process, or set `stream_layers: false` to train resident across the cards.
+
 **Model and tokenizer code.** With `training.stream_layers: true`, Soup uses
 Transformers' own implementation for the model config, the meta skeleton used by
 setup probes, and the streamed model. `--trust-remote-code` still reaches the
@@ -1206,7 +1208,8 @@ needs no second base model. IPO uses that same setup. On an untied checkpoint,
 one copy of the output head per step (about 1.05 GB for Llama-3.1-8B in bf16), which
 the VRAM pre-flight charges (#1049); tied checkpoints and `sft`/`orpo`/`simpo` pay
 nothing. The following DPO/SFT figures were measured on an RTX 3050 4 GB with
-a 730 MB model. BCO and IPO have no peak VRAM measurements.
+a 730 MB model. The DPO/SFT table below was not remeasured for the frozen `ref`
+adapter. BCO and IPO have no peak VRAM measurements.
 
 | arm | peak VRAM | vs SFT |
 |---|---|---|
@@ -1397,6 +1400,12 @@ the next run stops with the same message and leaves the copy in place.
 - `soup prune-layer-cache --model <base>` is a dry run: it lists the stale slots with sizes and exact paths. Only `--yes` removes them. Training never deletes.
 - Kept, never removed: the slot the run resolves to; the newest complete slot of the base (the `index.json` with the latest mtime), so a base with one complete slot never loses it; a slot with `index.json.resharding`; a slot holding a `.soup.*.tmp` file (a write in progress); a slot with no readable `index.json`.
 - Stripe folders sit outside the cache root. They are listed with sizes and are never deleted: remove them by hand.
+- Run pins are not discovered automatically. Pass `--keep <commit>` for each revision to
+  protect, in the dry run and with `--yes`. Repeat up to 64 times (duplicates count toward
+  the limit and are collapsed); commits must be full lowercase 40-hex strings. Protection
+  matches only `<this model's slug>@<commit>`, never a legacy bare-slug slot. A valid commit
+  with no matching slot stops the command with exit 1 before any deletion, so check the
+  model and commit if a pin is refused. Existing automatic protections still apply.
 
 ### Forward-only inference mode (API only, no CLI yet)
 
@@ -1883,7 +1892,10 @@ The `ScatterMoE LoRA:` setup line says which happened: `keeping target_modules '
 
 ## KV Cache Types (v0.53.0)
 
-`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` is recorded in `soup.yaml` only: neither `soup train` nor `soup serve` reads it (`fp8` is refused with `backend: mlx`). To apply a type, pass `soup serve --kv-cache-type <type>` (transformers backend); `fp8` is Hopper-only.
+`training.kv_cache_type: q8_0 | bf16 | f16 | fp8` records a setting in `soup.yaml`.
+Neither `soup train` nor `soup serve` reads it, and config validation refuses
+`fp8` with `backend: mlx`. On the Transformers backend, pass
+`soup serve --kv-cache-type` with `bf16`, `f16`, or `q8_0`.
 
 The **live serve runtime shipped in v0.71.14** for the transformers backend:
 
@@ -1893,8 +1905,8 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 ```
 
 - `bf16` / `f16` resolve the model compute dtype for the default `DynamicCache` (no extra dependency).
-- `q8_0` wires the transformers quantized KV cache (`cache_implementation="quantized"`, hqq backend). If no quant backend (`hqq` / `optimum-quanto`) is installed, the CLI exits 2 with an install hint rather than crashing.
-- `fp8` is rejected on pre-Hopper GPUs (compute capability < 9.0) with a friendly runtime error naming vLLM as the path on Ampere/Ada.
+- `q8_0` selects the 8-bit Transformers quantized KV cache with the `hqq` backend. Install `hqq` to use it.
+- `soup serve` refuses `--kv-cache-type fp8` on every backend, including on Hopper GPUs.
 - vLLM / SGLang serve wiring is still tracked under [#140](https://github.com/MakazhanAlpamys/Soup/issues/140) (`infra-blocked`).
 
 

@@ -30,6 +30,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 if TYPE_CHECKING:
     from soup_cli.config.schema import TrainingConfig  # noqa: F401
@@ -195,9 +196,7 @@ class BCOTrainerWrapper(StreamingSetupMixin):
                 eval_ds = Dataset.from_list(val_rows)
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Calculate warmup steps from ratio (#1431) ---

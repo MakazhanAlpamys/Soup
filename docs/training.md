@@ -21,6 +21,7 @@
 
 **Contents:**
 
+- [Machine-readable training preflight](#machine-readable-training-preflight)
 - [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
@@ -66,6 +67,32 @@ Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
 `backend: transformers` rather than `backend: unsloth`. The vision and audio setup
 paths do not use Unsloth; requesting it is refused at config load instead of
 silently falling back to transformers. Text SFT continues to support Unsloth.
+
+## Machine-readable training preflight
+
+**PREVIEW.** Run a local preflight with an explicit dry run:
+
+```sh
+soup train --config soup.yaml --dry-run --result-json
+```
+
+Once the command options parse, stdout contains one UTF-8 `soup.command_result` v1 JSON
+object and a newline. Human-readable diagnostics go to stderr. The preflight validates the
+configuration and data before training. Cloud, distributed launch, live LR search and
+execution-only options are refused with exit 2. Other covered outcomes keep their existing
+CLI exit codes. An interrupt returns 130. A zero exit before readiness has result status
+`failed` with reason `soup.train.preflight_incomplete`.
+
+The result records observed row counts and supported resolved settings. When evaluated,
+`vram.available_gb` reports total device capacity in decimal GB, and the analytical peak
+and required capacity describe the estimate used for the fit decision. Unavailable or
+unresolved fields are null. Disk usage and training wall time have no estimate on this path.
+For a supported single local data file, the result includes a SHA-256 only when bounded
+observations before and after loading agree. That hash describes source bytes. The config
+digest remains null until preflight binds the effective config to execution.
+
+The preview schema is packaged as `soup_cli/schemas/command-result-v1.json`. A parser error
+before command dispatch uses the standard usage diagnostic and exit code.
 
 ## Validation split & evaluation (`training.eval_steps`)
 
@@ -287,10 +314,12 @@ training:
 - **`save_steps` and `save_strategy` go together.** `save_steps` only counts under
   `save_strategy: steps`. A non-default `save_steps` beside `epoch` or `no` is refused at load
   rather than ignored.
-- **Not on every combination.** `backend: mlx` writes its own numbered adapter files every
-  `save_steps` iterations and has no epoch or off setting, and `task: unlearn` trains in its
-  own loop and writes no checkpoint, so `epoch` and `no` are refused on both. PPO accepts
-  `steps` and `no` because its trainer does not emit epoch-end callbacks.
+- **Backend and task limits.** MLX uses `save_steps` as an iteration interval.
+  Adapter training writes numbered adapter files. Native MLX full SFT writes
+  standalone model snapshots at optimizer boundaries in zero-padded directories
+  such as `checkpoint-0000200`. MLX and `task: unlearn` both refuse `epoch` and `no`.
+  Unlearning writes no intermediate checkpoints. PPO accepts `steps` and `no` because
+  its trainer does not emit epoch-end callbacks.
 
 ## Rewind — which row spiked the loss (`soup rewind`)
 
@@ -670,6 +699,18 @@ soup iterative-dpo \
 #     echo_trap_tokenizer_aware: true
 soup train --config grpo.yaml
 ```
+
+MiniLLM on-policy training and evaluation now sample from the prompt and generated
+history, excluding the target answer. This changes the on-policy term of existing
+`minillm_on_policy: true` runs, which previously continued the gold answer and could
+read padding logits. Earlier dialogue stays in the prompt; prompt ids are
+left-truncated to `data.max_length`, keeping the generation suffix, and padded
+separately from the unchanged CE rows. The fixed rollout length and EOS behavior
+are unchanged. Only `minillm_on_policy: true` now refuses train or validation rows
+with no usable prompt, including previously accepted assistant-only rows and rows
+whose prompt contains only system turns: supply explicit prompt and response rows.
+The error names the split and row number.
+The offline path keeps its existing row handling and objective.
 
 `training.echo_trap_tokenizer_aware` (also available as the real
 `--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
@@ -1688,6 +1729,12 @@ the row until the next valid measurement and breaks the warning streak. More tha
 a diagnostic heuristic, not a quality threshold: it neither stops training nor
 changes rewards or gradients. Evaluation/summary logs do not count as new
 measurements. MLX's existing logging is unchanged.
+
+Use `soup runs show <run_id>` to chart the mean score over the logging window
+that ends at each step. GRPO also charts the recorded spread, the mean of the
+per-batch standard deviations over that window. Runs with only a mean score,
+such as PPO or online DPO with a scorer, get one score chart. Pass `--no-plot`
+for run details without the charts.
 
 ```bash
 # Create a reasoning config

@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -37,6 +39,32 @@ def test_quickstart_dry_run(tmp_path, monkeypatch):
     first = json.loads(lines[0])
     assert "instruction" in first
     assert "output" in first
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["demo", "run #1", "run 🧪", "run\u2028next"],
+    ids=["plain", "yaml-comment", "emoji", "unicode-line-separator"],
+)
+def test_quickstart_output_config_preserves_directory(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "soup_cli.commands.quickstart._pick_quickstart_model",
+        lambda: ("test/model", None),
+    )
+    directory = tmp_path / name
+    result = runner.invoke(app, ["quickstart", "--dry-run", "--output", name])
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    directory = directory.resolve()
+    data_path = directory / "quickstart_data.jsonl"
+    assert data_path.is_file()
+    rendered = (directory / "quickstart_soup.yaml").read_text(encoding="utf-8")
+    assert (directory / "soup.yaml").read_text(encoding="utf-8") == rendered
+    config = yaml.safe_load(rendered)
+    assert config["base"] == "test/model"
+    assert config["data"]["train"] == str(data_path)
+    assert config["output"] == str(directory / "quickstart_output")
 
 
 def test_quickstart_dry_run_existing_files(tmp_path, monkeypatch):
@@ -83,8 +111,6 @@ def test_demo_data_count():
 
 def test_demo_config_valid():
     """Demo config is valid YAML."""
-    import yaml
-
     config = yaml.safe_load(DEMO_CONFIG)
     assert config["base"] == "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     assert config["task"] == "sft"

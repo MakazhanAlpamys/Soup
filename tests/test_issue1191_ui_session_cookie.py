@@ -9,6 +9,7 @@ The Bearer header keeps working unchanged for scripted clients.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import pytest
@@ -249,4 +250,14 @@ class TestRedirectStaysOnThisServer:
         assert parts.scheme == "" and parts.netloc == "", resp.headers["location"]
         assert parts.path == "/"
         assert parse_qsl(parts.query) == hostile
-        assert all("pwn" not in c for c in _set_cookie_headers(resp))
+        cookie_headers = _set_cookie_headers(resp)
+        cookie_header_count = len(cookie_headers)
+        assert cookie_header_count == 1
+        cookie_name, cookie_separator, cookie_fields = cookie_headers[0].partition("=")
+        cookie_value = cookie_fields.split(";", 1)[0]
+        has_expected_name = cookie_name == COOKIE
+        has_name_separator = cookie_separator == "="
+        has_urlsafe_value = re.fullmatch(r"[A-Za-z0-9_-]{43,}", cookie_value) is not None
+        assert has_expected_name
+        assert has_name_separator
+        assert has_urlsafe_value

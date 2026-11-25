@@ -29,7 +29,7 @@ import os
 import posixpath
 import stat
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
@@ -51,8 +51,77 @@ LOG_FILES: Mapping[str, str] = {
 #: Largest line written, in bytes. A line is one ``write`` call; this keeps it small enough
 #: that an append is not split by the filesystem.
 MAX_LINE_BYTES = 1024 * 1024
+_INDEX_READ_BYTES = 64 * 1024
+_INDEX_ANCHOR_BYTES = 64
 
 _FIELD = "loop log"
+
+
+@dataclass
+class _IdempotencyIndex:
+    """Per-process keys and read position for one append-only JSONL log."""
+
+    identity: tuple[int, int]
+    offset: int = 0
+    mtime_ns: Optional[int] = None
+    ctime_ns: Optional[int] = None
+    pending: bytes = b""
+    discarding_line: bool = False
+    anchor: bytes = b""
+    keys: set[tuple] = field(default_factory=set)
+    unhashable_keys: list[tuple] = field(default_factory=list)
+
+
+def _index_jsonl_record(index: _IdempotencyIndex, raw: bytes, keys: tuple[str, ...]) -> None:
+    try:
+        record = json.loads(raw)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return
+    if not isinstance(record, dict):
+        return
+    key = tuple(record.get(name) for name in keys)
+    try:
+        index.keys.add(key)
+    except TypeError:
+        # JSON fields are normally scalars. Preserve Python's tuple equality for malformed or
+        # future nested keys too, without making those uncommon values block valid appends.
+        if key not in index.unhashable_keys:
+            index.unhashable_keys.append(key)
+
+
+def _index_jsonl_chunk(index: _IdempotencyIndex, chunk: bytes, keys: tuple[str, ...]) -> None:
+    data = index.pending + chunk
+    index.pending = b""
+    while data:
+        if index.discarding_line:
+            newline = data.find(b"\n")
+            if newline < 0:
+                return
+            data = data[newline + 1 :]
+            index.discarding_line = False
+            continue
+
+        newline = data.find(b"\n")
+        if newline < 0:
+            if len(data) > MAX_LINE_BYTES:
+                index.discarding_line = True
+            else:
+                index.pending = data
+            return
+
+        raw = data[:newline]
+        if len(raw) <= MAX_LINE_BYTES:
+            _index_jsonl_record(index, raw, keys)
+        data = data[newline + 1 :]
+
+
+def _idempotency_key_present(index: _IdempotencyIndex, wanted: tuple) -> bool:
+    try:
+        if wanted in index.keys:
+            return True
+    except TypeError:
+        pass
+    return any(key == wanted for key in index.unhashable_keys)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +228,7 @@ class LoopLog:
         self._dir = LOG_DIR if base_dir is None else base_dir
         self._enabled = enabled
         self._failures: list[str] = []
+        self._idempotency_indexes: dict[tuple[str, tuple[str, ...]], _IdempotencyIndex] = {}
 
     @property
     def enabled(self) -> bool:
@@ -204,18 +274,77 @@ class LoopLog:
         return self._append(kind, line)
 
     def _has_line(self, kind: str, keys: "tuple[str, ...]", wanted: tuple) -> bool:
+        """Check an append-only log using a one-time index plus only the appended tail.
+
+        The first check after process start indexes the existing file. Later checks read only
+        bytes added since that check, so the common append path does not grow with log length.
+        The small anchor detects in-place edits near the previous end; replacement, truncation,
+        and same-size rewrites also invalidate the index. The log contract is append-only.
+        """
+        path = self.path(kind)
+        cache_key = (path, keys)
+        index = self._idempotency_indexes.get(cache_key)
         try:
-            with open(self.path(kind), "rb") as handle:
-                for raw in handle:
-                    try:
-                        record = json.loads(raw)
-                    except ValueError:
-                        continue
-                    if isinstance(record, dict) and tuple(record.get(k) for k in keys) == wanted:
-                        return True
+            fd = open_no_follow(
+                path,
+                os.O_RDONLY | getattr(os, "O_BINARY", 0),
+                check_parent=True,
+                refuse_hardlink=True,
+            )
         except OSError:
             return False
-        return False
+        try:
+            file_stat = os.fstat(fd)
+            identity = (file_stat.st_dev, file_stat.st_ino)
+            mtime_ns = file_stat.st_mtime_ns
+            ctime_ns = file_stat.st_ctime_ns
+            if (
+                index is None
+                or index.identity != identity
+                or file_stat.st_size < index.offset
+                or (
+                    file_stat.st_size == index.offset
+                    and (index.mtime_ns != mtime_ns or index.ctime_ns != ctime_ns)
+                )
+            ):
+                index = _IdempotencyIndex(identity=identity)
+                self._idempotency_indexes[cache_key] = index
+            elif index.anchor and file_stat.st_size > index.offset:
+                anchor_start = index.offset - len(index.anchor)
+                os.lseek(fd, anchor_start, os.SEEK_SET)
+                current_anchor = os.read(fd, len(index.anchor))
+                if current_anchor != index.anchor:
+                    index = _IdempotencyIndex(identity=identity)
+                    self._idempotency_indexes[cache_key] = index
+
+            os.lseek(fd, index.offset, os.SEEK_SET)
+            while True:
+                chunk = os.read(fd, _INDEX_READ_BYTES)
+                if not chunk:
+                    break
+                index.offset += len(chunk)
+                _index_jsonl_chunk(index, chunk, keys)
+
+            # The old line-by-line reader also considered a valid final JSON object without a
+            # newline. Keep that behavior while retaining the bytes as a pending tail in case a
+            # later append completes the line or inserts the separator for a torn write.
+            if index.pending and not index.discarding_line:
+                _index_jsonl_record(index, index.pending, keys)
+
+            end_stat = os.fstat(fd)
+            index.mtime_ns = end_stat.st_mtime_ns
+            index.ctime_ns = end_stat.st_ctime_ns
+            anchor_size = min(index.offset, _INDEX_ANCHOR_BYTES)
+            if anchor_size:
+                os.lseek(fd, index.offset - anchor_size, os.SEEK_SET)
+                index.anchor = os.read(fd, anchor_size)
+            else:
+                index.anchor = b""
+            return _idempotency_key_present(index, wanted)
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
 
     def _append(self, kind: str, line: Mapping[str, Any]) -> bool:
         if not self._enabled:

@@ -129,3 +129,82 @@ def test_leaderboard_exports_preserve_original_bytes(tracker, value, _shown):
         result = runner.invoke(app, ["eval", "leaderboard", "--format", fmt])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert result.stdout.encode("utf-8") == expected.encode("utf-8")
+
+
+# --sort-by reaches every format, and the average stays the average (#3272).
+# model-A leads on mmlu and trails on average; model-B the other way round.
+SORT_SCORES = {
+    "model-A": {"mmlu": 0.9, "gsm8k": 0.1},
+    "model-B": {"mmlu": 0.5, "gsm8k": 0.9},
+}
+AVERAGES = {"model-A": 0.5, "model-B": 0.7}
+
+
+def _save_sort_fixture(tracker):
+    for model, scores in SORT_SCORES.items():
+        for bench, score in scores.items():
+            tracker.save_eval_result(model, bench, score, {})
+
+
+def _export(fmt, *args):
+    result = runner.invoke(app, ["eval", "leaderboard", "--format", fmt, *args])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    return result.stdout
+
+
+@pytest.mark.parametrize(
+    "args,order",
+    [
+        pytest.param((), ["model-B", "model-A"], id="default-average"),
+        pytest.param(("--sort-by", "mmlu"), ["model-A", "model-B"], id="sort-by-mmlu"),
+        pytest.param(("-s", "gsm8k"), ["model-B", "model-A"], id="sort-by-gsm8k"),
+        pytest.param(("--sort-by", "no-such-bench"), ["model-B", "model-A"], id="unknown-bench"),
+    ],
+)
+def test_json_export_follows_sort_by_and_keeps_each_average(tracker, args, order):
+    _save_sort_fixture(tracker)
+
+    rows = json.loads(_export("json", *args))
+
+    assert [row["model"] for row in rows] == order
+    assert {row["model"]: row["average"] for row in rows} == AVERAGES
+    assert {row["model"]: row["scores"] for row in rows} == SORT_SCORES
+
+
+@pytest.mark.parametrize(
+    "args,order",
+    [
+        pytest.param((), ["model-B", "model-A"], id="default-average"),
+        pytest.param(("--sort-by", "mmlu"), ["model-A", "model-B"], id="sort-by-mmlu"),
+        pytest.param(("--sort-by", "no-such-bench"), ["model-B", "model-A"], id="unknown-bench"),
+    ],
+)
+def test_csv_export_follows_sort_by_and_keeps_each_average(tracker, args, order):
+    _save_sort_fixture(tracker)
+
+    lines = strip_ansi(_export("csv", *args)).splitlines()
+
+    assert lines[0] == "model,gsm8k,mmlu,average"
+    rows = {line.split(",")[0]: line for line in lines[1:]}
+    assert [line.split(",")[0] for line in lines[1:]] == order
+    assert rows == {"model-A": "model-A,0.1,0.9,0.5000", "model-B": "model-B,0.9,0.5,0.7000"}
+
+
+@pytest.mark.parametrize(
+    "args,order",
+    [
+        pytest.param((), ["model-B", "model-A"], id="default-average"),
+        pytest.param(("--sort-by", "mmlu"), ["model-A", "model-B"], id="sort-by-mmlu"),
+    ],
+)
+def test_table_avg_is_the_average_whatever_the_rows_are_sorted_by(tracker, args, order):
+    _save_sort_fixture(tracker)
+
+    result = runner.invoke(app, ["eval", "leaderboard", *args])
+
+    rows = [line for line in _lines(result) if line.split(" ")[0] in ("1", "2")]
+    assert rows == [
+        f"{rank} {model} {SORT_SCORES[model]['gsm8k']:.4f} "
+        f"{SORT_SCORES[model]['mmlu']:.4f} {AVERAGES[model]:.4f}"
+        for rank, model in enumerate(order, 1)
+    ]

@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sys
+from csv import Error as CsvError
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -17,6 +18,7 @@ from rich.console import Console
 from rich.markup import escape as markup_escape
 from rich.panel import Panel
 
+from soup_cli.commands.train_preflight_result import active_preflight, train_preflight_result
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import (
     PREFERENCE_PAIR_TASKS,
@@ -109,6 +111,7 @@ FORWARDED_OR_EARLIER_CLOUD_FLAGS = frozenset({
     "replay",
     "replay_ratio",
     "replay_seed",
+    "result_json",  # The preflight wrapper refuses cloud before train dispatch.
 })
 
 _UNWIRED_TRAINING_TUNABLES: tuple[str, ...] = (
@@ -213,6 +216,14 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
 
 
 UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
+
+#: The runs that ``--resume`` and ``--hf-resume`` refuse, for both help texts
+#: (#3086 T-3): the ReLoRA check in ``train`` and each branch of
+#: :func:`_resume_refusal`. A refusal added there is named here too.
+RESUME_REFUSED_RUNS_HELP = (
+    "training.relora_steps is configured, for task: unlearn or task: ppo, and on "
+    "backend: mlx for a full fine-tune (lora.r: 0) or task: grpo"
+)
 
 
 def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
@@ -441,6 +452,12 @@ def _train_sample_count(dcfg, dataset) -> int:
     return count if valid else rows
 
 
+def _record_preflight_refusal(code: str) -> None:
+    receipt = active_preflight()
+    if receipt is not None:
+        receipt.refuse(code)
+
+
 def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     """Validate sequence classification rows upfront if task is in CLASSIFICATION_TASKS."""
     if cfg.task in CLASSIFICATION_TASKS:
@@ -454,6 +471,7 @@ def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> N
             console.print(
                 f"[red]Error validating {cfg.task} dataset:[/] {escape(str(exc))}"
             )
+            _record_preflight_refusal("soup.data.invalid")
             raise typer.Exit(1) from exc
 
 
@@ -468,6 +486,7 @@ def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
         validate_csm_dataset(dataset)
     except ValueError as exc:
         console.print(f"[red]Error validating CSM dataset:[/] {escape(str(exc))}")
+        _record_preflight_refusal("soup.data.invalid")
         raise typer.Exit(1) from exc
 
 
@@ -496,6 +515,7 @@ def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
                     f"format {markup_escape(repr(fmt))} lacks prompt, completion or label. "
                     "Use data.format: kto with kto rows."
                 )
+                _record_preflight_refusal("soup.data.invalid")
                 raise typer.Exit(1)
         return
 
@@ -510,6 +530,7 @@ def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
                 f"format {markup_escape(repr(fmt))} lacks prompt, chosen or rejected. "
                 "Use data.format: dpo with preference-pair rows."
             )
+            _record_preflight_refusal("soup.data.invalid")
             raise typer.Exit(1)
     if not dataset.get("train") and outcome.first_drop is not None:
         console.print(
@@ -517,6 +538,7 @@ def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
             f"{markup_escape(repr(fmt))} must provide prompt, chosen and rejected. "
             "Use data.format: dpo with preference-pair rows."
         )
+        _record_preflight_refusal("soup.data.empty_train")
         raise typer.Exit(1)
 
 
@@ -556,6 +578,7 @@ def _refuse_empty_train(dcfg, dataset) -> None:
             "media files."
         )
     console.print(message)
+    _record_preflight_refusal("soup.data.empty_train")
     raise typer.Exit(1)
 
 
@@ -783,7 +806,8 @@ def _hardware_fit_preflight(
     inp = _hardware_fit_input_or_reason(
         cfg, gpu_memory_gb=total_bytes / 1024**3, kbit_fp32=kbit_fp32
     )
-    if isinstance(inp, FitUnavailable) and inp.field == "training.teacher_model":
+    student_only = isinstance(inp, FitUnavailable) and inp.field == "training.teacher_model"
+    if student_only:
         # #2909: a teacher the estimate cannot price; the student still can be, and a run
         # whose student alone does not fit the card is refused, as before the teacher was
         # priced. The first read already announced any Hub request.
@@ -812,12 +836,17 @@ def _hardware_fit_preflight(
         return None
     from soup_cli.utils.hardware_fit import (
         DISTILLATION_STEP,
+        VRAM_SAFETY_MARGIN,
         decide_hardware_fit,
         outside_calibrated_range,
         unextrapolated_floor,
     )
 
     report = decide_hardware_fit(inp, available_vram_gb=total_bytes / 1e9)
+    receipt = active_preflight()
+    # Publish only estimates that cover the full distillation step.
+    if receipt is not None and not student_only:
+        receipt.fit(report, VRAM_SAFETY_MARGIN)
     if report.ok:
         return None
     # The estimate is fitted on one range of runs; beyond it the same numbers are an
@@ -873,7 +902,10 @@ def _hardware_fit_preflight(
         return decision
     _print_fit_panel(decision, report)
     if refuse:
+        _record_preflight_refusal("soup.train.hardware_fit")
         raise typer.Exit(1)
+    if receipt is not None:
+        receipt.fit_warning()
     return None
 
 
@@ -1060,6 +1092,7 @@ def _realised_length_verdict(
     from soup_cli.utils.realised_length import LongestRow, longest_row_tokens
 
     inp, at_max = decision.inp, decision.report
+    receipt = active_preflight()
     max_length = inp.seq_len
     console.print(
         "[dim]Pre-flight: the run does not fit the card at data.max_length "
@@ -1081,6 +1114,8 @@ def _realised_length_verdict(
             dataclasses.replace(inp, seq_len=priced),
             available_vram_gb=at_max.available_vram_gb,
         )
+        if receipt is not None:
+            receipt.fit(at_row, VRAM_SAFETY_MARGIN)
         which = (
             f"priced at {priced} tokens, the longest row; data.max_length is {max_length}"
             if priced == measured.tokens
@@ -1115,6 +1150,7 @@ def _realised_length_verdict(
             at_max,
             priced_note=f"Pre-flight: not priced at the longest row of the data: {why}.",
         )
+    _record_preflight_refusal("soup.train.hardware_fit")
     raise typer.Exit(1)
 
 
@@ -1223,6 +1259,7 @@ def _describe_exception_for_tracker(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+@train_preflight_result
 def train(
     config: str = typer.Option(
         "soup.yaml",
@@ -1247,7 +1284,7 @@ def train(
         "-r",
         help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
         "on the MLX backend, a path to a .safetensors adapter file instead. "
-        "Not supported when training.relora_steps is configured",
+        f"Not supported when {RESUME_REFUSED_RUNS_HELP}",
     ),
     wandb: bool = typer.Option(
         False,
@@ -1340,7 +1377,7 @@ def train(
         help=(
             "Download the latest checkpoint branch from the --push-as repo "
             "and resume from it. Requires --push-as; not supported when "
-            "training.relora_steps is configured."
+            f"{RESUME_REFUSED_RUNS_HELP}."
         ),
     ),
     find_lr: bool = typer.Option(
@@ -1574,10 +1611,15 @@ def train(
             "(render + print the command). Lambda requires a registered SSH key."
         ),
     ),
+    result_json: Annotated[
+        bool,
+        typer.Option("--result-json", help="Emit a machine-readable dry-run result (preview)."),
+    ] = False,
 ):
     """Start training from a soup.yaml config."""
     from soup_cli.utils.launcher import validate_multi_node_options
 
+    receipt = active_preflight()
     # Refused before every other path (--cloud, --find-lr, --dry-run, the config
     # load): a visibility switch for a repository that is never created would
     # otherwise be dropped without a word.
@@ -1612,6 +1654,8 @@ def train(
     if not config_path.exists():
         console.print(f"[red]Config not found: {for_terminal(config_path)}[/]")
         console.print("Run [bold]soup init[/] to create one.")
+        if receipt is not None:
+            receipt.refuse("soup.config.missing")
         raise typer.Exit(1)
 
     # --- LR range finder fast path ---
@@ -1663,12 +1707,21 @@ def train(
 
     # Load & validate config
     console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
-    cfg = load_config(
-        config_path,
-        training_overrides=(
-            {"minillm_on_policy": True} if minillm_on_policy else None
-        ),
-    )
+    try:
+        cfg = load_config(
+            config_path,
+            training_overrides=(
+                {"minillm_on_policy": True} if minillm_on_policy else None
+            ),
+        )
+    except FileNotFoundError as exc:
+        if receipt is not None:
+            receipt.refuse("soup.config.missing", exc)
+        raise
+    except SystemExit as exc:
+        if receipt is not None and exc.code == 1:
+            receipt.refuse("soup.config.invalid", exc)
+        raise
 
     # --- v0.71.36 replay passthrough ---
     try:
@@ -1680,7 +1733,26 @@ def train(
         )
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
         console.print(f"[red]{markup_escape(str(exc))}[/]")
+        if receipt is not None:
+            receipt.refuse("soup.config.invalid", exc)
         raise typer.Exit(code=2) from exc
+
+    if receipt is not None:
+        receipt.config(cfg)
+        if cfg.training.parallelism == "pipeline" or cfg.training.use_fsdp2_compile:
+            console.print(
+                "[red]Train result JSON requires single-process settings.[/] "
+                "Disable pipeline parallelism and FSDP2 compilation for this preview."
+            )
+            receipt.refuse("soup.train.preflight_unsupported")
+            raise typer.Exit(2)
+        if cfg.training.hub != "hf":
+            console.print(
+                "[red]Train result JSON cannot size models from this configured Hub.[/] "
+                "Use an HF-backed configuration or the ordinary dry run."
+            )
+            receipt.refuse("soup.train.preflight_unsupported")
+            raise typer.Exit(2)
 
     if cfg.training.relora_steps is not None and (resume is not None or hf_resume):
         console.print(
@@ -1697,6 +1769,8 @@ def train(
         resolve_chat_template(cfg.data.chat_template)
     except KeyError as exc:
         console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        if receipt is not None:
+            receipt.refuse("soup.config.invalid", exc)
         raise typer.Exit(1) from exc
 
     # v0.72.3 — --resume / --hf-resume now work with layer streaming. v0.72.0-.2
@@ -1711,6 +1785,13 @@ def train(
     # When a generator stage has no retriever model set, splice in the latest
     # RA-DIT retriever output from the Registry. A manual value always wins.
     if getattr(cfg.training, "ra_dit_stage", None) == "generator":
+        if receipt is not None and cfg.training.ra_dit_retriever_model is None:
+            console.print(
+                "[red]Train result JSON requires an explicit RA-DIT retriever.[/] "
+                "Set training.ra_dit_retriever_model before the dry run."
+            )
+            receipt.refuse("soup.train.preflight_unsupported")
+            raise typer.Exit(2)
         from soup_cli.utils.ra_dit_run import autolink_generator_retriever
 
         advisory = autolink_generator_retriever(cfg)
@@ -1913,6 +1994,21 @@ def train(
         )
         raise typer.Exit(0)
 
+    # --- Layer streaming is single-process (#2585) ---
+    # The earliest point that knows WORLD_SIZE: after the config is loaded and the cloud
+    # hand-off (which runs elsewhere), before the dataset, the Hub resume pull, the run
+    # record and any model work. The trainer setup repeats the check for callers that
+    # never come through this command. Not a config validator: other commands load the
+    # same config in shells where a launcher variable may be left over.
+    if getattr(cfg.training, "stream_layers", False):
+        from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
+
+        try:
+            refuse_if_distributed_launch()
+        except ValueError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
     # --- --push-as / --hf-resume validation ---
     if push_as:
         from soup_cli.utils.hf import validate_repo_id
@@ -1936,12 +2032,14 @@ def train(
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
         from soup_cli.config.eval_gate_support import eval_gate_refusal
+        from soup_cli.config.loader import print_config_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
 
         refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
         if refusal is not None:
-            console.print(f"[red]{for_terminal(refusal)}[/]")
+            # The lines the same gate gets when it is set in the config file.
+            print_config_refusal(refusal)
             raise typer.Exit(1)
 
         try:
@@ -2276,6 +2374,8 @@ def train(
 
     # Detect hardware with backend awareness
     device, device_name = detect_device(backend=cfg.backend)
+    if receipt is not None:
+        receipt.device(device_name)
     gpu_info = get_gpu_info(backend=cfg.backend)
 
     configure_mps_async_load(device)
@@ -2563,10 +2663,23 @@ def train(
         console.print("[yellow]Dry run - validating data...[/]")
         if val_notice:
             console.print(f"[yellow]Note:[/] {val_notice}")
-        dataset = load_dataset(
-            data_config_for_task(run_data_config, cfg.task),
-            preserve_source_columns=task_preserves_source_columns(cfg.task),
-        )
+        if receipt is not None:
+            receipt.before_load(cfg)
+        try:
+            dataset = load_dataset(
+                data_config_for_task(run_data_config, cfg.task),
+                preserve_source_columns=task_preserves_source_columns(cfg.task),
+            )
+        except (OSError, ValueError, ImportError, CsvError):
+            if receipt is not None:
+                receipt.refuse("soup.data.invalid")
+            raise
+        if receipt is not None:
+            # Trainer setup opens the Arrow splits for pre-tokenized data.
+            if cfg.data.format == "pre_tokenized" and cfg.data.tokenized_path:
+                receipt.loaded(cfg, None, None)
+            else:
+                receipt.loaded(cfg, len(dataset.get("train", [])), len(dataset.get("val", [])))
         _validate_preference_dataset_if_applicable(cfg, dataset)
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
@@ -2586,6 +2699,8 @@ def train(
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
         console.print("[green]Config valid. Ready to train![/]")
+        if receipt is not None:
+            receipt.complete()
         raise typer.Exit()
 
     # Capture the source before loading/transformation, never at verdict/registration time.
@@ -2628,6 +2743,8 @@ def train(
 
     # Start experiment tracking
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.cost_history import cost_history_eligible
+    from soup_cli.utils.launcher import is_in_distributed
 
     tracker = ExperimentTracker()
     run_base = cfg.base
@@ -2639,6 +2756,15 @@ def train(
         gpu_info=gpu_info,
         experiment_name=experiment_name,
         run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
+        cost_history_eligible=cost_history_eligible(
+            task=cfg.task,
+            resume_from=resume_from,
+            device=device,
+            gpu_count=gpu_info.get("gpu_count"),
+            distributed=is_in_distributed(),
+            fsdp=fsdp,
+            ds_config_path=ds_config_path,
+        ),
     )
     # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
     # _reconcile_orphaned_run to ever notice the process is gone — the

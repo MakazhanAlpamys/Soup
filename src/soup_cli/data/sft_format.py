@@ -36,6 +36,8 @@ def build_format_row(
     data_cfg: DataConfig,
     console: Any | None = None,
     training_cfg: Any | None = None,
+    *,
+    include_messages: bool = False,
 ) -> Callable[[dict], dict]:
     """Factory: return the ``format_row`` function appropriate for ``data_cfg``.
 
@@ -101,6 +103,13 @@ def build_format_row(
         )
     else:
         inner = _build_full_sequence_format_row(tokenizer, max_length)
+    if include_messages:
+        format_tokens = inner
+
+        def inner(example: dict) -> dict:
+            # Distillation needs the same transformed messages as the CE formatter.
+            return {**format_tokens(example), "messages": example["messages"]}
+
     return _wrap_dropping_arrow_nulls(
         _wrap_with_prompt_strategy(
             _wrap_with_reasoning_effort(inner, reasoning_effort),

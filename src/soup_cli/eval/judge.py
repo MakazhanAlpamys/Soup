@@ -193,15 +193,25 @@ class JudgeResults:
         self.criteria_averages = criteria_averages
 
 
+def rubric_file_label(path: Path) -> str:
+    """How the errors of reading a rubric file name it: ``Rubric file <path>``."""
+    return f"Rubric file {path}"
+
+
 def load_rubric(path: Path) -> dict:
-    """Load a rubric YAML file with validation."""
+    """Load a rubric YAML file with validation.
+
+    The errors of reading the file (too large, nested too deeply) start with
+    :func:`rubric_file_label`; the errors of its shape (``Rubric must ...``,
+    ``Criterion N ...``) do not name the file.
+    """
     from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
     if not path.exists():
         raise FileNotFoundError(f"Rubric file not found: {path}")
 
     rubric = load_yaml_file_limited(
-        path, f"Rubric file {path}", max_bytes=MAX_CONFIG_BYTES
+        path, rubric_file_label(path), max_bytes=MAX_CONFIG_BYTES
     )
 
     if not isinstance(rubric, dict):
@@ -302,12 +312,12 @@ def _build_judge_prompt(
 _MAX_JUDGE_REPLY_CHARS = 64 * 1024
 
 
-def _first_json_object(text: str) -> Optional[dict]:
-    """The first JSON object in ``text`` that has a ``scores`` key (#1467).
+def _first_json_object(text: str, *, preferred_key: str = "scores") -> Optional[dict]:
+    """Return the first JSON object with the preferred key.
 
     Each ``{`` is tried in turn with ``json.JSONDecoder.raw_decode``, so an
     object nested at any depth (a quoted ``{...}`` in the reasoning) is read
-    whole. Falls back to the first JSON object when none has ``scores``.
+    whole. Falls back to the first JSON object when none has the preferred key.
     Nesting deeper than the decoder's recursion limit (a model repeating
     ``{"a":`` in a loop) ends the scan instead of retrying every ``{``.
     """
@@ -322,7 +332,7 @@ def _first_json_object(text: str) -> Optional[dict]:
         except RecursionError:
             return first
         if isinstance(obj, dict):
-            if "scores" in obj:
+            if preferred_key in obj:
                 return obj
             if first is None:
                 first = obj
@@ -712,25 +722,46 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
 # ---------------------------------------------------------------------------
 
 
+#: A whole pairwise reply that is just a verdict letter, optionally labelled or
+#: wrapped in quotes / markdown emphasis / brackets: ``B``, ``"A"``, ``**B**``,
+#: ``[A]``, ``Answer: B``, ``The winner is B``, ``Better response is A``.
+#: The letter is read by position, never searched for, so the English article
+#: "a" in prose cannot masquerade as verdict A (#2356).
+_VERDICT_ONLY = re.compile(
+    r"^(?:(?:the\s+)?(?:final\s+)?"
+    r"(?:answer|winner|verdict|choice|vote|prefer(?:red)?(?:\s+response)?"
+    r"|better(?:\s+(?:response|one))?)\s*(?::|=|\bis\b)\s*)?"
+    r"[\"'*(\[]*([AB])[\"'*)\].]*$",
+    re.IGNORECASE,
+)
+
+#: A reply that opens with an affirmative verdict: ``A is clearly better``,
+#: ``B wins here``. A bare ``A is`` also starts negative comparisons.
+_LEADING_VERDICT = re.compile(
+    r"^([AB])\s+(?:is\s+(?:clearly\s+)?better|wins)\b", re.IGNORECASE,
+)
+
+
 def _parse_pairwise(text: str) -> int:
-    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable)."""
-    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            winner = str(data.get("winner", "")).strip().upper()
-            if winner == "A":
-                return 0
-            if winner == "B":
-                return 1
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-    # Fallback: a bare "A" / "B" token.
-    stripped = (text or "").strip().upper()
-    if stripped.startswith("A") and not stripped.startswith("B"):
-        return 0
-    if stripped.startswith("B"):
-        return 1
+    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable).
+
+    A reply is read as a verdict only when the letter is where a verdict would
+    be: a JSON object's ``winner``, a whole reply that is just the letter (with
+    optional label), or a reply that opens with ``A is better`` / ``B wins``.
+    Other replies abstain with -1, which every caller treats as "no verdict", so
+    a judge that names no winner cannot flip the tuned win-rate (#2356).
+    """
+    text = text or ""
+    if len(text) > _MAX_JUDGE_REPLY_CHARS:
+        return -1
+    stripped = text.strip()
+    data = _first_json_object(stripped, preferred_key="winner") if stripped else None
+    if isinstance(data, dict) and "winner" in data:
+        return {"A": 0, "B": 1}.get(str(data["winner"]).strip().upper(), -1)
+    for pattern in (_VERDICT_ONLY, _LEADING_VERDICT):
+        match = pattern.match(stripped)
+        if match:
+            return 0 if match.group(1).upper() == "A" else 1
     return -1
 
 

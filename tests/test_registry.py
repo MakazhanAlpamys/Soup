@@ -9,6 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -1124,6 +1125,37 @@ class TestRegistryCLI:
 
 
 class TestHistoryCLI:
+    @pytest.mark.parametrize("dataset_registry", ["registered", "other-name", "missing", "corrupt"])
+    def test_history_suggests_dataset_registry_only_for_matching_name(
+        self, tmp_path, monkeypatch, dataset_registry,
+    ):
+        from soup_cli.utils.registry import register_dataset
+
+        monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "models.db"))
+        monkeypatch.chdir(tmp_path)
+        datasets_path = tmp_path / "datasets.json"
+        monkeypatch.setattr("soup_cli.utils.registry._default_registry_path", lambda: datasets_path)
+        if dataset_registry in {"registered", "other-name"}:
+            data = tmp_path / "pairs.jsonl"
+            data.write_text('{"text":"sample"}\n', encoding="utf-8")
+            registered_name = "pairs" if dataset_registry == "registered" else "different"
+            register_dataset(registered_name, str(data), "plaintext")
+        elif dataset_registry == "corrupt":
+            datasets_path.write_text("{", encoding="utf-8")
+
+        result = runner.invoke(app, ["history", "pairs"])
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        plain = " ".join(strip_ansi(result.output).split())
+        assert "No registry entries named 'pairs'." in plain
+        hint = "A dataset named 'pairs' exists in the local dataset registry."
+        if dataset_registry == "registered":
+            assert hint in plain
+            assert "soup data registry" in plain
+        else:
+            assert hint not in plain
+            assert "soup data registry" not in plain
+
     def test_history_empty(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
