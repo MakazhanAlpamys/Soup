@@ -383,8 +383,8 @@ Each JSONL row's text is read from `output`, `response` or `text`. A file in whi
 # Neutral report (no model load — runs as a sanity check)
 soup diagnose my-run-id
 
-# LIVE (v0.71.7): load the model and run the probes for real (format, memorization
-# and citation need --dataset; citation only RAFT-shaped rows)
+# LIVE (v0.71.7): load the model and run the probes for real (format, mode_collapse,
+# memorization and citation need --dataset; citation only RAFT-shaped rows)
 soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M \
     --adapter ./out --dataset train.jsonl --tokenizer HuggingFaceTB/SmolLM2-135M
 
@@ -416,7 +416,7 @@ when it fails (unknown or ambiguous entry, unreadable registry), with the report
 and exits 3 before anything runs when the flag is given without `--output`.
 
 **Live runners (v0.71.7).** With `--base-model` the report's probes run against the loaded model
-(+ optional `--adapter` LoRA path, `--dataset` for format / memorization / citation probes,
+(+ optional `--adapter` LoRA path, `--dataset` for format / mode_collapse / memorization / citation probes,
 `--holdout` for the forgetting probe using the first 12 usable rows and falling back to built-in general prompts if unset,
 `--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
