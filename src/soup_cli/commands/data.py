@@ -5004,7 +5004,8 @@ def leakage(
     samples: int = typer.Option(5, "--samples", min=0, max=20, help="Maximum example pairs."),
     as_json: bool = typer.Option(False, "--json", help="Print a machine-readable JSON report."),
     near_duplicates: bool = typer.Option(
-        False, "--near-duplicates", help="Also look for lexical near-duplicates (requires [data]).",
+        False, "--near-duplicates",
+        help="Look for lexical near-duplicates with the optional data extra.",
     ),
     threshold: Optional[str] = typer.Option(
         None, "--threshold", metavar="FLOAT",
