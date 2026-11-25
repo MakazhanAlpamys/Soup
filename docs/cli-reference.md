@@ -2813,7 +2813,7 @@ Usage: `soup loop prune [OPTIONS]`
 |---|---|---|---|---|
 | `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
 | `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
-| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); `versions.jsonl` always retains at least 20 rollback transitions. |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
 
 ### `soup loop replay`
 
