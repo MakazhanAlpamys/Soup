@@ -291,15 +291,15 @@ def diagnose(
             "Base model id to LOAD for a live diagnose run (e.g. "
             "HuggingFaceTB/SmolLM2-135M). When set, the report's probes run "
             "live against the model instead of emitting neutral scores; "
-            "format, memorization and citation need --dataset, and citation "
-            "only RAFT-shaped rows."
+            "format, mode_collapse, memorization and citation need --dataset, "
+            "and citation only RAFT-shaped rows."
         ),
     ),
     dataset: Optional[str] = typer.Option(
         None,
         "--dataset",
-        help="Training JSONL for live format / memorization / citation "
-        "probes (must stay under cwd).",
+        help="Training JSONL for live format / mode_collapse / memorization / "
+        "citation probes (must stay under cwd).",
     ),
     holdout: Optional[str] = typer.Option(
         None,
