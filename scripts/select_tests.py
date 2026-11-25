@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).absolute().parents[1]
 SCAN_ROOTS = ("src/soup_cli/", "scripts/", "tests/")
-MAX_FOCUSED_FILES = 100
+MAX_FOCUSED_FILES = 300
 SHARED_FILES = {
     "pyproject.toml",
     "pytest.ini",
@@ -30,7 +30,19 @@ SHARED_FILES = {
 }
 SHARED_PREFIXES = (".github/", "src/soup_cli/config/", "tests/fixtures/")
 DYNAMIC_IMPORTS = {"__import__", "import_module"}
-GENERIC_TEST_STEMS = {"utils", "base", "common", "helpers"}
+GENERIC_TEST_STEMS = {
+    "cli",
+    "data",
+    "train",
+    "model",
+    "eval",
+    "serve",
+    "config",
+    "utils",
+    "base",
+    "common",
+    "helpers",
+}
 
 
 class SelectionError(ValueError):
@@ -41,13 +53,15 @@ class SelectionError(ValueError):
 class TestPlan:
     paths: tuple[str, ...]
     reason: str | None = None
-    dynamic_files: int = 0
+    scope: str | None = None
+    unknown_dynamic_imports: int = 0
 
 
 @dataclass(frozen=True)
 class ImportGraph:
+    modules: dict[str, str]
     reverse: dict[str, set[str]]
-    dynamic: dict[str, set[str]]
+    unknown_dynamic_imports: int
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -182,22 +196,13 @@ def _literal_soup_module(value: str, modules: dict[str, str]) -> str:
     return ""
 
 
-def _dynamic_prefix(node: ast.AST | None, package: str) -> str:
-    """Keep a known leading module prefix, or leave the dynamic target unbounded."""
-    if isinstance(node, ast.JoinedStr) and node.values:
-        first = node.values[0]
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            return _resolve_import(first.value, package)
-    return ""
-
-
 def _imported_modules(
     tree: ast.AST, module: str, is_package: bool, modules: dict[str, str]
-) -> tuple[set[str], set[str]]:
-    """Find static and string references, plus prefixes for unresolved import calls."""
+) -> tuple[set[str], int]:
+    """Find static and string references and count unresolved import calls."""
     package = module if is_package else module.rpartition(".")[0]
     names = set()
-    dynamic = set()
+    unknown = 0
     loader_names = set(DYNAMIC_IMPORTS)
     calls = []
     for node in ast.walk(tree):
@@ -233,46 +238,66 @@ def _imported_modules(
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
             names.add(_resolve_import(first.value, package))
         elif kind in loader_names:
-            dynamic.add(_dynamic_prefix(first, package))
-    return names, dynamic
+            unknown += 1
+    return names, unknown
 
 
-def _reverse_imports(root: str, modules: dict[str, str]) -> ImportGraph:
+def _build_graph(root: Path, *, candidates: Iterable[str] | None = None) -> ImportGraph:
+    real_root = os.path.realpath(root)
+    modules = {}
+    paths = _candidate_paths(root) if candidates is None else candidates
+    for path in sorted(paths):
+        if not path.endswith(".py"):
+            continue
+        name = _module_name(path)
+        if name in modules:
+            raise SelectionError("multiple files have the same Python module name")
+        modules[name] = path
+
     reverse = defaultdict(set)
-    dynamic = {}
+    unknown_dynamic_imports = 0
     for name, relative in modules.items():
-        path = _file_in_checkout(root, relative)
+        path = _file_in_checkout(real_root, relative)
         try:
             tree = ast.parse(path.read_bytes(), filename=relative)
         except (OSError, SyntaxError, ValueError, RecursionError) as exc:
             raise SelectionError(f"could not parse {relative}") from exc
-        dependencies, prefixes = _imported_modules(
+        dependencies, unknown = _imported_modules(
             tree, name, relative.endswith("/__init__.py"), modules
         )
+        unknown_dynamic_imports += unknown
         for dependency in dependencies:
             if dependency in modules and dependency != name:
                 reverse[dependency].add(name)
-        if prefixes:
-            if name.startswith("soup_cli.") and "" in prefixes:
-                # Production imports can target any installed Soup module. Local
-                # scripts and tests are outside that package's import inventory.
-                prefixes = (prefixes - {""}) | {"soup_cli."}
-            dynamic[name] = prefixes
-    return ImportGraph(reverse, dynamic)
+    return ImportGraph(modules, reverse, unknown_dynamic_imports)
 
 
-def _affected_modules(start: str, reverse: dict[str, set[str]]) -> set[str]:
+def _affected_modules(start: str, graph: ImportGraph, *, direct: bool = False) -> set[str]:
     pending = [start]
     visited = set()
     while pending:
         current = pending.pop()
         if current not in visited:
             visited.add(current)
-            pending.extend(reverse.get(current, ()))
+            consumers = graph.reverse.get(current, ())
+            if direct:
+                # The narrower tier follows every test/helper edge but stops at
+                # intermediary source modules such as the shared CLI dispatcher.
+                consumers = (name for name in consumers if graph.modules[name].startswith("tests/"))
+            pending.extend(consumers)
     return visited
 
 
-def _selection_plan(root: Path, changes: Iterable[str], max_files: int) -> TestPlan:
+def _name_matches(path: str, test_stems: dict[str, str]) -> set[str]:
+    stem = PurePosixPath(path).stem.strip("_").replace("-", "_")
+    if stem in GENERIC_TEST_STEMS:
+        return set()
+    return {name for name, test_stem in test_stems.items() if f"_{stem}_" in f"_{test_stem}_"}
+
+
+def _selection_plan(
+    root: Path, changes: Iterable[str], max_files: int, graph: ImportGraph | None
+) -> TestPlan:
     real_root = os.path.realpath(root)
     selected_changes = sorted({_canonical_change(real_root, path) for path in changes})
     if not selected_changes:
@@ -289,62 +314,64 @@ def _selection_plan(root: Path, changes: Iterable[str], max_files: int) -> TestP
             raise SelectionError(f"no mapping for {path}")
         _file_in_checkout(real_root, path)
 
-    modules = {}
-    for path in sorted(_candidate_paths(root)):
-        if not path.endswith(".py"):
-            continue
-        name = _module_name(path)
-        if name in modules:
-            raise SelectionError("multiple files have the same Python module name")
-        modules[name] = path
-    graph = _reverse_imports(real_root, modules)
+    if graph is None:
+        graph = _build_graph(root)
     test_stems = {
-        name: stem for name, path in modules.items() if (stem := _test_stem(path)) is not None
+        name: stem for name, path in graph.modules.items() if (stem := _test_stem(path)) is not None
     }
-    changed_modules = {_module_name(path) for path in selected_changes}
-    dynamic_consumers = set()
-    for importer, prefixes in graph.dynamic.items():
-        if any(name.startswith(tuple(prefixes)) for name in changed_modules):
-            dynamic_consumers.update(_affected_modules(importer, graph.reverse))
-    dynamic_tests = dynamic_consumers & test_stems.keys()
-    dynamic_files = len(dynamic_tests)
-    if any(modules[name].endswith("/conftest.py") for name in dynamic_consumers):
-        return _full_plan(
-            "conftest.py can reach changed code through a dynamic import", dynamic_files
-        )
-
-    selected = set(dynamic_tests)
+    unknown = graph.unknown_dynamic_imports
+    transitive = set()
+    named = set()
+    imported = []
     for path in selected_changes:
         module = _module_name(path)
-        if modules.get(module) != path:
-            return _full_plan(f"no mapping for {path} in the checkout", dynamic_files)
-        consumers = _affected_modules(module, graph.reverse)
-        if any(modules[name].endswith("/conftest.py") for name in consumers):
-            return _full_plan(f"conftest.py depends on {path}", dynamic_files)
-        affected = consumers & test_stems.keys()
-        stem = PurePosixPath(path).stem.strip("_").replace("-", "_")
-        if module not in test_stems and stem not in GENERIC_TEST_STEMS:
-            affected.update(
-                name for name, test_stem in test_stems.items() if f"_{stem}_" in f"_{test_stem}_"
-            )
-        if not affected:
-            return _full_plan(f"no related tests found for {path}", dynamic_files)
-        selected.update(affected)
+        if graph.modules.get(module) != path:
+            return _full_plan(f"no mapping for {path} in the checkout", unknown)
+        affected = _affected_modules(module, graph) & test_stems.keys()
+        if affected:
+            imported.append(module)
+            transitive.update(affected)
+        else:
+            matches = _name_matches(path, test_stems)
+            if not matches:
+                return _full_plan(f"no related tests found for {path}", unknown)
+            named.update(matches)
+
+    selected = transitive | named
+    scope = "transitive"
+    if len(selected) > max_files:
+        selected = named.copy()
+        for module in imported:
+            affected = _affected_modules(module, graph, direct=True) & test_stems.keys()
+            if not affected:
+                return _full_plan(
+                    f"more than {max_files} transitive related test files and no direct tests "
+                    f"for {graph.modules[module]}",
+                    unknown,
+                )
+            selected.update(affected)
         if len(selected) > max_files:
-            return _full_plan(f"more than {max_files} related test files", dynamic_files)
-    return TestPlan(tuple(sorted(modules[name] for name in selected)), dynamic_files=dynamic_files)
+            return _full_plan(f"more than {max_files} related test files", unknown)
+        scope = "direct"
+
+    paths = tuple(sorted(graph.modules[name] for name in selected))
+    return TestPlan(paths, scope=scope, unknown_dynamic_imports=unknown)
 
 
-def _full_plan(reason: str, dynamic_files: int = 0) -> TestPlan:
-    return TestPlan(("tests/",), reason=reason, dynamic_files=dynamic_files)
+def _full_plan(reason: str, unknown_dynamic_imports: int = 0) -> TestPlan:
+    return TestPlan(("tests/",), reason=reason, unknown_dynamic_imports=unknown_dynamic_imports)
 
 
 def plan_tests(
-    root: Path, changes: Iterable[str], *, max_files: int = MAX_FOCUSED_FILES
+    root: Path,
+    changes: Iterable[str],
+    *,
+    max_files: int = MAX_FOCUSED_FILES,
+    graph: ImportGraph | None = None,
 ) -> TestPlan:
     """Select test files or explain why to use the full local suite."""
     try:
-        return _selection_plan(root, changes, max_files)
+        return _selection_plan(root, changes, max_files, graph)
     except (SelectionError, OSError) as exc:
         return _full_plan(
             str(exc) if isinstance(exc, SelectionError) else "could not read checkout"
@@ -368,7 +395,14 @@ def pytest_command(plan: TestPlan, *, shell: str, cwd_prefix: Path | None = None
 def main(argv: list[str] | None = None) -> int:
     from rich.console import Console
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "Exit code 0 prints a focused or full-suite command on stdout. "
+            "The SOUP_TEST_SELECTION JSON record is on stderr. "
+            "Invalid arguments use exit code 2 and print no command."
+        ),
+    )
     parser.add_argument("paths", nargs="*", help="explicit paths relative to the repository root")
     parser.add_argument("--base", help="compare the working tree with this commit instead of HEAD")
     parser.add_argument(
@@ -388,21 +422,26 @@ def main(argv: list[str] | None = None) -> int:
     else:
         plan = plan_tests(REPO_ROOT, changes)
     err = Console(stderr=True)
-    mode = "full" if plan.reason is not None else "focused"
-    dynamic_note = (
-        f" Dynamic imports account for {plan.dynamic_files} candidate test files."
-        if plan.dynamic_files
-        else ""
-    )
-    if plan.reason:
+    if plan.reason is not None:
+        mode = "full"
         status = f"Full suite: {plan.reason}."
     else:
+        mode = "focused"
         count = len(plan.paths)
         noun = "file" if count == 1 else "files"
         status = f"Selected {count} test {noun}."
-    err.print(status + dynamic_note, markup=False, soft_wrap=True)
+        if plan.scope == "direct":
+            status += " Scope: direct import and test-helper links. Transitive scope was too broad."
+    if plan.unknown_dynamic_imports:
+        status += f" Found {plan.unknown_dynamic_imports} unresolved dynamic imports."
+    err.print(status, markup=False, soft_wrap=True)
     record = json.dumps(
-        {"mode": mode, "reason": plan.reason, "dynamic_files": plan.dynamic_files},
+        {
+            "mode": mode,
+            "reason": plan.reason,
+            "scope": plan.scope,
+            "unknown_dynamic_imports": plan.unknown_dynamic_imports,
+        },
         separators=(",", ":"),
     )
     err.print(f"SOUP_TEST_SELECTION {record}", markup=False, highlight=False, soft_wrap=True)

@@ -37,7 +37,7 @@ def checkout(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_uses_reverse_imports_including_helpers_and_name_conventions(checkout):
+def test_uses_reverse_imports_including_helpers_and_literals(checkout):
     plan = select_tests.plan_tests(checkout, [CORE])
     assert plan.reason is None
     assert plan.paths == (
@@ -45,7 +45,6 @@ def test_uses_reverse_imports_including_helpers_and_name_conventions(checkout):
         "tests/test_direct.py",
         "tests/test_dynamic.py",
         "tests/test_patch_only.py",
-        "tests/test_rank_score_cli.py",
     )
 
 
@@ -88,15 +87,16 @@ def test_shared_or_uncertain_path_is_full(checkout, path, reason):
     assert reason in plan.reason
 
 
-def test_a_conftest_consumer_of_changed_code_makes_scope_global(checkout, monkeypatch):
+def test_reaching_conftest_does_not_expand_to_the_full_suite(checkout, monkeypatch):
     path = "tests/conftest.py"
     (checkout / path).write_text("from soup_cli.utils import rank_score\n", encoding="utf-8")
     monkeypatch.setattr(select_tests, "_candidate_paths", lambda root: {*SOURCE, path})
 
     plan = select_tests.plan_tests(checkout, [CORE])
 
-    assert plan.paths == ("tests/",)
-    assert "conftest.py depends on" in plan.reason
+    assert plan.reason is None
+    assert "tests/test_direct.py" in plan.paths
+    assert "tests/test_unrelated.py" not in plan.paths
 
 
 def test_unparseable_module_makes_dependency_graph_uncertain(checkout):
@@ -110,9 +110,9 @@ def test_empty_and_broad_selections_have_visible_full_suite_results(checkout):
     empty = select_tests.plan_tests(checkout, [])
     assert empty.paths == ("tests/",)
     assert "no changed files" in empty.reason
-    too_many = select_tests.plan_tests(checkout, [CORE], max_files=3)
+    too_many = select_tests.plan_tests(checkout, [CORE], max_files=2)
     assert too_many.paths == ("tests/",)
-    assert "more than 3" in too_many.reason
+    assert "more than 2" in too_many.reason
 
 
 def test_staged_unstaged_and_untracked_discovery_includes_both_rename_paths(monkeypatch, tmp_path):
@@ -161,7 +161,8 @@ def test_git_failure_prints_a_full_command_on_stdout(monkeypatch, capsys):
     assert _selection_record(captured.err) == {
         "mode": "full",
         "reason": "Git could not run rev-parse",
-        "dynamic_files": 0,
+        "scope": None,
+        "unknown_dynamic_imports": 0,
     }
 
 
@@ -209,30 +210,27 @@ def test_string_only_paths_use_longest_existing_module_prefix(checkout, monkeypa
     assert "tests/test_patch_neighbor.py" not in plan.paths
 
 
-def test_dynamic_importers_add_direct_tests_and_reverse_consumers(checkout, monkeypatch):
+def test_unknown_dynamic_imports_are_counted_without_selecting_tests(checkout, monkeypatch):
     extra = {
         "tests/test_lazy_builtin.py": "mod = __import__(name)\n",
         "tests/test_lazy_importlib.py": "mod = importlib.import_module(name=target)\n",
         "src/soup_cli/commands/plugin_loader.py": "module = importlib.import_module(target)\n",
         "tests/test_registry_client.py": "from soup_cli.commands import plugin_loader\n",
-        "tests/test_unrelated_prefix.py": "importlib.import_module(f'soup_cli.envs.{name}')\n",
+        "tests/test_dynamic_prefix.py": "importlib.import_module(f'soup_cli.envs.{name}')\n",
     }
+    before = select_tests.plan_tests(checkout, [CORE])
     _add_sources(checkout, monkeypatch, extra)
 
     selected = select_tests.plan_tests(checkout, [CORE])
 
     assert selected.reason is None
-    assert {
-        "tests/test_lazy_builtin.py",
-        "tests/test_lazy_importlib.py",
-        "tests/test_registry_client.py",
-    } <= set(selected.paths)
-    assert "tests/test_unrelated_prefix.py" not in selected.paths
-    assert selected.dynamic_files == 3
-    fallback = select_tests.plan_tests(checkout, [CORE], max_files=len(selected.paths) - 1)
-    assert fallback.paths == ("tests/",)
-    assert "more than" in fallback.reason
-    assert fallback.dynamic_files == 3
+    assert selected.paths == before.paths
+    assert selected.unknown_dynamic_imports == 4
+
+    unmapped = select_tests.plan_tests(checkout, ["src/soup_cli/utils/uncovered.py"])
+    assert unmapped.paths == ("tests/",)
+    assert "no related tests" in unmapped.reason
+    assert unmapped.unknown_dynamic_imports == 4
 
 
 def test_relative_import_inside_a_function_reaches_its_test(checkout, monkeypatch):
@@ -247,19 +245,31 @@ def test_relative_import_inside_a_function_reaches_its_test(checkout, monkeypatc
     assert "tests/test_other_wrapper.py" in select_tests.plan_tests(checkout, [CORE]).paths
 
 
-@pytest.mark.parametrize("stem", ["utils", "base", "common", "helpers"])
-def test_generic_name_does_not_override_import_evidence(checkout, monkeypatch, stem):
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "cli",
+        "data",
+        "train",
+        "model",
+        "eval",
+        "serve",
+        "config",
+        "utils",
+        "base",
+        "common",
+        "helpers",
+    ],
+)
+def test_generic_stem_does_not_supply_evidence(checkout, monkeypatch, stem):
     generic = f"src/soup_cli/utils/{stem}.py"
-    extra = {
-        generic: "",
-        f"tests/test_unrelated_{stem}_behavior.py": "",
-        "tests/test_authoritative.py": f"from soup_cli.utils import {stem}\n",
-    }
+    extra = {generic: "", f"tests/test_unrelated_{stem}_behavior.py": ""}
     _add_sources(checkout, monkeypatch, extra)
 
     plan = select_tests.plan_tests(checkout, [generic])
 
-    assert plan.paths == ("tests/test_authoritative.py",)
+    assert plan.paths == ("tests/",)
+    assert "no related tests" in plan.reason
 
 
 def test_main_focused_returns_zero_and_prints_machine_readable_status(
@@ -276,7 +286,8 @@ def test_main_focused_returns_zero_and_prints_machine_readable_status(
     assert _selection_record(captured.err) == {
         "mode": "focused",
         "reason": None,
-        "dynamic_files": 0,
+        "scope": "transitive",
+        "unknown_dynamic_imports": 0,
     }
 
 
@@ -285,3 +296,100 @@ def test_main_usage_error_retains_exit_two_and_empty_stdout(capsys):
         select_tests.main(["--base", "HEAD", CORE])
     assert exc.value.code == 2
     assert capsys.readouterr().out == ""
+
+
+def test_name_matching_is_only_for_unmapped_imports(checkout, monkeypatch):
+    extra = {
+        "src/soup_cli/utils/name_only.py": "",
+        "tests/test_name_only_contract.py": "",
+    }
+    _add_sources(checkout, monkeypatch, extra)
+
+    assert select_tests.plan_tests(checkout, ["src/soup_cli/utils/name_only.py"]).paths == (
+        "tests/test_name_only_contract.py",
+    )
+    assert "tests/test_rank_score_cli.py" not in select_tests.plan_tests(checkout, [CORE]).paths
+
+
+def test_broad_closure_keeps_complete_direct_and_test_helper_cohort(checkout, monkeypatch):
+    source = "src/soup_cli/utils/scope_example.py"
+    extra = {
+        source: "",
+        "tests/test_scope_direct.py": "from soup_cli.utils import scope_example\n",
+        "tests/_scope_helper.py": "from soup_cli.utils import scope_example\n",
+        "tests/test_scope_helper_consumer.py": "from tests import _scope_helper\n",
+        "src/soup_cli/commands/scope_dispatch.py": "from soup_cli.utils import scope_example\n",
+        "tests/test_scope_indirect.py": "from soup_cli.commands import scope_dispatch\n",
+    }
+    _add_sources(checkout, monkeypatch, extra)
+    full_graph = select_tests.plan_tests(checkout, [source], max_files=3)
+    focused = select_tests.plan_tests(checkout, [source], max_files=2)
+    fallback = select_tests.plan_tests(checkout, [source], max_files=1)
+    union = select_tests.plan_tests(checkout, [source, "tests/test_unrelated.py"], max_files=2)
+
+    assert full_graph.scope == "transitive"
+    assert "tests/test_scope_indirect.py" in full_graph.paths
+    assert focused.scope == "direct"
+    assert focused.paths == ("tests/test_scope_direct.py", "tests/test_scope_helper_consumer.py")
+    assert fallback.paths == union.paths == ("tests/",)
+    assert fallback.scope is None and union.scope is None
+    assert "more than 1 related test files" in fallback.reason
+    assert "more than 2 related test files" in union.reason
+
+
+def test_main_focused_output_explains_direct_scope_and_unknown_edges(checkout, monkeypatch, capsys):
+    monkeypatch.setattr(select_tests, "REPO_ROOT", checkout)
+    monkeypatch.chdir(checkout)
+    plan = select_tests.TestPlan(
+        ("tests/test_direct.py",), scope="direct", unknown_dynamic_imports=3
+    )
+    monkeypatch.setattr(select_tests, "plan_tests", lambda *args: plan)
+
+    assert select_tests.main(["--shell", "posix", CORE]) == 0
+
+    captured = capsys.readouterr()
+    assert "direct import and test-helper" in captured.err
+    assert "3 unresolved dynamic imports" in captured.err
+    assert _selection_record(captured.err) == {
+        "mode": "focused",
+        "reason": None,
+        "scope": "direct",
+        "unknown_dynamic_imports": 3,
+    }
+    assert captured.out.strip() == "python -m pytest --no-cov tests/test_direct.py"
+
+
+def test_help_describes_stdout_stderr_and_exit_codes(capsys):
+    with pytest.raises(SystemExit) as exc:
+        select_tests.main(["--help"])
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    for detail in ("SOUP_TEST_SELECTION", "stderr", "stdout", "Exit code 0", "exit code 2"):
+        assert detail in help_text
+
+
+@pytest.mark.integration
+def test_real_checkout_selects_related_tests_for_four_source_files():
+    root = select_tests.REPO_ROOT
+    related = {
+        "src/soup_cli/eval/gate.py": "tests/test_eval_gate.py",
+        "src/soup_cli/utils/yaml_limits.py": "tests/test_yaml_limits.py",
+        "src/soup_cli/commands/doctor.py": "tests/test_doctor.py",
+        "src/soup_cli/trainer/sft.py": "tests/test_issue341_seed_and_fullft.py",
+    }
+    try:
+        candidates = select_tests._candidate_paths(root)
+    except select_tests.SelectionError:
+        pytest.skip("needs a full Git checkout")
+    if not (related.keys() | set(related.values())) <= candidates or not all(
+        (root / path).is_file() for path in candidates if path.endswith(".py")
+    ):
+        pytest.skip("needs a full checkout of Soup source and tests")
+    graph = select_tests._build_graph(root, candidates=candidates)
+
+    for path, expected in related.items():
+        plan = select_tests.plan_tests(root, [path], graph=graph)
+        assert plan.reason is None, (path, plan.reason)
+        assert plan.scope in {"transitive", "direct"}
+        assert 1 <= len(plan.paths) <= 300, (path, len(plan.paths))
+        assert expected in plan.paths, (path, expected)
