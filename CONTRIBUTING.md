@@ -89,6 +89,16 @@ With `[dev]` installed, run the full suite:
 python -m pytest tests/ -v --tb=short
 ```
 
+For a focused local check, run `python scripts/select_tests.py` from the repository
+root and copy the pytest command it prints. It considers staged, unstaged, and
+non-ignored untracked changes against `HEAD`. Use `--base <commit>` to include
+committed changes, or pass specific repository-relative files to choose the input.
+It follows static imports and test naming conventions. Focused commands use
+`--no-cov` because coverage is measured on the full suite. Shared files, deletions,
+or an uncertain selection produce the full-suite command with a reason. Tests that
+reach code through dynamic dispatch or subprocesses can escape the import map, so
+run the full suite before merging. Use `--shell posix` in Git Bash on Windows.
+
 Run the linter in either environment:
 
 ```bash
