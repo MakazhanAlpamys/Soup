@@ -217,7 +217,10 @@ ancestors in the tree) and `position_ids` equal to the depth in the tree, so eve
 exactly the context it had in its own example. The loss and its gradient are those of the
 ordinary batch holding the same examples, to rounding: logits equal to float64 rounding on CPU for Llama,
 Mistral, Qwen2 and GPT-2 (exact with one thread; 1.7e-16 with 24, which is also what the
-ordinary batch differs by from the same examples run one at a time). This holds for a
+ordinary batch differs by from the same examples run one at a time), 1e-5 of the logit range
+in fp32 on a GPU. In bf16 the two layouts agree as closely as two ordinary layouts of the same
+examples agree with each other, which on some models is a few percent of the loss
+([`benchmarks/gate-prefix-tree.md`](../benchmarks/gate-prefix-tree.md), section 5). This holds for a
 forward without dropout: an ordinary batch draws a dropout mask per example over a shared
 beginning, a prefix-tree row one for all the examples that share it. So a non-zero
 `training.lora.dropout` (0.05 by default) is refused, and so is a model that applies dropout
@@ -259,7 +262,26 @@ The console prints what the check measured and how many tokens an epoch now runs
 **Works with layer streaming.** A step stays within `batch_size` x `max_length` tokens, so the
 streaming VRAM pre-flight holds and `prefix_tree` is allowed beside `stream_layers` (where
 `packing` and `multipack` are refused). A streamed step also pays a cost per sweep of the
-model, which a row of several examples pays once instead of once per example.
+model, which a row of several examples pays once instead of once per example, so the gain is
+larger than the token count alone. Measured on an RTX 3050 Laptop 4 GB, streamed NF4, LoRA
+dropout 0, examples per second, one example per step against prefix-tree rows:
+
+| | tool calling, one 4-function schema | tool calling as published | plain instructions (dolly) |
+|---|---|---|---|
+| Mistral-7B, 512-token rows | 0.400 -> 1.404 (3.5x) | 0.479 -> 1.130 (2.4x) | 0.563 -> 1.235 (2.2x) |
+| Mistral-7B, 1024-token rows | 0.392 -> 3.109 (7.9x) | | |
+| Mistral-7B, 2048-token rows | 0.375 -> 3.768 (10.0x) | | |
+| Qwen2.5-0.5B, 512-token rows | 2.42 -> 10.72 (4.4x) | 2.63 -> 5.03 (1.9x) | 2.69 -> 7.34 (2.7x) |
+
+Peak VRAM stays near batch 1's (1.19 GB against 1.14 GB on the 7B model at 512 tokens), which
+is what leaves room for the longer rows. Loss on 100 held-out rows after about the same
+training time, ordinary against prefix tree: 0.1488 against 0.1340 (Mistral-7B, in 66 % of the
+time), 0.2556 against 0.2126 and 0.2078 against 0.1950 (Qwen2.5-0.5B, tool calling), 1.4806
+against 1.4848 (Qwen2.5-0.5B, dolly: no gain). One epoch of prefix-tree rows is 1.7x to 4.3x
+shorter and ends 0.02 to 0.10 higher in held-out loss at the same learning rate. One card, one
+seed, loss only, measured before review changed the code (section 7 of the record); see
+[`benchmarks/gate-prefix-tree.md`](../benchmarks/gate-prefix-tree.md), including what is not
+explained.
 
 **Limits.** `task: sft`, `modality: text`, single process, `backend: transformers` (refused
 on `mlx` and `unsloth`). Refused beside

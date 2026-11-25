@@ -2,8 +2,9 @@
 Measurement record, published as measured, in the order things happened.
 
 Hardware: NVIDIA GeForce RTX 3050 Laptop GPU, 4096 MiB, driver 581.15; 15.8 GB host RAM;
-Windows 10 (10.0.19045). One machine, 2026-11-13 and 2026-11-14.
-Stack: Python 3.11.5, torch 2.14.1+cu130, transformers 5.22.2, peft 0.21.2, trl 0.29.1,
+Windows 10 (10.0.19045). One machine, 2026-11-13 and 2026-11-14 (GPU runs), 2026-11-17 and
+2026-11-25 (planning cost, CPU).
+Stack of the GPU runs: Python 3.11.5, torch 2.14.1+cu130, transformers 5.22.2, peft 0.21.2, trl 0.29.1,
 bitsandbytes 0.50.2.
 Models: unsloth/mistral-7b-instruct-v0.3 at revision 60b99dcbc7f8 (the revision the other
 records pin) and Qwen/Qwen2.5-0.5B-Instruct (model.safetensors 988,097,824 bytes, downloaded
@@ -12,7 +13,12 @@ LoRA r 8 on q_proj / v_proj, dropout 0, lr 1e-4, seed 3, batch_size 1.
 Data: glaiveai/glaive-function-calling-v2 (e7f4b64560) and databricks/databricks-dolly-15k
 (bdd27f4d94), first turn of each conversation, rows in file order that fit max_length; and
 Soup's own tool-calling fixture, src/soup_cli/data/_fixtures/gate/tool_call.jsonl (40 rows).
-Harness: benchmarks/harness/prefix_tree_ab.py. Raw output: results/prefix-tree-rtx3050-v1/.
+Harness: benchmarks/harness/prefix_tree_ab.py and prefix_tree_plan_cost.py. Raw output:
+results/prefix-tree-rtx3050-v1/.
+Code measured: the branch of #2840 (closed, split into #2957 and #3138), the 0.5B runs at
+10e4147b and the 7B runs at 392d06f2. Merged code: ab9715d9. What changed in between and why the
+figures still describe it is in section 7. The GPU runs were not repeated on the merged code;
+the planning cost was (section 5).
 -->
 
 # Gate record — `training.prefix_tree`: tokens several examples share are computed once
@@ -30,10 +36,11 @@ datasets.** Through the shipped trainer, layer-streamed NF4:
 | Qwen2.5-0.5B | tool calling as published | 2.63 -> 5.03 (1.9x) | 0.2078 -> **0.1950** |
 | Qwen2.5-0.5B | plain instructions (dolly) | 2.69 -> 7.34 (2.7x) | 1.4806 -> 1.4848 (no gain, section 4) |
 
-Peak VRAM stays where batch 1 has it (1.1 to 1.3 GB at 512-token rows on both models). Loss
-agreement with the ordinary batch is exact in fp32 and inside each model's own layout noise in
-bf16 (section 5). **Not measured: any other card, any model above 7B, generation quality (only
-held-out loss), more than one seed.**
+Peak VRAM stays where batch 1 has it (1.1 to 1.3 GB at 512-token rows on both models). The
+row's logits are within 1e-5 of the logit range of the ordinary batch's in fp32, and inside
+each model's own layout noise in bf16 (section 5). **Not measured: any other card, any model
+above 7B, generation quality (only held-out loss), more than one seed, the GPU runs on the
+merged code (section 7).**
 
 Unit convention: **decimal GB**, as in the other records.
 
@@ -47,8 +54,9 @@ batch computes them once per row. A prefix-tree row holds the shared beginning o
 continuations after it, with a 4D attention mask (a token attends to itself and its ancestors)
 and `position_ids` equal to the depth in the tree. Every token sees exactly the context it had
 in its own example, so the loss and its gradient are those of the ordinary batch holding the
-same examples. `src/soup_cli/utils/prefix_tree.py` has the three rules that keep that exact
-with the stock shifted loss (only untrained tokens are shared; a trained token's parent is
+same examples, to rounding, for a forward without dropout (every run here has LoRA dropout 0;
+the merged option refuses a non-zero one). `src/soup_cli/utils/prefix_tree.py` has the three
+rules that keep that true with the stock shifted loss (only untrained tokens are shared; a trained token's parent is
 repeated in front of it when it is not its row neighbour; a root's label is ignored).
 
 A step is still at most `batch_size` rows of `data.max_length` tokens, so the layer-streaming
@@ -183,11 +191,17 @@ thread and 1.7e-16 with 24, which is what the ordinary batch differs by from the
 run one at a time; 3e-16 on GPT-2); the float64 loss equal to 1e-12; gradients to float
 rounding; the same through a layer-streamed model.
 
-**Planning cost, CPU** (a laptop, one core; synthetic set of 10,000 examples of 400 tokens,
-50 system prompts of 300 tokens, 4,000,000 tokens, 512-token rows): reading the set through the
-collator 3.1 s, planning the rows 4.4 s; the examples held 34 MB (8.6 bytes per token, two
-`array('i')` per example) and planning peaked at 66 MB (16.4 bytes per token). The first
-version held Python lists: 322 MB and a 540 MB peak on the same set (`tracemalloc`).
+**Planning cost, CPU** (this laptop's Intel CPU, one core; a synthetic set of 10,000 examples
+of 400 tokens, 50 system prompts of 300 tokens, 4,000,000 tokens, 512-token rows;
+`benchmarks/harness/prefix_tree_plan_cost.py`). Measured on 2026-11-17 during the review of
+#2957, on its compact planning: reading the set through the collator 3.1 s, planning the rows
+4.4 s, 7.5 s in all; the examples held 34 MB (8.6 bytes per token, two `array('i')` per
+example) and planning peaked at 66 MB (16.4 bytes per token). The first version held Python
+lists: 322 MB and a 540 MB peak on the same set (`tracemalloc`). Repeated on the merged code
+(ab9715d9, 2026-11-25, Python 3.11.5, torch 2.15.0 CPU): reading 3.1 s and planning 4.06 to
+4.13 s in three runs (`plan_cost_time.json`), and the same 34 MB held and 66 MB peak
+(`plan_cost_memory.json`). The planning notice and `docs/peft-and-efficiency.md` use these
+figures (16 bytes and about 2 s per million tokens).
 
 **bf16, the per-group loss computed more than one way** (worst relative difference):
 
@@ -214,7 +228,34 @@ plain causal mask / wrong positions, in logit units): Mistral-7B, glaive one sch
 - A step covers more examples, so an epoch has fewer optimizer steps; compare runs by wall
   time or by examples seen, and expect to revisit the learning rate or the epochs.
 - Examples that share a beginning meet in one step, as with any grouping sampler.
-- `task: sft`, text, single process. Refused beside `packing`, `multipack`,
-  `stream_loss_chunk`, `data.format: raft`, `data.replay` and `data.interleave`.
+- `task: sft`, text, single process, `backend: transformers`. Refused beside `packing`,
+  `multipack`, `stream_loss_chunk`, `neftune_alpha`, `curriculum`, a non-zero `lora.dropout`,
+  `data.format: raft`, `data.replay` and `data.interleave`, and with a model that applies
+  dropout in training (`docs/peft-and-efficiency.md`, Limits).
 - The 4D mask keeps scaled-dot-product attention off its flash path; a row of `max_length`
   tokens holds a `max_length` x `max_length` boolean mask.
+
+## 7. The code measured and the code merged
+
+The figures above were measured on #2840 (10e4147b, 392d06f2). Review then changed the code
+before it merged as #2957 and #3138 (ab9715d9). What changed, against what was measured:
+
+- **The rows and their order.** Grouping and flattening became iterative, and planning holds
+  compact arrays and packs one row at a time. Both keep the rows and their order for a seed
+  (`test_the_walks_keep_the_order_a_seed_gives`, `test_compact_examples_plan_the_same_rows`).
+- **What the model gets.** The batch now carries a 2D mask of examples per token for the
+  trainer's `num_tokens` and `entropy`, and a forward pre-hook gives the model the same 4D mask
+  and positions the measured code passed directly. The forward of a row is unchanged; the
+  metrics of a step of several rows were wrong before and are now the ordinary batch's. Every
+  run here has `batch_size` 1, so its step is one row either way.
+- **Setup only.** The model check takes a shorter pair when no planned row holds two, dropout
+  is refused, and a planning notice prints above 50,000,000 tokens. None of it runs inside a
+  step; all runs here have dropout 0 and stay far below the notice.
+- **Planning cost** was measured after these changes and repeated on the merged code (section
+  5), so it is the one figure here that describes the merged code directly.
+
+The harness here is the one that measured. On the merged code (ab9715d9) both of its modes run
+to the end: a CPU run of each on a tiny random Llama and the 40-row fixture, 2026-11-25. Its
+A/B arms build the tree batch as the measured code did, with the 4D mask as `attention_mask`,
+which is what the merged pre-hook hands the model. So the figures are expected to hold for the
+merged code, but the GPU runs were not repeated on it.
