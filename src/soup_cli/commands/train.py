@@ -1935,15 +1935,27 @@ def train(
             # this is still free: a paid boot cannot fix a missing data file.
             import yaml
 
+            from soup_cli.cloud._local_inputs import prepare_local_train_inputs
             from soup_cli.cloud._shipped import refuse_unshipped_inputs
             from soup_cli.config.loader import load_config_from_string
 
             if name and not cfg.experiment_name:
                 cfg.experiment_name = name
+
+            local_train_inputs = prepare_local_train_inputs(cfg)
+
+            if cloud == "runpod" and local_train_inputs:
+                raise ValueError(
+                    "--cloud runpod does not ship local data.train files; "
+                    "use a Hub dataset id or --cloud lambda|modal"
+                )
+
             refuse_unshipped_inputs(cfg)
+
             effective_yaml = yaml.safe_dump(
                 cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,
             )
+
             # The overrides above are assigned after the load and the models do not
             # validate on assignment, so no validator has seen this config. The
             # remote `soup train` loads the text through all of them: do it here,
@@ -1955,16 +1967,26 @@ def train(
                     "the effective config (the file with the command-line overrides "
                     f"applied) would be refused on the remote machine: {exc}"
                 ) from exc
+
+
             # We call the generic-shaped plan function dynamically
             plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
             if plan_func is None:
                 raise ValueError(f"cloud backend {cloud!r} has no plan function")
+
+            plan_kwargs = {
+                "gpu": gpu,
+                "output_dir": cfg.output,
+                "soup_version": _soup_version,
+                "config_yaml": effective_yaml,
+            }
+
+            if cloud in {"lambda", "modal"}:
+                plan_kwargs["local_train_inputs"] = local_train_inputs
+
             plan = plan_func(
                 str(config_path),
-                gpu=gpu,
-                output_dir=cfg.output,
-                soup_version=_soup_version,
-                config_yaml=effective_yaml,
+                **plan_kwargs,
             )
             stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
@@ -1973,16 +1995,27 @@ def train(
 
         from soup_cli.utils.terminal import for_terminal as _plan_text
 
+        input_summary = (
+            "\n".join(
+                f"  {_plan_text(item.remote_path, single_line=True)} — "
+                f"{item.size_bytes:,} bytes"
+                for item in plan.local_train_inputs
+            )
+            or "  None"
+        )
+
         console.print(
             Panel(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n\n"
+                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n"
+                f"Inputs:\n{input_summary}\n\n"
                 f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
+
         if cloud_submit:
             try:
                 submit_func = getattr(cloud_mod, f"submit_{cloud}_run", None)

@@ -843,11 +843,12 @@ Cloud training exits 2 before writing a stub for `--push-as`, `--gate`, `--resum
 Use the local `soup train` command for those options. `--dry-run` is accepted for
 plan-only cloud runs. Combining it with `--cloud-submit` exits 2 before a submission.
 
-A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
-id (every built-in template sets one, so users hit this first). The same applies to local model
-paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan
-time rather than silently shipped. Uploading local input files is tracked in
-[#1704](https://github.com/MakazhanAlpamys/Soup/issues/1704) and is not done yet.
+Local `data.train` files are uploaded automatically for Lambda Labs and Modal cloud training. This support addresses [issue #1704](https://github.com/MakazhanAlpamys/Soup/issues/1704).
+Files must be regular files inside the project directory, without symlinked path components, dotfiles, or dot-directories. The combined upload size must not exceed 256 MiB. Local `data.train` directories are refused.
+For Lambda, the controller uploads the files to the instance and creates an `inputs-ready` marker after the upload completes. Cloud-init waits up to 20 minutes for this marker before starting training.
+For Modal, the generated app obtains the `soup-outputs` volume using `modal.Volume.from_name(..., create_if_missing=True)`. Its local entrypoint uploads each input using `modal volume put --force` to `/<run-name>/inputs/` on that volume. Uploaded input files are not downloaded back into the local output directory when training finishes. The Modal CLI and Python SDK were not installed in the development environment, so the CLI version and a live `modal volume put` execution were not verified.
+RunPod does not support uploading local training files and refuses them at plan time. Use a Hugging Face Hub dataset ID instead. Other local files referenced by dataset rows, such as image or audio files, are not uploaded automatically and remain unsupported.
+The same local-path restrictions apply to model paths (`base`, `teacher_model`, `reward_model`, `mole_task_adapters`): they are refused at plan time rather than silently shipped.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
@@ -864,7 +865,8 @@ soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
 `soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
 the embedded config inside the container, and runs `soup train` on the chosen GPU.
 
-Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
+Run outputs are written to the `soup-outputs` Modal volume, declared with
+`create_if_missing=True`, in a directory
 named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
 including after a failed run, the app downloads every file in that directory into your local
 output directory. To retry the download, use the Modal CLI's `volume get` subcommand with the
