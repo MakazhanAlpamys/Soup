@@ -674,3 +674,116 @@ def test_a_bare_name_inside_the_root_is_accepted(tmp_path):
     assert contained_leaf(str(tmp_path), "experts_000.safetensors") == str(
         tmp_path / "experts_000.safetensors"
     )
+
+
+# --------------------------------------------------------------------------
+# a cache written by the sharder BEFORE this storage layer existed
+# --------------------------------------------------------------------------
+FIXTURE = Path(__file__).parent / "fixtures" / "expert_shard_main_7b7697307"
+
+
+def _fixture_source():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "make_expert_shard_main_7b7697307",
+        Path(__file__).parent / "fixtures" / "make_expert_shard_main_7b7697307.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.source_tensors()
+
+
+def _pre_port_readers(kind):
+    from soup_cli.utils.expert_shard import ExpertShardReader
+    from soup_cli.utils.layer_shard import expert_paths, read_shard_index
+
+    root = FIXTURE / kind
+    index = read_shard_index(str(root))
+    readers = {
+        layer: ExpertShardReader(
+            path,
+            count=index.expert_count,
+            shapes=index.expert_shapes,
+            quant_specs=index.expert_quant_specs,
+            dtype=index.dtype,
+            direct=False,
+        )
+        for layer, path in expert_paths(str(root), index).items()
+    }
+    return root, index, readers
+
+
+def _expert_source(source, layer, expert):
+    import torch
+
+    prefix = f"model.layers.{layer}.mlp.experts.{expert}."
+    return (
+        torch.cat((source[prefix + "gate_proj.weight"], source[prefix + "up_proj.weight"]), 0),
+        source[prefix + "down_proj.weight"],
+    )
+
+
+def test_the_pre_port_fixture_has_the_index_this_tree_always_wrote():
+    for kind in ("fp32", "nf4"):
+        payload = json.loads((FIXTURE / kind / "index.json").read_text())
+        assert payload["format_version"] == 5 and payload["expert_layout"] == "per_expert"
+        assert "expert_layout_version" not in payload and "fp32_keys" not in payload
+
+
+def test_a_float32_cache_written_before_the_split_reads_back_identically():
+    import torch
+
+    from soup_cli.utils.expert_shard import aligned_staging
+
+    source = _fixture_source()
+    _, index, readers = _pre_port_readers("fp32")
+    assert index.expert_layers == (0, 1) and index.expert_count == 3
+    assert not index.expert_quant_specs
+    for layer, reader in readers.items():
+        owner, staging = aligned_staging(reader.max_span)
+        try:
+            for expert in (2, 0, 1):
+                host = reader.read_host(expert, staging)
+                gate_up, down = _expert_source(source, layer, expert)
+                assert torch.equal(host[f"{expert}.gate_up"], gate_up)
+                assert torch.equal(host[f"{expert}.down"], down)
+        finally:
+            reader.close()
+        assert owner.numel() > 0
+
+
+def test_a_nested_nf4_cache_written_before_the_split_reads_back_identically():
+    """Real bitsandbytes NF4 with the default double quantisation, written by the old sharder."""
+    import torch
+    from bitsandbytes.functional import dequantize_4bit, quantize_4bit
+    from safetensors.torch import load_file
+
+    from soup_cli.utils.expert_shard import aligned_staging
+    from soup_cli.utils.layer_stream_runtime import rebuild_quant_state
+
+    source = _fixture_source()
+    root, index, readers = _pre_port_readers("nf4")
+    assert index.double_quant is True
+    assert all(spec.nested for spec in index.expert_quant_specs.values())
+    codes = load_file(str(root / "extras.safetensors"))
+    for layer, reader in readers.items():
+        owner, staging = aligned_staging(reader.max_span)
+        try:
+            for expert in (1, 2, 0):
+                host = reader.read_host(expert, staging)
+                for part, value in zip(("gate_up", "down"), _expert_source(source, layer, expert)):
+                    key = f"{expert}.{part}"
+                    packed, state = quantize_4bit(
+                        value, blocksize=64, quant_type="nf4", compress_statistics=True
+                    )
+                    assert torch.equal(host[key], packed)
+                    rebuilt = rebuild_quant_state(
+                        key, host, index.expert_quant_specs[part], codes
+                    )
+                    assert torch.equal(
+                        dequantize_4bit(host[key], rebuilt), dequantize_4bit(packed, state)
+                    )
+        finally:
+            reader.close()
+        assert owner.numel() > 0
