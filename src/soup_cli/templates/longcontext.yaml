@@ -34,6 +34,6 @@ training:
   rope_scaling_type: dynamic
   use_flash_attn: true
   # use_liger: true       # pip install "soup-cli[liger]" for fused ops
-  # use_ring_attention: true  # Refused at config load (#2044): no trainer applies ring attention; use rope_scaling_type instead
+  # use_ring_attention: true  # Refused (#2044): use rope_scaling_type instead
 
 output: ./output_longctx

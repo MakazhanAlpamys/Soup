@@ -207,7 +207,8 @@ def test_every_mlx_support_row_is_reachable(task, field, value):
 
 @pytest.mark.parametrize(
     ("task", "expected_count"),
-    [("sft", 8), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
+    # #2044: use_ring_attention is refused at load, so it has no doctor row.
+    [("sft", 7), ("dpo", 4), ("orpo", 4), ("simpo", 4), ("kto", 4)],
 )
 def test_mlx_doctor_all_clear_counts_only_reachable_settings(
     task, expected_count, tmp_path, capsys, monkeypatch
