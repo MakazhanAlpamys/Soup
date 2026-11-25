@@ -2,8 +2,8 @@
 Measurement record, published as measured, in the order things happened.
 
 Hardware: NVIDIA GeForce RTX 3050 Laptop GPU, 4096 MiB, driver 581.15; 15.8 GB host RAM;
-Windows 10 (10.0.19045). One machine, 2026-11-13 and 2026-11-14 (GPU runs), 2026-11-17 and
-2026-11-25 (planning cost, CPU).
+Windows 10 (10.0.19045). One machine, 2026-11-13 and 2026-11-14 (GPU runs), 2026-11-25 (GPU
+runs on the merged code), 2026-11-17 and 2026-11-25 (planning cost, CPU).
 Stack of the GPU runs: Python 3.11.5, torch 2.14.1+cu130, transformers 5.22.2, peft 0.21.2, trl 0.29.1,
 bitsandbytes 0.50.2.
 Models: unsloth/mistral-7b-instruct-v0.3 at revision 60b99dcbc7f8 (the revision the other
@@ -16,9 +16,11 @@ Soup's own tool-calling fixture, src/soup_cli/data/_fixtures/gate/tool_call.json
 Harness: benchmarks/harness/prefix_tree_ab.py and prefix_tree_plan_cost.py. Raw output:
 results/prefix-tree-rtx3050-v1/.
 Code measured: the branch of #2840 (closed, split into #2957 and #3138), the 0.5B runs at
-10e4147b and the 7B runs at 392d06f2. Merged code: ab9715d9. What changed in between and why the
-figures still describe it is in section 7. The GPU runs were not repeated on the merged code;
-the planning cost was (section 5).
+10e4147b and the 7B runs at 392d06f2. Merged code: ab9715d9. Measured on the merged code (main
+at 83d4e9dc, whose prefix-tree code is ab9715d9's), 2026-11-25: the 7B training runs with rows
+of 1024 and 2048 tokens (section 3), one A/B repeat on the 0.5B model and the planning cost
+(section 7). What changed in between and why the earlier figures still describe it is in
+section 7.
 -->
 
 # Gate record — `training.prefix_tree`: tokens several examples share are computed once
@@ -29,7 +31,7 @@ datasets.** Through the shipped trainer, layer-streamed NF4:
 | | data | examples/s, one per step -> prefix tree | held-out loss, same wall time |
 |---|---|---|---|
 | Mistral-7B | tool calling, one 4-function schema | 0.400 -> 1.404 (3.5x) | 0.1488 -> **0.1340** in 66 % of the time |
-| Mistral-7B | the same, rows of 1024 / 2048 tokens | 0.392 -> 3.109 (7.9x) / 0.375 -> 3.768 (10.0x) | not run |
+| Mistral-7B | the same, rows of 1024 / 2048 tokens | 0.392 -> 3.109 (7.9x) / 0.375 -> 3.768 (10.0x) | 0.1488 -> **0.1329** / **0.1361** in 92 % / 90 % of the time |
 | Mistral-7B | tool calling as published | 0.479 -> 1.130 (2.4x) | not run |
 | Mistral-7B | plain instructions (dolly) | 0.563 -> 1.235 (2.2x) | not run |
 | Qwen2.5-0.5B | tool calling, one 4-function schema | 2.42 -> 10.72 (4.4x) | 0.2556 -> **0.2126** |
@@ -39,8 +41,8 @@ datasets.** Through the shipped trainer, layer-streamed NF4:
 Peak VRAM stays where batch 1 has it (1.1 to 1.3 GB at 512-token rows on both models). The
 row's logits are within 1e-5 of the logit range of the ordinary batch's in fp32, and inside
 each model's own layout noise in bf16 (section 5). **Not measured: any other card, any model
-above 7B, generation quality (only held-out loss), more than one seed, the GPU runs on the
-merged code (section 7).**
+above 7B, generation quality (only held-out loss), more than one seed, the speed A/B of the
+7B model on the merged code (section 7).**
 
 Unit convention: **decimal GB**, as in the other records.
 
@@ -126,8 +128,12 @@ optimizer steps); **C** prefix tree for as many epochs as fit in about A's time.
 |---|---|---|---|---|---|
 | Mistral-7B, glaive one schema (300 rows) | before | | | | 2.8378 |
 | | A ordinary | 1 | 300 | 794.5 s | 0.1488 |
-| | B prefix tree | 1 | 86 | **263.0 s** | 0.1833 |
-| | C prefix tree | 2 | 172 | 524.7 s | **0.1340** |
+| | B prefix tree, 512-token rows | 1 | 86 | **263.0 s** | 0.1833 |
+| | C prefix tree, 512-token rows | 2 | 172 | 524.7 s | **0.1340** |
+| | B prefix tree, 1024-token rows | 1 | 21 | **104.3 s** | 0.5458 |
+| | C prefix tree, 1024-token rows | 7 | 147 | 732.8 s | **0.1329** |
+| | B prefix tree, 2048-token rows | 1 | 8 | **79.7 s** | 1.6190 |
+| | C prefix tree, 2048-token rows | 9 | 72 | 713.7 s | **0.1361** |
 | Qwen2.5-0.5B, glaive one schema (600 rows) | before | | | | 1.9687 |
 | | A ordinary | 1 | 600 | 245.2 s | 0.2556 |
 | | B prefix tree | 1 | 125 | **57.7 s** | 0.3555 |
@@ -144,8 +150,17 @@ optimizer steps); **C** prefix tree for as many epochs as fit in about A's time.
 - **One epoch is faster and ends slightly worse.** A prefix-tree step holds several examples,
   so an epoch is a quarter to a half of the optimizer steps: 3.0x, 4.3x, 2.2x and 1.7x less
   training time, and a held-out loss 0.02 to 0.10 higher at the same learning rate.
-- **The same time ends better on the tool-calling data**: on all three such runs, C reaches a
-  lower held-out loss than A in no more time (the 7B run in 66 % of it).
+- **With longer rows one epoch is far from trained.** At 1024 and 2048 tokens a row holds about
+  14 and 38 of the 300 examples, so an epoch is 21 and 8 optimizer steps: 7.6x and 10.0x less
+  training time than A, and a held-out loss of 0.5458 and 1.6190.
+- **The same time ends better on the tool-calling data**: on all five such runs, C reaches a
+  lower held-out loss than A in no more time (the 7B runs in 66 %, 92 % and 90 % of it).
+- **The 1024 and 2048 runs** were made on the merged code (2026-11-25), with the same 300
+  training and 100 held-out rows as A. C's epochs are the most whose time fits in A's 794.5 s.
+  Held-out loss after each epoch, from the evaluation the trainer runs: at 1024 tokens 0.2966,
+  0.1654, 0.1355, 0.1449, 0.1292, 0.1331, 0.1329; at 2048 tokens 1.216, 0.3736, 0.2207, 0.1728,
+  0.151, 0.1435, 0.137, 0.1361, 0.1361. Every epoch from the third on at 1024 tokens and from
+  the sixth on at 2048 is below A's 0.1488.
 - **On dolly it does not**: C took longer than A and ended 0.004 higher. See section 4.
 - Single runs, one seed, held-out LOSS on the next 100 rows of the same file. Nothing here
   measures generated tool calls or answers.
@@ -251,11 +266,22 @@ before it merged as #2957 and #3138 (ab9715d9). What changed, against what was m
 - **Setup only.** The model check takes a shorter pair when no planned row holds two, dropout
   is refused, and a planning notice prints above 50,000,000 tokens. None of it runs inside a
   step; all runs here have dropout 0 and stay far below the notice.
-- **Planning cost** was measured after these changes and repeated on the merged code (section
-  5), so it is the one figure here that describes the merged code directly.
 
-The harness here is the one that measured. On the merged code (ab9715d9) both of its modes run
-to the end: a CPU run of each on a tiny random Llama and the 40-row fixture, 2026-11-25. Its
-A/B arms build the tree batch as the measured code did, with the 4D mask as `attention_mask`,
-which is what the merged pre-hook hands the model. So the figures are expected to hold for the
-merged code, but the GPU runs were not repeated on it.
+Measured on the merged code (main at 83d4e9dc, whose prefix-tree code is ab9715d9's;
+2026-11-25, the same GPU stack):
+
+- **The training runs with rows of 1024 and 2048 tokens** (section 3, B and C). They go
+  through `wrapper.train()`, so the merged trainer, its pre-hook and its 2D mask ran them.
+- **One A/B repeat**: Qwen2.5-0.5B, glaive one schema, 512-token rows, without the ordinary
+  batch arm (`ab_qwen05_stream_glaive-fixed_merged.json`). The same 600 rows planned into the
+  same 125 rows and 60,867 tokens; 2.57 -> 11.97 ex/s (4.65x, against 2.42 -> 10.72, 4.43x,
+  measured); peak 1.09 -> 1.26 GB (the same). The first round's loss of each of the 30 groups,
+  one at a time and as a tree row, is the measured run's to the last digit.
+- **Planning cost** (section 5).
+
+The harness here is the one that measured. On the merged code both of its modes run to the
+end: a CPU run of each on a tiny random Llama and the 40-row fixture, and the GPU runs above.
+Its A/B arms build the tree batch as the measured code did, with the 4D mask as
+`attention_mask`, which is what the merged pre-hook hands the model. The other GPU runs were
+not repeated on the merged code; the repeat above computes the same losses as the run it
+repeats.

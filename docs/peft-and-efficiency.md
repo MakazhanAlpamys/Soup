@@ -275,11 +275,14 @@ dropout 0, examples per second, one example per step against prefix-tree rows:
 
 Peak VRAM stays near batch 1's (1.19 GB against 1.14 GB on the 7B model at 512 tokens), which
 is what leaves room for the longer rows. Loss on 100 held-out rows after about the same
-training time, ordinary against prefix tree: 0.1488 against 0.1340 (Mistral-7B, in 66 % of the
-time), 0.2556 against 0.2126 and 0.2078 against 0.1950 (Qwen2.5-0.5B, tool calling), 1.4806
-against 1.4848 (Qwen2.5-0.5B, dolly: no gain). One epoch of prefix-tree rows is 1.7x to 4.3x
-shorter and ends 0.02 to 0.10 higher in held-out loss at the same learning rate. One card, one
-seed, loss only, measured before review changed the code (section 7 of the record); see
+training time, ordinary against prefix tree: 0.1488 against 0.1340, 0.1329 and 0.1361
+(Mistral-7B with 512-, 1024- and 2048-token rows, in 66 %, 92 % and 90 % of the time), 0.2556
+against 0.2126 and 0.2078 against 0.1950 (Qwen2.5-0.5B, tool calling), 1.4806 against 1.4848
+(Qwen2.5-0.5B, dolly: no gain). One epoch of 512-token prefix-tree rows is 1.7x to 4.3x shorter
+and ends 0.02 to 0.10 higher in held-out loss at the same learning rate; with longer rows an
+epoch is only a few optimizer steps, so train for more epochs. One card, one seed, loss only;
+most of it measured before review changed the code, the longer-row training runs and one
+repeat on the merged code (section 7 of the record); see
 [`benchmarks/gate-prefix-tree.md`](../benchmarks/gate-prefix-tree.md), including what is not
 explained.
 
