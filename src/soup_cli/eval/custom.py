@@ -84,7 +84,7 @@ class EvalResults:
 
 
 def load_eval_tasks(
-    path: "Path | str", *, require_expected: bool = True, scorer: Optional[str] = None,
+    path: "Path | str", *, require_expected: bool = True, graded_by: Optional[str] = None,
 ) -> list[EvalTask]:
     """Load eval tasks from a JSONL file with schema validation.
 
@@ -96,9 +96,12 @@ def load_eval_tasks(
     judge_score``, ``pairwise`` and ``reward``, which accept a prompt-only file:
     the judge modes take their reference from ``--judge-reference``, validated on
     its own, and the reward function receives 'expected' as ``answer`` (``""`` when
-    the row has none). ``scorer`` is the scorer that will grade every row when it is not
-    the rows' own (an eval gate task's ``scorer``): the scorer-specific reference checks
-    follow it, and an unknown row ``scoring`` is still refused (#3327).
+    the row has none). ``graded_by`` is a hint, not an override: it names the scorer
+    that will grade every row in place of the row's own (an eval gate task's
+    ``scorer``). The loader does not apply it, so each task keeps the row's
+    ``scoring``; it only stops holding a row to its own scorer's reference rule. The
+    caller substitutes the scorer and runs that scorer's reference checks. An unknown
+    row ``scoring`` is still refused (#3327).
     """
     path = Path(path)
     if not path.exists():
@@ -108,18 +111,20 @@ def load_eval_tasks(
         raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
 
     with open(path, encoding="utf-8") as fh:
-        return parse_eval_task_lines(fh, path, require_expected=require_expected, scorer=scorer)
+        return parse_eval_task_lines(
+            fh, path, require_expected=require_expected, graded_by=graded_by
+        )
 
 
 def parse_eval_task_lines(
     lines: Iterable[str], source: object, *, require_expected: bool = True,
-    scorer: Optional[str] = None,
+    graded_by: Optional[str] = None,
 ) -> list[EvalTask]:
     """Parse the JSONL lines of an eval file (``source`` only names it in messages).
 
     ``load_eval_tasks`` feeds it the open file; a caller that already holds the bytes
     (it hashed them) parses those same bytes instead of opening the path a second time.
-    ``require_expected`` and ``scorer`` are as in :func:`load_eval_tasks`.
+    ``require_expected`` and ``graded_by`` are as in :func:`load_eval_tasks`.
     """
     tasks: list[EvalTask] = []
     for line_num, line in enumerate(lines, 1):
@@ -160,7 +165,7 @@ def parse_eval_task_lines(
             _require_expected(row, line_num)
         expected = str(row.get("expected", ""))
         # A row graded by another scorer than its own is not held to its own's reference rule.
-        if scoring == "answer" and scorer in (None, "answer"):
+        if scoring == "answer" and graded_by in (None, "answer"):
             require_single_answer(expected, f"Line {line_num}")
 
         tasks.append(EvalTask(

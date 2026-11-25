@@ -71,3 +71,24 @@ def test_the_standalone_loader_still_refuses_a_multiline_answer_row(tmp_path):
     path.write_text(json.dumps({"prompt": "q", "expected": EXPECTED, "scoring": "answer"}) + "\n")
     with pytest.raises(ValueError, match=r"^Line 1: .*scoring 'answer'"):
         load_eval_tasks(path)
+
+
+# The loader's side of the contract: ``graded_by`` is a hint, not an override.
+# Tasks keep the row's own scorer; the hint only lifts the row scorer's reference
+# rule, and the caller (the gate) substitutes the scorer and runs its checks.
+def _loader(tmp_path: Path, row: dict, graded_by: str):
+    path = tmp_path / "tasks.jsonl"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    return load_eval_tasks(path, graded_by=graded_by)
+
+
+def test_the_loader_keeps_the_row_scorer_and_lifts_its_rule_under_a_hint(tmp_path):
+    (task,) = _loader(
+        tmp_path, {"prompt": "q", "expected": EXPECTED, "scoring": "answer"}, "exact"
+    )
+    assert task.scoring == "answer"
+
+
+def test_the_loader_leaves_the_hinted_scorer_rule_to_the_caller(tmp_path):
+    (task,) = _loader(tmp_path, {"prompt": "q", "expected": EXPECTED, "scoring": "exact"}, "answer")
+    assert task.scoring == "exact"
