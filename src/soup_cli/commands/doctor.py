@@ -717,14 +717,16 @@ def _check_gpu():
                 )
             )
     except ImportError:
-        # #3266 - PyTorch is only needed for training and GPU features; the
-        # core commands run without it, so this is not an error.
+        # #3266 - PyTorch is needed for the GPU check and for training with the
+        # transformers or unsloth backend; core commands and MLX training run
+        # without it, so this is not an error.
         train_install = escape('pip install "soup-cli[train]"')
         console.print(
             Panel(
                 "Backend:  [yellow]not checked (PyTorch not installed)[/]\n"
-                "[dim]The GPU check needs PyTorch. Core commands run without it; "
-                "training and GPU features need it.\n"
+                "[dim]The GPU check needs PyTorch, and so does training with the "
+                "transformers or unsloth backend. Core commands and MLX training "
+                "run without it.\n"
                 f"For training: {train_install} (see the summary below)[/]",
                 title="GPU",
             )
