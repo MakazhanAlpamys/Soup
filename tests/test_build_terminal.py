@@ -213,8 +213,11 @@ def test_the_materialised_title_shows_the_output_directory_as_typed(name):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     text = _plain(result)
     # A table title wraps at the width of the table, so compare without the spaces.
-    assert "Materialised\u2014" in "".join(text.split())
-    assert f"/out-{_shown(name)}" in "".join(text.split())
+    compact = "".join(text.split())
+    assert "Materialised\u2014" in compact
+    # The directory is shown as an absolute path; its last part is the typed name (the parent
+    # is separated by a slash or, on Windows, a backslash).
+    assert f"out-{_shown(name)}" in compact
     assert _not_shown(text)
 
 
