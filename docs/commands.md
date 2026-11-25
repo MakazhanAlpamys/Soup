@@ -545,6 +545,9 @@ The server exposes 15 ungated tools — `advise`, `data_inspect`,
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
 
+The `runs_list` and `runs_show` tools return run summaries with status,
+metrics and artifact location. Both use the same set of fields.
+
 ### Engine tool manifest
 
 Call `engine_describe` with omitted arguments or an empty object. It returns

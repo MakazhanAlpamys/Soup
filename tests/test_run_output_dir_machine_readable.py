@@ -12,6 +12,7 @@ The database storage itself is unchanged.
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -208,6 +209,40 @@ class TestMcpRunsOutputDir:
 
         out = reg.tool_runs_show({"run_id": run_outside})
         assert out["output_dir"] == "mcp_out"
+
+    @pytest.mark.parametrize("name", ["runs_list", "runs_show"])
+    def test_run_tools_return_the_client_summary(self, name, monkeypatch):
+        public = {
+            "run_id": "run_fixture",
+            "status": "completed",
+            "task": "sft",
+            "total_steps": 0,
+            "final_loss": None,
+            "exit_code": 0,
+            "output_dir": "output",
+        }
+        stored = {
+            **public,
+            "output_dir": str(self.project_dir / "output"),
+            "pid": 42,
+            "log_path": str(self.outside_dir / "fixture.log"),
+            "command_digest": "fixture-digest",
+            "config_json": '{"training":{"run_dir":"host-fixture"}}',
+            "error_message": "host-fixture",
+            "new_storage_field": {"nested": "host-fixture"},
+        }
+        tracker = SimpleNamespace(
+            list_runs=lambda *, limit: [stored],
+            get_run=lambda run_id: stored,
+            close=lambda: None,
+        )
+        monkeypatch.setattr("soup_cli.experiment.tracker.ExperimentTracker", lambda: tracker)
+        args = {"run_id": "run_fixture"} if name == "runs_show" else {}
+        result = reg.call_tool(name, args)
+        expected = {"runs": [public], "count": 1} if name == "runs_list" else public
+        assert result == expected
+        assert stored["output_dir"] == str(self.project_dir / "output")
+        assert stored["pid"] == 42
 
 
 class TestCliRunsShowAndStorageUnchanged:
