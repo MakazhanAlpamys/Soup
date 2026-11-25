@@ -84,7 +84,7 @@ class EvalResults:
 
 
 def load_eval_tasks(
-    path: "Path | str", *, require_expected: bool = True,
+    path: "Path | str", *, require_expected: bool = True, scorer: Optional[str] = None,
 ) -> list[EvalTask]:
     """Load eval tasks from a JSONL file with schema validation.
 
@@ -96,7 +96,9 @@ def load_eval_tasks(
     judge_score``, ``pairwise`` and ``reward``, which accept a prompt-only file:
     the judge modes take their reference from ``--judge-reference``, validated on
     its own, and the reward function receives 'expected' as ``answer`` (``""`` when
-    the row has none).
+    the row has none). ``scorer`` is the scorer that will grade every row when it is not
+    the rows' own (an eval gate task's ``scorer``): the scorer-specific reference checks
+    follow it, and an unknown row ``scoring`` is still refused (#3327).
     """
     path = Path(path)
     if not path.exists():
@@ -106,17 +108,18 @@ def load_eval_tasks(
         raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
 
     with open(path, encoding="utf-8") as fh:
-        return parse_eval_task_lines(fh, path, require_expected=require_expected)
+        return parse_eval_task_lines(fh, path, require_expected=require_expected, scorer=scorer)
 
 
 def parse_eval_task_lines(
     lines: Iterable[str], source: object, *, require_expected: bool = True,
+    scorer: Optional[str] = None,
 ) -> list[EvalTask]:
     """Parse the JSONL lines of an eval file (``source`` only names it in messages).
 
     ``load_eval_tasks`` feeds it the open file; a caller that already holds the bytes
     (it hashed them) parses those same bytes instead of opening the path a second time.
-    ``require_expected`` is as in :func:`load_eval_tasks`.
+    ``require_expected`` and ``scorer`` are as in :func:`load_eval_tasks`.
     """
     tasks: list[EvalTask] = []
     for line_num, line in enumerate(lines, 1):
@@ -156,7 +159,8 @@ def parse_eval_task_lines(
         if require_expected:
             _require_expected(row, line_num)
         expected = str(row.get("expected", ""))
-        if scoring == "answer":
+        # A row graded by another scorer than its own is not held to its own's reference rule.
+        if scoring == "answer" and scorer in (None, "answer"):
             require_single_answer(expected, f"Line {line_num}")
 
         tasks.append(EvalTask(

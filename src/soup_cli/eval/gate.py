@@ -778,7 +778,7 @@ def _run_custom_task(
             f"task '{task.name}' tasks file '{task.tasks}' "
             "is outside cwd - refusing to load"
         )
-    tasks = load_eval_tasks(task.tasks)
+    tasks = load_eval_tasks(task.tasks, scorer=task.scorer)
     if not tasks:
         return 0.0
     # Override scoring if the suite specified one (EvalTask.scoring field)
