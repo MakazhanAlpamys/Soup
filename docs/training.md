@@ -673,6 +673,18 @@ soup iterative-dpo \
 soup train --config grpo.yaml
 ```
 
+MiniLLM on-policy training and evaluation now sample from the prompt and generated
+history, excluding the target answer. This changes the on-policy term of existing
+`minillm_on_policy: true` runs, which previously continued the gold answer and could
+read padding logits. Earlier dialogue stays in the prompt; prompt ids are
+left-truncated to `data.max_length`, keeping the generation suffix, and padded
+separately from the unchanged CE rows. The fixed rollout length and EOS behavior
+are unchanged. Only `minillm_on_policy: true` now refuses train or validation rows
+with no usable prompt, including previously accepted assistant-only rows and rows
+whose prompt contains only system turns: supply explicit prompt and response rows.
+The error names the split and row number.
+The offline path keeps its existing row handling and objective.
+
 `training.echo_trap_tokenizer_aware` (also available as the real
 `--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
 whitespace tokens to the active tokenizer's integer ids. This catches subword
