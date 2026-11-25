@@ -3515,11 +3515,42 @@ class TrainingConfig(BaseModel):
         default=False,
         description="Enable FlashAttention (auto-detects v2/v3/v4 for faster attention)",
     )
-    # Performance — Ring FlashAttention (sequence parallelism)
+    # Performance — Ring FlashAttention (sequence parallelism). Refused at
+    # config load until a trainer applies it (#2044); see _refuse_ring_attention.
     use_ring_attention: bool = Field(
         default=False,
-        description="Enable Ring FlashAttention for sequence parallelism across GPUs",
+        description=(
+            "Refused at config load (#2044): no trainer sets up Ring "
+            "FlashAttention or sequence parallelism, so a run that asked for it "
+            "would train with ordinary attention. Use rope_scaling_type with "
+            "plain LoRA to extend the context."
+        ),
     )
+
+    @field_validator("use_ring_attention")
+    @classmethod
+    def _refuse_ring_attention(cls, value: bool) -> bool:
+        """#2044 — refuse ``use_ring_attention: true`` until a trainer applies it.
+
+        The field is validated in ``commands/train.py`` (CUDA, the extra, two
+        GPUs, max_length >= 8192) and then read by no trainer, so a run that
+        passes those checks trains each rank on the full sequence under
+        ordinary attention without saying the flag was ignored. Runs after
+        pydantic's bool coercion, so every true spelling is refused. The
+        validator and the mutual-exclusion checks stay in place for a real
+        implementation.
+        """
+        if value:
+            raise ValueError(
+                "training.use_ring_attention: true is refused (#2044): no "
+                "trainer sets up Ring FlashAttention or sequence parallelism, "
+                "so the run would train with ordinary attention while each rank "
+                "holds the full sequence. To extend the context, set "
+                "training.rope_scaling_type (linear, dynamic, yarn or llama3) "
+                "and train plain LoRA; remove use_ring_attention or set it to "
+                "false."
+            )
+        return value
     # Long-context — RoPE scaling
     rope_scaling_type: Optional[
         Literal["linear", "dynamic", "yarn", "llama3"]
