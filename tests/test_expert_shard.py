@@ -366,38 +366,55 @@ def test_reader_refuses_a_bad_expert_count(tmp_path, count):
         _reader(path, info, count=count)
 
 
-def test_reader_closes_its_handle_when_the_header_is_unreadable(tmp_path, monkeypatch):
-    from soup_cli.utils import safetensors_reader
+@pytest.mark.parametrize("direct", [True, False], ids=["direct", "buffered"])
+@pytest.mark.parametrize("failure", ["header", "after-header"])
+def test_a_failed_constructor_leaves_the_file_free_to_replace_or_delete(
+    tmp_path, monkeypatch, direct, failure
+):
+    """The handle must be closed by the constructor itself, with the exception retained.
 
-    path, info = _written(tmp_path)
-    opened = []
-    real_open_direct = safetensors_reader.open_direct
+    ``excinfo`` keeps the half-built reader alive, so a finaliser cannot be what closes
+    it. On Windows an open handle makes the replace or delete below fail.
+    """
+    import os
 
-    def boom(_path):
-        raise ValueError("injected header failure")
-
-    monkeypatch.setattr(safetensors_reader, "read_header_with_identity", boom)
-    def tracking_open(target):
-        handle = real_open_direct(target)
-        opened.append(handle)
-        return handle
-
-    monkeypatch.setattr(safetensors_reader, "open_direct", tracking_open)
+    from soup_cli.utils import expert_shard, safetensors_reader
     from soup_cli.utils.expert_shard import ExpertShardReader
 
-    # ``excinfo`` keeps the half-built reader alive, so ``__del__`` cannot be what
-    # closes the handle: only the constructor's own cleanup can.
-    with pytest.raises(ValueError, match="injected header failure") as excinfo:
+    path, info = _written(tmp_path)
+    handles = []
+    real_open = ExpertShardReader._open
+
+    def recording_open(self):
+        handle = real_open(self)
+        if not handles or handles[-1] is not handle:
+            handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(ExpertShardReader, "_open", recording_open)
+    if failure == "header":
+
+        def boom(_path):
+            raise ValueError("injected failure")
+
+        monkeypatch.setattr(safetensors_reader, "read_header_with_identity", boom)
+    else:
+
+        def boom(*args, **kwargs):
+            raise ValueError("injected failure")
+
+        monkeypatch.setattr(expert_shard, "_expected_tensors", boom)
+    with pytest.raises(ValueError, match="injected failure") as excinfo:
         ExpertShardReader(
-            path,
-            count=3,
-            shapes=info.shapes,
-            quant_specs={},
-            dtype="float32",
-            direct=True,
+            path, count=3, shapes=info.shapes, quant_specs={}, dtype="float32", direct=direct
         )
-    assert opened and all(handle.closed for handle in opened)
+    assert handles and all(handle.closed for handle in handles)
     assert excinfo.value is not None
+    replacement = tmp_path / "replacement.bin"
+    replacement.write_bytes(b"x")
+    os.replace(replacement, path)
+    os.unlink(path)
+    assert not os.path.exists(path)
 
 
 @pytest.mark.parametrize("bad", [(True, 4), (6.0, 4), (6, 4, 1), (0, 4), (6,)])

@@ -183,83 +183,92 @@ class ExpertShardReader:
         self._handle: Optional[Any] = None
         name = os.path.basename(path)
         self._identity: Optional[Any] = None
-        handle = self._open()
+        # Every step below runs with a live OS handle attached. Whatever fails, the
+        # handle is closed HERE, before the exception leaves: no finaliser, no traceback
+        # reference decides when a Windows file can be replaced or deleted again.
         try:
-            header, identity = read_header_with_identity(path)
+            handle = self._open()
+            try:
+                header, identity = read_header_with_identity(path)
+            except BaseException:
+                self.close()
+                raise
+            if identity_of(handle) != identity:
+                self.close()
+                raise ValueError(f"experts file {name} changed while it was being opened")
+            self._identity = identity
+            self._size = identity.size
+            expected = {
+                part: _expected_tensors(
+                    expert_key(0, part), self.shapes[part], self.quant_specs.get(part)
+                )
+                for part in EXPERT_PARTS
+            }
+            stored_dtype = _stored_torch_dtype(dtype)
+            #: per expert: ((tensor name, entry), ...)
+            self._entries: list = []
+            largest = 0
+            for expert in range(count):
+                entries = []
+                for part in EXPERT_PARTS:
+                    key = expert_key(expert, part)
+                    spec = self.quant_specs.get(part)
+                    wanted = quant_sidecar_keys(key, spec) if spec is not None else (key,)
+                    for tensor_name, (want_shape, want_dtype) in zip(wanted, expected[part]):
+                        entry = header.get(tensor_name)
+                        if entry is None:
+                            self.close()
+                            raise ValueError(
+                                f"experts file {name} has no tensor {tensor_name!r} "
+                                f"— reshard the checkpoint"
+                            )
+                        got_dtype = _stored_torch_dtype(entry.dtype)
+                        if want_dtype is None:
+                            want_dtype = stored_dtype
+                        if tuple(entry.shape) != want_shape or got_dtype != want_dtype:
+                            self.close()
+                            raise ValueError(
+                                f"experts file {name}: {tensor_name!r} is {entry.dtype} "
+                                f"{tuple(entry.shape)}, the index expects {want_dtype} "
+                                f"{want_shape} — reshard the checkpoint"
+                            )
+                        if entry.start % got_dtype.itemsize:
+                            self.close()
+                            raise ValueError(
+                                f"experts file {name}: {tensor_name!r} is not aligned to its dtype"
+                            )
+                        entries.append((tensor_name, entry))
+                need = 0
+                for _, entry in entries:
+                    lo, hi = aligned_span(entry.start, entry.end)
+                    need += hi - lo
+                if need > _MAX_EXPERT_BYTES:
+                    self.close()
+                    raise ValueError(
+                        f"experts file {name}: expert {expert} needs {need} bytes, over the "
+                        f"{_MAX_EXPERT_BYTES}-byte limit for one expert"
+                    )
+                largest = max(largest, need)
+                self._entries.append(tuple(entries))
+            if expert_key(count, GATE_UP) in header or expert_key(count, DOWN) in header:
+                self.close()
+                raise ValueError(
+                    f"experts file {name} holds more than {count} experts — reshard the checkpoint"
+                )
+            expected_names = {key for entries in self._entries for key, _ in entries}
+            if set(header) != expected_names:
+                self.close()
+                raise ValueError(
+                    f"experts file {name} has unexpected tensors — reshard the checkpoint"
+                )
+            #: Staging bytes one expert needs (each tensor's span on sector bounds).
+            self.max_span = largest
+            self.fetches = 0
+            self.bytes_read = 0
+            self.close()
         except BaseException:
             self.close()
             raise
-        if identity_of(handle) != identity:
-            self.close()
-            raise ValueError(f"experts file {name} changed while it was being opened")
-        self._identity = identity
-        self._size = identity.size
-        expected = {
-            part: _expected_tensors(
-                expert_key(0, part), self.shapes[part], self.quant_specs.get(part)
-            )
-            for part in EXPERT_PARTS
-        }
-        stored_dtype = _stored_torch_dtype(dtype)
-        #: per expert: ((tensor name, entry), ...)
-        self._entries: list = []
-        largest = 0
-        for expert in range(count):
-            entries = []
-            for part in EXPERT_PARTS:
-                key = expert_key(expert, part)
-                spec = self.quant_specs.get(part)
-                wanted = quant_sidecar_keys(key, spec) if spec is not None else (key,)
-                for tensor_name, (want_shape, want_dtype) in zip(wanted, expected[part]):
-                    entry = header.get(tensor_name)
-                    if entry is None:
-                        self.close()
-                        raise ValueError(
-                            f"experts file {name} has no tensor {tensor_name!r} "
-                            f"— reshard the checkpoint"
-                        )
-                    got_dtype = _stored_torch_dtype(entry.dtype)
-                    if want_dtype is None:
-                        want_dtype = stored_dtype
-                    if tuple(entry.shape) != want_shape or got_dtype != want_dtype:
-                        self.close()
-                        raise ValueError(
-                            f"experts file {name}: {tensor_name!r} is {entry.dtype} "
-                            f"{tuple(entry.shape)}, the index expects {want_dtype} "
-                            f"{want_shape} — reshard the checkpoint"
-                        )
-                    if entry.start % got_dtype.itemsize:
-                        self.close()
-                        raise ValueError(
-                            f"experts file {name}: {tensor_name!r} is not aligned to its dtype"
-                        )
-                    entries.append((tensor_name, entry))
-            need = 0
-            for _, entry in entries:
-                lo, hi = aligned_span(entry.start, entry.end)
-                need += hi - lo
-            if need > _MAX_EXPERT_BYTES:
-                self.close()
-                raise ValueError(
-                    f"experts file {name}: expert {expert} needs {need} bytes, over the "
-                    f"{_MAX_EXPERT_BYTES}-byte limit for one expert"
-                )
-            largest = max(largest, need)
-            self._entries.append(tuple(entries))
-        if expert_key(count, GATE_UP) in header or expert_key(count, DOWN) in header:
-            self.close()
-            raise ValueError(
-                f"experts file {name} holds more than {count} experts — reshard the checkpoint"
-            )
-        expected_names = {key for entries in self._entries for key, _ in entries}
-        if set(header) != expected_names:
-            self.close()
-            raise ValueError(f"experts file {name} has unexpected tensors — reshard the checkpoint")
-        #: Staging bytes one expert needs (each tensor's span on sector bounds).
-        self.max_span = largest
-        self.fetches = 0
-        self.bytes_read = 0
-        self.close()
 
     def _open(self) -> Any:
         if self._handle is None:
