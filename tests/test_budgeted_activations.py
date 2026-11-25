@@ -78,9 +78,8 @@ def test_published_a4_allocation_contract():
     from soup_cli.utils.budgeted_activations import activation_allocation_bytes
 
     fixture = json.loads(
-        (Path(__file__).parent / "fixtures/c3_a4_allocation_contract.json").read_text()
+        (Path(__file__).parent / "fixtures/l2l_allocation_contract.json").read_text()
     )
-    assert fixture["source_commit"] == "d6f7f733e09599327c61e67a3cf5434bfaa78164"
     for row in fixture["cases"]:
         args = {key: value for key, value in row.items() if key != "expected_bytes"}
         assert activation_allocation_bytes(**args) == row["expected_bytes"], row

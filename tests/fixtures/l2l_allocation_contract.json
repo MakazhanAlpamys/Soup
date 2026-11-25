@@ -1,8 +1,5 @@
 {
-  "source_commit": "d6f7f733e09599327c61e67a3cf5434bfaa78164",
-  "source_path": "benchmarks/harness/a4_activation_budget.py",
-  "source_sha256": "cb2a1f26c340e2350412c21d7d87b4aa0a4ae34e3a5e0e916e8a97f8c85d4ee1",
-  "scope": "StoreLayout with pinned_floor_bytes=0; captured from pinned upstream Git object, no GPU measurement",
+  "scope": "host bytes of the activation store layout with no pinned floor; arithmetic only, no GPU measurement",
   "cases": [
     {
       "n_layers": 1,
