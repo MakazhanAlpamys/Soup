@@ -983,6 +983,57 @@ jobs:
           PY
           python -m pytest -o addopts= tests/test_typer_click_compat.py -q
 
+  mcp-1-10-floor:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    # #3300: exercise the declared MCP 1.10 SDK floor and pinned pydantic compatibility stack.
+    # Runs on full CI runs (ci:full approval, nightly, release) as an optional check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MCP 1.10 floor compatibility stack
+        run: pip install -e ".[mcp]" "pytest>=7,<9" "mcp==1.10.0" "pydantic==2.11.10" "pydantic-settings==2.10.1"
+      - name: Verify constrained dependency graph
+        run: python -m pip check
+      - name: Assert exact package versions, MCP import, and SDK 1.x selection
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          from packaging.version import Version
+
+          expected = {
+              "mcp": "1.10.0",
+              "pydantic": "2.11.10",
+              "pydantic-settings": "2.10.1",
+          }
+          for name, want in expected.items():
+              got = md.version(name)
+              assert Version(got) == Version(want), f"{name} expected {want}, got {got}"
+              print(f"{name}={got} (matches floor)")
+
+          import mcp
+          print(f"mcp {getattr(mcp, '__version__', '')} imported successfully")
+
+          from soup_cli.mcp_server.server import _uses_callback_handlers
+          assert _uses_callback_handlers() is False, (
+              "expected _uses_callback_handlers() to be False for SDK 1.x"
+          )
+          print("SDK 1.x confirmed (_uses_callback_handlers() is False)")
+          PY
+      - name: Run MCP floor compatibility tests
+        run: >
+          pytest -o addopts= -q
+          tests/test_issue322_mcp2_compat.py
+          tests/test_mcp_engine_describe.py
+          tests/test_v07128.py::TestServerRoundTrip
+
   test:
     needs: plan
     strategy:

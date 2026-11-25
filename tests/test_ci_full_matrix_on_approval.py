@@ -78,6 +78,7 @@ GATED_JOBS = (
     "pytorch-smoke",
     "transformers-floor",
     "core-floor",
+    "mcp-1-10-floor",
 )
 NIGHTLY_JOBS = ("typer-vendored",)
 #: The two gated jobs that are not required checks and never fail the build: they run in the
@@ -147,6 +148,7 @@ SWITCHED_JOBS = ("test", "pytorch-smoke", "torchao-contract", "mlx-smoke")
 #: ``transformers-floor`` installs under its own exact floor on every run it is part of.
 FLOOR_JOB = "transformers-floor"
 FLOOR_CONSTRAINTS = ".github/constraints/transformers-floor.txt"
+MCP_FLOOR_JOB = "mcp-1-10-floor"
 #: How a step refers to ``plan``'s choice.
 CONSTRAINTS_OUTPUT = "needs.plan.outputs.constraints"
 
@@ -1131,7 +1133,25 @@ class TestPinnedUpstream:
         """A new job that installs `.[dev]` on its own resolves the newest release on
         every pull request, which is the failure this switch removed."""
         installing = {name for name, job in _jobs().items() if _project_installs(job)}
-        assert installing == {*SWITCHED_JOBS, FLOOR_JOB, "core-floor", "typer-vendored"}
+        assert installing == {
+            *SWITCHED_JOBS,
+            FLOOR_JOB,
+            "core-floor",
+            "typer-vendored",
+            MCP_FLOOR_JOB,
+        }
+
+    def test_mcp_floor_pins_exact_versions_and_mcp_extra(self):
+        """Issue #3300: mcp-1-10-floor installs [mcp] and pins the MCP 1.10 SDK floor stack."""
+        job = _jobs()[MCP_FLOOR_JOB]
+        commands = _pip_commands(job)
+        assert len(commands) == 1, commands
+        command = commands[0]
+        names, extras = _requested(command)
+        assert extras == {"mcp"}
+        args = set(shlex.split(command, comments=True))
+        for pin in ("mcp==1.10.0", "pydantic==2.11.10", "pydantic-settings==2.10.1"):
+            assert pin in args, f"{pin} missing from {MCP_FLOOR_JOB} install command: {command}"
 
     def test_no_environment_variable_constrains_a_job_behind_its_command_line(self):
         """`PIP_CONSTRAINT` in an `env:` applies to every pip of that job on every run,
@@ -1174,7 +1194,7 @@ PINNED_ON_PR_AND_PUSH = frozenset(
     }
 )
 
-FLOOR, TOOL, CORE, NEWEST = "floor", "tool", "core", "newest"
+FLOOR, TOOL, CORE, NEWEST, MCP = "floor", "tool", "core", "newest", "mcp"
 #: Every other job that runs ``pip install``, and why it may do so without the pinned
 #: file. ``_why_not`` holds each entry to its reason.
 UNPINNED_ON_PURPOSE = {
@@ -1192,6 +1212,8 @@ UNPINNED_ON_PURPOSE = {
     (CI.name, "core-floor"): CORE,
     # Dedicated core-only lane with exact Typer/Click pins, asserted at runtime.
     (CI.name, "typer-vendored"): CORE,
+    # Dedicated MCP 1.10 SDK floor lane with exact pins, asserted at runtime.
+    (CI.name, MCP_FLOOR_JOB): MCP,
     ("codspeed.yml", "benchmark"): CORE,
     # NEWEST: started by a schedule or by hand, never by a pull request or a push, and
     # there to meet the newest release.
@@ -1318,7 +1340,7 @@ def _contexts(workflow: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _why_not(kind: str, workflow: dict[str, Any], job: dict[str, Any]) -> list[str]:
     """What is wrong with *job* installing unpinned for the reason *kind*; empty if it holds."""
-    assert kind in (FLOOR, TOOL, CORE, NEWEST), kind
+    assert kind in (FLOOR, TOOL, CORE, NEWEST, MCP), kind
     problems = set()
     started_by = _events(workflow) & {*PR_AND_PUSH, "pull_request_target"}
     if kind == NEWEST and started_by:
@@ -1339,6 +1361,20 @@ def _why_not(kind: str, workflow: dict[str, Any], job: dict[str, Any]) -> list[s
                 problems.add(f"installs the extra {sorted(extras)}: {rendered}")
             if kind in (TOOL, CORE) and names & pinned:
                 problems.add(f"asks for {sorted(names & pinned)} by name, unpinned: {rendered}")
+            if kind == MCP:
+                if extras != {"mcp"}:
+                    problems.add(
+                        f"installs extras other than [mcp] ({sorted(extras or ())}): {rendered}"
+                    )
+                if names & pinned:
+                    problems.add(f"asks for {sorted(names & pinned)} by name, unpinned: {rendered}")
+                expected_pins = {"mcp==1.10.0", "pydantic==2.11.10", "pydantic-settings==2.10.1"}
+                args = set(shlex.split(rendered, comments=True))
+                missing = expected_pins - args
+                if missing:
+                    problems.add(
+                        f"missing expected pinned dependencies {sorted(missing)}: {rendered}"
+                    )
     return sorted(problems)
 
 
@@ -1426,6 +1462,30 @@ class TestEveryWorkflow:
             (FLOOR, f'pip install -e ".[dev]" -c {FLOOR_CONSTRAINTS}', ("push",), None),
             (FLOOR, 'pip install -e ".[dev]"', ("push",), "not under its floor file"),
             (FLOOR, f'pip install -e ".[dev]" -c {PINNED_CONSTRAINTS}', ("push",), "not under"),
+            (
+                MCP,
+                (
+                    'pip install -e ".[mcp]" "pytest>=7,<9" "mcp==1.10.0" '
+                    '"pydantic==2.11.10" "pydantic-settings==2.10.1"'
+                ),
+                ("pull_request",),
+                None,
+            ),
+            (
+                MCP,
+                (
+                    'pip install -e ".[dev]" "mcp==1.10.0" "pydantic==2.11.10" '
+                    '"pydantic-settings==2.10.1"'
+                ),
+                ("pull_request",),
+                "other than [mcp]",
+            ),
+            (
+                MCP,
+                'pip install -e ".[mcp]" "mcp==1.10.0"',
+                ("pull_request",),
+                "missing expected pinned dependencies",
+            ),
         ],
     )
     def test_a_reason_is_checked_and_not_trusted(self, kind, run, events, problem):
