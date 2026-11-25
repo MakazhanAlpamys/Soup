@@ -1,5 +1,6 @@
 """Tests for soup recipes — ready-made configs for popular models."""
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -182,6 +183,7 @@ class TestRecipesCLI:
         assert out_path.exists()
         content = out_path.read_text(encoding="utf-8")
         assert "meta-llama/Llama-3.1-8B-Instruct" in content
+        assert "Next: soup train --config soup.yaml" in strip_ansi(result.output).splitlines()
 
     def test_use_custom_output(self, tmp_path, monkeypatch):
         """soup recipes use <name> -o custom.yaml writes to custom path."""
@@ -193,6 +195,35 @@ class TestRecipesCLI:
         ])
         assert result.exit_code == 0
         assert (tmp_path / "my_config.yaml").exists()
+
+    def test_use_hint_keeps_output_as_one_argument(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        output = Path("run configs") / "config [green]&.yaml"
+        output.parent.mkdir()
+        result = runner.invoke(app, [
+            "recipes", "use", "qwen2.5-7b-sft", "-o", str(output), "--yes",
+        ])
+        assert result.exit_code == 0
+        assert output.is_file()
+        lines = strip_ansi(result.output).splitlines()
+        hint = next(line.removeprefix("Next: ") for line in lines if line.startswith("Next: "))
+        assert hint == 'soup train --config "run configs/config [green]&.yaml"'
+        assert shlex.split(hint) == ["soup", "train", "--config", output.as_posix()]
+
+    def test_use_hint_describes_shell_specific_output(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        output = Path("config %done%.yaml")
+        result = runner.invoke(app, [
+            "recipes", "use", "qwen2.5-7b-sft", "-o", str(output), "--yes",
+        ])
+        assert result.exit_code == 0
+        assert output.is_file()
+        lines = strip_ansi(result.output).splitlines()
+        assert "✓ Recipe qwen2.5-7b-sft written to config %done%.yaml" in lines
+        assert "Next: pass the path above as --config to soup train. Quote it for your shell." in (
+            lines
+        )
+        assert not any(line.startswith("Next: soup train --config") for line in lines)
 
     def test_use_overwrite_confirmation(self, tmp_path, monkeypatch):
         """Existing file asks for confirmation."""
