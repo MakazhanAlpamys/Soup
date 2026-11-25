@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -559,6 +560,7 @@ _RUN_SUMMARY_FIELDS = (
     "total_steps",
     "duration_secs",
     "output_dir",
+    "base_model",
     "base_revision",
     "base_revision_source",
     "training_data_sha256",
@@ -578,6 +580,12 @@ def _run_summary(row: dict) -> dict:
     summary = {name: row[name] for name in _RUN_SUMMARY_FIELDS if name in row}
     if "output_dir" in summary:
         summary["output_dir"] = sanitize_run_output_dir(summary["output_dir"])
+    base_model = summary.get("base_model")
+    if isinstance(base_model, str) and (
+        os.path.isabs(base_model) or ntpath.splitdrive(base_model)[0]
+    ):
+        summary["base_model"] = sanitize_run_output_dir(base_model)
+    summary["has_error"] = bool(row.get("error_message"))
     return summary
 
 
@@ -1222,7 +1230,7 @@ def _readonly_specs() -> list[ToolSpec]:
         ToolSpec(
             name="runs_show",
             title="Show run",
-            description="One run's summary with status and metrics. Accepts an id prefix.",
+            description="Run status, metrics and error indication. Accepts an id prefix.",
             input_schema={
                 "type": "object",
                 "properties": {"run_id": {"type": "string"}},

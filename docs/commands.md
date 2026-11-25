@@ -545,8 +545,13 @@ The server exposes 15 ungated tools — `advise`, `data_inspect`,
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
 
-The `runs_list` and `runs_show` tools return run summaries with status,
-metrics and artifact location. Both use the same set of fields.
+The `runs_list` and `runs_show` tools return status, metrics, base model
+and artifact information. Local absolute model and artifact paths use
+project-relative or shortened display names. For failure handling, use
+`has_error` and `exit_code`. If you used `config_json` or `error_message`
+from a run response, use `soup runs show RUN_ID` locally to see the recorded
+configuration and full error. Process and execution bookkeeping fields
+(`pid`, `command_digest` and `log_path`) stay in the local tracker.
 
 ### Engine tool manifest
 

@@ -211,26 +211,33 @@ class TestMcpRunsOutputDir:
         assert out["output_dir"] == "mcp_out"
 
     @pytest.mark.parametrize("name", ["runs_list", "runs_show"])
-    def test_run_tools_return_the_client_summary(self, name, monkeypatch):
+    @pytest.mark.parametrize("include_output_dir", [True, False], ids=["artifact", "no-artifact"])
+    def test_run_tools_return_the_client_summary(self, name, include_output_dir, monkeypatch):
         public = {
             "run_id": "run_fixture",
-            "status": "completed",
+            "status": "failed" if include_output_dir else "running",
             "task": "sft",
+            "base_model": "org/fixture",
             "total_steps": 0,
             "final_loss": None,
-            "exit_code": 0,
-            "output_dir": "output",
+            "exit_code": 1 if include_output_dir else None,
+            "has_error": include_output_dir,
         }
         stored = {
-            **public,
-            "output_dir": str(self.project_dir / "output"),
+            **{key: value for key, value in public.items() if key != "has_error"},
             "pid": 42,
             "log_path": str(self.outside_dir / "fixture.log"),
             "command_digest": "fixture-digest",
             "config_json": '{"training":{"run_dir":"host-fixture"}}',
-            "error_message": "host-fixture",
+            "error_message": "host-fixture" if include_output_dir else None,
             "new_storage_field": {"nested": "host-fixture"},
         }
+        if include_output_dir:
+            public["output_dir"] = "output"
+            stored["output_dir"] = str(self.project_dir / "output")
+            public["base_model"] = "fixture-model"
+            stored["base_model"] = str(self.outside_dir / "fixture-model")
+        original = stored.copy()
         tracker = SimpleNamespace(
             list_runs=lambda *, limit: [stored],
             get_run=lambda run_id: stored,
@@ -241,8 +248,7 @@ class TestMcpRunsOutputDir:
         result = reg.call_tool(name, args)
         expected = {"runs": [public], "count": 1} if name == "runs_list" else public
         assert result == expected
-        assert stored["output_dir"] == str(self.project_dir / "output")
-        assert stored["pid"] == 42
+        assert stored == original
 
 
 class TestCliRunsShowAndStorageUnchanged:
