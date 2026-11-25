@@ -136,8 +136,10 @@ counted (`steps_stock`).
 ## Re-run on the merged head 92375494e, 2026-11-25
 
 The Qwen2.5-1.5B-Instruct row only. The code measured is `92375494e` (the #3178 head merged with current
-main plus the `training.prefix_tree` refusal fix); the later commit that adds this section changes only
-the record, not the code. Batch shapes: plain Soup 2 x 4 (micro-batch 2, accumulation 4); packed 8 x 1
+main plus the `training.prefix_tree` refusal fix). The commits after it add this section and its
+evidence file, and add refusals (with their tests) for configurations the measured run does not use
+(`loraplus_lr_ratio`, `rank_pattern`, `alpha_pattern`, `data.streaming`); they do not touch the
+measured path. Batch shapes: plain Soup 2 x 4 (micro-batch 2, accumulation 4); packed 8 x 1
 (micro-batch 8, accumulation 1); 8 rows per optimizer step in both, 105 steps. Same 840 rows
 (sha256 `eba8a5bc...79c8`), seed 3407, 105 steps, one run per arm. WSL2 Ubuntu, RTX 5070 Laptop 8 GB,
 Python 3.13, torch 2.11.0+cu128, triton 3.6.0, transformers 5.17.0, peft 0.20.0, trl 0.29.1,
