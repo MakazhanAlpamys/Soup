@@ -1708,6 +1708,7 @@ Listed by first contribution. PR numbers link the work.
 
 - **Thejesh** ([@thejesh23](https://github.com/thejesh23))
   - Restored Trainer accumulation normalization for classifier, reranker and cross-encoder losses. ([#3207](https://github.com/MakazhanAlpamys/Soup/pull/3207))
+  - Restored Trainer accumulation normalization for the MoLE router loss and its gradient. ([#3208](https://github.com/MakazhanAlpamys/Soup/pull/3208))
 
 ---
 
