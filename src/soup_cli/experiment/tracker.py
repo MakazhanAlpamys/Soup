@@ -253,10 +253,9 @@ class ExperimentTracker:
     def _ensure_schema(self) -> None:
         try:
             self._initialize_schema()
-        except sqlite3.DatabaseError as exc:
+        except sqlite3.DatabaseError:
             self.close()
-            if _sqlite_primary_code(exc) in _SQLITE_CORRUPT_CODES:
-                raise RunStatusStorageError(_CORRUPT_DATABASE_ERROR) from None
+            # Existing callers handle SQLite errors from ordinary schema setup.
             raise
 
     def _initialize_schema(self) -> None:
@@ -359,6 +358,11 @@ class ExperimentTracker:
                 reason = "it is read-only. Reopen a writable copy."
             elif code in _SQLITE_LOCK_CODES:
                 reason = "it is locked. Retry after the other writer finishes."
+            elif code in _SQLITE_CORRUPT_CODES:
+                # The optional migration rolled back. Report the failure from
+                # the status methods while keeping the legacy error boundary.
+                self._run_status_upgrade_error = _CORRUPT_DATABASE_ERROR
+                return
             else:
                 raise
             self._run_status_upgrade_error = (

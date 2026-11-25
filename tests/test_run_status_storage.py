@@ -304,33 +304,26 @@ def _expect_upgrade_error(tracker, reason):
             method(*args)
 
 
-def test_read_only_legacy_database_preserves_read_views(tmp_path):
+def test_read_only_legacy_database_preserves_read_views(tmp_path, monkeypatch):
     path = tmp_path / "read-only.sqlite"
     _prior_status_schema(path)
+    connect = sqlite3.connect
 
-    mode = path.stat().st_mode
-    try:
-        path.chmod(0o444)
-    except OSError:
-        pytest.skip("cannot make the database file read-only on this system")
-    try:
-        with closing(sqlite3.connect(path)) as conn:
-            try:
-                conn.execute("UPDATE runs SET total_steps = 100")
-            except sqlite3.OperationalError as exc:
-                if exc.sqlite_errorcode & 0xFF != sqlite3.SQLITE_READONLY:
-                    raise
-            else:
-                pytest.skip("SQLite can still write to a read-only file on this system")
+    def connect_read_only(database):
+        assert database == str(path)
+        return connect(f"{path.as_uri()}?mode=ro", uri=True)
 
+    # Read-only is a connection property. chmod can leave the WAL sidecars
+    # read-only even after the main file's permissions are restored.
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect", connect_read_only)
         with closing(ExperimentTracker(path)) as tracker:
             _read_legacy_views(tracker)
             _expect_upgrade_error(tracker, "read-only")
-    finally:
-        path.chmod(mode)
 
     with closing(ExperimentTracker(path)) as tracker:
         assert tracker.get_run_status("run-one") is None
+        _read_legacy_views(tracker)
 
 
 @pytest.mark.parametrize("journal_mode", ["wal", "delete"])
@@ -367,31 +360,48 @@ def test_locked_legacy_database_preserves_read_views_and_can_retry(
             assert tracker.list_active_execution_runs() == []
 
 
-def test_corrupt_database_has_fixed_diagnostic_and_leaves_file_untouched(tmp_path):
+def test_corrupt_database_keeps_native_open_error_and_leaves_file_untouched(tmp_path):
     path = tmp_path / "corrupt.sqlite"
     contents = b"not a SQLite database" * 64
     path.write_bytes(contents)
 
-    with pytest.raises(
-        RunStatusStorageError,
-        match=r"^experiment database is corrupt\. Restore it from a backup\.$",
-    ):
+    with closing(sqlite3.connect(path)) as conn:
+        with pytest.raises(sqlite3.DatabaseError) as native:
+            conn.execute("PRAGMA journal_mode=WAL")
+    with pytest.raises(sqlite3.DatabaseError) as tracker:
         ExperimentTracker(path)
 
+    assert type(tracker.value) is type(native.value)
+    assert str(tracker.value) == str(native.value)
     assert path.read_bytes() == contents
     assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
+
+
+def test_status_reads_report_a_fixed_error_when_the_database_is_corrupt(tmp_path):
+    path = tmp_path / "replaced.sqlite"
+    with closing(ExperimentTracker(path)) as tracker:
+        tracker.close()
+        contents = b"not a SQLite database" * 64
+        path.write_bytes(contents)
+
+        with pytest.raises(
+            RunStatusStorageError,
+            match=r"^experiment database is corrupt\. Restore it from a backup\.$",
+        ):
+            tracker.get_run_status("run-one")
+
+    assert path.read_bytes() == contents
 
 
 def test_run_status_upgrade_rolls_back_if_a_later_alter_fails(tmp_path, monkeypatch):
     path = tmp_path / "upgrade-rollback.sqlite"
     _prior_status_schema(path)
     connect = sqlite3.connect
-    first_column = _COLUMNS.split(", ")[0]
+    second_column = _COLUMNS.split(", ")[1]
 
     class InterruptedMigration(sqlite3.Connection):
         def execute(self, sql, parameters=()):
-            if f"ALTER TABLE runs ADD COLUMN {first_column}" in sql:
-                super().execute(sql, parameters).close()
+            if f"ALTER TABLE runs ADD COLUMN {second_column}" in sql:
                 error = sqlite3.DatabaseError("unexpected private diagnostic")
                 error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
                 raise error
@@ -401,11 +411,13 @@ def test_run_status_upgrade_rolls_back_if_a_later_alter_fails(tmp_path, monkeypa
         return connect(*args, factory=InterruptedMigration, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", connect_with_interruption)
-    with pytest.raises(
-        RunStatusStorageError,
-        match=r"^experiment database is corrupt\. Restore it from a backup\.$",
-    ):
-        ExperimentTracker(path)
+    with closing(ExperimentTracker(path)) as tracker:
+        _read_legacy_views(tracker)
+        with pytest.raises(
+            RunStatusStorageError,
+            match=r"^experiment database is corrupt\. Restore it from a backup\.$",
+        ):
+            tracker.get_run_status("run-one")
     with closing(connect(path)) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
         assert not columns.intersection(_COLUMNS.split(", "))
