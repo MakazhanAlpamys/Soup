@@ -83,6 +83,7 @@ def _exec_controller(
     termination_checks: list[str] | None = None,
     request_timeouts: list[tuple[str, str, float]] | None = None,
     clock_out: list[float] | None = None,
+    clock: dict[str, float] | None = None,
 ) -> tuple[int, list, list]:
     namespace: dict[str, object] = {"__name__": "controller"}
     exec(stub, namespace)
@@ -94,7 +95,8 @@ def _exec_controller(
         lookups = []
     if termination_checks is None:
         termination_checks = []
-    clock = {"now": 0.0}
+    if clock is None:
+        clock = {"now": 0.0}
 
     def fake_sleep(seconds: float) -> None:
         clock["now"] += seconds
@@ -680,6 +682,11 @@ class TestTransientLookupRetries:
         lookups: list[tuple] = []
         timeouts: list[tuple[str, str, float]] = []
         clock_end: list[float] = []
+        # Each fake lookup burns 2 seconds of wall clock before it fails, so
+        # every loop advances 7s (2s lookup + 5s sleep): without the
+        # `min(5, remaining)` sleep cap the final sleep would overshoot the
+        # deadline and the clock would end at 63, not 60.
+        clock: dict[str, float] = {"now": 0.0}
 
         def fake_request(api_key, path, *, method="GET", payload=None, **_):
             if path.endswith("/launch"):
@@ -687,23 +694,24 @@ class TestTransientLookupRetries:
                 raise RuntimeError("simulated response lost")
             if path == "/instances":
                 lookups.append((api_key, path))
+                clock["now"] += 2.0
                 raise urllib.error.URLError("network down")
             return {"data": {}}
 
         rc, _, _ = _exec_controller(
             stub, _make_fake_run(), fake_request, captured_prints=prints,
             lookups=lookups, request_timeouts=timeouts, clock_out=clock_end,
+            clock=clock,
         )
 
         assert rc == 1
         lookup_timeouts = [t for path, method, t in timeouts if path == "/instances"]
-        assert len(lookup_timeouts) == 12
-        # Each attempt asks for at most the remaining budget: the fake clock
-        # advances 5s per loop, so the caps walk 60, 55, ... 5.
-        assert lookup_timeouts == [60.0 - 5.0 * i for i in range(12)]
+        # Every attempt asks for at most the remaining budget: the fake clock
+        # is at 7*i when attempt i starts, so the caps walk 60, 53, 46, ...
+        assert lookup_timeouts == [max(60.0 - 7.0 * i, 0.0) for i in range(len(lookup_timeouts))]
         assert all(0 < t <= 60.0 for t in lookup_timeouts)
         # The deadline itself is never passed: the final bounded sleep ends
-        # exactly at the 60-second mark.
+        # exactly at the 60-second mark, not at 63 without the cap.
         assert clock_end == [60.0]
 
     def test_success_then_transients_to_deadline_stay_unconfirmed(
