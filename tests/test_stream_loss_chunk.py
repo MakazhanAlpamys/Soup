@@ -178,6 +178,62 @@ class TestTheLossAndItsGradient:
 
         assert torch.allclose(grads[1], grads[0] * 0.25, rtol=1e-6, atol=0)
 
+    @pytest.mark.parametrize("scale", [4096.0, 65536.0])
+    def test_fp16_projection_keeps_gradients_after_loss_scaling(self, scale):
+        from soup_cli.utils.stream_loss_chunk import (
+            chunked_causal_lm_loss,
+            shift_for_next_token,
+        )
+
+        labels = torch.zeros((1, 19), dtype=torch.long)
+        labels[0, 3] = -100
+        target = shift_for_next_token(labels)
+        denominator = 8192
+
+        def step(mode):
+            weight = torch.nn.Parameter(torch.zeros((1, 19, 1)))
+            optimizer = torch.optim.SGD([weight], lr=1.0)
+            scaler = torch.amp.GradScaler("cpu", init_scale=scale)
+            head_lengths = []
+
+            def head(piece):
+                assert torch.is_autocast_enabled("cpu")
+                assert torch.get_autocast_dtype("cpu") == torch.float16
+                head_lengths.append(piece.shape[1])
+                token = piece.squeeze(-1)
+                # Explicit cast keeps the derivative's half-precision boundary
+                # without depending on a CPU half-precision matmul kernel.
+                return torch.stack((token + 9, torch.zeros_like(token)), dim=-1).half()
+
+            with torch.autocast("cpu", dtype=torch.float16):
+                if mode == "chunked":
+                    loss, _ = chunked_causal_lm_loss(
+                        weight, head, labels, 16, num_items_in_batch=denominator
+                    )
+                else:
+                    logits = torch.cat([head(piece) for piece in weight.split(mode, dim=1)], dim=1)
+                    loss = torch.nn.functional.cross_entropy(
+                        logits.float().flatten(0, 1), target.flatten(), reduction="sum"
+                    ) / denominator
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            gradient = weight.grad.detach().clone()
+            scaler.step(optimizer)
+            return loss.detach(), gradient, weight.detach(), head_lengths
+
+        full = step(19)
+        split = step(16)
+        chunked = step("chunked")
+        assert torch.isfinite(full[0])
+        assert torch.count_nonzero(full[1][0, [2, 18]]) == 0
+        assert full[1][0, :18].abs().max() > 1e-8
+        assert full[1][0, 16:18].abs().min() > 1e-8
+        for got in (split, chunked):
+            torch.testing.assert_close(got[0], full[0], rtol=1e-5, atol=0)
+            torch.testing.assert_close(got[1], full[1], rtol=1e-5, atol=0)
+            torch.testing.assert_close(got[2], full[2], rtol=1e-5, atol=0)
+        assert chunked[3] == [16, 3, 16, 3]
+
 
 class TestNoFullLogits:
     def _spied(self, head):
@@ -1065,6 +1121,124 @@ class TestThroughTheRealTrainer:
 
         assert plain["trainer"] == "RewindSFTTrainer"
         assert chunked["trainer"] == "RewindChunkedLossSFTTrainer"
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("tie", [False, True], ids=["untied", "tied"])
+def test_streamed_fp16_scaler_preserves_chunked_adapter_updates(
+    tmp_path, monkeypatch, record_property, tie
+):
+    from time import perf_counter
+
+    from transformers.trainer_utils import SaveStrategy
+
+    from soup_cli.utils.stream_loss_chunk import causal_lm_of
+    from tests.test_v07204 import _build_streamed_wrapper, _randomise_lora_b
+
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *args, **kwargs: False)
+    record_property("cuda_device", torch.cuda.get_device_name())
+    chunk_size = 16
+
+    def run(arm, **training):
+        root = tmp_path / arm
+        root.mkdir()
+        with monkeypatch.context() as patch:
+            wrapper, _, _ = _build_streamed_wrapper(
+                root,
+                patch,
+                task="sft",
+                tie=tie,
+                device="cuda",
+                rewind_log=False,
+                gradient_accumulation_steps=1,
+                optimizer="sgd",
+                lr=0.01,
+                warmup_ratio=0.0,
+                weight_decay=0.0,
+                **training,
+            )
+            trainer = wrapper.trainer
+            try:
+                assert (wrapper._stream_runtime.large_pool is None) == tie
+                assert trainer.args.fp16 and not trainer.args.bf16
+                scaler = trainer.accelerator.scaler
+                assert scaler is not None and scaler.is_enabled()
+                # One finite step even on cards where the default scale backs off first.
+                scaler.load_state_dict({**scaler.state_dict(), "scale": 1024.0})
+                _randomise_lora_b(wrapper.model)
+                params = [p for p in wrapper.model.parameters() if p.requires_grad]
+                before = torch.cat([p.detach().flatten() for p in params])
+                gradients, projections, projection_events = [], [], []
+                unscale = scaler.unscale_
+
+                def capture_unscaled(optimizer):
+                    unscale(optimizer)
+                    gradients.append(torch.cat([p.grad.detach().flatten() for p in params]))
+
+                patch.setattr(scaler, "unscale_", capture_unscaled)
+
+                def observe(hidden, logits):
+                    projections.append((hidden.shape[1], logits.dtype))
+
+                hook = wrapper._stream_loss_chunk_hook
+                if hook is None:
+                    head = causal_lm_of(wrapper.model).get_output_embeddings()
+                    head.register_forward_hook(
+                        lambda _module, args, output: observe(args[0], output)
+                    )
+                else:
+                    forward = hook._head_forward
+
+                    def observed_head(hidden):
+                        start = torch.cuda.Event(enable_timing=True)
+                        end = torch.cuda.Event(enable_timing=True)
+                        start.record()
+                        logits = forward(hidden)
+                        end.record()
+                        projection_events.append((start, end))
+                        observe(hidden, logits)
+                        return logits
+
+                    patch.setattr(hook, "_head_forward", observed_head)
+
+                trainer.args.max_steps = 1
+                trainer.args.save_strategy = SaveStrategy.NO
+                torch.cuda.synchronize()
+                record_property(f"{arm}_baseline_allocated_bytes", torch.cuda.memory_allocated())
+                torch.cuda.reset_peak_memory_stats()
+                start = perf_counter()
+                trainer.train()
+                torch.cuda.synchronize()
+                record_property(f"{arm}_train_seconds", perf_counter() - start)
+                record_property(f"{arm}_peak_allocated_bytes", torch.cuda.max_memory_allocated())
+                record_property(f"{arm}_head_calls", len(projections))
+                if projection_events:
+                    midpoint = len(projection_events) // 2
+                    assert midpoint > 1 and projections[:midpoint] == projections[midpoint:]
+                    replay_ms = sum(
+                        start.elapsed_time(end) for start, end in projection_events[midpoint:]
+                    )
+                    record_property("replayed_projection_ms", replay_ms)
+                assert trainer.state.global_step == 1
+                assert not trainer.accelerator.optimizer_step_was_skipped
+                assert len(gradients) == 1
+                delta = torch.cat([p.detach().flatten() for p in params]) - before
+                for value in (gradients[0], delta):
+                    assert torch.isfinite(value).all() and value.count_nonzero()
+                assert projections and all(dtype == torch.float16 for _, dtype in projections)
+                return before.cpu(), gradients[0].cpu(), delta.cpu(), [n for n, _ in projections]
+            finally:
+                wrapper._remove_stream_loss_chunk_hook()
+                wrapper._close_stream_runtime()
+
+    plain = run("plain")
+    chunked = run("chunked", stream_loss_chunk=chunk_size)
+    torch.testing.assert_close(chunked[0], plain[0], rtol=0, atol=0)
+    assert max(plain[3]) > chunk_size
+    assert min(chunked[3]) < chunk_size and max(chunked[3]) == chunk_size
+    # The full and chunked projections can select different FP16 GEMM kernels.
+    for got, want in zip(chunked[1:3], plain[1:3], strict=True):
+        assert (got - want).norm() <= 0.03 * want.norm()
 
 
 class TestTheHookComesOffAfterTraining:
