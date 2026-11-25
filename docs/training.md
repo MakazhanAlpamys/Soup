@@ -21,6 +21,7 @@
 
 **Contents:**
 
+- [Machine-readable training preflight](#machine-readable-training-preflight)
 - [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
@@ -66,6 +67,32 @@ Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
 `backend: transformers` rather than `backend: unsloth`. The vision and audio setup
 paths do not use Unsloth; requesting it is refused at config load instead of
 silently falling back to transformers. Text SFT continues to support Unsloth.
+
+## Machine-readable training preflight
+
+**PREVIEW.** Run a local preflight with an explicit dry run:
+
+```sh
+soup train --config soup.yaml --dry-run --result-json
+```
+
+Once the command options parse, stdout contains one UTF-8 `soup.command_result` v1 JSON
+object and a newline. Human-readable diagnostics go to stderr. The preflight validates the
+configuration and data before training. Cloud, distributed launch, live LR search and
+execution-only options are refused with exit 2. Other covered outcomes keep their existing
+CLI exit codes. An interrupt returns 130. A zero exit before readiness has result status
+`failed` with reason `soup.train.preflight_incomplete`.
+
+The result records observed row counts and supported resolved settings. When evaluated,
+`vram.available_gb` reports total device capacity in decimal GB, and the analytical peak
+and required capacity describe the estimate used for the fit decision. Unavailable or
+unresolved fields are null. Disk usage and training wall time have no estimate on this path.
+For a supported single local data file, the result includes a SHA-256 only when bounded
+observations before and after loading agree. That hash describes source bytes. The config
+digest remains null until preflight binds the effective config to execution.
+
+The preview schema is packaged as `soup_cli/schemas/command-result-v1.json`. A parser error
+before command dispatch uses the standard usage diagnostic and exit code.
 
 ## Validation split & evaluation (`training.eval_steps`)
 
@@ -673,6 +700,18 @@ soup iterative-dpo \
 soup train --config grpo.yaml
 ```
 
+MiniLLM on-policy training and evaluation now sample from the prompt and generated
+history, excluding the target answer. This changes the on-policy term of existing
+`minillm_on_policy: true` runs, which previously continued the gold answer and could
+read padding logits. Earlier dialogue stays in the prompt; prompt ids are
+left-truncated to `data.max_length`, keeping the generation suffix, and padded
+separately from the unchanged CE rows. The fixed rollout length and EOS behavior
+are unchanged. Only `minillm_on_policy: true` now refuses train or validation rows
+with no usable prompt, including previously accepted assistant-only rows and rows
+whose prompt contains only system turns: supply explicit prompt and response rows.
+The error names the split and row number.
+The offline path keeps its existing row handling and objective.
+
 `training.echo_trap_tokenizer_aware` (also available as the real
 `--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
 whitespace tokens to the active tokenizer's integer ids. This catches subword
@@ -700,6 +739,33 @@ files from runs before this version are not comparable.
 `training.rl_checkpoint_save_every_steps` saves the adapter, the optimizer state and a manifest under `<output>/rl-checkpoints/step-N/`; the `pid_lagrangian` rollback below restores from them. The optimizer state (`optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory (the adapter is loaded under the same containment). A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup. An optimizer whose state holds objects other than tensors and plain containers is no longer saved: a rollback then restores the adapter only, and the log says so at each save. A save refuses, by name in the log, a checkpoint directory that resolves outside the run's output directory, any link inside the checkpoint directory, and a checkpoint path that is a file instead of a directory; it writes nothing in those cases and training goes on.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
+
+For replicated DDP with a PEFT policy, RL checkpoint callbacks share rank 0's save status
+and retained checkpoint steps. With `pid_lagrangian`, each rank computes its vote using its
+own detector history, smoothing windows and drift guard. The maximum finite vote drives
+one PID decision on rank 0; every rank receives the controller state, rollback target,
+counters and stop decision and applies the coefficient to its own trainer. A detector that
+deliberately returns `None` contributes a healthy `0.0` signal, as in a single-process run;
+this includes InfoRM steps with too few scores or a two-valued 0/1 reward. Missing buffers,
+genuinely absent vote inputs and non-finite votes stop the run on all ranks. The elevated
+PID beta and integral are retained after rollback.
+
+Recovery requires the policy adapter on every rank and the optimizer state when the
+manifest declares it present and optimizer recovery is enabled. A declared adapter-only
+checkpoint can restore the adapter on every rank. Missing, unreadable, invalid or oversized
+manifests, a declared but missing optimizer file, and asymmetric restore failures stop the
+run before the next update. Manifests are read even when optimizer recovery is disabled.
+Exchanges validate both global step and phase; a mismatch aborts with a named error.
+Communication failures propagate to the launcher; a lost process uses the process-group
+timeout rather than an additional callback timeout. All ranks need access to the same
+checkpoint storage.
+
+Collectives run only with an initialized process group of more than one rank. Single-process
+behavior and the `RANK`/`LOCAL_RANK` fallback without a group are unchanged. FSDP and
+DeepSpeed behavior is unchanged: each rank still keeps its own list of saved steps, as
+before; collective recovery for sharded state is not qualified. The agreement on controller
+decisions and recovery stops covers `pid_lagrangian` only. `kl_control` and independently
+halting detectors remain rank-local.
 
 The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 

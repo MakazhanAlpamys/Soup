@@ -222,7 +222,7 @@ def show_cmd(
                 art_table.add_row(
                     escape(art["kind"]),
                     Text(strip_control(art["path"])),
-                    f"{art['size_bytes'] / 1024 / 1024:.1f} MB"
+                    f"{art['size_bytes'] / 1024 / 1024:.1f} MiB"
                     if art["size_bytes"] > 1024 * 1024
                     else f"{art['size_bytes']} B",
                     escape(art["sha256"][:16]),

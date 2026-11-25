@@ -90,6 +90,63 @@ def test_model_is_released_after_generation_failure(monkeypatch):
     assert events == ["load:before", "generate:before", "close:before"]
 
 
+def test_generator_without_close_keeps_the_generation_error():
+    from soup_cli.eval.custom import EvalTask
+    from soup_cli.eval.quant_performance import measure_model
+
+    class NoClose:
+        device = "cpu"
+        dtype = "float32"
+        last_generated_tokens = 0
+
+        def __call__(self, prompt):
+            raise RuntimeError("generation failed")
+
+    with pytest.raises(RuntimeError, match="generation failed"):
+        measure_model(
+            NoClose, [EvalTask(prompt="1", expected="ok")],
+            device="cpu", warmup=0, repeats=1,
+        )
+
+
+def test_generator_and_bound_close_are_released_before_probe_release(monkeypatch):
+    import weakref
+
+    from soup_cli.eval import quant_performance
+    from soup_cli.eval.custom import EvalTask
+    from soup_cli.eval.quant_performance import measure_model
+
+    references = []
+    events = []
+
+    class Closable:
+        device = "cpu"
+        dtype = "float32"
+        last_generated_tokens = 1
+
+        def __call__(self, prompt):
+            return "ok"
+
+        def close(self):
+            events.append("close")
+
+    def factory():
+        generator = Closable()
+        references.append(weakref.ref(generator))
+        return generator
+
+    def release(probe):
+        assert references[0]() is None
+        events.append("release")
+
+    monkeypatch.setattr(quant_performance._MemoryProbe, "release", release)
+    measure_model(
+        factory, [EvalTask(prompt="1", expected="ok")],
+        device="cpu", warmup=0, repeats=1,
+    )
+    assert events == ["close", "release"]
+
+
 def test_no_generator_reference_survives_into_the_second_load(monkeypatch):
     import weakref
 

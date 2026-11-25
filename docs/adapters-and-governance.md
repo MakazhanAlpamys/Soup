@@ -440,6 +440,9 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # hold, not while the deploy is waiting.
 # `soup loop status` shows a `pending_deploy` row for the waiting, due or held state, and the
 # cycle notes start with deploy_backoff: or deploy_held: while applicable.
+# If `SOUP_LOOP_SERVE_ENDPOINT` is missing when a saved deploy retry is due, the candidate,
+# cursor and retry count are kept. The status shows why the last poll waited. When the endpoint
+# is available again, the loop retries that same candidate.
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to

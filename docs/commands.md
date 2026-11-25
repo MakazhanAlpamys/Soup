@@ -538,14 +538,32 @@ The registry is identical across transports — same tools, same schemas, same
 The network transports need `mcp >= 1.10.0` — streamable HTTP landed in 1.8.0
 and rebinding protection in 1.10.0 — which is the floor `soup-cli[mcp]` pins.
 
-The server exposes 14 read-only tools — `advise`, `data_inspect`,
+The server exposes 15 ungated tools — `advise`, `data_inspect`,
 `data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
 `runs_list`, `runs_show`, `registry_list`, `registry_show`, `profile`,
-`diagnose_evidence`, `ship_evidence` — each returning JSON. Two **plan-only**
+`diagnose_evidence`, `ship_evidence` and `engine_describe` — each returning JSON. Two **plan-only**
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
 
-Every tool in `tools/list` carries MCP annotations. They describe **side effects**, with MCP's meaning (`readOnlyHint: true` = the tool does not modify its environment), and they are hints for the client, not enforcement. The **gate level** is a separate thing: read (always runs), plan (`--allow-mutating`) or execute (`--allow-execute`), 14 / 2 / 2 tools, kept on the tool table rather than read off the annotations; the engine itself will report it. Eight tools advertise `readOnlyHint: true`: `advise`, `data_inspect`, `data_validate`, `recipes_search`, `recipes_show`, `profile`, `diagnose_evidence` and `ship_evidence`. Six read-level tools can write benign state and advertise `readOnlyHint: false, destructiveHint: false` and no `idempotentHint` (a repeat call is not promised to change nothing; for example a registry read re-applies file permissions): `runs_list`, `runs_show`, `registry_list` and `registry_show` (opening the local database creates or migrates it, and reading a run rewrites a stale `running` row whose process is gone), `data_doctor` (it can fill the Hugging Face tokenizer cache) and `data_score` (the optional presidio engine can download a spaCy model); those last two also advertise `openWorldHint: true`, and `profile` advertises `openWorldHint: false` (it never downloads). `train_start` and `export` advertise `readOnlyHint: false, destructiveHint: false` (they run nothing; under `--allow-execute` `train_start` writes a new run directory under `.soup/mcp-runs/` and both issue a one-time token; neither deletes or overwrites a user file or a live plan, and issuing a token only drops expired plan tokens held in memory as housekeeping); `train_execute` and `export_execute` advertise `readOnlyHint: false, destructiveHint: true`.
+### Engine tool manifest
+
+Call `engine_describe` with omitted arguments or an empty object. It returns
+one JSON object with `contract_version: 1`, the display `soup_version`, the
+startup `transport` (`stdio`, `sse` or `http`), effective `gates` (`mutating` and
+`execute`), and a name-sorted `tools` array of `{name, level}` objects. Input with
+extra keys returns `soup.engine.invalid_arguments` as an MCP tool error.
+
+There are 15 enabled tools by default, 17 with `--allow-mutating`, and 19 with
+stdio `--allow-execute`. Execution implies mutation permission. The manifest
+reports startup permissions. Enabled tools still enforce their own argument,
+authorization and confirmation checks. `tools/list` advertises all 19
+descriptors, including the stubs that refuse calls when their gate is disabled.
+
+Clients can negotiate capabilities with `contract_version`. Compatible added
+tools and optional fields fit version 1. An incompatible change to the manifest,
+tool level or availability requires a new version.
+
+Every tool in `tools/list` carries MCP annotations. They describe **side effects**, with MCP's meaning (`readOnlyHint: true` = the tool does not modify its environment), and they are hints for the client, not enforcement. The **gate level** is a separate thing: read (always runs), plan (`--allow-mutating`) or execute (`--allow-execute`), 15 / 2 / 2 tools, stored on the tool table and reported by the engine manifest. Nine tools advertise `readOnlyHint: true`: `advise`, `data_inspect`, `data_validate`, `recipes_search`, `recipes_show`, `profile`, `diagnose_evidence`, `ship_evidence` and `engine_describe`. Six read-level tools can write benign state and advertise `readOnlyHint: false, destructiveHint: false` and no `idempotentHint` (a repeat call is not promised to change nothing; for example a registry read re-applies file permissions): `runs_list`, `runs_show`, `registry_list` and `registry_show` (opening the local database creates or migrates it, and reading a run rewrites a stale `running` row whose process is gone), `data_doctor` (it can fill the Hugging Face tokenizer cache) and `data_score` (the optional presidio engine can download a spaCy model); those last two also advertise `openWorldHint: true`, and `profile` advertises `openWorldHint: false` (it never downloads). `train_start` and `export` advertise `readOnlyHint: false, destructiveHint: false` (they run nothing; under `--allow-execute` `train_start` writes a new run directory under `.soup/mcp-runs/` and both issue a one-time token; neither deletes or overwrites a user file or a live plan, and issuing a token only drops expired plan tokens held in memory as housekeeping); `train_execute` and `export_execute` advertise `readOnlyHint: false, destructiveHint: true`.
 
 `--allow-execute` implies `--allow-mutating` and enables full background subprocess execution via two execution tools (`train_execute` and `export_execute`). Execution requires a server-issued one-time confirmation token returned during the planning phase (`train_start` or `export`). The token state is kept in-memory with a 5-minute TTL and is consumed before subprocess invocation.
 

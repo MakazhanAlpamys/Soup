@@ -1293,6 +1293,16 @@ def split_data(
                 f"[red]Split sizes ({val_count} + {test_count}) >= dataset size ({total}).[/]"
             )
             raise typer.Exit(1)
+        for option, percentage, count, split_name in (
+            ("--val", val, val_count, "validation"),
+            ("--test", test, test_count, "test"),
+        ):
+            if percentage and count == 0:
+                console.print(
+                    f"[yellow]Warning: {option} {percentage}% rounds to 0 rows; "
+                    f"no {split_name} split file will be written. Use a larger percentage "
+                    "or --absolute with a valid count.[/]"
+                )
 
     # Perform split
     if stratify:
@@ -1931,10 +1941,14 @@ def download_dataset(
 
         try:
             src_fmt = detect_format(data)
-        except ValueError:
-            src_fmt = None
+        except ValueError as exc:
+            console.print(
+                f"[red]{for_terminal(exc)}[/]\n"
+                "Omit --format to write the downloaded rows unchanged."
+            )
+            raise typer.Exit(1) from exc
 
-        if src_fmt and src_fmt != fmt:
+        if src_fmt != fmt:
             converted = []
             for row in data:
                 messages = format_to_messages(row, src_fmt)
