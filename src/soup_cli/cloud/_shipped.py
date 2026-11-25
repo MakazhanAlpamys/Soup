@@ -63,13 +63,13 @@ _HUB_MODEL_FIELDS: frozenset[str] = frozenset(
 _LOCAL_ESCAPE_PREFIXES: Tuple[str, ...] = (
     "./",
     "../",
-    "~/",  # home
-    "/",  # absolute path
-    ".\\",  # Windows: current directory
-    "..\\",  # Windows: parent directory
-    "~\\",  # Windows: home
-    "\\\\",  # Windows UNC
-    "\\",  # Windows root-relative
+    "~/",        # home
+    "/",         # absolute path
+    ".\\",       # Windows: current directory
+    "..\\",      # Windows: parent directory
+    "~\\",       # Windows: home
+    "\\\\",      # Windows UNC
+    "\\",        # Windows root-relative
 )
 
 #: Fields whose remote form is a Hugging Face Hub *dataset* id. ``data.train`` is
@@ -86,7 +86,9 @@ _HUB_DATASET_FIELDS: frozenset[str] = frozenset(
 #: suffix or a path spelling says "local" for these.
 _PY_FILE_FIELDS: frozenset[str] = frozenset({"training.reward_fn"})
 
-_COMMA_SEPARATED_PLAN_INPUTS: frozenset[str] = frozenset({"training.reward_fn"})
+_COMMA_SEPARATED_PLAN_INPUTS: frozenset[str] = frozenset(
+    {"training.reward_fn"}
+)
 
 
 def _resolve_plan_input(cfg: "SoupConfig", dotted: str) -> object:
