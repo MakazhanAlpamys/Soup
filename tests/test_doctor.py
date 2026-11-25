@@ -655,7 +655,12 @@ def test_doctor_missing_train_extra_suggests_extra(monkeypatch):
     # #3266 - the GPU panel and the summary say PyTorch is optional for core commands.
     flat = _plain(out.replace(chr(0x2502), " "))
     assert "Backend: not checked (PyTorch not installed)" in flat
-    assert "The GPU check needs PyTorch. Core commands run without it" in flat
+    assert (
+        "The GPU check needs PyTorch, and so does training with the transformers or "
+        "unsloth backend. Core commands and MLX training run without it." in flat
+    )
+    # MLX training does not need PyTorch, so the panel must not say training does.
+    assert "training and GPU features need it" not in flat
     assert 'For training: pip install "soup-cli[train]"' in flat
     assert (
         'Training stack not installed (optional for core commands): pip install "soup-cli[train]"'
