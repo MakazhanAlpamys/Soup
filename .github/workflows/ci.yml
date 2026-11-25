@@ -1028,11 +1028,59 @@ jobs:
           print("SDK 1.x confirmed (_uses_callback_handlers() is False)")
           PY
       - name: Run MCP floor compatibility tests
+        id: mcp-tests
         run: >
-          pytest -o addopts= -q
+          pytest -o addopts= -q -rs --junitxml=mcp-floor-junit.xml
           tests/test_issue322_mcp2_compat.py
           tests/test_mcp_engine_describe.py
           tests/test_v07128.py::TestServerRoundTrip
+      - name: Fail if any MCP floor compatibility test was skipped
+        if: (success() || failure()) && (steps.mcp-tests.outcome == 'success' || steps.mcp-tests.outcome == 'failure')
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("mcp-floor-junit.xml")
+          if not report.is_file():
+              print(f"ERROR: expected JUnit report {report} was not generated", file=sys.stderr)
+              sys.exit(1)
+
+          root = ET.parse(report).getroot()
+          skipped_cases = []
+          for testcase in root.findall(".//testcase"):
+              skipped = testcase.find("skipped")
+              if skipped is not None:
+                  classname = testcase.attrib.get("classname", "")
+                  name = testcase.attrib.get("name", "<unknown>")
+                  node = f"{classname}.{name}" if classname else name
+                  reason = (
+                      skipped.attrib.get("message")
+                      or (skipped.text or "").strip()
+                      or "no reason given"
+                  )
+                  skipped_cases.append(f"{node}: {reason}")
+
+          skipped_elements = root.findall(".//skipped")
+          count = len(skipped_elements)
+          if count > 0:
+              print(
+                  f"ERROR: {count} test(s) skipped in mcp-1-10-floor (skips are forbidden):",
+                  file=sys.stderr,
+              )
+              for detail in skipped_cases:
+                  print(f"  - {detail}", file=sys.stderr)
+              if len(skipped_cases) < count:
+                  extra = count - len(skipped_cases)
+                  print(
+                      f"  ({extra} additional <skipped> element(s) outside <testcase>)",
+                      file=sys.stderr,
+                  )
+              sys.exit(1)
+
+          print("Verified 0 skipped tests in mcp-floor-junit.xml")
+          PY
 
   test:
     needs: plan
