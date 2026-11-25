@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from benchmarks.measure_preference_vram_grid import (
@@ -11,6 +13,7 @@ from benchmarks.measure_preference_vram_grid import (
     _validate_measured_forward,
     _validate_probe_tree,
     classify_ratio,
+    main,
     parse_nvidia_smi_sample,
 )
 
@@ -37,6 +40,40 @@ def test_parent_worker_command_is_accepted_by_the_real_parser(tmp_path):
     assert parsed.output_file == tmp_path / "row.json"
     assert parsed.output_dir is None
     assert parsed.report is None
+
+
+@pytest.mark.parametrize("missing_option", ["--output-dir", "--report"])
+def test_parent_mode_requires_output_paths_with_usage_error(
+    monkeypatch, capsys, tmp_path, missing_option
+):
+    command = [
+        "measure_preference_vram_grid.py",
+        "--task",
+        "dpo",
+        "--source-tree",
+        str(tmp_path / "source"),
+        "--model-path",
+        str(tmp_path / "model"),
+        "--main-sha",
+        "main-sha",
+        "--probe-sha",
+        "probe-sha",
+        "--tree-sha",
+        "tree-sha",
+        "--output-dir",
+        str(tmp_path / "output"),
+        "--report",
+        str(tmp_path / "report.md"),
+    ]
+    option_index = command.index(missing_option)
+    del command[option_index : option_index + 2]
+    monkeypatch.setattr(sys, "argv", command)
+
+    with pytest.raises(SystemExit) as caught:
+        main()
+
+    assert caught.value.code == 2
+    assert "parent mode requires --output-dir and --report" in capsys.readouterr().err
 
 
 def test_grid_calls_a_probe_under_read_a_refusal():
