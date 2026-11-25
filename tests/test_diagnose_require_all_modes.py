@@ -139,6 +139,33 @@ class TestDiagnoseCli:
         assert "--evidence" in strip_ansi(result.output)
 
 
+class TestDiagnoseHelp:
+    """#3269: the help names all seven modes and when citation is scored."""
+
+    def _help(self) -> str:
+        result = runner.invoke(app, ["diagnose", "--help"], env={"COLUMNS": "250"})
+        assert result.exit_code == 0, result.output
+        # The option table wraps a description inside box-drawing borders.
+        return " ".join(strip_ansi(result.output).replace(chr(0x2502), " ").split())
+
+    def test_summary_names_every_failure_mode(self):
+        text = self._help()
+        assert (
+            "forgetting / refusal / format / mode_collapse / memorization / "
+            "contamination / citation" in text
+        )
+        for mode in FAILURE_MODES:
+            assert mode in text
+
+    def test_base_model_help_names_citation_and_its_condition(self):
+        text = self._help()
+        assert "the 6 probes" not in text
+        assert (
+            "format, memorization and citation need --dataset, and citation "
+            "only RAFT-shaped rows" in text
+        )
+
+
 class TestMcpTool:
     def _call(self, tmp_path, monkeypatch, scores, **extra):
         from soup_cli.mcp_server import registry as reg
