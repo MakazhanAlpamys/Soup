@@ -110,6 +110,25 @@ class TestTheServerBuildsOnWhicheverMajorIsInstalled:
             _dispatch_tool({}, "no_such_tool", {})
         assert "unknown tool" in str(excinfo.value)
 
+    def test_sdk_one_still_validates_non_describe_inputs(self):
+        import asyncio
+
+        from soup_cli.mcp_server.registry import build_registry
+        from soup_cli.mcp_server.server import _uses_callback_handlers, build_server
+        from tests.mcp_roundtrip import connected_session, is_error
+
+        if _uses_callback_handlers():
+            pytest.skip("SDK 1.x descriptor validation")
+        server = build_server(build_registry(allow_mutating=False))
+
+        async def call():
+            async with connected_session(server) as client:
+                return await client.call_tool("recipes_search", {"query": 0})
+
+        result = asyncio.run(call())
+        assert is_error(result)
+        assert result.content[0].text.startswith("Input validation error:")
+
     def test_a_handler_failure_carries_no_path_or_stack(self):
         from soup_cli.mcp_server.server import _dispatch_tool, _DispatchError
 

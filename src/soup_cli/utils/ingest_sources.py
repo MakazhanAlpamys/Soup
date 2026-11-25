@@ -12,9 +12,10 @@ once per ingest invocation, mirroring v0.26.0 Part C policy.
 
 Design notes:
 - All parsers are pure Iterable[dict] -> Iterator[TraceRecord]. No network
-  code here. Users hand us a JSONL export; the one live pull
-  (``soup ingest --source langfuse --pull``, #204) lives in
-  ``utils/ingest_pull.py`` and feeds ``parse_langfuse`` in memory.
+  code here. Users hand us a JSONL export; the live pulls
+  (``soup ingest --source langfuse|langsmith --pull``, #204) live in
+  ``utils/ingest_pull.py`` and ``utils/ingest_pull_langsmith.py`` and feed
+  ``parse_langfuse`` / ``parse_langsmith`` in memory.
 - File reads enforce cwd containment + null-byte rejection (TOCTOU policy
   mirroring v0.26.0 / v0.40.3 / v0.55.0).
 - `_MAX_INGEST_LINES` caps any single ingest to prevent OOM on tampered
@@ -55,6 +56,13 @@ _AUTH_ENV: Mapping[str, tuple[str, ...]] = {
     "openpipe": ("OPENPIPE_API_KEY",),
     "openai-stored": ("OPENAI_API_KEY",),
     "otel": ("OTEL_EXPORTER_OTLP_HEADERS",),
+}
+
+# Settings ``--pull`` reads beside the credentials above (#204). Kept apart from
+# ``_AUTH_ENV``: ``resolve_auth_env`` needs every variable of a source set, and
+# these are not credentials (``LANGSMITH_ENDPOINT`` is optional).
+_PULL_SETTINGS_ENV: Mapping[str, tuple[str, ...]] = {
+    "langsmith": ("LANGSMITH_PROJECT", "LANGSMITH_ENDPOINT"),
 }
 
 

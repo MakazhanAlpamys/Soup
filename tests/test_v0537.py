@@ -26,6 +26,26 @@ import pytest
 
 
 class TestMarkdownHeadingSplit:
+    def test_section_cap_does_not_duplicate_last_section(self, monkeypatch):
+        import soup_cli.utils.data_pipeline as data_pipeline
+
+        monkeypatch.setattr(data_pipeline, "_MAX_MD_SECTIONS", 2)
+        rows = data_pipeline.split_markdown_by_headings(
+            "# A\na body\n# B\nb body\n# C\nc body"
+        )
+
+        assert [row["section"] for row in rows] == ["A", "B"]
+        assert rows[1]["text"] == "b body"
+
+    def test_section_cap_keeps_last_section_when_input_ends_at_cap(self, monkeypatch):
+        import soup_cli.utils.data_pipeline as data_pipeline
+
+        monkeypatch.setattr(data_pipeline, "_MAX_MD_SECTIONS", 2)
+        rows = data_pipeline.split_markdown_by_headings("# A\na body\n# B\nb body")
+
+        assert [row["section"] for row in rows] == ["A", "B"]
+        assert rows[1]["text"] == "b body"
+
     def test_empty_string_returns_empty_list(self):
         from soup_cli.utils.data_pipeline import split_markdown_by_headings
         assert split_markdown_by_headings("") == []

@@ -1122,7 +1122,7 @@ def _build_judge_scorer(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # prompt-only is valid (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
     references = _aligned_references(task_eval, len(tasks), judge_reference)
@@ -1486,7 +1486,7 @@ def _build_reward_scorer(
     """
     from soup_cli.eval.custom import load_eval_tasks
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # prompt-only is valid (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
 
@@ -1561,7 +1561,7 @@ def _build_pairwise_scorer(
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # prompt-only is valid (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
     references = _aligned_references(task_eval, len(tasks), judge_reference)
@@ -2525,12 +2525,12 @@ def _emit_and_exit(
     push: Optional[str] = None,
 ) -> None:
     console.print(render_ship_panel(verdict))
-    # The per-row file goes first so the verdict can name it only when it exists. A failure to
-    # write it is reported after the verdict, the evidence and the PR comment are out (exit 1):
-    # it is part of the evidence, and nothing here claims a file that was not written.
+    # The per-row file goes first so the verdict can name it only when it exists. Each requested
+    # output is attempted independently: one failed path must not hide another useful artifact or
+    # suppress the explicitly requested best-effort PR comment.
     records = verdict.task_win.detail.records if verdict.task_win.detail is not None else None
     rows_pointer: Optional[str] = None
-    rows_error: Optional[Exception] = None
+    write_errors: list[str] = []
     if output and records:
         try:
             rows_path = write_task_rows(records, output)
@@ -2540,7 +2540,9 @@ def _emit_and_exit(
                 f"({len(records)} rows; it holds your prompts and the answers)"
             )
         except (OSError, ValueError, TypeError) as exc:
-            rows_error = exc
+            write_errors.append(
+                f"cannot write the task rows next to --output: {type(exc).__name__}: {exc}"
+            )
     if output:
         try:
             atomic_write_text(
@@ -2549,7 +2551,7 @@ def _emit_and_exit(
             )
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
-            _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
+            write_errors.append(f"cannot write --output: {type(exc).__name__}: {exc}")
     if emit_evidence and verdict.failed_rule == FAILED_ADAPTER_NOOP:
         # Nothing was measured; 0.0 placeholder scores must not replay as evidence.
         console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
@@ -2571,24 +2573,18 @@ def _emit_and_exit(
             )
             console.print(f"[green]Wrote evidence[/] {escape(emit_evidence)}")
         except (OSError, ValueError, TypeError) as exc:
-            _fail(
-                f"cannot write --emit-evidence: {type(exc).__name__}: {exc}",
-                _EXIT_RUNTIME,
+            write_errors.append(
+                f"cannot write --emit-evidence: {type(exc).__name__}: {exc}"
             )
+    # Reported before the push: a transport error escaping _push_pr_comment must not swallow them.
+    for message in write_errors:
+        console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
     # Post the PR comment BEFORE the DON'T-SHIP exit so a regression is still
     # announced on the PR (the gate then blocks with exit 2).
     if push:
         _push_pr_comment(verdict, push)
-    if rows_error is not None:
-        message = (
-            f"cannot write the task rows next to --output: {type(rows_error).__name__}: "
-            f"{rows_error}"
-        )
-        if verdict.decision == DECISION_SHIP:
-            _fail(message, _EXIT_RUNTIME)
-        # a DON'T SHIP keeps its own exit code (2): a pipeline that retries on exit 1 must not
-        # run a finished verdict again; the error is printed all the same
-        console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
+    if write_errors and verdict.decision == DECISION_SHIP:
+        raise typer.Exit(code=_EXIT_RUNTIME)
     if verdict.decision != DECISION_SHIP:
         raise typer.Exit(code=_EXIT_DONT_SHIP)
 

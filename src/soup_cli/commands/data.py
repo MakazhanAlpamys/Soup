@@ -6,13 +6,19 @@ import json
 import ntpath
 import os
 import random
+import sys
+from csv import Error as CsvError
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import NoReturn, Optional
+from time import monotonic
+from typing import Annotated, NoReturn, Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from soup_cli import __version__
 from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
@@ -22,8 +28,20 @@ from soup_cli.data.loader import (
     non_object_row_issue,
 )
 from soup_cli.data.validator import validate_and_stats
+from soup_cli.utils.command_result import (
+    CommandResult,
+    DataValidateResult,
+    ResultReason,
+    encode_command_result,
+)
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_OK,
+    EXIT_RUNTIME_ERROR,
+    EXIT_USAGE_ERROR,
+    GateCommand,
+)
 from soup_cli.utils.paths import ensure_distinct_paths, is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal
@@ -100,30 +118,150 @@ def validate(
         callback=refuse_nan,
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
+    result_json: Annotated[
+        bool, typer.Option("--result-json", help="Emit a machine-readable result (preview)")
+    ] = False,
 ):
     """Validate a dataset, returning exit 3 for input errors and 2 for unusable data."""
+    if not result_json:
+        outcome = _validate_data(path, fmt, min_valid_fraction, output=console, preview=False)
+        if outcome.exit_code != EXIT_OK:
+            raise typer.Exit(outcome.exit_code)
+        return
+
+    output = Console(stderr=True)
+    started_at = datetime.now(UTC)
+    started = monotonic()
+
+    def encode(outcome: _DataValidationOutcome) -> bytes:
+        status = {
+            EXIT_OK: "ok",
+            EXIT_RUNTIME_ERROR: "failed",
+            EXIT_GATE_FAILED: "blocked",
+            EXIT_USAGE_ERROR: "refused",
+            130: "cancelled",
+        }[outcome.exit_code]
+        decision = None
+        if outcome.data is not None:
+            decision = "valid" if outcome.exit_code == EXIT_OK else "invalid"
+        return encode_command_result(CommandResult(
+            schema="soup.command_result",
+            schema_version=1,
+            soup_version=__version__,
+            command="data.validate",
+            phase="validate",
+            status=status,
+            exit_code=outcome.exit_code,
+            started_at=started_at,
+            duration_s=monotonic() - started,
+            decision=decision,
+            reasons=[outcome.reason] if outcome.reason is not None else [],
+            warnings=outcome.warnings,
+            data=outcome.data,
+        ))
+
+    try:
+        outcome = _validate_data(path, fmt, min_valid_fraction, output=output, preview=True)
+        encoded = encode(outcome)
+    except KeyboardInterrupt:
+        output.print("[yellow]Interrupted.[/]")
+        outcome = _DataValidationOutcome(130, ResultReason(
+            code="soup.cli.interrupted",
+            message="Dataset validation was interrupted.",
+            fix="Run validation again when intended.",
+        ))
+        encoded = encode(outcome)
+    except Exception as exc:
+        error_type = for_terminal(type(exc).__name__, single_line=True)
+        output.print(f"[red]Dataset validation failed unexpectedly ({error_type}).[/]")
+        outcome = _DataValidationOutcome(EXIT_RUNTIME_ERROR, ResultReason(
+            code="soup.cli.execution_failed",
+            message="The command could not complete.",
+            fix="Check the local diagnostic and correct the environment or input.",
+        ))
+        encoded = encode(outcome)
+
+    # A write failure is a transport failure. Never attempt a second document.
+    sys.stdout.buffer.write(encoded)
+    if outcome.exit_code != EXIT_OK:
+        raise typer.Exit(outcome.exit_code)
+
+
+@dataclass
+class _DataValidationOutcome:
+    exit_code: int
+    reason: ResultReason | None = None
+    warnings: list[ResultReason] = field(default_factory=list)
+    data: DataValidateResult | None = None
+
+
+def _validate_data(
+    path: str, fmt: str, min_valid_fraction: float, *, output: Console, preview: bool,
+) -> _DataValidationOutcome:
     file_path = Path(path)
-    if not file_path.exists():
-        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
-        raise typer.Exit(EXIT_USAGE_ERROR)
+
+    def load_failure(exc: Exception) -> _DataValidationOutcome:
+        output.print("[red]Could not load dataset. Check the file type and installed readers.[/]")
+        if isinstance(exc, ImportError) and file_path.suffix.lower() == ".parquet":
+            output.print("Install pyarrow to read parquet files: pip install pyarrow")
+        return _DataValidationOutcome(EXIT_RUNTIME_ERROR, ResultReason(
+            code="soup.data.load_failed",
+            message="Dataset rows could not be loaded.",
+            fix="Check the local file, its type, and the installed readers.",
+        ))
+
+    try:
+        source_exists = file_path.exists()
+    except OSError as exc:
+        if not preview:
+            raise
+        return load_failure(exc)
+    if not source_exists:
+        location = "" if preview else f": {for_terminal(file_path)}"
+        output.print(f"[red]File not found{location}[/]")
+        return _DataValidationOutcome(EXIT_USAGE_ERROR, ResultReason(
+            code="soup.data.source_missing",
+            message="Dataset file was not found.",
+            fix="Supply an existing local dataset file.",
+        ))
 
     if fmt != "auto":
         from soup_cli.data.formats import VALID_FORMATS
 
         if fmt not in VALID_FORMATS:
-            console.print(
-                f"[red]Unknown --format: {for_terminal(repr(fmt))}[/]\n"
+            label = "" if preview else f": {for_terminal(repr(fmt))}"
+            output.print(
+                f"[red]Unknown --format{label}[/]\n"
                 f"Accepted: auto, {', '.join(VALID_FORMATS)}"
             )
-            raise typer.Exit(EXIT_USAGE_ERROR)
+            return _DataValidationOutcome(EXIT_USAGE_ERROR, ResultReason(
+                code="soup.data.format_unsupported",
+                message="The requested dataset format is unsupported.",
+                fix="Select a supported format or auto.",
+            ))
 
     load_issues = SkippedRows()
-    data = load_raw_data(file_path, issues=load_issues)
+    try:
+        data = load_raw_data(
+            file_path, issues=load_issues, diagnostics=output if preview else None,
+        )
+    except (OSError, ValueError, ImportError, CsvError) as exc:
+        if not preview:
+            raise
+        return load_failure(exc)
     # #1887: every row the loader skipped (not an object, or not JSON) is an
     # invalid row for the N/M line, for --min-valid-fraction and for the exit
     # code. The statistics below still describe the retained objects.
     skipped = load_issues.total
     none_remain = f"no object rows remain: {skipped} row(s) skipped (listed above)"
+    warnings: list[ResultReason] = []
+    if preview and skipped:
+        warnings.append(ResultReason(
+            code="soup.data.rows_skipped",
+            message="The loader skipped invalid rows.",
+            fix="Check the local diagnostics and repair the rejected rows.",
+            details={"skipped": skipped, "total": len(data) + skipped},
+        ))
 
     # Auto-detect format if not specified
     if fmt == "auto":
@@ -131,15 +269,25 @@ def validate(
 
         try:
             fmt = detect_format(data)
-            console.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
+            output.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
         except ValueError as exc:
             message = str(exc)
             if not data and skipped:
                 message = f"{none_remain}; cannot detect a format. Pass --format to validate."
-            console.print(f"[red]{for_terminal(message)}[/]")
-            raise typer.Exit(EXIT_USAGE_ERROR)
+            output.print(f"[red]{for_terminal(message)}[/]")
+            return _DataValidationOutcome(EXIT_USAGE_ERROR, ResultReason(
+                code="soup.data.format_undetected",
+                message="Dataset format could not be detected.",
+                fix="Supply the correct explicit format and check the file.",
+            ), warnings=warnings)
 
     result = validate_and_stats(data, expected_format=fmt)
+    if preview and result["issues"] and (data or not skipped):
+        warnings.append(ResultReason(
+            code="soup.data.validation_warnings",
+            message="The validator reported dataset issues.",
+            fix="Check the local diagnostics and correct the dataset as needed.",
+        ))
     if not data and skipped:
         result["issues"] = [none_remain if i == "Dataset is empty" else i
                             for i in result["issues"]]
@@ -151,26 +299,43 @@ def validate(
     result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
-        console.print("[yellow]Issues found:[/]")
+        output.print("[yellow]Issues found:[/]")
         for issue in result["issues"]:
-            console.print(f"  [yellow]![/] {for_terminal(issue)}")
+            output.print(f"  [yellow]![/] {for_terminal(issue)}")
     else:
-        console.print("[bold green]Dataset is valid![/]")
+        output.print("[bold green]Dataset is valid![/]")
 
     valid = result["valid_rows"]
     total = result["total"] + skipped
-    console.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
+    valid_fraction = valid / total if total else None
+    output.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
+    payload = None
+    if preview:
+        payload = DataValidateResult(
+            format=fmt, total=total, valid=valid, invalid=total - valid,
+            valid_fraction=valid_fraction,
+        )
 
     if total > 0 and valid == 0:
-        console.print("[red]Validation failed: no usable rows remain.[/]")
-        raise typer.Exit(EXIT_GATE_FAILED)
+        output.print("[red]Validation failed: no usable rows remain.[/]")
+        return _DataValidationOutcome(EXIT_GATE_FAILED, ResultReason(
+            code="soup.data.no_usable_rows",
+            message="No usable dataset rows remain.",
+            fix="Supply usable rows in the selected format.",
+        ), warnings=warnings, data=payload)
 
-    if total > 0 and valid / total < min_valid_fraction:
-        console.print(
-            f"[red]Validation failed: valid fraction {valid / total:.3f} is below "
+    if valid_fraction is not None and valid_fraction < min_valid_fraction:
+        output.print(
+            f"[red]Validation failed: valid fraction {valid_fraction:.3f} is below "
             f"--min-valid-fraction {min_valid_fraction:.3f}.[/]"
         )
-        raise typer.Exit(EXIT_GATE_FAILED)
+        return _DataValidationOutcome(EXIT_GATE_FAILED, ResultReason(
+            code="soup.data.valid_fraction_below_minimum",
+            message="The valid row fraction is below the requested minimum.",
+            fix="Repair malformed rows and rerun validation.",
+            details={"actual": valid_fraction, "minimum": min_valid_fraction},
+        ), warnings=warnings, data=payload)
+    return _DataValidationOutcome(EXIT_OK, warnings=warnings, data=payload)
 
 
 @app.command()
@@ -1127,6 +1292,16 @@ def split_data(
                 f"[red]Split sizes ({val_count} + {test_count}) >= dataset size ({total}).[/]"
             )
             raise typer.Exit(1)
+        for option, percentage, count, split_name in (
+            ("--val", val, val_count, "validation"),
+            ("--test", test, test_count, "test"),
+        ):
+            if percentage and count == 0:
+                console.print(
+                    f"[yellow]Warning: {option} {percentage}% rounds to 0 rows; "
+                    f"no {split_name} split file will be written. Use a larger percentage "
+                    "or --absolute with a valid count.[/]"
+                )
 
     # Perform split
     if stratify:
@@ -2037,7 +2212,7 @@ class _AugmentProvider:
 
 _AUGMENT_DEFAULT_MODELS = {
     "ollama": "llama3.1",
-    "anthropic": "claude-3-5-haiku-20241022",
+    "anthropic": "claude-haiku-5-5",
     "vllm": "local",
 }
 

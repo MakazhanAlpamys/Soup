@@ -169,6 +169,7 @@ soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --gpu H100 --history  Estimate duration and cost from comparable local single-GPU SFT runs, with an observed range
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -299,7 +300,7 @@ soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity 
 soup adapters check <adapter> [--json]        Is the adapter trained? Total/per-layer ||dW||_F, live fraction, all-zero lora_B, leaked .inner. keys; ends in alive or inactive: <reason> (exit 0 / 2; 1 = usage error)
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
-soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
+soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--rank <N>] [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank fast path; mixed-rank concat with LoRA/rsLoRA scaling; optional SVD rank cap; scan + same-base gated) (v0.71.34)
 soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
 soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
@@ -403,6 +404,15 @@ soup version [--full] [--json]                Show version (--full: system info,
 soup --version                                Show version (prints the same text as soup version)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+### Estimating training time from local runs
+
+Pass `soup cost --history --gpu <label>` to use the median seconds per
+optimizer step from at least three comparable single-GPU text SFT runs. The
+reported range comes from the fastest and slowest of those runs. A matching run
+must have recorded that it started without resuming on one CUDA device. If
+there are too few matches or the step count cannot be estimated from rows and a
+fixed batch size, Soup gives its model-based estimate and explains the fallback.
 
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
@@ -528,12 +538,32 @@ The registry is identical across transports — same tools, same schemas, same
 The network transports need `mcp >= 1.10.0` — streamable HTTP landed in 1.8.0
 and rebinding protection in 1.10.0 — which is the floor `soup-cli[mcp]` pins.
 
-The server exposes 14 read-only tools — `advise`, `data_inspect`,
+The server exposes 15 ungated tools — `advise`, `data_inspect`,
 `data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
 `runs_list`, `runs_show`, `registry_list`, `registry_show`, `profile`,
-`diagnose_evidence`, `ship_evidence` — each returning JSON. Two **plan-only**
+`diagnose_evidence`, `ship_evidence` and `engine_describe` — each returning JSON. Two **plan-only**
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
+
+### Engine tool manifest
+
+Call `engine_describe` with omitted arguments or an empty object. It returns
+one JSON object with `contract_version: 1`, the display `soup_version`, the
+startup `transport` (`stdio`, `sse` or `http`), effective `gates` (`mutating` and
+`execute`), and a name-sorted `tools` array of `{name, level}` objects. Input with
+extra keys returns `soup.engine.invalid_arguments` as an MCP tool error.
+
+There are 15 enabled tools by default, 17 with `--allow-mutating`, and 19 with
+stdio `--allow-execute`. Execution implies mutation permission. The manifest
+reports startup permissions. Enabled tools still enforce their own argument,
+authorization and confirmation checks. `tools/list` advertises all 19
+descriptors, including the stubs that refuse calls when their gate is disabled.
+
+Clients can negotiate capabilities with `contract_version`. Compatible added
+tools and optional fields fit version 1. An incompatible change to the manifest,
+tool level or availability requires a new version.
+
+Every tool in `tools/list` carries MCP annotations. They describe **side effects**, with MCP's meaning (`readOnlyHint: true` = the tool does not modify its environment), and they are hints for the client, not enforcement. The **gate level** is a separate thing: read (always runs), plan (`--allow-mutating`) or execute (`--allow-execute`), 15 / 2 / 2 tools, stored on the tool table and reported by the engine manifest. Nine tools advertise `readOnlyHint: true`: `advise`, `data_inspect`, `data_validate`, `recipes_search`, `recipes_show`, `profile`, `diagnose_evidence`, `ship_evidence` and `engine_describe`. Six read-level tools can write benign state and advertise `readOnlyHint: false, destructiveHint: false` and no `idempotentHint` (a repeat call is not promised to change nothing; for example a registry read re-applies file permissions): `runs_list`, `runs_show`, `registry_list` and `registry_show` (opening the local database creates or migrates it, and reading a run rewrites a stale `running` row whose process is gone), `data_doctor` (it can fill the Hugging Face tokenizer cache) and `data_score` (the optional presidio engine can download a spaCy model); those last two also advertise `openWorldHint: true`, and `profile` advertises `openWorldHint: false` (it never downloads). `train_start` and `export` advertise `readOnlyHint: false, destructiveHint: false` (they run nothing; under `--allow-execute` `train_start` writes a new run directory under `.soup/mcp-runs/` and both issue a one-time token; neither deletes or overwrites a user file or a live plan, and issuing a token only drops expired plan tokens held in memory as housekeeping); `train_execute` and `export_execute` advertise `readOnlyHint: false, destructiveHint: true`.
 
 `--allow-execute` implies `--allow-mutating` and enables full background subprocess execution via two execution tools (`train_execute` and `export_execute`). Execution requires a server-issued one-time confirmation token returned during the planning phase (`train_start` or `export`). The token state is kept in-memory with a 5-minute TTL and is consumed before subprocess invocation.
 

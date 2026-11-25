@@ -10,7 +10,7 @@ import os
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-3-haiku-20240307"
+DEFAULT_MODEL = "claude-haiku-5-5"
 
 
 def generate_anthropic(

@@ -927,6 +927,7 @@ Usage: `soup cost [OPTIONS]`
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--gpu`, `-g` | text |  |  | Filter by specific GPU (e.g., A100, H100, RTX 4090) |
 | `--json` | flag | off |  | Output as JSON for scripting |
+| `--history` | flag | off |  | Use comparable local SFT runs with one GPU selected by --gpu. |
 
 ## `soup data`
 
@@ -1670,6 +1671,7 @@ Usage: `soup data validate [OPTIONS] PATH`
 | `PATH` | text |  | yes | Path to dataset file |
 | `--format`, `-f` | text | `auto` |  | Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext |
 | `--min-valid-fraction` | float, 0.0 to 1.0 | `0.0` |  | Exit 2 when the fraction of valid rows is below this value |
+| `--result-json` | flag | off |  | Emit a machine-readable result (preview) |
 
 ## `soup delinearize-llama4`
 
@@ -2483,10 +2485,10 @@ Usage: `soup ingest [OPTIONS]`
 | `--source` | text |  | yes | Trace source: langfuse \| langsmith \| helicone \| openpipe \| otel \| openai-stored |
 | `--logs` | text |  |  | Path to JSONL trace export (one event per line). Required unless --pull. |
 | `--output`, `-o` | text |  |  | Output JSONL (default: traces.jsonl in cwd). |
-| `--pull` | flag | off |  | Fetch generations live from the Langfuse API instead of reading --logs (--source langfuse only). Reads LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a self-hosted instance. |
+| `--pull` | flag | off |  | Fetch live from the vendor's API instead of reading --logs (--source langfuse or langsmith). Langfuse: LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a self-hosted instance. LangSmith: LANGSMITH_API_KEY and LANGSMITH_PROJECT, plus LANGSMITH_ENDPOINT for another region or a self-hosted instance. |
 | `--since` | text |  |  | With --pull: how far back to fetch, e.g. 30m, 24h, 7d (default 7d, max 365d). |
-| `--max-pages` | integer, 1 to 10000 |  |  | With --pull: stop with an error, writing nothing, if results are still pending after this many pages of 100 generations (default 100). |
-| `--allow-private-host` | flag | off |  | With --pull: allow LANGFUSE_HOST to be a private or loopback address (self-hosted Langfuse). HTTPS is still required. |
+| `--max-pages` | integer, 1 to 10000 |  |  | With --pull: stop with an error, writing nothing, if results are still pending after this many pages of 100 generations or LLM runs (default 100). |
+| `--allow-private-host` | flag | off |  | With --pull: allow LANGFUSE_HOST or LANGSMITH_ENDPOINT to be a private or loopback address (self-hosted). HTTPS is still required. |
 | `--slack-url` | text |  |  | Optional Slack webhook URL — POSTed on completion. SSRF-validated. |
 | `--discord-url` | text |  |  | Optional Discord webhook URL — POSTed on completion. SSRF-validated. |
 
@@ -3168,6 +3170,7 @@ Usage: `soup prune-layer-cache [OPTIONS]`
 | `--model` | text |  | yes | Base model id whose cache slots to inspect. |
 | `--cache-dir` | text |  |  | Cache root (default: the layer-stream root). |
 | `--yes` | flag | off |  | Actually remove. Without it: dry run. |
+| `--keep` | text, repeatable |  |  | Protect a lowercase 40-hex commit. Repeat up to 64 times. |
 
 ## `soup prune-prompt`
 
