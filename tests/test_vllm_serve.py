@@ -80,7 +80,9 @@ class TestServeBackendFlag:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
 
-        result = runner.invoke(app, ["serve", "--model", str(model_dir), "--backend", "invalid"])
+        result = runner.invoke(
+            app, ["serve", "--model", str(model_dir), "--backend", "invalid"]
+        )
         assert result.exit_code != 0
         assert "unknown backend" in result.output.lower() or result.exit_code != 0
 
@@ -95,7 +97,9 @@ class TestServeBackendFlag:
         model_dir.mkdir()
 
         with patch("soup_cli.utils.vllm.is_vllm_available", return_value=False):
-            result = runner.invoke(app, ["serve", "--model", str(model_dir), "--backend", "vllm"])
+            result = runner.invoke(
+                app, ["serve", "--model", str(model_dir), "--backend", "vllm"]
+            )
             assert result.exit_code != 0
 
     def test_vllm_missing_preflight_skips_kv_cache_resolver(self, tmp_path):

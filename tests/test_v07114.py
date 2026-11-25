@@ -152,9 +152,13 @@ class TestConsolidateShards:
         _write_shard(shards / "pytorch_model_fsdp_0.bin", {"w": torch.ones(2, 3)})
         _write_shard(shards / "pytorch_model_fsdp_1.bin", {"w": torch.zeros(2, 3)})
         plan = plan_consolidation(str(shards), str(tmp_path / "m.safetensors"))
-        with caplog.at_level(logging.WARNING, logger="soup_cli.utils.fsdp_consolidate"):
+        with caplog.at_level(
+            logging.WARNING, logger="soup_cli.utils.fsdp_consolidate"
+        ):
             consolidate_shards(plan)
-        assert any("more than one shard" in rec.message for rec in caplog.records)
+        assert any(
+            "more than one shard" in rec.message for rec in caplog.records
+        )
 
     def test_non_dict_shard_rejected(self, tmp_path, monkeypatch):
         import torch

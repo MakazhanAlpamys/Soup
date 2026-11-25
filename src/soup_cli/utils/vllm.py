@@ -343,7 +343,8 @@ def create_vllm_engine(
     if quantization:
         if quantization not in ("awq", "gptq", "fp8"):
             raise ValueError(
-                f"quantization must be one of awq/gptq/fp8 or None, got {quantization!r}"
+                f"quantization must be one of awq/gptq/fp8 or None, "
+                f"got {quantization!r}"
             )
         engine_args.quantization = quantization
 
@@ -352,9 +353,10 @@ def create_vllm_engine(
         import re
 
         # SSRF protection: block URL-based model paths
-        if re.match(r"^https?://", speculative_model):
+        if re.match(r'^https?://', speculative_model):
             raise ValueError(
-                "speculative_model must be a local path or HuggingFace model ID, not a URL"
+                "speculative_model must be a local path or HuggingFace model ID, "
+                "not a URL"
             )
         engine_args.speculative_model = speculative_model
         engine_args.num_speculative_tokens = num_speculative_tokens
@@ -673,8 +675,12 @@ def create_vllm_app(
                 text = chat_response["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError):
                 text = ""
-        usage = chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
-        msg_id = chat_response.get("id", "") if isinstance(chat_response, dict) else ""
+        usage = (
+            chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
+        )
+        msg_id = (
+            chat_response.get("id", "") if isinstance(chat_response, dict) else ""
+        )
         out_model = openai_payload.get("model", model_name)
         in_tokens = int(usage.get("prompt_tokens", 0) or 0)
         out_tokens = int(usage.get("completion_tokens", 0) or 0)
