@@ -203,6 +203,7 @@
     "training.online_dpo_max_new_tokens": 64,
     "training.optimizer": "adamw_torch",
     "training.orpo_beta": 0.1,
+    "training.packed_lora": null,
     "training.packing": false,
     "training.packing_cross_doc_attn_mask": false,
     "training.parallelism": "data",
