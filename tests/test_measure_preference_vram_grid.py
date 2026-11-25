@@ -2,6 +2,8 @@ import pytest
 
 from benchmarks.measure_preference_vram_grid import (
     _assert_full_batch,
+    _build_parser,
+    _build_worker_command,
     _failed_worker_row,
     _paired_verdict,
     _render_report,
@@ -11,6 +13,30 @@ from benchmarks.measure_preference_vram_grid import (
     classify_ratio,
     parse_nvidia_smi_sample,
 )
+
+
+def test_parent_worker_command_is_accepted_by_the_real_parser(tmp_path):
+    command = _build_worker_command(
+        script=tmp_path / "measure_preference_vram_grid.py",
+        mode="probe",
+        task="dpo",
+        seq_len=2048,
+        source_tree=tmp_path / "source",
+        model_path=tmp_path / "model",
+        main_sha="main-sha",
+        probe_sha="probe-sha",
+        tree_sha="tree-sha",
+        output_file=tmp_path / "row.json",
+    )
+
+    parsed = _build_parser().parse_args(command[2:])
+
+    assert parsed.worker_mode == "probe"
+    assert parsed.task == "dpo"
+    assert parsed.seq_len == 2048
+    assert parsed.output_file == tmp_path / "row.json"
+    assert parsed.output_dir is None
+    assert parsed.report is None
 
 
 def test_grid_calls_a_probe_under_read_a_refusal():

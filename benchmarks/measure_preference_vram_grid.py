@@ -716,6 +716,44 @@ def _render_report(
     )
 
 
+def _build_worker_command(
+    *,
+    script: Path,
+    mode: str,
+    task: str,
+    seq_len: int,
+    source_tree: Path,
+    model_path: Path,
+    main_sha: str,
+    probe_sha: str,
+    tree_sha: str,
+    output_file: Path,
+) -> list[str]:
+    """Build one worker invocation using only arguments the worker needs."""
+    return [
+        sys.executable,
+        str(script),
+        "--worker-mode",
+        mode,
+        "--task",
+        task,
+        "--seq-len",
+        str(seq_len),
+        "--source-tree",
+        str(source_tree),
+        "--model-path",
+        str(model_path),
+        "--main-sha",
+        main_sha,
+        "--probe-sha",
+        probe_sha,
+        "--tree-sha",
+        tree_sha,
+        "--output-file",
+        str(output_file),
+    ]
+
+
 def _run_task(args: argparse.Namespace) -> int:
     output_dir = args.output_dir.resolve()
     report_path = args.report.resolve()
@@ -741,28 +779,18 @@ def _run_task(args: argparse.Namespace) -> int:
             log_file = output_dir / "logs" / f"{args.task}-seq{seq_len}-{mode}.log"
             row_file.parent.mkdir(parents=True, exist_ok=True)
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            command = [
-                sys.executable,
-                str(script),
-                "--worker-mode",
-                mode,
-                "--task",
-                args.task,
-                "--seq-len",
-                str(seq_len),
-                "--source-tree",
-                str(source_tree),
-                "--model-path",
-                str(args.model_path.resolve()),
-                "--main-sha",
-                main_sha,
-                "--probe-sha",
-                probe_sha,
-                "--tree-sha",
-                tree_sha,
-                "--output-file",
-                str(row_file),
-            ]
+            command = _build_worker_command(
+                script=script,
+                mode=mode,
+                task=args.task,
+                seq_len=seq_len,
+                source_tree=source_tree,
+                model_path=args.model_path.resolve(),
+                main_sha=main_sha,
+                probe_sha=probe_sha,
+                tree_sha=tree_sha,
+                output_file=row_file,
+            )
             with log_file.open("w", encoding="utf-8") as log:
                 try:
                     result = subprocess.run(
@@ -802,7 +830,7 @@ def _run_task(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", required=True, choices=TASKS)
     parser.add_argument("--source-tree", type=Path, required=True)
@@ -810,12 +838,17 @@ def main() -> int:
     parser.add_argument("--main-sha", required=True)
     parser.add_argument("--probe-sha", required=True)
     parser.add_argument("--tree-sha", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--report", type=Path)
     parser.add_argument("--worker-timeout", type=int, default=3600)
     parser.add_argument("--worker-mode", choices=("probe", "step"))
     parser.add_argument("--seq-len", type=int, choices=SEQUENCE_LENGTHS)
     parser.add_argument("--output-file", type=Path)
+    return parser
+
+
+def main() -> int:
+    parser = _build_parser()
     args = parser.parse_args()
     if args.worker_mode:
         if args.seq_len is None or args.output_file is None:
@@ -833,6 +866,8 @@ def main() -> int:
             tree_sha=args.tree_sha,
             output_file=args.output_file.resolve(),
         )
+    if args.output_dir is None or args.report is None:
+        parser.error("parent mode requires --output-dir and --report")
     return _run_task(args)
 
 
