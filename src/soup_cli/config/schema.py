@@ -64,7 +64,7 @@ from soup_cli.utils.config_bounds import (
 # apply_long_context_config say the same thing (long_context has no torch).
 from soup_cli.utils.long_context import LONGROPE_REFUSAL
 from soup_cli.utils.numeric import float_with_overflow_check
-from soup_cli.utils.preference import resolve_preference_loss
+from soup_cli.utils.preference import SUPPORTED_PREFERENCE_LOSSES, resolve_preference_loss
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
@@ -247,6 +247,14 @@ _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
     "grace_codebook_size",
     "grace_codebook_dim",
 })
+
+_DATA_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
+    "raft_shuffle_seed",
+    "replay_ratio",
+    "replay_seed",
+})
+
+_SHIP_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({"noise_floor"})
 
 class LoraConfig(BaseModel):
     @field_validator("*", mode="before")
@@ -547,6 +555,16 @@ class DataConfig(BaseModel):
             "local file paths to combine via data.interleave. (#443)"
         ),
     )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_DATA_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
 
     @field_validator("train", mode="before")
     @classmethod
@@ -1276,6 +1294,11 @@ class EvalGateConfig(BaseModel):
     if any task regresses below ``regression_threshold`` vs the baseline.
     """
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
     enabled: bool = Field(
         default=False,
         description="Turn the eval gate on",
@@ -1592,6 +1615,21 @@ class TrainingConfig(BaseModel):
     )
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, ge=0, description="Save checkpoint every N steps")
+    # #2575 — transformers also saves at the LAST step whenever the strategy is "steps"
+    # (its default, which no wrapper overrode), so every run left a checkpoint-N folder
+    # and nothing turned that off. The default here keeps that exactly.
+    save_strategy: Literal["steps", "epoch", "no"] = Field(
+        default="steps",
+        description=(
+            "When to write intermediate checkpoint-N folders: 'steps' (every save_steps "
+            "steps, and once more at the last step; the default), 'epoch' (at the end of "
+            "each epoch) or 'no' (never; the final adapter or model is still saved). "
+            "Quote it in YAML: an unquoted no is a bool. 'epoch' and 'no' are refused "
+            "with a non-default save_steps, on backend: mlx and on task: unlearn. "
+            "'epoch' is also refused on task: ppo because its trainer does not emit "
+            "epoch-end callbacks (#2575)."
+        ),
+    )
     logging_steps: int = Field(default=10, ge=1, description="Log metrics every N steps")
     # #1223 — the validation split is evaluated at the end of every epoch by
     # default; this switches to a step schedule. Unset rather than defaulted so
@@ -1616,6 +1654,54 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             raise ValueError("training.eval_steps must be an int, not a bool")
         return v
+
+    @field_validator("save_strategy", mode="before")
+    @classmethod
+    def _validate_save_strategy_type(cls, v: Any) -> Any:
+        """#2575 — only a string can name a strategy.
+
+        YAML 1.1 reads an unquoted ``no`` (and ``off``, ``false``) as ``False``, so the
+        natural spelling of the third choice arrives as a bool. It is refused, with the
+        fix in the message, rather than coerced: a bool says nothing about ``epoch`` or
+        ``steps``, and ``save_strategy: true`` must not mean anything.
+        """
+        if isinstance(v, bool):
+            raise ValueError(
+                "training.save_strategy must be a string, not a bool: YAML reads an "
+                "unquoted no, off or false as a bool. Quote it: save_strategy: \"no\" "
+                "(or 'steps' / 'epoch')."
+            )
+        if not isinstance(v, str):
+            raise ValueError(
+                "training.save_strategy must be one of 'steps', 'epoch', 'no'; "
+                f"got {type(v).__name__}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_save_steps_needs_the_steps_strategy(self) -> "TrainingConfig":
+        """#2575 — ``save_steps`` only counts under ``save_strategy: steps``.
+
+        A tunable set while its feature is off is refused. "Set" means set to something
+        other than the default, not merely present in ``model_fields_set``:
+        ``model_dump()`` writes ``save_steps: 100`` for every config, and ``sweep``
+        (which rebuilds the config from a dict), the unsloth probe, ``soup rewind`` and the cloud
+        hand-off all validate a dump, so a guard on presence alone would refuse its own
+        output (the lesson of #321, ``bnb_4bit_use_double_quant``). The one miss is an
+        explicit ``save_steps: 100`` beside ``epoch`` / ``no``, which is indistinguishable
+        from a dump and harmless: it is the value the default carries and nothing reads it.
+        """
+        if self.save_strategy == "steps" or "save_steps" not in self.model_fields_set:
+            return self
+        default = type(self).model_fields["save_steps"].default
+        if self.save_steps != default:
+            raise ValueError(
+                f"training.save_steps is {self.save_steps} but training.save_strategy is "
+                f"{self.save_strategy!r}: save_steps only counts under save_strategy: "
+                "steps, so it would be ignored. Remove training.save_steps, or set "
+                "training.save_strategy: steps."
+            )
+        return self
 
     # DPO-specific
     dpo_beta: float = Field(
@@ -4232,6 +4318,28 @@ class TrainingConfig(BaseModel):
             "(v0.37.0)."
         ),
     )
+    # Prefix-tree batches — tokens several examples share are computed once
+    prefix_tree: bool = Field(
+        default=False,
+        description=(
+            "Lay each training batch out as prefix trees: tokens that several "
+            "examples begin with (one system prompt, one tool schema, one "
+            "document) and that are not trained on are held once, with a 4D "
+            "ancestor attention mask and tree-depth position ids. The loss and "
+            "its gradient are those of the ordinary batch holding the same "
+            "examples, to rounding; the step runs the trees' tokens instead of the sum of "
+            "the examples' lengths. A step is still at most batch_size rows of "
+            "data.max_length tokens. Needs untrained prompt tokens (e.g. "
+            "data.train_on_responses_only) to have anything to share. "
+            "task='sft' on the transformers backend only (refused on mlx "
+            "and unsloth); works with "
+            "stream_layers. Mutually exclusive with packing, multipack, "
+            "stream_loss_chunk, neftune_alpha, curriculum and a non-zero "
+            "lora.dropout (0.05 by default; set it to 0); a model that applies "
+            "dropout in training is refused at setup. A bool only: 1 or 'yes' "
+            "is refused."
+        ),
+    )
     # NEFTune — noisy embeddings for better fine-tuning
     neftune_alpha: Optional[float] = Field(
         default=None,
@@ -4492,6 +4600,76 @@ class TrainingConfig(BaseModel):
                 "pick one (multipack uses FFD bin-packing; packing "
                 "uses TRL's basic packer). For most uses, multipack=true "
                 "is the better choice."
+            )
+        return self
+
+    @field_validator("prefix_tree", mode="before")
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_prefix_tree_is_bool(cls, v, info: ValidationInfo):
+        """``prefix_tree: 1`` or ``yes`` (a quoted one) is refused instead of
+        being coerced to ``true``: the switch changes how every step is laid
+        out, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
+
+    @model_validator(mode="after")
+    def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
+        """``prefix_tree`` decides which examples share a row, as packing and
+        multipack do; two of them at once have no defined result.
+
+        ``stream_loss_chunk`` is refused beside it until the chunked loss has
+        been checked on prefix-tree rows: it is correct by construction (a row
+        is still scored by the row shift), but not measured.
+
+        ``neftune_alpha`` changes the loss on a prefix-tree row (its noise
+        depends on the row length), and ``curriculum`` sets an order the
+        sampler would replace: both are refused rather than quietly altered.
+        """
+        if not self.prefix_tree:
+            return self
+        others = [name for name in ("packing", "multipack") if getattr(self, name)]
+        if others:
+            raise ValueError(
+                f"training.prefix_tree cannot be combined with {' and '.join(others)}: "
+                "each of them decides which examples share a row. Keep one."
+            )
+        if self.stream_loss_chunk is not None:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.stream_loss_chunk "
+                "yet: the chunked loss has not been checked on prefix-tree rows. "
+                "Remove one of the two."
+            )
+        if self.neftune_alpha is not None:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.neftune_alpha: "
+                "NEFTune scales its noise by the row length and draws it once per row "
+                "token, so on a prefix-tree row (longer, with shared tokens) the noise "
+                "is not the ordinary batch's. Remove one of the two."
+            )
+        if self.curriculum:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.curriculum: the "
+                "prefix-tree sampler orders the examples by their shared beginnings and "
+                "shuffles its rows every epoch, which would drop the curriculum order "
+                "without a word. Remove one of the two."
+            )
+        # The same test as trainer/sft.py's is_full_finetune (not imported: the
+        # trainer module imports this one). Without an adapter, lora.dropout is
+        # never applied.
+        full_finetune = bool(self.unfrozen_parameters or self.lisa_enabled or self.lora.r == 0)
+        if not full_finetune and self.lora.dropout:
+            raise ValueError(
+                f"training.prefix_tree cannot be combined with a LoRA dropout "
+                f"(training.lora.dropout={self.lora.dropout!r}, 0.05 by default): an "
+                "ordinary batch draws a dropout mask per example over a shared "
+                "beginning, a prefix-tree row draws one for every example that shares "
+                "it, so the loss would no longer be the ordinary batch's. Set "
+                "training.lora.dropout: 0 or training.prefix_tree: false."
             )
         return self
 
@@ -5065,6 +5243,16 @@ class ShipConfig(BaseModel):
     runs. ``soup ship --config soup.yaml`` reads these as defaults; an explicit
     CLI flag always wins (CLI > config > hard default).
     """
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(
+            cls,
+            info.field_name,
+            value,
+            exempt_fields=_SHIP_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS,
+        )
 
     task_eval: Optional[str] = Field(
         default=None,
@@ -6543,6 +6731,56 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_prefix_tree_supported(self) -> "SoupConfig":
+        """``training.prefix_tree`` is wired where its equality was checked:
+        text SFT through the HF trainer (resident or layer-streamed).
+
+        Every refusal names what to change: a switch that silently did nothing
+        would leave a run at its ordinary speed with no sign of why.
+        """
+        if not self.training.prefix_tree:
+            return self
+        from soup_cli.utils.prefix_tree_trainer import supports_prefix_tree
+
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.prefix_tree is supported on backend='transformers' only; got "
+                f"backend={self.backend!r} (it replaces the HF Trainer's dataloader and "
+                "is checked on that path only). Use backend='transformers' or set "
+                "prefix_tree: false."
+            )
+        if not supports_prefix_tree(self.task):
+            raise ValueError(
+                f"training.prefix_tree supports task='sft' only; got task={self.task!r}. "
+                "It shares tokens that are not trained on, and only the SFT path is "
+                "wired. Set prefix_tree: false or switch task."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                f"training.prefix_tree supports modality='text' only; got "
+                f"{self.modality!r} (its collator carries input_ids, labels and an "
+                "attention mask, nothing else). Set prefix_tree: false."
+            )
+        if self.data.format == "raft":
+            raise ValueError(
+                "training.prefix_tree cannot be combined with data.format='raft': RAFT "
+                "builds its own trainer and collator. Set prefix_tree: false."
+            )
+        if self.data.replay is not None:
+            raise ValueError(
+                "training.prefix_tree is incompatible with data.replay (grouping "
+                "examples by their shared beginning breaks the replay ratio). "
+                "Remove one of the two."
+            )
+        if self.data.interleave is not None:
+            raise ValueError(
+                "training.prefix_tree is incompatible with data.interleave (grouping "
+                "examples by their shared beginning breaks the per-source mixture ratio). "
+                "Remove one of the two."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_curriculum_dynamic_supported(self) -> "SoupConfig":
         """v0.48.0 Part A — Curriculum-Aware dynamic telemetry.
 
@@ -7812,6 +8050,12 @@ class SoupConfig(BaseModel):
                 "simpo, bco or ipo, or set stream_layers=false."
             )
         stream_task = resolve_preference_loss(self) or self.task
+        if self.task == "preference" and tcfg.preference_loss is None:
+            losses = sorted(SUPPORTED_PREFERENCE_LOSSES.intersection(_STREAM_SUPPORTED_TASKS))
+            raise ValueError(
+                "training.stream_layers with task='preference' requires a single "
+                f"training.preference_loss. Choose one of {', '.join(losses)}."
+            )
         if stream_task not in _STREAM_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.stream_layers supports task in "
@@ -8142,8 +8386,10 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_vision_preference_format(self) -> "SoupConfig":
         """Refuse vision row formats for preference tasks until they have a row path."""
-        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
-        vision_preference_formats = {"llava", "sharegpt4v"}
+        preference_tasks = {
+            "dpo", "ipo", "simpo", "orpo", "bco", "preference", "kto", "reward_model",
+        }
+        vision_preference_formats = {"llava", "sharegpt4v", "video", "multimodal"}
         if self.task in preference_tasks and self.data.format in vision_preference_formats:
             raise ValueError(
                 f"task={self.task!r} with data.format={self.data.format!r} has no "
@@ -9404,6 +9650,48 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_save_strategy_is_honoured(self) -> "SoupConfig":
+        """#2575 - ``training.save_strategy: epoch`` / ``no`` needs a trainer that writes
+        ``checkpoint-N`` through the HF ``Trainer``.
+
+        * ``backend: mlx`` runs its own loops (``mlx_sft`` / ``mlx_dpo`` / ``mlx_grpo``),
+          which write a numbered adapter file every ``save_steps`` iterations and have no
+          epoch or off setting. Wiring one into three loops that cannot run off Apple
+          Silicon is a separate change; until then it is refused rather than ignored.
+        * ``task: unlearn`` trains in its own loop and writes only the final model, so
+          there is no checkpoint for a strategy to control.
+        * TRL's PPO loop does not emit epoch-end callbacks, so only steps and no
+          are available for PPO.
+
+        Defined after :meth:`_validate_mlx_task_support`, so a task MLX cannot run is
+        refused for that reason first and "use backend: transformers" leads to a config
+        that loads. ``steps`` (the default) is always accepted.
+        """
+        strategy = self.training.save_strategy
+        if strategy == "steps":
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                f"Refused: training.save_strategy={strategy!r} is not implemented on "
+                "backend: mlx (the MLX loops write an adapter file every "
+                "training.save_steps iterations themselves, with no epoch or off "
+                "setting). Remove training.save_strategy, or use backend: transformers."
+            )
+        if self.task == "unlearn":
+            raise ValueError(
+                f"Refused: training.save_strategy={strategy!r} has nothing to control on "
+                "task: unlearn, which trains in its own loop and writes no checkpoint, "
+                "only the final model. Remove training.save_strategy."
+            )
+        if self.task == "ppo" and strategy == "epoch":
+            raise ValueError(
+                "Refused: training.save_strategy='epoch' is not implemented on task: ppo "
+                "(the PPO trainer does not emit epoch-end callbacks). "
+                'Use save_strategy: steps or save_strategy: "no".'
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_uld_compat(self) -> "SoupConfig":
         """v0.70.0 Part B — Universal Logit Distillation gate.
 
@@ -9771,10 +10059,8 @@ class SoupConfig(BaseModel):
         ]
         if not fields:
             return self
-        if (
-            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
-            and tcfg.lora.r == 0 and not tcfg.stream_layers
-        ):
+        mlx_full_route = self._mlx_full_finetune_freezes()
+        if mlx_full_route and tcfg.lora.r == 0:
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
@@ -9793,11 +10079,31 @@ class SoupConfig(BaseModel):
             return self
         settings = " and ".join(setting for setting, _ in off_path)
         changes = " and ".join(change for _, change in off_path)
+        # #3086 T-2: a run that differs from the exemption above only in its LoRA
+        # rank is told about the MLX route too, with the quantization that
+        # ``_validate_full_finetune`` requires of it.
+        route, alternative = (
+            (", or in native MLX text SFT with lora.r: 0",
+             ", or lora.r: 0 with quantization: none")
+            if mlx_full_route else ("", "")
+        )
         raise ValueError(
             f"{named} {verb} not applied by task={self.task!r} with {settings}: "
             "layers are frozen only on the text path with backend: transformers and "
-            "no layer streaming, so this run would train every layer. "
-            f"Use {changes}, or remove {keys}."
+            f"no layer streaming{route}, so this run would train every layer. "
+            f"Use {changes}{alternative}, or remove {keys}."
+        )
+
+    def _mlx_full_finetune_freezes(self) -> bool:
+        """Whether the run is on the one MLX route that freezes layers once
+        ``training.lora.r`` is 0: native MLX text SFT without layer streaming.
+
+        :meth:`_validate_freeze_is_applied` lets the fields through on this route
+        with ``lora.r == 0`` and names the route in its refusal otherwise, so the
+        exemption and the message read the same condition (#3086 T-2)."""
+        return (
+            self.backend == "mlx" and self.task == "sft" and self.modality == "text"
+            and not self.training.stream_layers
         )
 
     @model_validator(mode="after")

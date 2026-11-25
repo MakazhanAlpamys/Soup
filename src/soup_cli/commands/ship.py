@@ -61,6 +61,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from soup_cli import __version__
+from soup_cli.eval.judge_templates import JUDGE_MODE_PREFERENCE, JUDGE_MODE_REFERENCE
 from soup_cli.utils.config_bounds import has_control_character
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
@@ -111,6 +112,7 @@ from soup_cli.utils.ship_verdict import (
     DECISION_SHIP,
     DEFAULT_FORGETTING_THRESHOLD,
     FAILED_ADAPTER_NOOP,
+    JUDGE_TASK_MODES,
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
     MODE_REWARD,
@@ -1015,23 +1017,115 @@ def _leg1_metric(
     return build_task_win("metric", base_leg, tuned_leg, detail=detail)
 
 
+def _judge_mode_of(task_mode: str, judge_reference: bool) -> Optional[str]:
+    """The judge mode a verdict in ``task_mode`` is judged with (#2520)."""
+    if task_mode not in JUDGE_TASK_MODES:
+        return None
+    return JUDGE_MODE_REFERENCE if judge_reference else JUDGE_MODE_PREFERENCE
+
+
+def _task_references(task_eval: str) -> List[str]:
+    """Each task row's ``expected``, read raw, for ``--judge-reference`` (#2520).
+
+    ``load_eval_tasks`` cannot be used for this check: it stores
+    ``str(row.get("expected", ""))``, so a missing key reads like ``""``, ``null``
+    becomes ``"None"``, and the line number is gone. This reads the same file the
+    same way (``.jsonl``, UTF-8, blank lines skipped, at most ``MAX_EVAL_TASKS``
+    rows) and keeps physical line numbers. It returns one reference per task, in
+    the loader's order, so ``references[i]`` belongs to ``tasks[i]``.
+
+    Refused, naming the option, the field and the line: a missing, ``null``,
+    non-string, empty or whitespace-only ``expected``, and a ``scoring: "regex"``
+    row, whose ``expected`` is a pattern rather than an answer. ``load_eval_tasks``
+    itself is unchanged for every other caller.
+    """
+    from pathlib import Path
+
+    from soup_cli.eval.custom import MAX_EVAL_TASKS
+
+    path = Path(task_eval)
+    if not path.exists():
+        raise ValueError(f"--judge-reference: task-eval file not found: {task_eval}")
+    if path.suffix.lower() != ".jsonl":
+        raise ValueError(f"--judge-reference: task-eval must be a .jsonl file, got {path.suffix}")
+
+    def _refuse(line_num: int, problem: str) -> NoReturn:
+        raise ValueError(f"--judge-reference: task-eval line {line_num}: {problem}")
+
+    references: List[str] = []
+    with open(path, encoding="utf-8") as handle:
+        for line_num, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line:
+                continue
+            if len(references) >= MAX_EVAL_TASKS:
+                _refuse(line_num, f"more than {MAX_EVAL_TASKS} tasks")
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                _refuse(line_num, "not valid JSON")
+            if not isinstance(row, dict):
+                _refuse(line_num, "not a JSON object")
+            if row.get("scoring") == "regex":
+                _refuse(
+                    line_num,
+                    "field 'expected' of a 'scoring: regex' row is a pattern, not a "
+                    "reference answer; drop the row or use another scoring",
+                )
+            if "expected" not in row:
+                _refuse(line_num, "field 'expected' is missing")
+            expected = row["expected"]
+            if expected is None:
+                _refuse(line_num, "field 'expected' is null")
+            if not isinstance(expected, str):
+                _refuse(
+                    line_num,
+                    f"field 'expected' must be a string, got {type(expected).__name__}",
+                )
+            if not expected.strip():
+                _refuse(line_num, "field 'expected' is empty or whitespace-only")
+            references.append(expected)
+    return references
+
+
+def _aligned_references(
+    task_eval: str, task_count: int, judge_reference: bool
+) -> Optional[List[str]]:
+    """``--judge-reference``'s references for the loaded tasks, or ``None``.
+
+    Re-reads and re-checks the rows in the scorer builder, after the pre-load
+    check in ``_verdict_live``: a file edited in between is refused here too.
+    """
+    if not judge_reference:
+        return None
+    references = _task_references(task_eval)
+    if len(references) != task_count:
+        raise ValueError(
+            f"--judge-reference: task-eval has {len(references)} rows with an "
+            f"'expected' for {task_count} loaded tasks; the file changed while it was read"
+        )
+    return references
+
+
 def _build_judge_scorer(
-    task_eval: str, judge_model: str
+    task_eval: str, judge_model: str, *, judge_reference: bool = False
 ) -> Callable[[Callable[[str], str]], float]:
     """A ``score(gen) -> [0, 1]`` scorer for one side of a judge_score leg.
 
     Lifted out of ``_leg1_judge`` (was an inner closure) so the base side can be
     scored on its own N times for the noise floor without also scoring the tuned
     side (#403). The tasks are loaded and the evaluator built once, then reused
-    across every call.
+    across every call. ``judge_reference`` (#2520) shows each task's ``expected``
+    to the judge.
     """
     from soup_cli.eval.custom import load_eval_tasks
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # prompt-only is valid (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+    references = _aligned_references(task_eval, len(tasks), judge_reference)
     provider, model, api_base = _parse_judge_url(judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
@@ -1059,6 +1153,10 @@ def _build_judge_scorer(
             {"prompt": t.prompt, "response": answer, "category": t.category}
             for t, answer in zip(tasks, answers)
         ]
+        if references is not None:
+            # Same index, same row: the item and its reference come from one task.
+            for item, reference in zip(items, references, strict=True):
+                item["reference"] = reference
         judged = evaluator.evaluate_batch(items)
         overall = float(getattr(judged, "overall_score", scale_min))
         value = max(0.0, min(1.0, (overall - scale_min) / span))
@@ -1095,10 +1193,13 @@ def _leg1_judge(
     tuned_gen: Callable[[str], str],
     task_eval: str,
     judge_model: str,
+    *,
+    judge_reference: bool = False,
 ) -> TaskWin:
     from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
 
-    score = _build_judge_scorer(task_eval, judge_model)
+    reference_option = {"judge_reference": True} if judge_reference else {}
+    score = _build_judge_scorer(task_eval, judge_model, **reference_option)
     with group("task_eval", side="base", countable=True):
         base_score = score(base_gen)
     with group("task_eval", side="tuned", countable=True):
@@ -1109,7 +1210,10 @@ def _leg1_judge(
         )
     )
     detail = _with_task_rows(detail, base_score, tuned_score, scoring_applies=False)
-    return build_task_win("judge_score", base_score, tuned_score, detail=detail)
+    return build_task_win(
+        "judge_score", base_score, tuned_score, detail=detail,
+        judge_mode=_judge_mode_of("judge_score", judge_reference),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1382,7 +1486,7 @@ def _build_reward_scorer(
     """
     from soup_cli.eval.custom import load_eval_tasks
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # prompt-only is valid (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
 
@@ -1442,7 +1546,7 @@ def _leg1_reward(
 
 
 def _build_pairwise_scorer(
-    task_eval: str, judge_model: str
+    task_eval: str, judge_model: str, *, judge_reference: bool = False
 ) -> Callable[[Callable[[str], str], Callable[[str], str]], float]:
     """A ``winrate(gen_a, gen_b) -> [0, 1]`` scorer for a pairwise leg (#284).
 
@@ -1450,15 +1554,17 @@ def _build_pairwise_scorer(
     model judged against ITSELF (``winrate(base_gen, base_gen)``), whose expected
     value is 0.5 by construction — its spread over repeats is the combined
     decode + judge noise, directly measured rather than inferred (#403). Tasks
-    and evaluator are built once and reused.
+    and evaluator are built once and reused. ``judge_reference`` (#2520) passes
+    each task's ``expected`` with its pair, to both swap orders.
     """
     from soup_cli.eval.custom import load_eval_tasks
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
 
-    tasks = load_eval_tasks(task_eval)
+    tasks = load_eval_tasks(task_eval, require_expected=False)  # prompt-only is valid (#3240)
     if not tasks:
         raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+    references = _aligned_references(task_eval, len(tasks), judge_reference)
     provider, model, api_base = _parse_judge_url(judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
 
@@ -1468,10 +1574,15 @@ def _build_pairwise_scorer(
         from soup_cli.utils.live_eval import truncation_of
 
         pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
+        rate = (
+            pairwise_winrate(pairs, evaluator)
+            if references is None
+            else pairwise_winrate(pairs, evaluator, references=references)
+        )
         # No per-row scores: a pairwise judgment is one verdict per pair, recorded by the judge
         # rows, not here. The answers are in hand, so their truncation is counted.
         return LegScore(
-            pairwise_winrate(pairs, evaluator),
+            rate,
             truncated=tuple(truncation_of(pair[1]) for pair in pairs),
             truncated_other=tuple(truncation_of(pair[2]) for pair in pairs),
         )
@@ -1484,6 +1595,8 @@ def _leg1_pairwise(
     tuned_gen: Callable[[str], str],
     task_eval: str,
     judge_model: str,
+    *,
+    judge_reference: bool = False,
 ) -> TaskWin:
     """Leg-1 via a true pairwise judge win-rate (#284).
 
@@ -1493,7 +1606,8 @@ def _leg1_pairwise(
     """
     from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
 
-    winrate = _build_pairwise_scorer(task_eval, judge_model)
+    reference_option = {"judge_reference": True} if judge_reference else {}
+    winrate = _build_pairwise_scorer(task_eval, judge_model, **reference_option)
     with group("task_eval", side="tuned", countable=True):
         rate = winrate(base_gen, tuned_gen)
     def pairwise_detail() -> Optional[TaskDetail]:
@@ -1510,7 +1624,10 @@ def _leg1_pairwise(
             )
         return None
 
-    return build_task_win("pairwise", 0.5, rate, detail=_task_detail_or_none(pairwise_detail))
+    return build_task_win(
+        "pairwise", 0.5, rate, detail=_task_detail_or_none(pairwise_detail),
+        judge_mode=_judge_mode_of("pairwise", judge_reference),
+    )
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -1650,6 +1767,7 @@ def _build_task_floor_scorer(
     task_eval: str,
     judge_model: Optional[str],
     reward_fn: Optional[Callable[..., object]] = None,
+    judge_reference: bool = False,
 ) -> Callable[[], float]:
     """A ``() -> float`` closure scoring the BASE side's leg-1 task axis once.
 
@@ -1657,7 +1775,14 @@ def _build_task_floor_scorer(
     noise-floor repeat so the spread reflects run-to-run variance, not setup.
     The judge modes require a judge model; its presence is validated upstream in
     ``_verdict_live``, so a missing one here is a programming error.
+    ``judge_reference`` (#2520) makes the floor judge with the same template as
+    the leg it guards, so the floor measures the noise of that instrument.
     """
+    if judge_reference and task_mode not in JUDGE_TASK_MODES:
+        raise ValueError(
+            f"--judge-reference applies only to --task-mode judge_score or pairwise, "
+            f"not {task_mode}"
+        )
     if task_mode == "metric":
         from soup_cli.eval.custom import load_eval_tasks, run_eval
 
@@ -1683,9 +1808,11 @@ def _build_task_floor_scorer(
 
     if not judge_model:
         raise ValueError(f"--task-mode {task_mode} needs a judge model")
+    # Passed only when set, so the builders' call shape is unchanged without it.
+    reference_option = {"judge_reference": True} if judge_reference else {}
 
     if task_mode == "judge_score":
-        judge_scorer = _build_judge_scorer(task_eval, judge_model)
+        judge_scorer = _build_judge_scorer(task_eval, judge_model, **reference_option)
 
         def _judge_score() -> float:
             return judge_scorer(base_gen)
@@ -1693,7 +1820,7 @@ def _build_task_floor_scorer(
         return _judge_score
 
     if task_mode == "pairwise":
-        pairwise_scorer = _build_pairwise_scorer(task_eval, judge_model)
+        pairwise_scorer = _build_pairwise_scorer(task_eval, judge_model, **reference_option)
 
         def _pairwise_score() -> float:
             # The base judged against itself: expected 0.5 by construction, so
@@ -1716,6 +1843,7 @@ def _measure_noise_floor(
     judge_model: Optional[str],
     forgetting_threshold: float,
     reward_fn: Optional[Callable[..., object]] = None,
+    judge_reference: bool = False,
 ) -> NoiseFloor:
     """Re-run the BASE model ``runs`` times and return the measured spread.
 
@@ -1763,6 +1891,7 @@ def _measure_noise_floor(
         task_eval=task_eval,
         judge_model=judge_model,
         reward_fn=reward_fn,
+        judge_reference=judge_reference,
     )
 
     samples: List[Dict[str, float]] = []
@@ -1983,6 +2112,7 @@ def _verdict_live(
     gate_inputs: Optional[GateInputs] = None,
     before_models: Optional[Callable[[], None]] = None,
     reward_fn: Optional[str] = None,
+    judge_reference: bool = False,
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1).
 
@@ -2078,6 +2208,22 @@ def _verdict_live(
             _EXIT_USAGE,
         )
 
+    # --judge-reference (#2520): check every task row's ``expected`` before the
+    # adapter-noop shortcut and before any model loads, so a bad reference file
+    # is a usage error (exit 2) found in seconds, not after a model load. The
+    # scorer builders read and check the rows again when they build.
+    if judge_reference:
+        if task_mode not in JUDGE_TASK_MODES:
+            _fail(
+                "--judge-reference applies only to --task-mode judge_score or pairwise, "
+                f"not {task_mode}",
+                _EXIT_USAGE,
+            )
+        try:
+            _task_references(task_eval)
+        except (ValueError, OSError, UnicodeDecodeError) as exc:
+            _fail(str(exc), _EXIT_USAGE)
+
     # Read the adapter before either model loads: an all-zero lora_B adds
     # nothing, and the live eval would only reach "task did not improve" (#2410).
     # An empty --adapter / --tuned is absent (the checks above treat "" as not given), so it is
@@ -2091,6 +2237,7 @@ def _verdict_live(
             task_win=TaskWin(
                 mode=task_mode, base=0.0, tuned=0.0, won=False,
                 reward=None if reward_target is None else reward_target.spec,
+                judge_mode=_judge_mode_of(task_mode, judge_reference),
             ),
             benchmark_deltas=(),
             failed_rule=FAILED_ADAPTER_NOOP,
@@ -2105,6 +2252,8 @@ def _verdict_live(
     # the file is run HERE: after the run is known to evaluate, before any model loads
     reward_callable = _load_reward_callable(reward_target) if reward_target is not None else None
     tuned_id = tuned if tuned else base
+    # Passed on only when set: the helpers' call shape is unchanged without it.
+    reference_option = {"judge_reference": True} if judge_reference else {}
     try:
         template_options = (
             {"chat_template_kwargs": chat_template_kwargs}
@@ -2127,11 +2276,16 @@ def _verdict_live(
                 judge_model=judge_model,
                 forgetting_threshold=forgetting_threshold,
                 reward_fn=reward_callable,
+                **reference_option,
             )
         if task_mode == "judge_score":
-            task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
+            task_win = _leg1_judge(
+                base_gen, tuned_gen, task_eval, judge_model, **reference_option
+            )
         elif task_mode == "pairwise":
-            task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
+            task_win = _leg1_pairwise(
+                base_gen, tuned_gen, task_eval, judge_model, **reference_option
+            )
         elif task_mode == MODE_REWARD:
             task_win = _leg1_reward(
                 base_gen, tuned_gen, task_eval, reward_callable, reward_target.spec
@@ -2371,12 +2525,12 @@ def _emit_and_exit(
     push: Optional[str] = None,
 ) -> None:
     console.print(render_ship_panel(verdict))
-    # The per-row file goes first so the verdict can name it only when it exists. A failure to
-    # write it is reported after the verdict, the evidence and the PR comment are out (exit 1):
-    # it is part of the evidence, and nothing here claims a file that was not written.
+    # The per-row file goes first so the verdict can name it only when it exists. Each requested
+    # output is attempted independently: one failed path must not hide another useful artifact or
+    # suppress the explicitly requested best-effort PR comment.
     records = verdict.task_win.detail.records if verdict.task_win.detail is not None else None
     rows_pointer: Optional[str] = None
-    rows_error: Optional[Exception] = None
+    write_errors: list[str] = []
     if output and records:
         try:
             rows_path = write_task_rows(records, output)
@@ -2386,7 +2540,9 @@ def _emit_and_exit(
                 f"({len(records)} rows; it holds your prompts and the answers)"
             )
         except (OSError, ValueError, TypeError) as exc:
-            rows_error = exc
+            write_errors.append(
+                f"cannot write the task rows next to --output: {type(exc).__name__}: {exc}"
+            )
     if output:
         try:
             atomic_write_text(
@@ -2395,7 +2551,7 @@ def _emit_and_exit(
             )
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError, TypeError) as exc:
-            _fail(f"cannot write --output: {type(exc).__name__}: {exc}", _EXIT_RUNTIME)
+            write_errors.append(f"cannot write --output: {type(exc).__name__}: {exc}")
     if emit_evidence and verdict.failed_rule == FAILED_ADAPTER_NOOP:
         # Nothing was measured; 0.0 placeholder scores must not replay as evidence.
         console.print("[yellow]Warning:[/] no scores were measured; evidence not written")
@@ -2417,24 +2573,18 @@ def _emit_and_exit(
             )
             console.print(f"[green]Wrote evidence[/] {escape(emit_evidence)}")
         except (OSError, ValueError, TypeError) as exc:
-            _fail(
-                f"cannot write --emit-evidence: {type(exc).__name__}: {exc}",
-                _EXIT_RUNTIME,
+            write_errors.append(
+                f"cannot write --emit-evidence: {type(exc).__name__}: {exc}"
             )
+    # Reported before the push: a transport error escaping _push_pr_comment must not swallow them.
+    for message in write_errors:
+        console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
     # Post the PR comment BEFORE the DON'T-SHIP exit so a regression is still
     # announced on the PR (the gate then blocks with exit 2).
     if push:
         _push_pr_comment(verdict, push)
-    if rows_error is not None:
-        message = (
-            f"cannot write the task rows next to --output: {type(rows_error).__name__}: "
-            f"{rows_error}"
-        )
-        if verdict.decision == DECISION_SHIP:
-            _fail(message, _EXIT_RUNTIME)
-        # a DON'T SHIP keeps its own exit code (2): a pipeline that retries on exit 1 must not
-        # run a finished verdict again; the error is printed all the same
-        console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
+    if write_errors and verdict.decision == DECISION_SHIP:
+        raise typer.Exit(code=_EXIT_RUNTIME)
     if verdict.decision != DECISION_SHIP:
         raise typer.Exit(code=_EXIT_DONT_SHIP)
 
@@ -2583,6 +2733,11 @@ def ship(
         help="JSONL of held-out edits for --gate loop-v2: {edit_id, prompt, expected, original}. "
         "Check 2: the new version must not be significantly worse on them.",
     ),
+    judge_reference: bool = typer.Option(
+        False, "--judge-reference",
+        help="Show the judge each task's `expected` answer as a reference "
+        "(--task-mode judge_score or pairwise; live runs only).",
+    ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     if progress is not None and progress != "jsonl":
@@ -2624,6 +2779,8 @@ def ship(
     template_kwargs = _parse_chat_template_kwargs(chat_template_kwargs)
     if evidence and chat_template_kwargs is not None:
         _fail("--chat-template-kwargs applies only to a live run, not --evidence", _EXIT_USAGE)
+    if evidence and judge_reference:
+        _fail("--judge-reference applies only to a live run, not --evidence", _EXIT_USAGE)
     # `is not None` (not truthiness): an explicit empty --config must fail loud
     # through _parse_ship_config, not silently disable the staleness gate.
     if config is not None:
@@ -2672,6 +2829,13 @@ def ship(
                 "it was scored with, and an offline replay never runs a file)",
                 _EXIT_USAGE,
             )
+    # After the config fill: the task mode can come from eval.ship.task_mode.
+    if judge_reference and task_mode not in JUDGE_TASK_MODES:
+        _fail(
+            "--judge-reference applies only to --task-mode judge_score or pairwise, "
+            f"not {task_mode}",
+            _EXIT_USAGE,
+        )
     threshold = _validate_threshold_flag(forgetting_threshold)
     noise_floor = _validate_noise_floor_flag(noise_floor)
     # Before any model loads and before anything is written: an output may not replace one of
@@ -2803,6 +2967,7 @@ def ship(
             **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
             **({"base_adapter": base_adapter} if base_adapter is not None else {}),
             **({"gate_inputs": gate_inputs} if gate_inputs is not None else {}),
+            **({"judge_reference": True} if judge_reference else {}),
         )
         stopped_input = warn_stopped_inputs(
             base, tuned, adapter, base_adapter, stderr=progress != "jsonl",

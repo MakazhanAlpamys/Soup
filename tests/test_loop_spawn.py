@@ -245,6 +245,9 @@ class TestADetachedDaemonRunsItsChildToTheEnd:
     """The real spawn helper under the daemon's own flags, with a stub child (no GPU, no soup)."""
 
     def test_a_stub_child_of_a_detached_process_runs_with_no_console_window(self, tmp_path):
+        # Real detached Popen cannot be mocked: checking that the Windows kernel allocates no
+        # console window (kernel32.GetConsoleWindow() == 0) for a child spawned by a detached
+        # daemon exercises actual OS creation flags (CREATE_NO_WINDOW vs DETACHED_PROCESS).
         stub = tmp_path / "stub_child.py"
         stub.write_text(_STUB_CHILD, encoding="utf-8")
         marker, log, result = tmp_path / "marker", tmp_path / "child.log", tmp_path / "rc"
@@ -253,10 +256,18 @@ class TestADetachedDaemonRunsItsChildToTheEnd:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             **detached_popen_kwargs("nt"),
         )
-        deadline = time.monotonic() + 120
-        while not result.exists() and time.monotonic() < deadline:
-            time.sleep(0.25)
-        middle.wait(timeout=30)
+        try:
+            deadline = time.monotonic() + 120
+            while not result.exists() and time.monotonic() < deadline:
+                time.sleep(0.25)
+                if middle.poll() is not None:
+                    time.sleep(0.25)
+                    break
+            middle.wait(timeout=30)
+        finally:
+            if middle.poll() is None:
+                middle.kill()
+                middle.wait(timeout=10)
 
         assert result.exists(), "the detached daemon stand-in wrote no result"
         assert result.read_text(encoding="utf-8") == "0"

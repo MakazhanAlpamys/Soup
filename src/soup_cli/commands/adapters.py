@@ -921,8 +921,8 @@ def arithmetic(
     config_overrides: Optional[dict[str, object]] = None
 
     if use_concat:
-        # Bake each adapter's own decode-time scaling (lora_alpha/r) into its A
-        # block so a single-scaling output reproduces Σ cᵢ·(effective ΔWᵢ). Use
+        # Bake each adapter's decode-time scaling (alpha/r, or alpha/sqrt(r) for
+        # rsLoRA) into its A block so unit-scaled output reproduces Σ cᵢ·(effective ΔWᵢ). Use
         # an explicit `is None` fallback so a valid scaling of 0.0 (lora_alpha=0,
         # r>0 — an intentionally zeroed task vector) is NOT silently promoted to
         # 1.0 by `or`.
@@ -943,13 +943,13 @@ def arithmetic(
                 "nothing to merge.[/]"
             )
             raise typer.Exit(1)
-        # Output is a single-scaling adapter: r == lora_alpha == new_rank. Clear
-        # any per-module rank_pattern/alpha_pattern (v0.39.0) carried over from
-        # the template source — the concat output is uniform-rank, so stale
-        # per-module overrides would mis-scale it.
+        # Input scalings are baked in: ordinary LoRA with r == lora_alpha gives
+        # unit output scaling. Clear rsLoRA and per-module rank/alpha overrides
+        # inherited from the template so they cannot scale the result again.
         config_overrides = {
             "r": new_rank,
             "lora_alpha": new_rank,
+            "use_rslora": False,
             "rank_pattern": {},
             "alpha_pattern": {},
         }
@@ -1641,9 +1641,50 @@ def adapter_pr(
     )
 
 
+def _closes_at_word_end(command: str, index: int) -> bool:
+    """Whether the ``'`` at ``index``, inside a word, opens a single-quoted group.
+
+    It does when the next ``'`` of the command ends a word (whitespace or the end
+    of the command follows it): ``--opt='a b'`` is ``--opt=a b``. Otherwise it is
+    a literal character, as an apostrophe is: ``don't``, ``a'b c``, ``O'Brien``,
+    an unclosed ``--opt='a b``, and ``don't stop 'x'`` (the next ``'`` opens a
+    word, it does not end one) keep it. So does a ``'`` followed by a ``"`` that
+    opens a double-quoted group before the next ``'``: in ``don't "James' file"``
+    the ``'`` of ``James'`` is inside that group, and ``don't`` stays one word.
+    A ``"`` after an odd number of backslashes is a literal character, as in
+    :func:`_split_windows_command`, and opens no group.
+    """
+    length = len(command)
+    position = index + 1
+    while position < length:
+        char = command[position]
+        if char == "\\":
+            run_end = position
+            while run_end < length and command[run_end] == "\\":
+                run_end += 1
+            if run_end < length and command[run_end] == '"' and (run_end - position) % 2:
+                position = run_end + 1
+            else:
+                position = run_end
+            continue
+        if char == '"':
+            return False
+        if char == "'":
+            return position + 1 == length or command[position + 1] in " \t"
+        position += 1
+    return False
+
+
 def _split_windows_command(command: str) -> list[str]:
     """Split a command line according to Microsoft C runtime rules,
     with single-quote grouping support for cross-platform compatibility.
+
+    A ``'`` that starts a word groups to the next ``'``. A ``'`` inside a word
+    groups only as :func:`_closes_at_word_end` says, so ``--opt='a b'`` groups as
+    ``--opt="a b"`` does. A ``'`` that ends a word (whitespace or the end of the
+    command follows it, as in ``dogs' and cats'``) never opens a group, and
+    neither does a ``'`` inside double quotes or after a backslash: each is a
+    literal character.
     """
     args: list[str] = []
     current: list[str] = []
@@ -1673,7 +1714,15 @@ def _split_windows_command(command: str) -> list[str]:
                 current.append(char)
                 index += 1
                 continue
-            elif char == "'" and not has_token:
+            elif char == "'" and (
+                not has_token
+                or (
+                    # A ' that ends a word (dogs') stays a literal character.
+                    index + 1 < length
+                    and command[index + 1] not in " \t"
+                    and _closes_at_word_end(command, index)
+                )
+            ):
                 in_squote = True
                 has_token = True
                 index += 1
@@ -1701,6 +1750,10 @@ def _split_windows_command(command: str) -> list[str]:
                         index += 1
             else:
                 current.append("\\" * num_bs)
+                if index < length and command[index] == "'":
+                    # A backslash before ``'`` keeps it a literal character.
+                    current.append("'")
+                    index += 1
             continue
 
         if char == '"':
@@ -1754,6 +1807,9 @@ def adapter_bisect(
         help=(
             "Command template (no shell); '{ckpt}' is replaced with each "
             "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
+            "Quotes group words on every platform. On Windows a single quote groups "
+            "when it starts a word ('a b') or when its closing quote ends the word "
+            "(--opt='a b'); any other ' (don't) is a literal character. "
             "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
         ),
     ),

@@ -955,7 +955,7 @@ def split_markdown_by_headings(text: str) -> List[Mapping[str, Any]]:
         if m:
             _flush()
             if len(sections) >= _MAX_MD_SECTIONS:
-                break
+                return sections
             current_section = m.group(2).strip()
             current_level = len(m.group(1))
             body = []

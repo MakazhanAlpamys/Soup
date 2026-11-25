@@ -11,10 +11,12 @@ a duplicate. The checks run against the real crash: the state write is made to f
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 import soup_cli.utils.loop_daemon as loop_daemon
+import soup_cli.utils.loop_log as loop_log_module
 from soup_cli.utils.canary_router import CanaryPolicy, record_bucket_outcome
 from soup_cli.utils.loop_daemon import WatchConfig, run_once, watch
 from soup_cli.utils.loop_log import LoopLog
@@ -43,6 +45,27 @@ def _version(to_version=2, cause="promote", iteration_id="iter-1"):
 
 
 class TestLogLevel:
+    def test_deeply_nested_line_does_not_break_dedup_or_later_appends(self, cwd):
+        log = LoopLog(str(cwd / "logs"))
+        path = cwd / "logs" / "versions.jsonl"
+
+        assert log.version(_version()) is True
+        with path.open("ab") as handle:
+            handle.write(b"[" * 10_000 + b"]" * 10_000 + b"\n")
+
+        assert log.version({**_version(), "id": "duplicate"}) is True
+        assert log.version(_version(to_version=3)) is True
+
+        valid = []
+        for raw in path.read_bytes().splitlines():
+            try:
+                record = json.loads(raw)
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(record, dict):
+                valid.append(record)
+        assert [record["to_version"] for record in valid] == [2, 3]
+
     def test_the_same_iteration_and_outcome_is_written_once(self, cwd):
         log = LoopLog(str(cwd / "logs"))
 
@@ -95,6 +118,128 @@ class TestLogLevel:
         log.progress({"schema_version": 1, "id": "p2", "iteration_id": "x", "stage": "train"})
 
         assert len(_lines(cwd / "logs" / "progress.jsonl")) == 2
+
+    def test_large_log_is_scanned_once_then_only_new_bytes_are_read(self, cwd, monkeypatch):
+        path = cwd / "logs" / "iterations.jsonl"
+        path.parent.mkdir()
+        target = _iteration("iter-target", "skipped")
+        rows = [
+            {"schema_version": 1, "iteration_id": f"iter-{i}", "outcome": "skipped"}
+            for i in range(20_000)
+        ]
+        rows.append(target)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+        reads = []
+        real_read = loop_log_module.os.read
+
+        def record_read(fd, size):
+            data = real_read(fd, size)
+            reads.append(len(data))
+            return data
+
+        monkeypatch.setattr(loop_log_module.os, "read", record_read)
+        log = LoopLog(str(path.parent))
+        assert log.iteration(target) is True
+        assert sum(reads) >= path.stat().st_size
+
+        reads.clear()
+        later = _iteration("iter-later", "skipped")
+        assert log.iteration(later) is True
+        assert log.iteration(later) is True
+
+        assert sum(reads) < 2048
+        assert sum(line.get("iteration_id") == "iter-later" for line in _lines(path)) == 1
+
+    def test_incremental_index_observes_an_append_from_another_writer(self, cwd):
+        first = LoopLog(str(cwd / "logs"))
+        warm = _iteration("iter-warm", "skipped")
+        target = _iteration("iter-external", "canary")
+        first.iteration(warm)
+        assert first.iteration({**warm, "id": "different-id"}) is True
+
+        loop_log_module.append_json_line(str(cwd / "logs" / "iterations.jsonl"), target)
+        assert first.iteration(target) is True
+
+        assert sum(line.get("iteration_id") == "iter-external"
+                   for line in _lines(cwd / "logs" / "iterations.jsonl")) == 1
+
+    def test_restart_rebuilds_the_idempotency_index_from_existing_logs(self, cwd):
+        first = LoopLog(str(cwd / "logs"))
+        target = _iteration("iter-restart", "promoted")
+        first.iteration(target)
+
+        restarted = LoopLog(str(cwd / "logs"))
+        assert restarted.iteration({**target, "id": "different-id"}) is True
+
+        assert len(_lines(cwd / "logs" / "iterations.jsonl")) == 1
+
+    def test_truncating_a_log_invalidates_the_cached_index(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        target = _iteration("iter-after-truncate", "failed")
+        log.iteration(target)
+        assert log.iteration({**target, "id": "different-id"}) is True
+        path.write_bytes(b"")
+
+        assert log.iteration(target) is True
+        assert len(_lines(path)) == 1
+
+    def test_same_size_rewrite_invalidates_the_cached_index(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        old = _iteration("iter-same-size", "canary")
+        replacement = _iteration("iter-same-size", "failed")
+        log.iteration(old)
+        assert log.iteration({**old, "id": "different-id"}) is True
+        old_stat = path.stat()
+        old_size = path.stat().st_size
+        path.write_bytes((json.dumps(replacement) + "\n").encode("utf-8"))
+        rewritten = path.stat()
+        os.utime(path, ns=(rewritten.st_atime_ns, old_stat.st_mtime_ns + 2_000_000_000))
+        assert path.stat().st_size == old_size
+        assert path.stat().st_mtime_ns != old_stat.st_mtime_ns
+
+        assert log.iteration(old) is True
+        assert len(_lines(path)) == 2
+
+    def test_replacing_log_inode_invalidates_the_cached_index(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        target = _iteration("iter-replaced", "canary")
+        replacement = _iteration("iter-replaced", "failed")
+        log.iteration(target)
+        assert log.iteration({**target, "id": "different-id"}) is True
+
+        replacement_path = path.with_name("iterations-replacement.jsonl")
+        replacement_path.write_bytes((json.dumps(replacement) + "\n").encode("utf-8"))
+        os.replace(replacement_path, path)
+
+        assert log.iteration(target) is True
+        rows = _lines(path)
+        assert sum(row.get("outcome") == "canary" for row in rows) == 1
+        assert sum(row.get("outcome") == "failed" for row in rows) == 1
+
+    def test_changed_bytes_before_old_end_are_detected_when_log_grows(self, cwd):
+        path = cwd / "logs" / "iterations.jsonl"
+        log = LoopLog(str(path.parent))
+        target = _iteration("iter-anchor", "canary")
+        replacement = _iteration("iter-anchor", "failed")
+        log.iteration(target)
+        assert log.iteration({**target, "id": "different-id"}) is True
+        original_size = path.stat().st_size
+
+        replacement_bytes = (json.dumps(replacement) + "\n").encode("utf-8")
+        assert len(replacement_bytes) == original_size
+        path.write_bytes(replacement_bytes)
+        loop_log_module.append_json_line(
+            str(path), _iteration("iter-after-anchor", "skipped")
+        )
+
+        assert log.iteration(target) is True
+        rows = _lines(path)
+        assert sum(row.get("outcome") == "canary" for row in rows) == 1
+        assert sum(row.get("outcome") == "failed" for row in rows) == 1
 
 
 class TestEveryIterationGetsItsLine:

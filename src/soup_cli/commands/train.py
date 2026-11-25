@@ -214,6 +214,14 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
 
 UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
 
+#: The runs that ``--resume`` and ``--hf-resume`` refuse, for both help texts
+#: (#3086 T-3): the ReLoRA check in ``train`` and each branch of
+#: :func:`_resume_refusal`. A refusal added there is named here too.
+RESUME_REFUSED_RUNS_HELP = (
+    "training.relora_steps is configured, for task: unlearn or task: ppo, and on "
+    "backend: mlx for a full fine-tune (lora.r: 0) or task: grpo"
+)
+
 
 def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
     """Why ``flag`` (``--resume`` / ``--hf-resume``) cannot run for ``cfg``, or None."""
@@ -279,6 +287,69 @@ def _format_duration_display(result: dict) -> str:
     hours = int(duration_secs // 3600)
     minutes = int((duration_secs % 3600) // 60)
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
+def _completion_commands(
+    output_dir: object,
+    merge_note: str | None = None,
+    *,
+    windows_separators: bool | None = None,
+    backend_hint: str = "",
+    dequantize_hint: str = "",
+) -> str:
+    """The follow-up commands of the completion panel, as Rich markup.
+
+    ``output_dir`` is the config's ``output``. The commands are for pasting into a shell of
+    unknown kind, so the path goes through ``paste_arg`` (same text for POSIX shells,
+    PowerShell and cmd.exe). When no such spelling exists, prose refers to the Output path
+    in the panel. ``for_terminal`` keeps Rich markup and control characters in the path
+    from reaching the console. ``merge_note`` replaces the
+    ``soup merge`` line when the output needs no merge. ``windows_separators`` (default:
+    this host spells paths with backslashes) writes a nested path with forward slashes.
+    ``backend_hint`` (`` --backend mlx``) follows ``soup chat`` and ``soup merge``, and
+    ``dequantize_hint`` (`` --dequantize``) follows the merge adapter argument; both are
+    fixed flags that the caller derives from the config, not text from it.
+    """
+    from soup_cli.utils.paths import paste_arg
+    from soup_cli.utils.terminal import for_terminal
+
+    if windows_separators is None:
+        windows_separators = os.sep == "\\"
+    spelled = paste_arg(output_dir, windows_separators=windows_separators)
+    if spelled is None:
+        chat_options = f" and add {backend_hint.strip()}" if backend_hint else ""
+        merge_options = " and ".join(
+            option.strip() for option in (backend_hint, dequantize_hint) if option
+        )
+        merge_flags = f" and add {merge_options}" if merge_options else ""
+        return "\n".join((
+            f"Quick test: For soup chat, use the Output path above as --model{chat_options}.",
+            "Push to HF: For soup push, use the Output path above as --model "
+            "and supply the repository ID with --repo.",
+            merge_note if merge_note is not None else (
+                "Merge LoRA: For soup merge, use the Output path above as --adapter"
+                f"{merge_flags}."
+            ),
+            "Export GGUF: For soup export, use the Output path above as --model.",
+            "[dim]Use your shell's quoting rules for the Output path. "
+            "Enter the original value from your config if the display shows escapes.[/]",
+        ))
+
+    shown = for_terminal(spelled)
+    merge_line = (
+        merge_note
+        if merge_note is not None
+        else (
+            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {shown}"
+            f"{dequantize_hint}"
+        )
+    )
+    return "\n".join((
+        f"Quick test:  [bold]soup chat{backend_hint} --model {shown}[/]",
+        f"Push to HF:  [bold]soup push --model {shown}[/]",
+        merge_line,
+        f"Export GGUF: [bold]soup export --model {shown}[/]",
+    ))
 
 
 def _run_auto_eval_after_training(
@@ -1252,7 +1323,7 @@ def train(
         "-r",
         help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
         "on the MLX backend, a path to a .safetensors adapter file instead. "
-        "Not supported when training.relora_steps is configured",
+        f"Not supported when {RESUME_REFUSED_RUNS_HELP}",
     ),
     wandb: bool = typer.Option(
         False,
@@ -1345,7 +1416,7 @@ def train(
         help=(
             "Download the latest checkpoint branch from the --push-as repo "
             "and resume from it. Requires --push-as; not supported when "
-            "training.relora_steps is configured."
+            f"{RESUME_REFUSED_RUNS_HELP}."
         ),
     ),
     find_lr: bool = typer.Option(
@@ -1887,13 +1958,15 @@ def train(
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
+        from soup_cli.utils.terminal import for_terminal as _plan_text
+
         console.print(
             Panel(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
-                f"[bold]Run:[/] {markup_escape(plan.run_command)}",
+                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n\n"
+                f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
@@ -1915,6 +1988,21 @@ def train(
             "command above (or re-run with --cloud-submit)."
         )
         raise typer.Exit(0)
+
+    # --- Layer streaming is single-process (#2585) ---
+    # The earliest point that knows WORLD_SIZE: after the config is loaded and the cloud
+    # hand-off (which runs elsewhere), before the dataset, the Hub resume pull, the run
+    # record and any model work. The trainer setup repeats the check for callers that
+    # never come through this command. Not a config validator: other commands load the
+    # same config in shells where a launcher variable may be left over.
+    if getattr(cfg.training, "stream_layers", False):
+        from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
+
+        try:
+            refuse_if_distributed_launch()
+        except ValueError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
 
     # --- --push-as / --hf-resume validation ---
     if push_as:
@@ -1939,12 +2027,14 @@ def train(
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
         from soup_cli.config.eval_gate_support import eval_gate_refusal
+        from soup_cli.config.loader import print_config_refusal
         from soup_cli.config.schema import EvalGateConfig
         from soup_cli.eval.gate import load_suite
 
         refusal = eval_gate_refusal(task=cfg.task, backend=cfg.backend)
         if refusal is not None:
-            console.print(f"[red]{for_terminal(refusal)}[/]")
+            # The lines the same gate gets when it is set in the config file.
+            print_config_refusal(refusal)
             raise typer.Exit(1)
 
         try:
@@ -2640,6 +2730,8 @@ def train(
 
     # Start experiment tracking
     from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.utils.cost_history import cost_history_eligible
+    from soup_cli.utils.launcher import is_in_distributed
 
     tracker = ExperimentTracker()
     run_base = cfg.base
@@ -2651,6 +2743,15 @@ def train(
         gpu_info=gpu_info,
         experiment_name=experiment_name,
         run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
+        cost_history_eligible=cost_history_eligible(
+            task=cfg.task,
+            resume_from=resume_from,
+            device=device,
+            gpu_count=gpu_info.get("gpu_count"),
+            distributed=is_in_distributed(),
+            fsdp=fsdp,
+            ds_config_path=ds_config_path,
+        ),
     )
     # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
     # _reconcile_orphaned_run to ever notice the process is gone — the
@@ -2974,16 +3075,22 @@ def train(
     dequantize_hint = (
         " --dequantize" if cfg.backend == "mlx" and cfg.training.quantization == "4bit" else ""
     )
-    merge_hint = (
+    merge_note = (
         "Full fine-tuning output is a standalone model; no soup merge is needed"
         if cfg.backend == "mlx" and cfg.training.lora.r == 0
         else
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else (
-            f"[bold]Merge LoRA:[/]  soup merge{backend_hint} --adapter {result['output_dir']}"
-            f"{dequantize_hint}"
-        )
+        else None
+    )
+
+    from soup_cli.utils.terminal import for_terminal as _for_terminal
+
+    completion_commands = _completion_commands(
+        result["output_dir"],
+        merge_note,
+        backend_hint=backend_hint,
+        dequantize_hint=dequantize_hint,
     )
 
     if manual_stop.stopped:
@@ -2997,12 +3104,9 @@ def train(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
-            f"Output: [bold]{result['output_dir']}[/]\n"
+            f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat{backend_hint} --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"{merge_hint}\n"
-            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
+            f"{completion_commands}\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title=title,
         )

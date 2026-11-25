@@ -500,10 +500,27 @@ def _release_for(context: dict[str, Any]) -> str:
     return _render(_decide_step()["env"]["RELEASE"], context)
 
 
+def _live_label_from_payload(context: dict[str, Any]) -> dict[str, Any]:
+    """*context* with the `labels` step's answer filled in from the event's own payload.
+
+    Since 2026-11-23 the decision reads `steps.labels.outputs.ci_full`, the pull request's labels
+    as the API reports them when `plan` runs (tests/test_ci_plan_live_labels.py). A test that
+    names no answer means that the API agrees with the payload, which is the case for every
+    row of ``EVENTS``; one that wants them to differ passes its own `steps` and keeps it.
+    """
+    if "steps" in context:
+        return context
+    event = context["github"].get("event", {})
+    labels = (event.get("pull_request") or {}).get("labels", [])
+    present = any(str(item.get("name", "")).lower() == LABEL for item in labels)
+    answer = "true" if present else "false"
+    return {**context, "steps": {"labels": {"outputs": {"ci_full": answer}}}}
+
+
 def _approval_for(context: dict[str, Any]) -> str:
     expression = _decide_step()["env"].get("APPROVAL")
     assert isinstance(expression, str), "the decide step must compute APPROVAL in its env"
-    return _render(expression, context)
+    return _render(expression, _live_label_from_payload(context))
 
 
 def _runs(job: str, context: dict[str, Any]) -> bool:

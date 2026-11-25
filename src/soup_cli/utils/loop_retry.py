@@ -45,6 +45,9 @@ from typing import Any, Mapping, Optional
 RETRY_DELAYS_SEC = (300.0, 1800.0)
 #: Failures on the same inputs after which the loop holds.
 ATTEMPT_LIMIT = len(RETRY_DELAYS_SEC) + 1
+#: Upper bound ``LoopState`` accepts for a persisted attempt counter. A streak
+#: that never holds (a training-only one) must not grow past it (#3221).
+MAX_FAILED_ATTEMPTS = 100
 
 _REASON_CHARS = 300
 #: The stages whose exception is remembered.
@@ -104,6 +107,11 @@ def train_inputs_fingerprint(state: Any, data_path: str, method: str) -> Optiona
                 for chunk in iter(lambda: handle.read(_READ_CHUNK), b""):
                     digest.update(chunk)
     except OSError:
+        # A failed read may have absorbed one or more chunks already. Start a
+        # fresh digest so the fallback key depends only on the path (and the
+        # identity below), not on the offset where the read happened to fail
+        # (#3222).
+        digest = hashlib.sha256()
         digest.update(f"unreadable:{os.path.abspath(os.path.normpath(data_path))}:".encode())
     recipe = state.effective_sft_recipe() if method == "sft" else None
     identity = {
@@ -216,6 +224,11 @@ def after_failure(
     """
     same = isinstance(previous, Mapping) and previous.get("inputs") == fingerprint
     attempts = int(previous["attempts"]) + 1 if same else 1
+    # A persisted count never goes above the bound, on either branch: a
+    # training-only streak never holds, and a saturated streak followed by a
+    # raised stage must end held at the bound, not at 101 that LoopState
+    # refuses (#3221).
+    attempts = min(attempts, MAX_FAILED_ATTEMPTS)
     held = attempts >= ATTEMPT_LIMIT and hold_after_limit
     wait = timedelta(seconds=RETRY_DELAYS_SEC[min(attempts, len(RETRY_DELAYS_SEC)) - 1])
     return {

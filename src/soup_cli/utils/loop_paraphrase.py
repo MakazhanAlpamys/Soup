@@ -39,7 +39,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
-from soup_cli.utils.loop_feedback import EditedAnswer, LogStats, _iter_objects
+from soup_cli.utils.loop_feedback import _UUID, EditedAnswer, LogStats, _iter_objects
 from soup_cli.utils.loop_formats import DEFAULT_LAYOUT, SCHEMA_VERSION, prompt_hash
 from soup_cli.utils.loop_log import append_json_line, utc_now_iso
 from soup_cli.utils.loop_stages import TOOL_AUTH_TOKEN_ENV, _endpoint_is_local
@@ -346,7 +346,6 @@ def paraphrase_edit(
 # Reading paraphrases.jsonl
 # ---------------------------------------------------------------------------
 
-_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _HASH = re.compile(r"[0-9a-f]{64}")
 
 
