@@ -2617,7 +2617,7 @@ def review_cmd(
 
     shown = 0
     non_objects = SkipTally("lines skipped (JSON values that are not objects)")
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for line_number, line in enumerate(fh, start=1):
             if shown >= sample:
                 break
