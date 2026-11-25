@@ -7,10 +7,11 @@ Top-level CLI command (NOT a sub-group) — operators type:
     soup diagnose <run-id> --badge diagnose.svg
     soup diagnose <run-id> --output diagnose.json --attach-to-registry <id>
 
-Since v0.71.7 (#165) the six probe runners (forgetting / refusal / format /
-mode_collapse / memorization / contamination) run LIVE when ``--base-model``
-is supplied: the model (+ optional ``--adapter`` LoRA path, ``--dataset``,
-``--tokenizer``) is loaded and each probe is fed real generator output via
+Since v0.71.7 (#165) the probe runners (forgetting / refusal / format /
+mode_collapse / memorization / contamination, and citation since v0.71.10)
+run LIVE when ``--base-model`` is supplied: the model (+ optional
+``--adapter`` LoRA path, ``--dataset``, ``--tokenizer``) is loaded and
+each probe is fed real generator output via
 ``soup_cli.utils.diagnose.live.run_live_diagnose``. Without ``--base-model``
 the command computes scores from ``--evidence`` JSON or defaults to neutral OK.
 """
@@ -288,8 +289,10 @@ def diagnose(
         "--base-model",
         help=(
             "Base model id to LOAD for a live diagnose run (e.g. "
-            "HuggingFaceTB/SmolLM2-135M). When set, the 6 probes run live "
-            "against the model instead of emitting neutral scores."
+            "HuggingFaceTB/SmolLM2-135M). When set, the report's probes run "
+            "live against the model instead of emitting neutral scores; "
+            "format, memorization and citation need --dataset, and citation "
+            "only RAFT-shaped rows."
         ),
     ),
     dataset: Optional[str] = typer.Option(
@@ -346,9 +349,9 @@ def diagnose(
         ),
     ),
 ) -> None:
-    """Compute a 6-mode FailureReport for a completed run.
+    """Compute a 7-mode FailureReport for a completed run.
 
-    With ``--base-model`` the six probes run LIVE against the loaded model
+    With ``--base-model`` the report's probes run LIVE against the loaded model
     (+ optional ``--adapter`` LoRA path, ``--dataset``, ``--holdout``, ``--tokenizer``).
     Without it, scores come from ``--evidence`` JSON or default to neutral OK.
     """
