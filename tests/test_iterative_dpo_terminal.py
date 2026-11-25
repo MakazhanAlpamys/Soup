@@ -44,9 +44,10 @@ _NAMES = [
 ]
 
 
-# The plan turns every backslash of the output directory into a slash, so the spellings that
-# hold one are not shown "as typed" there; the other names are.
-_DIRECTORY_NAMES = [_NAMES[0], _NAMES[1], _NAMES[4]]
+# The plan removes the trailing separators of the output directory, so the spelling that ends in
+# two backslashes is not shown as typed there; every other name is, a backslash before an
+# unmatched bracket included.
+_DIRECTORY_NAMES = [_NAMES[0], _NAMES[1], _NAMES[2], _NAMES[4]]
 
 
 @pytest.fixture(autouse=True)
