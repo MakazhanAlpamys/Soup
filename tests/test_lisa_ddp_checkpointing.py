@@ -178,3 +178,14 @@ def test_other_training_modes_keep_ddp_default(
     )
     assert wrapper.trainer.args.gradient_checkpointing is native
     assert wrapper.trainer.args.ddp_find_unused_parameters is None
+
+
+@pytest.mark.parametrize(("task", "checkpointing"), [("sft", "medium"), ("pretrain", "selective")])
+def test_lisa_native_checkpointing_enables_unused_parameter_detection(
+    train_extra, tmp_path, monkeypatch, task, checkpointing,
+):
+    wrapper = _setup_wrapper(
+        task, tmp_path / "fixture", monkeypatch, lisa=True, checkpointing=checkpointing,
+    )
+    assert wrapper.trainer.args.gradient_checkpointing is True
+    assert wrapper.trainer.args.ddp_find_unused_parameters is True
