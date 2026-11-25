@@ -119,8 +119,8 @@ def parse_eval_task_lines(
     ``require_expected`` is as in :func:`load_eval_tasks`.
     """
     tasks: list[EvalTask] = []
-    for line_num, line in enumerate(lines, 1):
-        line = line.strip()
+    for line_num, raw_line in enumerate(lines, 1):
+        line = raw_line.strip()
         if not line:
             continue
 
@@ -133,8 +133,11 @@ def parse_eval_task_lines(
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
+            # The decoder saw the stripped row: shift its offset back by the row's
+            # indentation, so the column is the one in the file (#3326).
+            indent = len(raw_line) - len(raw_line.lstrip())
             raise ValueError(
-                f"Invalid JSON on line {line_num}: {exc}"
+                f"Invalid JSON on line {line_num}, column {indent + exc.pos + 1}: {exc.msg}"
             ) from exc
 
         if not isinstance(row, dict):
