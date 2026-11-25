@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from scripts import select_tests
+from tests.conftest import strip_ansi
 
 CORE = "src/soup_cli/utils/rank_score.py"
 SOURCE = {
@@ -156,8 +157,9 @@ def test_git_failure_prints_a_full_command_on_stdout(monkeypatch, capsys):
     assert select_tests.main(["--shell", "posix"]) == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == "python -m pytest tests/"
-    assert "Full suite" in captured.err
-    assert "Git" in captured.err
+    status = " ".join(strip_ansi(captured.err).split())
+    assert "Full suite" in status
+    assert "Git" in status
     assert _selection_record(captured.err) == {
         "mode": "full",
         "reason": "Git could not run rev-parse",
@@ -348,8 +350,9 @@ def test_main_focused_output_explains_direct_scope_and_unknown_edges(checkout, m
     assert select_tests.main(["--shell", "posix", CORE]) == 0
 
     captured = capsys.readouterr()
-    assert "direct import and test-helper" in captured.err
-    assert "3 unresolved dynamic imports" in captured.err
+    status = " ".join(strip_ansi(captured.err).split())
+    assert "direct import and test-helper" in status
+    assert "3 unresolved dynamic imports" in status
     assert _selection_record(captured.err) == {
         "mode": "focused",
         "reason": None,
