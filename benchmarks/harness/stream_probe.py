@@ -167,6 +167,15 @@ def parse_args() -> argparse.Namespace:
             "came from the shipped code"
         ),
     )
+    parser.add_argument(
+        "--recompute",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "training.stream_recompute: off = every streamed layer keeps its activations "
+            "instead of the checkpoint recompute"
+        ),
+    )
     parser.add_argument("--out", required=True, help="JSON results file, rewritten per point")
     parser.add_argument("--label", default="", help="free text stored beside the results")
     return parser.parse_args()
@@ -508,6 +517,7 @@ class Instruments:
                 "self.events[slot].record(stream)",
                 "_release_source(source, idx, self.events[slot])",
                 "_release_source(source, idx, None)",
+                "self.generation[slot] += 1",
             ),
         )
         inst = self
@@ -541,6 +551,9 @@ class Instruments:
                     pool.buffers[slot][name].copy_(source.get(idx, name))
                 _release_source(source, idx, None)
             pool.owner[slot] = idx
+            # The no-recompute backward refuses a slot whose load generation
+            # moved since its first visit; a replacement load must bump it too.
+            pool.generation[slot] += 1
             pool.loads += 1
             return slot
 
@@ -1097,9 +1110,15 @@ def main() -> int:
     inst = Instruments(runtime, model, args.quant)
     if args.quant == "nf4":
         print(f"{'nf4 linears':<16}{inst.patched_linears} patched for the ablation")
+    if args.recompute == "off":
+        from soup_cli.utils.layer_stream_runtime import set_stream_recompute
+
+        switched = set_stream_recompute(model, False)
+        print(f"{'recompute':<16}OFF on {switched} streamed layers (stream_recompute='off')")
 
     meta = {
         **facts,
+        "recompute": args.recompute,
         "label": args.label,
         "weights": args.weights,
         "weights_dir": weights_dir,

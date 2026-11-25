@@ -9,8 +9,10 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.audit_log import default_log_path, read_audit_tail, rotate_if_needed
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
@@ -52,12 +54,14 @@ def tail_cmd(
     for header in ("timestamp", "command", "exit", "operator", "host"):
         table.add_column(header)
     for r in records:
+        # Every field is whatever the log file holds, so each cell is a Text: never read
+        # as markup or emoji codes.
         table.add_row(
-            escape(str(r.get("timestamp", ""))),
-            escape(str(r.get("command", ""))),
-            escape(str(r.get("exit_code", ""))),
-            escape(str(r.get("operator_id", ""))),
-            escape(str(r.get("host_id", ""))),
+            Text(strip_control(str(r.get("timestamp", "")))),
+            Text(strip_control(str(r.get("command", "")))),
+            Text(strip_control(str(r.get("exit_code", "")))),
+            Text(strip_control(str(r.get("operator_id", "")))),
+            Text(strip_control(str(r.get("host_id", "")))),
         )
     console.print(table)
 
@@ -79,6 +83,8 @@ def rotate_cmd(
         console.print(f"[red]Rotate failed: {escape(str(exc))}[/]")
         raise typer.Exit(2)
     if rotated:
-        console.print(f"[green]Rotated {escape(target)} -> {escape(target)}.1[/]")
+        console.print(
+            f"[green]Rotated {for_terminal(target)} -> {for_terminal(target)}.1[/]", emoji=False
+        )
     else:
         console.print("[dim]No rotation needed.[/]")

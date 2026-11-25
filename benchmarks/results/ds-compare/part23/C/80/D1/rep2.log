@@ -1,0 +1,84 @@
+[2026-11-07 13:33:04,960] [WARNING] [runner.py:214:fetch_hostfile] Unable to find hostfile, will proceed with training with local resources only.
+Detected VISIBLE_DEVICES=0 but ignoring it because one or several of --include/--exclude/--num_gpus/--num_nodes cl args were used. If you want to use CUDA_VISIBLE_DEVICES don't pass any of these arguments to deepspeed.
+[2026-11-07 13:33:04,960] [INFO] [runner.py:618:main] cmd = /workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python -u -m deepspeed.launcher.launch --world_info=eyJsb2NhbGhvc3QiOiBbMF19 --master_addr=127.0.0.1 --master_port=29516 --enable_each_rank_log=None --log_level=info /workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py --model /workspace/payload/benchmarks/harness/ds_compare/model --rows /workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl --max-length 2048 --epochs 1 --arm D1 --shape C --rep 2 --out /workspace/out/results/C/80/D1/rep2.raw.json --deepspeed /workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE=libnccl-dev=2.25.1-1+cuda12.8
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NCCL_VERSION=2.25.1-1
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-dev
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE=libnccl2=2.25.1-1+cuda12.8
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_NAME=libnccl2
+[2026-11-07 13:33:06,277] [INFO] [launch.py:145:main] 0 NV_LIBNCCL_PACKAGE_VERSION=2.25.1-1
+[2026-11-07 13:33:06,277] [INFO] [launch.py:152:main] WORLD INFO DICT: {'localhost': [0]}
+[2026-11-07 13:33:06,277] [INFO] [launch.py:158:main] nnodes=1, num_local_procs=1, node_rank=0
+[2026-11-07 13:33:06,277] [INFO] [launch.py:169:main] global_rank_mapping=defaultdict(<class 'list'>, {'localhost': [0]})
+[2026-11-07 13:33:06,277] [INFO] [launch.py:170:main] dist_world_size=1
+[2026-11-07 13:33:06,277] [INFO] [launch.py:174:main] Setting CUDA_VISIBLE_DEVICES=0
+[2026-11-07 13:33:06,278] [INFO] [launch.py:245:main] process 10556 spawned with command: ['/workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python', '-u', '/workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py', '--local_rank=0', '--model', '/workspace/payload/benchmarks/harness/ds_compare/model', '--rows', '/workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_c.jsonl', '--max-length', '2048', '--epochs', '1', '--arm', 'D1', '--shape', 'C', '--rep', '2', '--out', '/workspace/out/results/C/80/D1/rep2.raw.json', '--deepspeed', '/workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json']
+/opt/conda/lib/python3.11/site-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  warnings.warn(  # warn only once
+{'loss': '5.936', 'grad_norm': '1.555', 'learning_rate': '0.0002', 'epoch': '0.01562'}
+{'loss': '5.915', 'grad_norm': '1.654', 'learning_rate': '0.0002', 'epoch': '0.03125'}
+{'loss': '5.861', 'grad_norm': '0.5315', 'learning_rate': '0.0002', 'epoch': '0.04688'}
+{'loss': '5.848', 'grad_norm': '0.685', 'learning_rate': '0.0002', 'epoch': '0.0625'}
+{'loss': '5.782', 'grad_norm': '0.7035', 'learning_rate': '0.0002', 'epoch': '0.07812'}
+{'loss': '5.77', 'grad_norm': '0.8484', 'learning_rate': '0.0002', 'epoch': '0.09375'}
+{'loss': '5.679', 'grad_norm': '0.8716', 'learning_rate': '0.0002', 'epoch': '0.1094'}
+{'loss': '5.673', 'grad_norm': '0.9156', 'learning_rate': '0.0002', 'epoch': '0.125'}
+{'loss': '5.621', 'grad_norm': '0.8815', 'learning_rate': '0.0002', 'epoch': '0.1406'}
+{'loss': '5.598', 'grad_norm': '0.9643', 'learning_rate': '0.0002', 'epoch': '0.1562'}
+{'loss': '5.572', 'grad_norm': '1.012', 'learning_rate': '0.0002', 'epoch': '0.1719'}
+{'loss': '5.541', 'grad_norm': '1.017', 'learning_rate': '0.0002', 'epoch': '0.1875'}
+{'loss': '5.524', 'grad_norm': '1.076', 'learning_rate': '0.0002', 'epoch': '0.2031'}
+{'loss': '5.515', 'grad_norm': '1.241', 'learning_rate': '0.0002', 'epoch': '0.2188'}
+{'loss': '5.473', 'grad_norm': '1.144', 'learning_rate': '0.0002', 'epoch': '0.2344'}
+{'loss': '5.453', 'grad_norm': '1.253', 'learning_rate': '0.0002', 'epoch': '0.25'}
+{'loss': '5.446', 'grad_norm': '1.167', 'learning_rate': '0.0002', 'epoch': '0.2656'}
+{'loss': '5.438', 'grad_norm': '1.174', 'learning_rate': '0.0002', 'epoch': '0.2812'}
+{'loss': '5.419', 'grad_norm': '1.161', 'learning_rate': '0.0002', 'epoch': '0.2969'}
+{'loss': '5.394', 'grad_norm': '1.221', 'learning_rate': '0.0002', 'epoch': '0.3125'}
+{'loss': '5.389', 'grad_norm': '1.355', 'learning_rate': '0.0002', 'epoch': '0.3281'}
+{'loss': '5.384', 'grad_norm': '1.333', 'learning_rate': '0.0002', 'epoch': '0.3438'}
+{'loss': '5.379', 'grad_norm': '1.292', 'learning_rate': '0.0002', 'epoch': '0.3594'}
+{'loss': '5.385', 'grad_norm': '1.386', 'learning_rate': '0.0002', 'epoch': '0.375'}
+{'loss': '5.364', 'grad_norm': '1.29', 'learning_rate': '0.0002', 'epoch': '0.3906'}
+{'loss': '5.346', 'grad_norm': '1.508', 'learning_rate': '0.0002', 'epoch': '0.4062'}
+{'loss': '5.355', 'grad_norm': '1.235', 'learning_rate': '0.0002', 'epoch': '0.4219'}
+{'loss': '5.339', 'grad_norm': '1.42', 'learning_rate': '0.0002', 'epoch': '0.4375'}
+{'loss': '5.326', 'grad_norm': '1.305', 'learning_rate': '0.0002', 'epoch': '0.4531'}
+{'loss': '5.344', 'grad_norm': '1.432', 'learning_rate': '0.0002', 'epoch': '0.4688'}
+{'loss': '5.324', 'grad_norm': '1.418', 'learning_rate': '0.0002', 'epoch': '0.4844'}
+{'loss': '5.322', 'grad_norm': '1.467', 'learning_rate': '0.0002', 'epoch': '0.5'}
+{'loss': '5.301', 'grad_norm': '1.457', 'learning_rate': '0.0002', 'epoch': '0.5156'}
+{'loss': '5.309', 'grad_norm': '1.496', 'learning_rate': '0.0002', 'epoch': '0.5312'}
+{'loss': '5.293', 'grad_norm': '1.477', 'learning_rate': '0.0002', 'epoch': '0.5469'}
+{'loss': '5.302', 'grad_norm': '1.744', 'learning_rate': '0.0002', 'epoch': '0.5625'}
+{'loss': '5.281', 'grad_norm': '1.418', 'learning_rate': '0.0002', 'epoch': '0.5781'}
+{'loss': '5.299', 'grad_norm': '1.569', 'learning_rate': '0.0002', 'epoch': '0.5938'}
+{'loss': '5.297', 'grad_norm': '1.626', 'learning_rate': '0.0002', 'epoch': '0.6094'}
+{'loss': '5.272', 'grad_norm': '1.378', 'learning_rate': '0.0002', 'epoch': '0.625'}
+{'loss': '5.279', 'grad_norm': '1.452', 'learning_rate': '0.0002', 'epoch': '0.6406'}
+{'loss': '5.279', 'grad_norm': '1.724', 'learning_rate': '0.0002', 'epoch': '0.6562'}
+{'loss': '5.271', 'grad_norm': '1.486', 'learning_rate': '0.0002', 'epoch': '0.6719'}
+{'loss': '5.277', 'grad_norm': '1.543', 'learning_rate': '0.0002', 'epoch': '0.6875'}
+{'loss': '5.257', 'grad_norm': '1.502', 'learning_rate': '0.0002', 'epoch': '0.7031'}
+{'loss': '5.267', 'grad_norm': '1.441', 'learning_rate': '0.0002', 'epoch': '0.7188'}
+{'loss': '5.248', 'grad_norm': '1.442', 'learning_rate': '0.0002', 'epoch': '0.7344'}
+{'loss': '5.263', 'grad_norm': '1.345', 'learning_rate': '0.0002', 'epoch': '0.75'}
+{'loss': '5.255', 'grad_norm': '1.437', 'learning_rate': '0.0002', 'epoch': '0.7656'}
+{'loss': '5.262', 'grad_norm': '1.582', 'learning_rate': '0.0002', 'epoch': '0.7812'}
+{'loss': '5.254', 'grad_norm': '1.602', 'learning_rate': '0.0002', 'epoch': '0.7969'}
+{'loss': '5.231', 'grad_norm': '1.446', 'learning_rate': '0.0002', 'epoch': '0.8125'}
+{'loss': '5.264', 'grad_norm': '1.662', 'learning_rate': '0.0002', 'epoch': '0.8281'}
+{'loss': '5.259', 'grad_norm': '1.578', 'learning_rate': '0.0002', 'epoch': '0.8438'}
+{'loss': '5.241', 'grad_norm': '1.468', 'learning_rate': '0.0002', 'epoch': '0.8594'}
+{'loss': '5.236', 'grad_norm': '1.501', 'learning_rate': '0.0002', 'epoch': '0.875'}
+{'loss': '5.242', 'grad_norm': '1.679', 'learning_rate': '0.0002', 'epoch': '0.8906'}
+{'loss': '5.256', 'grad_norm': '1.838', 'learning_rate': '0.0002', 'epoch': '0.9062'}
+{'loss': '5.231', 'grad_norm': '1.432', 'learning_rate': '0.0002', 'epoch': '0.9219'}
+{'loss': '5.238', 'grad_norm': '1.555', 'learning_rate': '0.0002', 'epoch': '0.9375'}
+{'loss': '5.229', 'grad_norm': '1.451', 'learning_rate': '0.0002', 'epoch': '0.9531'}
+{'loss': '5.233', 'grad_norm': '1.687', 'learning_rate': '0.0002', 'epoch': '0.9688'}
+{'loss': '5.243', 'grad_norm': '1.741', 'learning_rate': '0.0002', 'epoch': '0.9844'}
+{'loss': '5.239', 'grad_norm': '1.933', 'learning_rate': '0.0002', 'epoch': '1'}
+{'train_runtime': '51.92', 'train_samples_per_second': '1.233', 'train_steps_per_second': '1.233', 'train_loss': '5.393', 'epoch': '1'}
+[2026-11-07 13:34:26,290] [INFO] [launch.py:285:main] Process 10556 exits successfully.

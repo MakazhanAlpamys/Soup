@@ -236,4 +236,8 @@ def test_every_shipped_recipe_still_validates_through_web_ui(
     )
 
     assert response.status_code == 200, f"{name}: {response.text}"
+    if recipe.unavailable_reason:
+        assert response.json()["valid"] is False
+        assert recipe.unavailable_reason in response.text
+        return
     assert response.json()["valid"] is True, f"{name}: {response.json()}"

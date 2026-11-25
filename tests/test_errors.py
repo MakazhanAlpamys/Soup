@@ -8,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.utils import hf
 from soup_cli.utils.errors import format_friendly_error
 from tests.conftest import strip_ansi
 
@@ -24,7 +25,7 @@ def test_cuda_oom_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "--batch-size" in output
     assert "GPU ran out of memory" in output
     # v0.53.4 #11 — message now suggests --batch-size / --grad-accum CLI flags.
@@ -40,7 +41,7 @@ def test_missing_fastapi_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ModuleNotFoundError("No module named 'fastapi'")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "soup-cli[serve]" in output
 
 
@@ -51,7 +52,7 @@ def test_missing_datasketch_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ModuleNotFoundError("No module named 'datasketch'")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "soup-cli[data]" in output
 
 
@@ -62,7 +63,7 @@ def test_missing_wandb_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ModuleNotFoundError("No module named 'wandb'")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "pip install wandb" in output
 
 
@@ -73,7 +74,7 @@ def test_missing_deepspeed_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ModuleNotFoundError("No module named 'deepspeed'")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "soup-cli[deepspeed]" in output
 
 
@@ -88,7 +89,7 @@ def test_missing_train_dep_points_at_train_extra(module):
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ModuleNotFoundError(f"No module named '{module}'")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     # The `\[train]` escape renders to a literal `[train]` in the output.
     assert "soup-cli[train]" in output
     assert "[train] extra" in output
@@ -101,7 +102,7 @@ def test_connection_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ConnectionError("Failed to connect")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "Network connection failed" in output
 
 
@@ -112,7 +113,7 @@ def test_unknown_error_shows_type():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = ZeroDivisionError("division by zero")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "ZeroDivisionError" in output
     assert "division by zero" in output
     assert "--verbose" in output
@@ -127,7 +128,7 @@ def test_verbose_shows_traceback():
             raise RuntimeError("CUDA out of memory. Tried to allocate")
         except RuntimeError as exc:
             format_friendly_error(exc, verbose=True)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "GPU ran out of memory" in output
     assert "Traceback" in output or "RuntimeError" in output
 
@@ -141,7 +142,7 @@ def test_verbose_unknown_error():
             raise ValueError("something weird")
         except ValueError as exc:
             format_friendly_error(exc, verbose=True)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "ValueError" in output
     assert "something weird" in output
 
@@ -153,7 +154,7 @@ def test_yaml_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = Exception("yaml.scanner.ScannerError: mapping values are not allowed here")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "YAML syntax" in output
 
 
@@ -164,7 +165,7 @@ def test_validation_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = Exception("2 validation error for SoupConfig")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "Config validation failed" in output
 
 
@@ -175,7 +176,7 @@ def test_auth_401_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = Exception("401 Client Error: Unauthorized")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "Authentication failed" in output
 
 
@@ -186,7 +187,7 @@ def test_file_not_found_error():
     with patch("soup_cli.utils.errors.console", test_console):
         exc = FileNotFoundError("No such file or directory: 'model.bin'")
         format_friendly_error(exc, verbose=False)
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "No such file or directory" in output
     assert "soup init" in output
 
@@ -217,36 +218,41 @@ def test_cuda_oom_mentions_gradient_checkpointing():
         exc = RuntimeError("CUDA out of memory")
         format_friendly_error(exc, verbose=False)
 
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "gradient_checkpointing" in output
     assert "4bit" in output
 
 
-def test_gated_repo_error():
-    """HF gated repos should suggest login and HF_TOKEN."""
+class GatedRepoError(Exception):
+    """Stand-in for the Hub exception type without importing the Hub SDK."""
+
+    status_code = 403
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        Exception("Cannot access gated repo"),
+        Exception("Access denied to gated-repo"),
+        GatedRepoError("Cannot access this model"),
+    ],
+    ids=("gated-repo-message", "hyphenated-message", "exception-type"),
+)
+@pytest.mark.parametrize(
+    ("installed_version", "command"),
+    [("0.33.5", "huggingface-cli login"), ("0.34.0", "hf auth login")],
+)
+def test_gated_repo_error_hints(exc, installed_version, command, monkeypatch):
+    monkeypatch.setattr(hf, "version", lambda _: installed_version, raising=False)
     buf = StringIO()
     test_console = Console(file=buf, stderr=False)
 
     with patch("soup_cli.utils.errors.console", test_console):
-        exc = Exception("GatedRepoError: Cannot access gated repo")
         format_friendly_error(exc, verbose=False)
 
-    output = buf.getvalue()
-    assert "huggingface-cli login" in output
-    assert "HF_TOKEN" in output
-
-
-def test_gated_repo_hyphenated_error():
-    """Hyphenated gated-repo errors should match."""
-    buf = StringIO()
-    test_console = Console(file=buf, stderr=False)
-
-    with patch("soup_cli.utils.errors.console", test_console):
-        exc = Exception("Access denied to gated-repo")
-        format_friendly_error(exc, verbose=False)
-
-    output = buf.getvalue()
-    assert "huggingface-cli login" in output
+    output = " ".join(strip_ansi(buf.getvalue()).split())
+    assert f"Run: {command} or set HF_TOKEN." in output
+    assert "Also accept the model license on Hugging Face." in output
 
 
 def test_trust_remote_code_error():
@@ -260,7 +266,7 @@ def test_trust_remote_code_error():
         )
         format_friendly_error(exc, verbose=False)
 
-    output = buf.getvalue()
+    output = " ".join(strip_ansi(buf.getvalue()).split())
     assert "trust_remote_code=True" in output
 
 
@@ -297,3 +303,43 @@ def test_exception_text_is_not_parsed_as_markup(exc, verbose):
     assert "soup-cli[audio]" in output
     assert "\x1b" not in output
     assert "\x07" not in output
+
+
+# --- a refused CPU allocation (#2154) ---
+
+
+def _shown(exc: Exception) -> str:
+    buf = StringIO()
+    with patch("soup_cli.utils.errors.console", Console(file=buf, stderr=False, width=200)):
+        format_friendly_error(exc, verbose=False)
+    return " ".join(strip_ansi(buf.getvalue()).split())
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # posix_memalign: Linux and macOS
+        "[enforce fail at alloc_cpu.cpp:121] err == 0. DefaultCPUAllocator: can't allocate "
+        "memory: you tried to allocate 22548578304 bytes. Error code 12 (Cannot allocate "
+        "memory)",
+        # Windows, Android and mimalloc builds
+        "DefaultCPUAllocator: not enough memory: you tried to allocate 22548578304 bytes. "
+        "Buy new RAM!",
+    ],
+    ids=["posix", "windows"],
+)
+def test_a_refused_cpu_allocation_says_what_to_do(message):
+    shown = _shown(RuntimeError(message))
+
+    assert "Error: The CPU allocator could not reserve memory for a tensor." in shown
+    assert (
+        "Free memory by closing other programs, add swap (Linux) or enlarge the page file "
+        "(Windows), or use a smaller model."
+    ) in shown
+
+
+def test_a_cuda_out_of_memory_message_keeps_the_gpu_entry():
+    shown = _shown(RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"))
+
+    assert "GPU ran out of memory during training." in shown
+    assert "CPU allocator" not in shown

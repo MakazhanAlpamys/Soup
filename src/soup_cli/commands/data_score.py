@@ -16,6 +16,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
+
 console = Console()
 
 
@@ -74,7 +76,7 @@ def score(
     ),
     threshold: float = typer.Option(
         0.8, "--threshold",
-        min=0.0, max=1.0,
+        min=0.0, max=1.0, callback=refuse_nan,
         help="Decontamination overlap threshold.",
     ),
 ):
@@ -172,7 +174,7 @@ def decontaminate(
         help="Output JSONL of rows that survived decontamination.",
     ),
     threshold: float = typer.Option(
-        0.8, "--threshold", min=0.0, max=1.0,
+        0.8, "--threshold", min=0.0, max=1.0, callback=refuse_nan,
         help="Minimum n-gram overlap ratio for removing a row.",
     ),
     n: int = typer.Option(
@@ -193,6 +195,11 @@ def decontaminate(
         load_jsonl_rows,
     )
 
+    refuse_output_over_input(
+        [("--input", input), ("--benchmark-file", benchmark_file)],
+        [("--output", output)],
+        console=console,
+    )
     rows = _read_rows(input)
     bench_list: List[str] = []
     if benchmarks:
@@ -259,13 +266,14 @@ def toxicity(
         help="Output JSONL file for rows meeting the threshold.",
     ),
     threshold: float = typer.Option(
-        0.05, "--threshold", min=0.0, max=1.0,
+        0.05, "--threshold", min=0.0, max=1.0, callback=refuse_nan,
         help="Rows meeting the abuse-keyword threshold are kept.",
     ),
 ):
     """Run an abuse-keyword heuristic (not a toxicity classifier)."""
     from soup_cli.utils.data_score import extract_row_text, score_abuse_keywords
 
+    refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -300,6 +308,7 @@ def langdetect(
     """Tag each row with a 2-letter language code (heuristic)."""
     from soup_cli.utils.data_score import detect_language, extract_row_text
 
+    refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -331,6 +340,7 @@ def pii(
     """Flag rows containing email / phone / SSN / credit-card patterns."""
     from soup_cli.utils.data_score import detect_pii, extract_row_text
 
+    refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
@@ -364,6 +374,7 @@ def educational(
     """Tag each row with an educational-value score [0, 1]."""
     from soup_cli.utils.data_score import extract_row_text, score_educational_value
 
+    refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
     rows = _read_rows(input)
     out_rows = []
     for row in rows:

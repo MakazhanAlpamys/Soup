@@ -1,0 +1,717 @@
+{
+  "argv": [
+    "/workspace/payload/benchmarks/harness/ds_compare/hf_baseline.py",
+    "--local_rank=0",
+    "--model",
+    "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "--rows",
+    "/workspace/payload/benchmarks/harness/ds_compare/ds_compare_rows_b.jsonl",
+    "--max-length",
+    "512",
+    "--epochs",
+    "2",
+    "--arm",
+    "D1",
+    "--shape",
+    "B",
+    "--rep",
+    "2",
+    "--out",
+    "/workspace/out/results/B/80/D1/rep2.raw.json",
+    "--deepspeed",
+    "/workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json"
+  ],
+  "arm": "D1",
+  "attempt": 1,
+  "budget_gb": 80,
+  "cap_applied": false,
+  "cap_gb": null,
+  "child_exit_code": 0,
+  "cost_usd": null,
+  "data": {
+    "epochs": 2,
+    "expected_total_tokens": 65536,
+    "max_length": 512,
+    "rows": 64,
+    "rows_file": "ds_compare_rows_b.jsonl",
+    "tokens_per_row_max": 512,
+    "tokens_per_row_min": 512
+  },
+  "deepspeed_config_file": "/workspace/payload/benchmarks/harness/ds_compare/ds_d1_z3_param_offload.json",
+  "device_name": "NVIDIA H100 80GB HBM3",
+  "error": null,
+  "exit_code": 0,
+  "final_loss": 5.232781887054443,
+  "gradient_checkpointing": false,
+  "kind": "hf",
+  "lora": {
+    "alpha": 16,
+    "dropout": 0.05,
+    "r": 8,
+    "target_modules": [
+      "q_proj",
+      "v_proj"
+    ],
+    "total_parameters": 3407872,
+    "trainable_parameters": 3407872,
+    "wrapped_modules": 64
+  },
+  "loss_at": {
+    "128": 5.232781887054443,
+    "64": 5.280287742614746
+  },
+  "loss_curve": [
+    [
+      1,
+      6.182010173797607
+    ],
+    [
+      2,
+      6.231204032897949
+    ],
+    [
+      3,
+      6.17716121673584
+    ],
+    [
+      4,
+      6.116121768951416
+    ],
+    [
+      5,
+      6.079746723175049
+    ],
+    [
+      6,
+      6.0065741539001465
+    ],
+    [
+      7,
+      6.033681869506836
+    ],
+    [
+      8,
+      5.9853081703186035
+    ],
+    [
+      9,
+      5.8992133140563965
+    ],
+    [
+      10,
+      5.854198932647705
+    ],
+    [
+      11,
+      5.793262004852295
+    ],
+    [
+      12,
+      5.757829189300537
+    ],
+    [
+      13,
+      5.752400875091553
+    ],
+    [
+      14,
+      5.81528902053833
+    ],
+    [
+      15,
+      5.705687522888184
+    ],
+    [
+      16,
+      5.696874141693115
+    ],
+    [
+      17,
+      5.63480806350708
+    ],
+    [
+      18,
+      5.601738929748535
+    ],
+    [
+      19,
+      5.653219699859619
+    ],
+    [
+      20,
+      5.613234043121338
+    ],
+    [
+      21,
+      5.572424411773682
+    ],
+    [
+      22,
+      5.487295627593994
+    ],
+    [
+      23,
+      5.5394697189331055
+    ],
+    [
+      24,
+      5.457992076873779
+    ],
+    [
+      25,
+      5.483497142791748
+    ],
+    [
+      26,
+      5.429155349731445
+    ],
+    [
+      27,
+      5.412308216094971
+    ],
+    [
+      28,
+      5.371134281158447
+    ],
+    [
+      29,
+      5.377782821655273
+    ],
+    [
+      30,
+      5.379087924957275
+    ],
+    [
+      31,
+      5.391104221343994
+    ],
+    [
+      32,
+      5.345927715301514
+    ],
+    [
+      33,
+      5.400004863739014
+    ],
+    [
+      34,
+      5.346879005432129
+    ],
+    [
+      35,
+      5.366417407989502
+    ],
+    [
+      36,
+      5.301180362701416
+    ],
+    [
+      37,
+      5.32144021987915
+    ],
+    [
+      38,
+      5.29163122177124
+    ],
+    [
+      39,
+      5.315232276916504
+    ],
+    [
+      40,
+      5.350057125091553
+    ],
+    [
+      41,
+      5.327669620513916
+    ],
+    [
+      42,
+      5.29318380355835
+    ],
+    [
+      43,
+      5.290219306945801
+    ],
+    [
+      44,
+      5.2732038497924805
+    ],
+    [
+      45,
+      5.2833380699157715
+    ],
+    [
+      46,
+      5.333770275115967
+    ],
+    [
+      47,
+      5.2903852462768555
+    ],
+    [
+      48,
+      5.280587673187256
+    ],
+    [
+      49,
+      5.271903991699219
+    ],
+    [
+      50,
+      5.235428810119629
+    ],
+    [
+      51,
+      5.290043830871582
+    ],
+    [
+      52,
+      5.320316314697266
+    ],
+    [
+      53,
+      5.283914566040039
+    ],
+    [
+      54,
+      5.291240692138672
+    ],
+    [
+      55,
+      5.280571937561035
+    ],
+    [
+      56,
+      5.235751628875732
+    ],
+    [
+      57,
+      5.250112533569336
+    ],
+    [
+      58,
+      5.259960174560547
+    ],
+    [
+      59,
+      5.282341957092285
+    ],
+    [
+      60,
+      5.226521968841553
+    ],
+    [
+      61,
+      5.257570743560791
+    ],
+    [
+      62,
+      5.240665435791016
+    ],
+    [
+      63,
+      5.243293762207031
+    ],
+    [
+      64,
+      5.280287742614746
+    ],
+    [
+      65,
+      5.243962287902832
+    ],
+    [
+      66,
+      5.244921684265137
+    ],
+    [
+      67,
+      5.234323501586914
+    ],
+    [
+      68,
+      5.256149768829346
+    ],
+    [
+      69,
+      5.257869243621826
+    ],
+    [
+      70,
+      5.230666160583496
+    ],
+    [
+      71,
+      5.216432571411133
+    ],
+    [
+      72,
+      5.256307125091553
+    ],
+    [
+      73,
+      5.2058796882629395
+    ],
+    [
+      74,
+      5.209460735321045
+    ],
+    [
+      75,
+      5.247805118560791
+    ],
+    [
+      76,
+      5.24268913269043
+    ],
+    [
+      77,
+      5.224898338317871
+    ],
+    [
+      78,
+      5.295933246612549
+    ],
+    [
+      79,
+      5.216342926025391
+    ],
+    [
+      80,
+      5.197230815887451
+    ],
+    [
+      81,
+      5.24303674697876
+    ],
+    [
+      82,
+      5.222507476806641
+    ],
+    [
+      83,
+      5.234994888305664
+    ],
+    [
+      84,
+      5.246022701263428
+    ],
+    [
+      85,
+      5.243943214416504
+    ],
+    [
+      86,
+      5.248278617858887
+    ],
+    [
+      87,
+      5.246867656707764
+    ],
+    [
+      88,
+      5.20668888092041
+    ],
+    [
+      89,
+      5.219771862030029
+    ],
+    [
+      90,
+      5.280395984649658
+    ],
+    [
+      91,
+      5.248885154724121
+    ],
+    [
+      92,
+      5.250617504119873
+    ],
+    [
+      93,
+      5.234002590179443
+    ],
+    [
+      94,
+      5.216426849365234
+    ],
+    [
+      95,
+      5.238002777099609
+    ],
+    [
+      96,
+      5.225754737854004
+    ],
+    [
+      97,
+      5.203543663024902
+    ],
+    [
+      98,
+      5.209949016571045
+    ],
+    [
+      99,
+      5.243303298950195
+    ],
+    [
+      100,
+      5.20630407333374
+    ],
+    [
+      101,
+      5.23345947265625
+    ],
+    [
+      102,
+      5.257253170013428
+    ],
+    [
+      103,
+      5.237257480621338
+    ],
+    [
+      104,
+      5.17203950881958
+    ],
+    [
+      105,
+      5.226599216461182
+    ],
+    [
+      106,
+      5.181396961212158
+    ],
+    [
+      107,
+      5.243561744689941
+    ],
+    [
+      108,
+      5.239647388458252
+    ],
+    [
+      109,
+      5.225503921508789
+    ],
+    [
+      110,
+      5.196688652038574
+    ],
+    [
+      111,
+      5.214644908905029
+    ],
+    [
+      112,
+      5.180820941925049
+    ],
+    [
+      113,
+      5.224523067474365
+    ],
+    [
+      114,
+      5.229428291320801
+    ],
+    [
+      115,
+      5.252136707305908
+    ],
+    [
+      116,
+      5.241947650909424
+    ],
+    [
+      117,
+      5.2189106941223145
+    ],
+    [
+      118,
+      5.218120574951172
+    ],
+    [
+      119,
+      5.231428623199463
+    ],
+    [
+      120,
+      5.234020709991455
+    ],
+    [
+      121,
+      5.228222370147705
+    ],
+    [
+      122,
+      5.184842586517334
+    ],
+    [
+      123,
+      5.224784851074219
+    ],
+    [
+      124,
+      5.196281433105469
+    ],
+    [
+      125,
+      5.216651916503906
+    ],
+    [
+      126,
+      5.247241497039795
+    ],
+    [
+      127,
+      5.190795421600342
+    ],
+    [
+      128,
+      5.232781887054443
+    ]
+  ],
+  "max_memory_allocated_bytes": 6684600320,
+  "max_memory_reserved_at_train_begin_bytes": 2116026368,
+  "max_memory_reserved_bytes": 8369733632,
+  "model": {
+    "id": "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "revision": "d10aef7999a2b5ba950ab3974312feeedbfe0b77"
+  },
+  "peak_vram_mib": 9333.0,
+  "pytorch_cuda_alloc_conf": null,
+  "rep": 2,
+  "rerun_recompute_on": false,
+  "resolved_deepspeed_config": {
+    "bf16": {
+      "enabled": true
+    },
+    "fp16": {
+      "enabled": false
+    },
+    "gradient_accumulation_steps": 1,
+    "gradient_clipping": 1.0,
+    "optimizer": {
+      "params": {
+        "betas": [
+          0.9,
+          0.999
+        ],
+        "eps": 1e-08,
+        "lr": 0.0002,
+        "weight_decay": 0.0
+      },
+      "type": "AdamW"
+    },
+    "steps_per_print": Infinity,
+    "train_batch_size": 1,
+    "train_micro_batch_size_per_gpu": 1,
+    "wall_clock_breakdown": false,
+    "zero_optimization": {
+      "contiguous_gradients": true,
+      "offload_optimizer": {
+        "device": "none"
+      },
+      "offload_param": {
+        "device": "cpu",
+        "pin_memory": true
+      },
+      "overlap_comm": true,
+      "reduce_bucket_size": 16777216,
+      "stage": 3,
+      "stage3_max_live_parameters": 1000000000,
+      "stage3_max_reuse_distance": 1000000000,
+      "stage3_param_persistence_threshold": 40960,
+      "stage3_prefetch_bucket_size": 15099494,
+      "sub_group_size": 1000000000
+    }
+  },
+  "sampler": {
+    "foreign_gpu_processes": {
+      "apps_seen": {
+        "7859": {
+          "first_seen": 1794058026.019209,
+          "last_seen": 1794058142.38859,
+          "max_mib": 9290.0,
+          "name": "/workspace/payload/benchmarks/harness/ds_compare/venv_main/bin/python"
+        }
+      },
+      "foreign_pids": [],
+      "pid_namespace_visible": true
+    },
+    "gpu_idle_baseline_mib": 0.0,
+    "preflight_busy": false,
+    "rss_peak_bytes": 33772494848.0,
+    "rss_samples": 135,
+    "train_window": {
+      "busy_samples": 205,
+      "end": 1794058142.9413714,
+      "gpu_util_mean_pct": 67.15533980582525,
+      "samples": 206,
+      "sm_clock_busy_median_mhz": 1980.0,
+      "start": 1794058039.6798968,
+      "vram_peak_mib": 9333.0
+    },
+    "whole_run": {
+      "busy_samples": 233,
+      "gpu_util_mean_pct": 53.32209737827716,
+      "samples": 267,
+      "sm_clock_busy_median_mhz": 1980.0,
+      "vram_peak_mib": 9333.0
+    }
+  },
+  "schema": "ds_compare.run.v1",
+  "shape": "B",
+  "started_at": 1794058015.8694801,
+  "status": "ok",
+  "steady_tok_per_s": 637.8666161605355,
+  "steps": 128,
+  "tok_per_s": 634.6500980019988,
+  "tokens_source": "counted by the collator",
+  "tokens_trained": 65536,
+  "trace_args": {
+    "bf16": true,
+    "deepspeed": true,
+    "gradient_accumulation_steps": 1,
+    "gradient_checkpointing": false,
+    "learning_rate": 0.0002,
+    "lr_scheduler_type": "constant",
+    "max_grad_norm": 1.0,
+    "num_train_epochs": 2,
+    "optim": "adamw_torch",
+    "per_device_train_batch_size": 1,
+    "seed": 42,
+    "weight_decay": 0.0,
+    "world_size": 1
+  },
+  "trace_begin_wall": 1794058039.6798968,
+  "trace_complete": true,
+  "trace_last_step_seconds": 103.26147471182048,
+  "train_loss_mean": 5.365492433309555,
+  "train_runtime_s": 103.2632,
+  "train_runtime_source": "trainer train_runtime",
+  "train_samples_per_second": 1.24,
+  "versions": {
+    "accelerate": "1.15.0",
+    "cuda_available": true,
+    "cuda_runtime": "12.8",
+    "datasets": "5.1.0",
+    "deepspeed": "0.19.9",
+    "peft": "0.21.2",
+    "python": "3.11.14",
+    "soup-cli": "0.77.2",
+    "soup_cli_commit": "9ca9819747a624da4cbbff03cc8e1a7d2a81100d",
+    "soup_cli_editable": false,
+    "torch": "2.9.1+cu128",
+    "transformers": "5.22.2",
+    "trl": "0.29.1"
+  },
+  "void": false,
+  "void_attempts": 0,
+  "void_reasons": [],
+  "wall_seconds": 135.2578558921814,
+  "warmup": false
+}

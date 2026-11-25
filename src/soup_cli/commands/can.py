@@ -8,18 +8,18 @@ from typing import List, Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 app = typer.Typer(no_args_is_help=True)
 
 
 def _fail(message: str) -> None:
-    console.print(f"[red]{for_terminal(message)}[/]")
+    console.print(Text(strip_control(message), style="red"))
     raise typer.Exit(1)
 
 
@@ -43,7 +43,7 @@ def _load_attestation_files(paths: Optional[List[str]]) -> list[dict]:
                 raise ValueError(
                     f"attestation file too large (> {_MAX_ATTESTATION_BYTES} bytes)"
                 )
-            with open(real, encoding="utf-8") as fh:
+            with open(real, encoding="utf-8-sig") as fh:
                 stmt = json.load(fh)
             statements.append(validate_attestation_statement(stmt))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -85,10 +85,16 @@ def pack_cmd(
         )
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
-    console.print(Panel(
-        f"Packed [cyan]{for_terminal(entry_id)}[/] -> [bold]{for_terminal(str(path))}[/]",
-        title="Soup Can", border_style="green",
-    ))
+    console.print(
+        Panel(
+            Text.assemble(
+                "Packed ", (strip_control(entry_id), "cyan"),
+                " -> ", (strip_control(path), "bold"),
+            ),
+            title="Soup Can",
+            border_style="green",
+        )
+    )
 
 
 @app.command(name="inspect")
@@ -105,7 +111,7 @@ def inspect_cmd(
     except Exception as exc:
         _fail(f"Cannot inspect can: {exc}")
 
-    table = Table(title=f"Can: {for_terminal(manifest.name)}", show_header=False)
+    table = Table(title=Text(f"Can: {manifest.name}"), show_header=False)
     table.add_column("Field", style="bold cyan")
     table.add_column("Value")
     for key, val in [
@@ -118,7 +124,7 @@ def inspect_cmd(
         ("description", manifest.description or ""),
     ]:
         # ``key`` is one of the literals above; ``val`` comes from the can.
-        table.add_row(escape(key), for_terminal(str(val)))
+        table.add_row(key, Text(strip_control(val)))
     console.print(table)
 
 
@@ -131,10 +137,39 @@ def verify_cmd(
 
     report = verify_can(path)
     if report.manifest_ok and report.config_ok:
-        console.print(f"[green]OK:[/] {for_terminal(report.message)}")
+        console.print(Text.assemble(("OK:", "green"), f" {strip_control(report.message)}"))
     else:
-        console.print(f"[red]Verify failed:[/] {for_terminal(report.message)}")
+        console.print(Text.assemble(("Verify failed:", "red"), f" {strip_control(report.message)}"))
         raise typer.Exit(1)
+
+
+def _target_parts(targets) -> list:
+    """The panel lines for the can's ``output`` and ``data.train`` (text from the can).
+
+    ``output`` (with the experiment name, when the can sets one) that leaves the working
+    directory is flagged as refused; a local ``data.train`` path outside it is flagged as a
+    warning only.
+    """
+    parts: list = [f"\nOutput: {strip_control(targets.output, single_line=True)}"]
+    if targets.experiment:
+        parts.append(f"\nExperiment name: {strip_control(targets.experiment, single_line=True)}")
+    if targets.output_problem is not None:
+        parts.append(
+            (
+                "\n  warning: outside the working directory - "
+                "soup can run will refuse this can",
+                "red",
+            )
+        )
+    if not targets.data_train:
+        parts.append("\nTraining data: (not set)")
+    for entry, outside in targets.data_train:
+        parts.append(f"\nTraining data: {strip_control(entry, single_line=True)}")
+        if outside:
+            parts.append(("\n  warning: this path is outside the working directory", "yellow"))
+    if targets.data_train_more:
+        parts.append(f"\nTraining data: (+{targets.data_train_more} more)")
+    return parts
 
 
 @app.command(name="run")
@@ -158,22 +193,30 @@ def run_cmd(
     ),
 ) -> None:
     """Run a can end-to-end: extract -> train (-> optional deploy)."""
-    from soup_cli.cans.run import run_can
+    from soup_cli.cans.run import describe_can_targets, run_can
 
     if not yes:
         try:
-            from soup_cli.cans.unpack import inspect_can
+            from soup_cli.cans.unpack import inspect_can, read_config
             manifest = inspect_can(can_path)
+            targets = describe_can_targets(read_config(can_path))
         except (FileNotFoundError, ValueError) as exc:
             _fail(str(exc))
         console.print(Panel(
-            "[yellow]`soup can run` will:[/]\n"
-            "  - Extract the can\n"
-            "  - Auto-fetch any data referenced inside\n"
-            "  - Run [bold]soup train[/] against the embedded config\n\n"
-            f"Recipe: [bold]{for_terminal(manifest.name)}[/]\n"
-            f"Author: {for_terminal(manifest.author)}\n\n"
-            "Pass [bold]--yes[/] to confirm.",
+            Text.assemble(
+                ("`soup can run` will:", "yellow"),
+                "\n  - Extract the can\n"
+                "  - Auto-fetch any data referenced inside\n"
+                "  - Run ",
+                ("soup train", "bold"),
+                " against the embedded config\n\nRecipe: ",
+                (manifest.name, "bold"),
+                f"\nAuthor: {strip_control(manifest.author)}",
+                *_target_parts(targets),
+                "\n\nPass ",
+                ("--yes", "bold"),
+                " to confirm.",
+            ),
             title="Run can - confirm", border_style="yellow",
         ))
         raise typer.Exit(1)
@@ -194,8 +237,11 @@ def run_cmd(
         _fail("soup can run did not produce a result")
     if result.train_returncode != 0:
         console.print(
-            f"[red]train failed (rc={result.train_returncode}). "
-            f"Extract dir: {for_terminal(str(result.extract_dir))}[/]"
+            Text(
+                f"train failed (rc={result.train_returncode}). "
+                f"Extract dir: {strip_control(result.extract_dir)}",
+                style="red",
+            )
         )
         raise typer.Exit(result.train_returncode)
     if result.deploy_returncode is not None and result.deploy_returncode != 0:
@@ -204,8 +250,11 @@ def run_cmd(
         )
         raise typer.Exit(result.deploy_returncode)
     console.print(
-        f"[green]Can run complete[/] - extract dir: "
-        f"[bold]{for_terminal(str(result.extract_dir))}[/]"
+        Text.assemble(
+            ("Can run complete", "green"),
+            " - extract dir: ",
+            (strip_control(result.extract_dir), "bold"),
+        )
     )
 
 
@@ -238,7 +287,7 @@ def publish_cmd(
         _fail(str(exc))
     except ImportError as exc:
         _fail(f"huggingface_hub not installed: {exc}")
-    console.print(f"[green]Published[/] -> [bold]{for_terminal(url)}[/]")
+    console.print(Text.assemble(("Published", "green"), " -> ", (strip_control(url), "bold")))
 
 
 @app.command(name="fork")
@@ -262,6 +311,4 @@ def fork_cmd(
         )
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
-    console.print(
-        f"[green]Forked[/] -> [bold]{for_terminal(str(path))}[/]"
-    )
+    console.print(Text.assemble(("Forked", "green"), " -> ", (strip_control(path), "bold")))

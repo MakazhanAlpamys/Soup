@@ -444,6 +444,132 @@ def _as_targets(entry: Any) -> Any:
     return entry if isinstance(entry, str) else list(entry)
 
 
+_LAYER_INDEX = re.compile(r"(?:^|\.)(?:layers|h)\.\d+(?:\.|$)")
+
+
+def find_layer_unscoped_targets(model: Any, target_modules: Any) -> list[str]:
+    """Names in a list ``target_modules`` that ``layers_to_transform`` drops.
+
+    peft applies ``layers_to_transform`` only to a LIST ``target_modules``,
+    and even then only to matches that sit inside a numbered decoder layer
+    (``...layers.N....`` / ``...h.N....``): a name that matches nothing else
+    just gets no adapter, with no error (#1432). ``embed_tokens`` is the
+    common case. The exception is an EXACT module name such as a top-level
+    ``lm_head``: peft returns on an exact match before it reads
+    ``layers_to_transform``, so that target keeps its adapter and is not
+    flagged here.
+
+    Returns every target whose matches in ``model.named_modules()`` are all
+    outside a numbered layer. A target that resolves to nothing in this
+    model is left alone (nothing here to silently drop); a target with at
+    least one in-layer match is left alone too. ``target_modules`` that is
+    not a list (a PEFT regex string, or ``None``) has nothing to check and
+    returns an empty list (the regex case is refused separately, because
+    peft does not layer-scope a regex at all).
+    """
+    if not isinstance(target_modules, list):
+        return []
+    module_names = [name for name, _ in model.named_modules() if name]
+    unscoped = []
+    for target in target_modules:
+        if target in module_names:
+            continue  # an exact module name: peft keeps it before reading layers_to_transform
+        matches = [
+            name for name in module_names
+            if name == target or name.endswith(f".{target}")
+        ]
+        if matches and not any(_LAYER_INDEX.search(name) for name in matches):
+            unscoped.append(target)
+    return unscoped
+
+
+_LAYER_INDEX_NUM = re.compile(r"(?:^|\.)(?:layers|h)\.(\d+)(?:\.|$)")
+
+
+def expand_string_target_modules(model: Any, target_modules: str) -> list[str]:
+    """Expand a peft string ``target_modules`` into full module names.
+
+    Only the two shapes peft reads as a string are handled, and each is
+    expanded with peft's own rule so the adapter lands where the string
+    would have put it:
+
+    * ``all-linear`` (any casing): every ``nn.Linear`` and ``Conv1D`` module
+      except the output embedding's own module, which peft excludes.
+    * a regex: modules whose full name matches it. peft matches a regex with
+      ``re.fullmatch`` against the module path, and so does this.
+
+    Returns names in ``model.named_modules()`` order. An empty result means
+    the string reaches nothing in this model; the caller decides what to say.
+    """
+    modules = {name: module for name, module in model.named_modules() if name}
+    if target_modules.strip().lower() == "all-linear":
+        import torch
+
+        linear_types: tuple[type, ...] = (torch.nn.Linear,)
+        try:  # GPT-2 style models use Conv1D instead of nn.Linear
+            from transformers.pytorch_utils import Conv1D
+
+            linear_types = (torch.nn.Linear, Conv1D)
+        except Exception:  # pragma: no cover - transformers always ships it
+            pass
+        excluded: set[str] = set()
+        get_output = getattr(model, "get_output_embeddings", None)
+        if callable(get_output):
+            output = get_output()
+            if output is not None:
+                excluded = {name for name, module in modules.items()
+                            if module is output}
+        return [name for name, module in modules.items()
+                if isinstance(module, linear_types) and name not in excluded]
+
+    try:
+        pattern = re.compile(target_modules)
+    except re.error as exc:
+        raise ValueError(
+            f"training.lora.target_modules={target_modules!r} is not a valid "
+            f"regular expression: {exc}"
+        ) from exc
+    return [name for name in modules if pattern.fullmatch(name)]
+
+
+def restrict_target_modules_to_layers(
+    model: Any,
+    target_modules: Any,
+    cutoff: int,
+    total_layers: int,
+) -> list[str]:
+    """Keep only the targets that live in decoder layers ``>= cutoff``.
+
+    A freeze plan frees layers ``cutoff .. total_layers-1``. peft applies
+    ``layers_to_transform`` to a list ``target_modules`` but never to a
+    string, so a string target has to become an explicit list before it can
+    respect the plan (#2201). Names outside a numbered decoder layer
+    (``lm_head``, embeddings) are kept: the plan only governs numbered layers,
+    and peft keeps an exact module name for a list target too, so after
+    resolution every name is exact.
+    """
+    if isinstance(target_modules, str):
+        candidates = expand_string_target_modules(model, target_modules)
+    elif isinstance(target_modules, (list, tuple, set)):
+        candidates = list(target_modules)
+    else:  # None, UnmappedTargets and friends: nothing to restrict
+        return []
+
+    kept: list[str] = []
+    for name in candidates:
+        match = _LAYER_INDEX_NUM.search(name)
+        if match is None:
+            # Outside the decoder stack (lm_head, the embeddings). A freeze plan
+            # only governs numbered layers, so it cannot scope these; peft keeps
+            # an exact name for a list target too, and after resolution every
+            # name is exact (#2201 review, item 3).
+            kept.append(name)
+            continue
+        if cutoff <= int(match.group(1)) < total_layers:
+            kept.append(name)
+    return kept
+
+
 def resolve_lora_target_parameters(model: Any, configured: Any) -> Any:
     """Resolve opt-in raw-parameter LoRA targets for supported architectures.
 
@@ -470,6 +596,7 @@ def build_lora_config_kwargs(
     target_modules: Any,
     target_parameters: Any,
     task_type: Any,
+    layers_to_transform: Any = None,
 ) -> dict[str, Any]:
     """Build the shared PEFT LoRA kwargs used by every trainer path."""
     kwargs = {
@@ -483,6 +610,10 @@ def build_lora_config_kwargs(
         "use_dora": lora_cfg.use_dora,
         "use_rslora": lora_cfg.use_rslora,
     }
+    if layers_to_transform is not None:
+        # #1432: scopes the adapter to the layers freeze_model_layers left
+        # trainable. No layers_pattern needed, peft's default covers 'layers'/'h'.
+        kwargs["layers_to_transform"] = layers_to_transform
     rank_pattern = lora_cfg.rank_pattern
     alpha_pattern = lora_cfg.alpha_pattern
     if rank_pattern:
@@ -515,12 +646,16 @@ def build_peft_config_spec(
     target_modules: Any,
     task_type: Any,
     target_parameters: Any = None,
+    layers_to_transform: Any = None,
 ) -> dict[str, Any]:
     """Return the PEFT class name and kwargs for the configured adapter.
 
     VeRA is a distinct PEFT tuner, not a LoRA option. Keeping this branch next
     to the shared LoRA kwargs is what makes every trainer consume the same
     method choice instead of silently constructing ordinary LoRA.
+    ``VeraConfig`` does accept its own ``layers_to_transform``, but the caller
+    (``sft.py``) refuses ``use_vera`` combined with a freeze plan rather than
+    wiring it here, so ``layers_to_transform`` is LoRA-only in practice (#1432).
     """
     if getattr(lora_cfg, "use_vera", False):
         return {
@@ -540,6 +675,7 @@ def build_peft_config_spec(
             target_modules=target_modules,
             target_parameters=target_parameters,
             task_type=task_type,
+            layers_to_transform=layers_to_transform,
         ),
     }
 
@@ -591,12 +727,17 @@ def build_lora_config(
     target_modules: Any,
     task_type: Any,
     target_parameters: Any = None,
+    layers_to_transform: Any = None,
 ) -> Any:
     """Build the configured PEFT adapter through the single shared path.
 
     Keeping the PEFT import inside this function preserves Soup's lazy-import
     boundary while ensuring every trainer consumes new shared LoRA fields such
     as ``rank_pattern`` and ``alpha_pattern`` automatically.
+
+    ``layers_to_transform`` (#1432) restricts which decoder layers actually
+    get a LoRA adapter. Callers pass the layer indices freeze_model_layers
+    left trainable, so the adapter cannot silently re-train a frozen layer.
     """
     import peft
 
@@ -614,6 +755,7 @@ def build_lora_config(
         target_modules=target_modules,
         target_parameters=target_parameters,
         task_type=task_type,
+        layers_to_transform=layers_to_transform,
     )
     if exclude_modules:
         spec["init_kwargs"]["exclude_modules"] = exclude_modules
@@ -1373,6 +1515,7 @@ def _attach_reward_hack(
     output_dir: str,
     task: str,
     rl_checkpoint_cb: Any = None,
+    collective_enabled: bool = False,
 ) -> int:
     """Attach the reward-hack callback: mitigation controller (v0.71.26) when a
     ``reward_hack_mitigation`` mode is set, else the plain v0.70.0 detector.
@@ -1451,6 +1594,7 @@ def _attach_reward_hack(
                 ),
             )
             trainer.add_callback(callback)
+            callback._collective_enabled = collective_enabled
             callback.attach(trainer)
             return 1
         except (TypeError, ValueError, OSError) as exc:
@@ -1502,10 +1646,21 @@ def attach_rl_callbacks(
     non-mlx backends, so this helper trusts the caller's config.
     """
     attached = 0
+    collective_enabled = False
+    if (getattr(tcfg, "rl_checkpoint_save_every_steps", None) is not None
+            or getattr(tcfg, "reward_hack_mitigation", "off") == "pid_lagrangian"):
+        from soup_cli.utils.rl_distributed import peft_policy
+
+        collective_enabled = (
+            getattr(trainer, "is_fsdp_enabled", False) is not True
+            and getattr(trainer, "is_deepspeed_enabled", False) is not True
+            and peft_policy(getattr(trainer, "model", None)) is not None
+        )
     # Build the RL-checkpoint callback FIRST so the pid_lagrangian rollback
     # ladder can be handed a reference to restore from.
     ckpt_cb = _build_rl_checkpoint_cb(tcfg, output_dir=output_dir, task=task)
     if ckpt_cb is not None:
+        ckpt_cb._collective_enabled = collective_enabled
         trainer.add_callback(ckpt_cb)
         attached += 1
 
@@ -1517,6 +1672,7 @@ def attach_rl_callbacks(
         output_dir=output_dir,
         task=task,
         rl_checkpoint_cb=ckpt_cb,
+        collective_enabled=collective_enabled,
     )
 
     if bool(getattr(tcfg, "echo_trap_enabled", False)):

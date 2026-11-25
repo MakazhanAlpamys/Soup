@@ -5,6 +5,27 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture
+def bounded_random_choice(monkeypatch):
+    """Fail a random search that keeps drawing instead of letting it spin forever.
+
+    Every random sweep in these tests needs well under 10 000 draws, so reaching the
+    cap means the sampler cannot finish.
+    """
+    import random
+
+    draw = random.choice
+    calls = {"n": 0}
+
+    def capped(seq):
+        calls["n"] += 1
+        if calls["n"] > 10_000:
+            raise AssertionError("random search kept drawing: it can never finish")
+        return draw(seq)
+
+    monkeypatch.setattr(random, "choice", capped)
+
+
 class TestParseSweepParams:
     """Test sweep parameter parsing."""
 
@@ -148,6 +169,56 @@ class TestGenerateCombinations:
         combo_tuples = [tuple(sorted(c.items())) for c in combos]
         assert len(combo_tuples) == len(set(combo_tuples))
 
+    @pytest.mark.parametrize(
+        ("params", "max_runs", "expected_runs"),
+        [
+            # 3 x 4 = 12 list entries but 2 x 4 = 8 distinct arms: the default
+            # min(12, 10) asked for 10 unique arms and never stopped sampling.
+            ({"lr": [1e-5, 2e-5, 1e-5], "lora_r": [8, 16, 32, 64]}, None, 8),
+            # An explicit --max-runs between the distinct count and the product.
+            ({"lr": [1e-5, 2e-5, 1e-5], "lora_r": [8, 16]}, 5, 4),
+            # The same value spelled two ways parses to one float.
+            ({"lr": [1e-5, 0.00001, 2e-5], "epochs": [1, 2, 3, 4]}, 9, 8),
+        ],
+    )
+    def test_random_search_with_repeated_values_terminates(
+        self, bounded_random_choice, params, max_runs, expected_runs
+    ):
+        """A repeated value in a list must not make random search loop forever."""
+        from soup_cli.commands.sweep import _generate_combinations
+
+        combos = _generate_combinations(params, "random", max_runs)
+        combo_tuples = [tuple(sorted(c.items())) for c in combos]
+        assert len(combos) == expected_runs
+        assert len(set(combo_tuples)) == expected_runs
+
+    def test_random_search_runs_each_distinct_arm_once(self):
+        """When every arm runs, a repeated value does not run its arms twice."""
+        from soup_cli.commands.sweep import _generate_combinations
+
+        combos = _generate_combinations({"lr": [1e-5, 2e-5, 1e-5]}, "random", None)
+        assert sorted(c["lr"] for c in combos) == [1e-5, 2e-5]
+
+    def test_random_search_dedups_every_list_and_keeps_first_seen_order(self, monkeypatch):
+        """Every list is deduplicated, not only the first, and keeps its first-seen order."""
+        import random
+
+        from soup_cli.commands.sweep import _generate_combinations
+
+        drawn = []
+        real_choice = random.choice
+
+        def recording_choice(seq):
+            drawn.append(list(seq))
+            return real_choice(seq)
+
+        monkeypatch.setattr(random, "choice", recording_choice)
+        params = {"epochs": [3, 1, 3, 2], "batch_size": [6, 4, 6, 5]}
+        # 3 x 3 = 9 distinct arms; asking for 4 takes the sampling branch.
+        combos = _generate_combinations(params, "random", 4)
+        assert len(combos) == 4
+        assert drawn[:2] == [[3, 1, 2], [6, 4, 5]]
+
     def test_random_search_defaults_to_10(self):
         """Random search without max_runs should default to min(total, 10)."""
         from soup_cli.commands.sweep import _generate_combinations
@@ -285,6 +356,34 @@ class TestSweepCLI:
         assert result.exit_code == 0
         assert "Sweep Plan" in result.output
         assert "lr" in result.output
+
+    def test_sweep_random_dry_run_with_a_repeated_value(self, tmp_path, bounded_random_choice):
+        """`--strategy random` with a value listed twice plans the distinct arms and exits."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        config_file = tmp_path / "soup.yaml"
+        config_file.write_text(
+            "base: test-model\n"
+            "data:\n"
+            "  train: ./data.jsonl\n"
+        )
+
+        result = CliRunner().invoke(app, [
+            "sweep",
+            "--config", str(config_file),
+            "--param", "lr=1e-5,2e-5,1e-5",
+            "--param", "lora_r=8,16",
+            "--strategy", "random",
+            "--max-runs", "5",
+            "--dry-run",
+        ])
+        assert result.exit_code == 0, result.output
+        from .conftest import strip_ansi
+
+        plain = " ".join(strip_ansi(result.output).split())
+        assert "Runs: 4" in plain
 
     def test_sweep_config_not_found(self):
         """Should fail if config doesn't exist."""

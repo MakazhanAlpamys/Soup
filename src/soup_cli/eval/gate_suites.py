@@ -54,7 +54,9 @@ from pathlib import Path
 from typing import Callable, Tuple
 
 from soup_cli.eval.forgetting import MINI_BENCHMARKS, ForgettingDetector
-from soup_cli.eval.generation import generate_outputs
+from soup_cli.eval.generation import iter_outputs
+from soup_cli.utils.jsonl_lines import jsonl_lines
+from soup_cli.utils.ship_progress import track
 
 GeneratorFn = Callable[[str], str]
 
@@ -174,7 +176,7 @@ def _load_gate_fixture(filename: str) -> Tuple[dict, ...]:
             raise ValueError(f"gate suite fixture '{filename}' too large")
         text = Path(concrete).read_text(encoding="utf-8")
     rows: list[dict] = []
-    for line in text.splitlines():
+    for line in jsonl_lines(text):
         line = line.strip()
         if not line:
             continue
@@ -212,8 +214,8 @@ def _fraction_passing(
     if not items:
         return 0.0
     passed = 0
-    outputs = generate_outputs(gen, [item.get("prompt", "") for item in items])
-    for item, output in zip(items, outputs):
+    outputs = iter_outputs(gen, [item.get("prompt", "") for item in items])
+    for item, output in track(zip(items, outputs), len(items)):
         if output is None:
             continue
         output = output[:_MAX_OUTPUT_LEN]

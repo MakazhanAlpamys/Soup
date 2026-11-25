@@ -229,6 +229,18 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         # #342 — gradient watchdog state.
         self._nan_skip_count: int = 0
         self._nan_model_ref: Any = None
+        self._nan_param_names: set[str] = set()
+        # One-shot guard so a parameter scan failure warns once per run
+        # instead of repeating every step.
+        self._nan_scan_warned = False
+        # #2601 — per parameter, whether its accumulated gradient was finite
+        # before the Trainer clipped it (0-d bool tensors, read only on a
+        # skipped step), and the hook handles that record it.
+        self._grad_finite: dict[str, Any] = {}
+        self._grad_hook_handles: list[Any] = []
+        # #2601 — True once a skipped step had to name the parameters read
+        # after the clip.
+        self._nan_names_after_clip = False
 
     def push_rollout(self, rollout: Any) -> None:
         """Append a rollout to the bounded replay buffer (no-op if disabled)."""
@@ -274,6 +286,23 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         self._ref_model = ref
         # #342 — capture model reference for gradient watchdog.
         self._nan_model_ref = model
+        self._register_grad_hooks(model)
+        # #342 — restore cumulative watchdog state if resuming from a checkpoint
+        if state is not None:
+            history = getattr(state, "log_history", None)
+            if isinstance(history, list):
+                for entry in history:
+                    if isinstance(entry, dict) and "nan_skip_step" in entry:
+                        self._nan_skip_count += 1
+                        # A record from before #2601 has no source; its
+                        # names were read after the clip.
+                        if entry.get("nan_param_names_source") != "before_clip":
+                            self._nan_names_after_clip = True
+                        names = entry.get("nan_param_names")
+                        if isinstance(names, list):
+                            self._nan_param_names.update(
+                                n for n in names if isinstance(n, str)
+                            )
         return control
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
@@ -325,6 +354,47 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
 
     # --- #342 gradient watchdog ---
 
+    def _register_grad_hooks(self, model: Any) -> None:
+        """Record whether each gradient is finite before the Trainer clips it.
+
+        #2601 — ``on_pre_optimizer_step`` runs after ``_clip_grad_norm`` (and,
+        with ``max_grad_norm: 0``, after ``clip_grad_norm_(params, inf)`` in
+        ``_get_grad_norm``). One NaN makes the clip coefficient NaN and every
+        gradient with it, so the scan there cannot tell which parameter the
+        NaN started in. A post-accumulate hook sees each ``p.grad`` after every
+        backward, before any clip; the value from the last micro-batch covers
+        the whole accumulated step. It stores a 0-d tensor, so nothing syncs
+        with the host unless a step is skipped.
+        """
+        self._remove_grad_hooks()
+        if model is None or not hasattr(model, "named_parameters"):
+            return
+
+        import torch
+
+        def make_hook(name: str):
+            def hook(param):
+                if param.grad is not None:
+                    self._grad_finite[name] = torch.isfinite(param.grad).all()
+
+            return hook
+
+        try:
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    self._grad_hook_handles.append(
+                        param.register_post_accumulate_grad_hook(make_hook(name))
+                    )
+        except Exception as exc:  # noqa: BLE001 — never crash training
+            self._remove_grad_hooks()
+            logger.debug("gradient watchdog hooks not registered: %s", exc)
+
+    def _remove_grad_hooks(self) -> None:
+        for handle in self._grad_hook_handles:
+            handle.remove()
+        self._grad_hook_handles = []
+        self._grad_finite = {}
+
     def on_pre_optimizer_step(
         self, args, state, control, model=None, **kwargs
     ):
@@ -346,27 +416,91 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         microbatch) would call ``zero_grad()`` mid-accumulation, wiping
         valid gradients from earlier microbatches and producing asymmetric
         partial updates.
+
+        #2601 — the names come from the record ``_register_grad_hooks`` keeps
+        from before the clip. Without one (the hooks never fired), they are
+        the names read here, and ``nan_param_names_source`` says so.
         """
         import torch
 
+        grad_finite, self._grad_finite = self._grad_finite, {}
         target = model if model is not None else self._nan_model_ref
         if target is None:
             return control
-        has_nan = False
-        for p in target.parameters():
-            if p.grad is not None and not torch.isfinite(p.grad).all():
-                has_nan = True
-                break
-        if has_nan:
+        non_finite_names: list[str] = []
+        found = False
+        try:
+            if hasattr(target, "named_parameters"):
+                for name, p in target.named_parameters():
+                    found = True
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        non_finite_names.append(name)
+            if not found and hasattr(target, "parameters"):
+                for idx, p in enumerate(target.parameters()):
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        non_finite_names.append(f"param_{idx}")
+        except Exception as exc:  # noqa: BLE001 — never crash training
+            if not self._nan_scan_warned:
+                self._nan_scan_warned = True
+                logger.warning(
+                    "gradient watchdog parameter scan failed (%s); "
+                    "gradient checking disabled for this step",
+                    exc,
+                )
+            else:
+                logger.debug("gradient watchdog scan skipped: %s", exc)
+        if non_finite_names:
+            from soup_cli.utils.terminal import strip_control
+
+            # A gradient that was not finite before the clip is not finite
+            # after it, so this keeps the scan's parameter order.
+            before_clip = [
+                name
+                for name in non_finite_names
+                if name in grad_finite and not bool(grad_finite[name])
+            ]
+            if before_clip:
+                non_finite_names = before_clip
+                source = "before_clip"
+                source_detail = ""
+            else:
+                self._nan_names_after_clip = True
+                source = "after_clip"
+                source_detail = (
+                    "; names read after clipping, which spreads a NaN to "
+                    "every gradient"
+                )
             self._nan_skip_count += 1
+            self._nan_param_names.update(non_finite_names)
             target.zero_grad()
+            count = len(non_finite_names)
+            first_few = [strip_control(name) for name in non_finite_names[:3]]
+            names_detail = ", ".join(first_few)
+            if count > len(first_few):
+                names_detail += f" (+{count - len(first_few)} more)"
             logger.warning(
-                "step %d: non-finite gradients detected, zeroing "
-                "gradients so optimizer.step() is a no-op "
+                "step %d: non-finite gradients detected in %d parameter(s) [%s]%s, "
+                "zeroing gradients so optimizer.step() is a no-op "
                 "(%d total skipped)",
                 state.global_step + 1,
+                count,
+                names_detail,
+                source_detail,
                 self._nan_skip_count,
             )
+            log_history = getattr(state, "log_history", None)
+            if log_history is not None:
+                log_history.append(
+                    {
+                        "step": state.global_step + 1,
+                        "nan_skip_step": state.global_step + 1,
+                        # Per-step count: number of parameters with non-finite
+                        # gradients in this specific optimizer step.
+                        "nan_param_count": count,
+                        "nan_param_names": non_finite_names[:5],
+                        "nan_param_names_source": source,
+                    }
+                )
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
@@ -377,6 +511,7 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         clean one.  Loud warning at >= 5%.  The fraction is surfaced in
         ``state.log_history`` so ``soup adapters audit`` can see it.
         """
+        self._remove_grad_hooks()
         total = max(state.global_step, 1)
         fraction = self._nan_skip_count / total
 
@@ -385,12 +520,20 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         # a zero record means "the watchdog ran and saw no NaN".
         log_history = getattr(state, "log_history", None)
         if log_history is not None:
-            log_history.append(
-                {
-                    "nan_skip_count": self._nan_skip_count,
-                    "nan_skip_fraction": round(fraction, 4),
-                }
-            )
+            entry = {
+                "nan_skip_count": self._nan_skip_count,
+                "nan_skip_fraction": round(fraction, 4),
+            }
+            if self._nan_skip_count > 0:
+                # Run summary: count and first 5 names of distinct parameters
+                # that exhibited non-finite gradients across the entire run.
+                entry["nan_param_count"] = len(self._nan_param_names)
+                entry["nan_param_names"] = sorted(self._nan_param_names)[:5]
+                # #2601 — "before_clip" only when every skipped step was.
+                entry["nan_param_names_source"] = (
+                    "after_clip" if self._nan_names_after_clip else "before_clip"
+                )
+            log_history.append(entry)
 
         # Console / log messages are conditional.
         if self._nan_skip_count > 0:

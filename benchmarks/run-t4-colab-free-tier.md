@@ -8,6 +8,10 @@ gaps are marked as gaps.
 
 Hardware: Tesla T4 (sm_75, Turing), 15.6 GB, free-tier Google Colab.
 Driver/library versions were not recorded.
+
+A third session (2026-10-26, #999), uncapped, measured throughput against the
+forecast bracket. Its versions are recorded in its own section, and its raw
+output is committed under results/issue999-t4-colab/.
 -->
 
 # An 8B streamed run on a free-tier Colab T4
@@ -102,6 +106,11 @@ this run does not have: the trainer's own metrics render in the notebook as
 either (see below). This record fixes a wrong forecast; it does not close the
 validation #714 also asked for. That half should be tracked as its own issue.
 
+**Validated, 2026-10-27 (#999).** An uncapped session has since measured it:
+**233 tok/s at seq 256, 0.81x of the bracket's 288 low end**, so the bracket
+over-predicts. See [Measured throughput against the
+bracket](#measured-throughput-against-the-bracket-999).
+
 LoRA applied: **3,407,872 trainable / 8,030,261,248 total (0.04%)**.
 
 ---
@@ -153,6 +162,115 @@ the gap has been seen rather than reasoned about.
 
 ---
 
+## Measured throughput against the bracket (#999)
+
+**Added 2026-10-27.** A third session on a free Colab T4, on 2026-10-26 between
+19:17 and 19:35 UTC (the VM's clock, from the `nvidia-smi` samples), measured
+the tok/s the bracket forecasts, under the ruling on #999: **no process cap**.
+Nothing called `set_per_process_memory_fraction`, the config has no
+`stream_vram_override`, and each run was a fresh process. Harness:
+[`harness/issue999_t4_bracket_check.ipynb`](harness/issue999_t4_bracket_check.ipynb).
+Every report, log and `nvidia-smi` sample:
+[`results/issue999-t4-colab/`](results/issue999-t4-colab/).
+
+### Conditions
+
+| | |
+|---|---|
+| GPU | Tesla T4, sm_75, 15,360 MiB, driver 580.82.07, power limit 70.00 W, SM clock max 1590 MHz, PCIe gen 3 x16 |
+| Host | 2 vCPUs, 13.61 GB RAM (12.38 GB available at start), Python 3.13.16 |
+| Process cap | **none** |
+| Software | soup-cli **0.77.0**, torch 2.11.0+cu130, transformers 5.20.2, peft 0.21.2, trl 0.29.1, bitsandbytes 0.50.2, accelerate 1.15.0 |
+| Config | this record's, minus the cap: NF4, `stream_layers: true`, `stream_buffers: 2`, `batch_size: 1`, `max_length: 256`, LoRA r=8 / α=16, fp16; `gradient_accumulation_steps` at its default of 4 |
+| Measurement | `soup bench train --steps 28 --warmup 8`: 20 counted optimizer steps per run |
+| Runs | A, B, A, B, interleaved, each in a fresh process, after one unmeasured priming run that downloaded and sharded the checkpoint |
+
+Two data shapes, 32 rows each:
+
+- **A** is `notebooks/proof-4gb.ipynb`'s own section 5 data, unchanged: 37.5
+  tokens per sequence on average. It is the like-for-like with #910.
+- **B** has the same prompts with answers longer than 256 tokens, which Soup
+  truncates at `max_length`, so every sequence is exactly 256 tokens. The
+  bracket is a compute bound, and at batch 1 a 37-token step is mostly spent
+  streaming layers, so B is the bracket's fair test.
+
+**Two fixes from #2215 were applied at launch.** 0.77.0's `bench train` cannot
+run any 4-bit config: TRL casts the adapters to bf16, the fingerprint hashed
+them through numpy, and on an fp16 card it skipped the fp32 cast `soup train`
+makes before training. The harness applied the two fixes from #2216 (a
+byte-level fingerprint, and the same `align_trainable_dtype_for_fp16` call
+`soup train` makes) only after checking that the installed release lacked each
+one, and the first line of every log records it. The fingerprint is taken
+before the first step and after the last, outside the timed window. With the
+alignment, the adapters train in fp32, as they do under `soup train`.
+
+### Results
+
+| Run | Tokens / sequence | Total tok/s | Supervised tok/s | Utilisation | Median step | Busy SM clock min / median / max | Peak VRAM allocated | Valid |
+|---|---|---|---|---|---|---|---|---|
+| A1 | 37.5 | **45.49** | 21.53 | 47.3% | 3.265 s | 960 / 1530 / 1590 MHz (652 samples) | 1.51 GB | yes |
+| B1 | 256 | **232.93** | 214.96 | 92.3% | 4.378 s | 585 / 750 / 1575 MHz (877) | 1.93 GB | yes |
+| A2 | 37.5 | **44.87** | 21.24 | 47.3% | 3.314 s | 930 / 1530 / 1590 MHz (663) | 1.51 GB | yes |
+| B2 | 256 | **233.09** | 215.11 | 92.3% | 4.374 s | 555 / 750 / 1575 MHz (876) | 1.93 GB | yes |
+
+Total tok/s counts every position of every counted batch, padding included,
+which is what the bracket counts (`TFLOPS / (6 * P)`), as ruled on #999.
+Supervised tok/s and utilisation show how much of it the loss saw. The two runs
+of each shape agree to **1.4%** (A) and **0.07%** (B), and their per-step losses
+match exactly. The GradScaler skipped one step (step 2) in each A run and none
+in B, all inside the 8 warm-up steps; every counted `grad_norm` is finite.
+
+### Against the bracket
+
+| | Bracket | A (45.18 tok/s, mean) | B (233.01 tok/s, mean) |
+|---|---|---|---|
+| Published, v0.75.0 (#910's session) | 288-423 (20.39 TFLOPS @ 525 MHz) | 0.157x of the low end | **0.809x of the low end, 0.551x of the high end** |
+| This session's pre-flight, per run | 327-481, 351-516, 356-523, 357-525 (23.18-25.28 TFLOPS @ 675-840 MHz) | 0.126-0.139x of the low end | 0.653-0.664x of the low end |
+
+**The bracket over-predicted, and never bound.** With full 256-token sequences
+the T4 measured **233 tok/s, 19% below the published bracket's low end**
+(288 / 233 = 1.24x) and 45% below its high end (1.82x). Against this session's
+own, higher brackets it is about two thirds of the low end. With the record's
+own 37-token rows it measured **45 tok/s, 0.16x of 288** (6.4x below): there a
+step is mostly the fixed cost of streaming the layers, which is not what the
+bracket models.
+
+As the issue expected, the result is below 288 rather than inside the bracket.
+On this card the bracket is an upper bound, not a forecast: even at 256 tokens
+the run reached 55% of the published bracket's ceiling (44-45% of this
+session's), short of the 68%-100% range its 0.68 low-end factor encodes.
+
+**Clock: a likely part of the gap, not shown as a cause.** During B's counted
+steps the busy SM clock's median was **750 MHz**, half of A's 1530 MHz, and
+over each whole B process the median board power was 67.3 W against the card's
+70.00 W limit (A: 53-54 W). That is consistent with the T4 holding at its power
+limit under B's heavier load, but throttle reasons were not logged, so it is
+not shown. The probe clocks printed in the brackets (675-840 MHz) are the same
+single post-hoc `nvidia-smi` sample this record already calls decoration.
+
+**Peak VRAM: one more point for the estimator.** B's peak allocation, 1.93 GB,
+is under the ~1.97 GB at batch 1 x seq 256 that every run's pre-flight panel
+printed: an over-prediction of 2%, the safe direction. A ran shorter sequences
+than the 256 the estimate is for, so its 1.51 GB is not a comparison. Every
+panel printed the plan of #910's second session: a 5.70 GB pinned store, and
+2 x 113 MB buffers plus a 1051 MB large-layer slot.
+
+**Host side.** The peak RSS of each bench process was 8.6-8.8 GB of the host's
+13.61 GB, and available RAM never fell below 4.17 GB.
+
+**What this measurement does not establish:**
+
+- One session on one Colab host. Two fresh processes per shape show the
+  run-to-run spread inside it, not the variation between free-tier hosts,
+  which #910 already saw change the plan between sessions.
+- The clock and power were observed, not controlled, and throttle reasons were
+  not captured.
+- The bracket's probe ran for a short burst at the start of each process. How
+  its TFLOPS relates to the sustained, power-limited rate of a real step is not
+  measured here.
+
+---
+
 ## What this does **not** establish
 
 - **No throughput claim. None.** The card was under an artificial memory cap;
@@ -163,6 +281,9 @@ the gap has been seen rather than reasoned about.
   bracket is current, it is a *compute bound derived from a GEMM probe*, not a
   measurement of what this run achieved — the two are routinely confused, which
   is why the forecast is printed with the clock it was taken at.
+  *(2026-10-27, #999: this bullet is about the capped runs. An uncapped session
+  has since measured tok/s against the bracket; see [Measured throughput against
+  the bracket](#measured-throughput-against-the-bracket-999).)*
 - **Backward / gradient exactness at 8B on Turing is not shown.** An adapter with
   128 of 128 tensors non-zero proves gradients *flowed*; it does not prove they
   were *correct*. The distinction is not academic here — #331 was a defect that

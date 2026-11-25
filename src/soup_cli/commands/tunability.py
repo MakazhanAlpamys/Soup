@@ -13,9 +13,10 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 from soup_cli.utils.tunability import (
     DEFAULT_CANDIDATES,
     CandidateBase,
@@ -127,13 +128,13 @@ def tunability_cmd(
         console.print("[red]dataset path must not contain null bytes[/]")
         raise typer.Exit(2)
     if not is_under_cwd(dataset):
-        console.print(f"[red]dataset {for_terminal(repr(dataset))} is outside cwd[/]")
+        console.print(Text(f"dataset {strip_control(repr(dataset))} is outside cwd", style="red"))
         raise typer.Exit(2)
 
     try:
         cands = _resolve_candidates(candidates)
     except typer.BadParameter as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(str(exc)), style="red"))
         raise typer.Exit(2) from exc
 
     if plan_only:
@@ -184,7 +185,7 @@ def tunability_cmd(
             probe_fn=probe_fn,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(str(exc)), style="red"))
         raise typer.Exit(2) from exc
 
     table = Table(title="Tunability sweep")
@@ -218,14 +219,14 @@ def tunability_cmd(
             console.print("[red]output path must not contain null bytes[/]")
             raise typer.Exit(2)
         if not is_under_cwd(output):
-            console.print(f"[red]output {for_terminal(repr(output))} is outside cwd[/]")
+            console.print(Text(f"output {strip_control(repr(output))} is outside cwd", style="red"))
             raise typer.Exit(2)
         try:
             write_report(report, output)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(Text(strip_control(str(exc)), style="red"))
             raise typer.Exit(2) from exc
-        console.print(f"[green]Report written to {escape(output)}[/]")
+        console.print(Text(f"Report written to {strip_control(output)}", style="green"))
 
 
 __all__ = ["tunability_cmd"]

@@ -1,0 +1,203 @@
+[issue999] applied fixes from #2215: fingerprint, fp16-adapter-alignment
+Auto-detected format: chatml
+Loading tokenizer: NousResearch/Meta-Llama-3.1-8B-Instruct
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]
+Fetching 11 files: 100%|██████████| 11/11 [00:00<00:00, 1616.47it/s]
+╭────────────────────────────────────────────────────────────────────────────────── Layer streaming disk pre-flight ───────────────────────────────────────────────────────────────────────────────────╮
+│ HF/local source: 16.06 GB                                                                                                                                                                            │
+│ Soup materialized copy: 16.06 GB (no write required)                                                                                                                                                 │
+│ Layer-shard cache: 5.70 GB (reusable)                                                                                                                                                                │
+│ Projected total on disk: 37.82 GB                                                                                                                                                                    │
+│ Additional writes before training: 0.00 GB                                                                                                                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Preparing layer shards -> /root/.soup/layer-stream/NousResearch__Meta-Llama-3.1-8B-Instruct
+╭─────────────────────────────────────────────────────────────────────────────────────── training.stream_layers ───────────────────────────────────────────────────────────────────────────────────────╮
+│ Layer streaming BETA — arch llama, tier ram                                                                                                                                                          │
+│   base store   5.70 GB across 32 layers (pinned)                                                                                                                                                     │
+│   VRAM buffers 2 x 113 MB + 1 x 1051 MB large-layer slot = 1276 MB                                                                                                                                   │
+│   resident     0 MB extras + adapters                                                                                                                                                                │
+│   peak VRAM    ~1.97 GB at batch 1 x seq 256 (logits 0.46 GB)                                                                                                                                        │
+│   free VRAM    15.51 GB                                                                                                                                                                              │
+│   forecast     351-516 tok/s — a compute-bound bound, not a promise                                                                                                                                  │
+│                (from 24.86 TFLOPS measured on this card now using float16 @ 690 MHz)                                                                                                                 │
+│   ! accumulating 4x at batch 1: the base is re-read once per micro-batch. Per token that is free, but reaching effective batch 4 by raising training.batch_size instead measured ~2.5x faster.       │
+│ Accumulation holds peak VRAM flat, so raise batch_size while the budget above allows, then accumulate for the rest.                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Layer streaming is BETA: slower than resident training, but this model may not run resident on this card at all.
+expandable_segments allocator hint not enabled: CUDA was already initialised before Soup could set it — the allocator reads PYTORCH_CUDA_ALLOC_CONF once, at context creation
+Layer streaming ready: 32 layers, 5.70 GB pinned RAM store (6.44 GB page-locked), 2 x 113 MB decoder buffers + 1 x 1051 MB large-layer slot
+LoRA applied: 3,407,872 trainable / 8,030,261,248 total (0.04%)
+
+Map:   0%|          | 0/28 [00:00<?, ? examples/s][transformers] return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword.
+
+Map:  64%|██████▍   | 18/28 [00:00<00:00, 171.06 examples/s]
+Map: 100%|██████████| 28/28 [00:00<00:00, 150.94 examples/s]
+
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]
+Map: 100%|██████████| 4/4 [00:00<00:00, 165.09 examples/s]
+
+Map:   0%|          | 0/28 [00:00<?, ? examples/s]
+Map: 100%|██████████| 28/28 [00:00<00:00, 2830.78 examples/s]
+
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]
+Map: 100%|██████████| 4/4 [00:00<00:00, 933.52 examples/s]
+
+Truncating train dataset:   0%|          | 0/28 [00:00<?, ? examples/s]
+Truncating train dataset: 100%|██████████| 28/28 [00:00<00:00, 3756.17 examples/s]
+
+Truncating eval dataset:   0%|          | 0/4 [00:00<?, ? examples/s]
+Truncating eval dataset: 100%|██████████| 4/4 [00:00<00:00, 857.86 examples/s]
+Rewind log: /tmp/soup-bench-0ulrsoh_/rewind.jsonl
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'pad_token_id': 128009}.
+
+  0%|          | 0/28 [00:00<?, ?it/s]
+  4%|▎         | 1/28 [00:06<02:44,  6.08s/it]
+                                              
+{'loss': '3.965', 'grad_norm': '1.088', 'learning_rate': '0', 'entropy': '3.411', 'num_tokens': '1024', 'mean_token_accuracy': '0.296', 'epoch': '0.1429'}
+
+  4%|▎         | 1/28 [00:06<02:44,  6.08s/it]
+  7%|▋         | 2/28 [00:10<02:08,  4.95s/it]
+                                              
+{'loss': '3.877', 'grad_norm': '1.411', 'learning_rate': '0.0002', 'entropy': '3.408', 'num_tokens': '2048', 'mean_token_accuracy': '0.2987', 'epoch': '0.2857'}
+
+  7%|▋         | 2/28 [00:10<02:08,  4.95s/it]
+ 11%|█         | 3/28 [00:14<01:55,  4.64s/it]
+                                              
+{'loss': '3.887', 'grad_norm': '0.9822', 'learning_rate': '0.0001993', 'entropy': '3.364', 'num_tokens': '3072', 'mean_token_accuracy': '0.3037', 'epoch': '0.4286'}
+
+ 11%|█         | 3/28 [00:14<01:55,  4.64s/it]
+ 14%|█▍        | 4/28 [00:18<01:48,  4.51s/it]
+                                              
+{'loss': '3.902', 'grad_norm': '1.104', 'learning_rate': '0.0001973', 'entropy': '3.45', 'num_tokens': '4096', 'mean_token_accuracy': '0.2934', 'epoch': '0.5714'}
+
+ 14%|█▍        | 4/28 [00:18<01:48,  4.51s/it]
+ 18%|█▊        | 5/28 [00:23<01:42,  4.46s/it]
+                                              
+{'loss': '3.814', 'grad_norm': '1.17', 'learning_rate': '0.000194', 'entropy': '3.56', 'num_tokens': '5120', 'mean_token_accuracy': '0.3097', 'epoch': '0.7143'}
+
+ 18%|█▊        | 5/28 [00:23<01:42,  4.46s/it]
+ 21%|██▏       | 6/28 [00:27<01:37,  4.44s/it]
+                                              
+{'loss': '3.666', 'grad_norm': '1.355', 'learning_rate': '0.0001894', 'entropy': '3.456', 'num_tokens': '6144', 'mean_token_accuracy': '0.3281', 'epoch': '0.8571'}
+
+ 21%|██▏       | 6/28 [00:27<01:37,  4.44s/it]
+ 25%|██▌       | 7/28 [00:32<01:33,  4.44s/it]
+                                              
+{'loss': '3.591', 'grad_norm': '1.424', 'learning_rate': '0.0001835', 'entropy': '3.456', 'num_tokens': '7168', 'mean_token_accuracy': '0.3217', 'epoch': '1'}
+
+ 25%|██▌       | 7/28 [00:32<01:33,  4.44s/it]
+ 29%|██▊       | 8/28 [00:36<01:29,  4.46s/it]
+                                              
+{'loss': '3.402', 'grad_norm': '1.764', 'learning_rate': '0.0001766', 'entropy': '3.382', 'num_tokens': '8192', 'mean_token_accuracy': '0.3471', 'epoch': '1.143'}
+
+ 29%|██▊       | 8/28 [00:36<01:29,  4.46s/it]
+ 32%|███▏      | 9/28 [00:41<01:25,  4.48s/it]
+                                              
+{'loss': '3.319', 'grad_norm': '1.856', 'learning_rate': '0.0001686', 'entropy': '3.308', 'num_tokens': '9216', 'mean_token_accuracy': '0.3503', 'epoch': '1.286'}
+
+ 32%|███▏      | 9/28 [00:41<01:25,  4.48s/it]
+ 36%|███▌      | 10/28 [00:45<01:20,  4.50s/it]
+                                               
+{'loss': '3.152', 'grad_norm': '2.072', 'learning_rate': '0.0001597', 'entropy': '3.258', 'num_tokens': '1.024e+04', 'mean_token_accuracy': '0.3761', 'epoch': '1.429'}
+
+ 36%|███▌      | 10/28 [00:45<01:20,  4.50s/it]
+ 39%|███▉      | 11/28 [00:50<01:16,  4.49s/it]
+                                               
+{'loss': '2.99', 'grad_norm': '2.154', 'learning_rate': '0.00015', 'entropy': '3.049', 'num_tokens': '1.126e+04', 'mean_token_accuracy': '0.3994', 'epoch': '1.571'}
+
+ 39%|███▉      | 11/28 [00:50<01:16,  4.49s/it]
+ 43%|████▎     | 12/28 [00:54<01:11,  4.47s/it]
+                                               
+{'loss': '2.82', 'grad_norm': '2.03', 'learning_rate': '0.0001396', 'entropy': '2.664', 'num_tokens': '1.229e+04', 'mean_token_accuracy': '0.427', 'epoch': '1.714'}
+
+ 43%|████▎     | 12/28 [00:54<01:11,  4.47s/it]
+ 46%|████▋     | 13/28 [00:58<01:06,  4.45s/it]
+                                               
+{'loss': '2.75', 'grad_norm': '2.232', 'learning_rate': '0.0001287', 'entropy': '2.596', 'num_tokens': '1.331e+04', 'mean_token_accuracy': '0.4212', 'epoch': '1.857'}
+
+ 46%|████▋     | 13/28 [00:58<01:06,  4.45s/it]
+ 50%|█████     | 14/28 [01:03<01:01,  4.42s/it]
+                                               
+{'loss': '2.645', 'grad_norm': '3.255', 'learning_rate': '0.0001174', 'entropy': '2.409', 'num_tokens': '1.434e+04', 'mean_token_accuracy': '0.4429', 'epoch': '2'}
+
+ 50%|█████     | 14/28 [01:03<01:01,  4.42s/it]
+ 54%|█████▎    | 15/28 [01:07<00:57,  4.40s/it]
+                                               
+{'loss': '2.507', 'grad_norm': '3.243', 'learning_rate': '0.0001058', 'entropy': '2.342', 'num_tokens': '1.536e+04', 'mean_token_accuracy': '0.4773', 'epoch': '2.143'}
+
+ 54%|█████▎    | 15/28 [01:07<00:57,  4.40s/it]
+ 57%|█████▋    | 16/28 [01:11<00:52,  4.37s/it]
+                                               
+{'loss': '2.292', 'grad_norm': '3.125', 'learning_rate': '9.419e-05', 'entropy': '2.168', 'num_tokens': '1.638e+04', 'mean_token_accuracy': '0.5021', 'epoch': '2.286'}
+
+ 57%|█████▋    | 16/28 [01:11<00:52,  4.37s/it]
+ 61%|██████    | 17/28 [01:16<00:47,  4.36s/it]
+                                               
+{'loss': '2.24', 'grad_norm': '3.206', 'learning_rate': '8.264e-05', 'entropy': '2.163', 'num_tokens': '1.741e+04', 'mean_token_accuracy': '0.527', 'epoch': '2.429'}
+
+ 61%|██████    | 17/28 [01:16<00:47,  4.36s/it]
+ 64%|██████▍   | 18/28 [01:20<00:43,  4.34s/it]
+                                               
+{'loss': '2.181', 'grad_norm': '3.396', 'learning_rate': '7.132e-05', 'entropy': '2.188', 'num_tokens': '1.843e+04', 'mean_token_accuracy': '0.5456', 'epoch': '2.571'}
+
+ 64%|██████▍   | 18/28 [01:20<00:43,  4.34s/it]
+ 68%|██████▊   | 19/28 [01:24<00:38,  4.33s/it]
+                                               
+{'loss': '2.069', 'grad_norm': '3.738', 'learning_rate': '6.039e-05', 'entropy': '2.251', 'num_tokens': '1.946e+04', 'mean_token_accuracy': '0.5508', 'epoch': '2.714'}
+
+ 68%|██████▊   | 19/28 [01:24<00:38,  4.33s/it]
+ 71%|███████▏  | 20/28 [01:29<00:34,  4.33s/it]
+                                               
+{'loss': '1.957', 'grad_norm': '4.103', 'learning_rate': '5e-05', 'entropy': '2.157', 'num_tokens': '2.048e+04', 'mean_token_accuracy': '0.5566', 'epoch': '2.857'}
+
+ 71%|███████▏  | 20/28 [01:29<00:34,  4.33s/it]
+ 75%|███████▌  | 21/28 [01:33<00:30,  4.33s/it]
+                                               
+{'loss': '1.912', 'grad_norm': '3.947', 'learning_rate': '4.028e-05', 'entropy': '2.217', 'num_tokens': '2.15e+04', 'mean_token_accuracy': '0.5678', 'epoch': '3'}
+
+ 75%|███████▌  | 21/28 [01:33<00:30,  4.33s/it]
+ 79%|███████▊  | 22/28 [01:37<00:26,  4.34s/it]
+                                               
+{'loss': '1.876', 'grad_norm': '4.505', 'learning_rate': '3.138e-05', 'entropy': '2.121', 'num_tokens': '2.253e+04', 'mean_token_accuracy': '0.5808', 'epoch': '3.143'}
+
+ 79%|███████▊  | 22/28 [01:37<00:26,  4.34s/it]
+ 82%|████████▏ | 23/28 [01:42<00:21,  4.34s/it]
+                                               
+{'loss': '1.774', 'grad_norm': '4.544', 'learning_rate': '2.34e-05', 'entropy': '2.113', 'num_tokens': '2.355e+04', 'mean_token_accuracy': '0.6053', 'epoch': '3.286'}
+
+ 82%|████████▏ | 23/28 [01:42<00:21,  4.34s/it]
+ 86%|████████▌ | 24/28 [01:46<00:17,  4.36s/it]
+                                               
+{'loss': '1.769', 'grad_norm': '3.727', 'learning_rate': '1.645e-05', 'entropy': '2.013', 'num_tokens': '2.458e+04', 'mean_token_accuracy': '0.6106', 'epoch': '3.429'}
+
+ 86%|████████▌ | 24/28 [01:46<00:17,  4.36s/it]
+ 89%|████████▉ | 25/28 [01:50<00:13,  4.37s/it]
+                                               
+{'loss': '1.767', 'grad_norm': '3.961', 'learning_rate': '1.064e-05', 'entropy': '2.12', 'num_tokens': '2.56e+04', 'mean_token_accuracy': '0.6144', 'epoch': '3.571'}
+
+ 89%|████████▉ | 25/28 [01:51<00:13,  4.37s/it]
+ 93%|█████████▎| 26/28 [01:55<00:08,  4.44s/it]
+                                               
+{'loss': '1.675', 'grad_norm': '3.938', 'learning_rate': '6.031e-06', 'entropy': '1.989', 'num_tokens': '2.662e+04', 'mean_token_accuracy': '0.6191', 'epoch': '3.714'}
+
+ 93%|█████████▎| 26/28 [01:55<00:08,  4.44s/it]
+ 96%|█████████▋| 27/28 [02:00<00:04,  4.43s/it]
+                                               
+{'loss': '1.712', 'grad_norm': '3.671', 'learning_rate': '2.696e-06', 'entropy': '1.977', 'num_tokens': '2.765e+04', 'mean_token_accuracy': '0.6212', 'epoch': '3.857'}
+
+ 96%|█████████▋| 27/28 [02:00<00:04,  4.43s/it]
+100%|██████████| 28/28 [02:04<00:00,  4.43s/it]
+                                               
+{'loss': '1.723', 'grad_norm': '3.926', 'learning_rate': '6.762e-07', 'entropy': '1.985', 'num_tokens': '2.867e+04', 'mean_token_accuracy': '0.625', 'epoch': '4'}
+
+100%|██████████| 28/28 [02:04<00:00,  4.43s/it]
+                                               
+{'train_runtime': '125.1', 'train_samples_per_second': '0.895', 'train_steps_per_second': '0.224', 'train_loss': '2.687', 'epoch': '4'}
+
+100%|██████████| 28/28 [02:05<00:00,  4.43s/it]
+100%|██████████| 28/28 [02:05<00:00,  4.47s/it]
+28 steps (8 warm-up discarded): median 4.3778s, p95 4.5437s, 18900 supervised of 20480 tokens, 215.0 supervised tok/s
+Report: /content/issue999/b1.json
+Valid: the model trained while it was measured.

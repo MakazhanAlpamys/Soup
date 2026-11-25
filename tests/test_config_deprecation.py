@@ -2,11 +2,14 @@
 
 A value that never took effect is refused eventually, but not at once: ``soup
 autopilot`` and every run-config dump write the whole model, defaults included,
-so refusing a former default breaks files Soup wrote itself. For one release the
-value loads with a warning naming the release that will refuse it.
+so refusing a former default breaks files Soup wrote itself. For one release
+(v0.76) the value loaded with a warning naming the release that would refuse it;
+v0.77.0 reached that release and refuses it, together with the staged fields of
+#808.
 
-These tests cover the mechanism. Each deprecated value has its own tests beside
-the field it belongs to.
+These tests cover the mechanism, the warning path included (it is kept for the
+next value that needs a release of notice, and reached here by monkeypatching the
+switch). Each deprecated value has its own tests beside the field it belongs to.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from soup_cli.config.deprecation import (
     SoupConfigDeprecationWarning,
     warn_deprecated_value,
 )
+from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -83,7 +87,9 @@ class TestTheVersionHelper:
 
 
 class TestTheWarning:
-    def test_it_is_a_future_warning_that_names_the_release(self):
+    def test_it_is_a_future_warning_that_names_the_release(self, monkeypatch):
+        """The warning path, kept for the next deprecation; this release refuses."""
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             warn_deprecated_value("x: y is ignored.")
         assert issubclass(SoupConfigDeprecationWarning, FutureWarning)
@@ -91,24 +97,56 @@ class TestTheWarning:
         assert message.startswith("x: y is ignored.")
         assert f"v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it" in message
 
+    def test_this_release_refuses_instead(self):
+        """Control: with the switch as shipped, the same call is a refusal."""
+        with pytest.raises(ValueError) as excinfo:
+            warn_deprecated_value("x: y is ignored.", refusal="x: y is refused.")
+        assert str(excinfo.value) == (
+            f"x: y is refused. Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        )
+
+
+#: Each deadline beside the switch that must flip when the declared version reaches it.
+_SWITCHES = (
+    ("DEPRECATED_VALUE_SEVERITY", DEPRECATED_VALUE_REJECTION_VERSION),
+    ("STAGED_FIELD_SEVERITY", STAGED_FIELD_REJECTION_VERSION),
+)
+
+
+def _switch(name: str) -> str:
+    owner = deprecation if name == "DEPRECATED_VALUE_SEVERITY" else loader
+    return getattr(owner, name)
+
 
 class TestTheDeadline:
     """A warning with no expiry is permanent, so the expiry is checked (#627's shape)."""
 
-    def test_the_deadline_has_not_passed(self):
-        """The release that reaches the deadline turns this red: flip each
-        deprecated value to a refusal, then move or retire the constant."""
-        assert _major_minor(soup_cli.__version__) < _major_minor(
-            DEPRECATED_VALUE_REJECTION_VERSION
-        ), (
-            f"soup_cli is {soup_cli.__version__}, and the deprecated config values "
-            f"were promised a refusal in v{DEPRECATED_VALUE_REJECTION_VERSION}"
-        )
+    def test_the_deadline_has_passed_and_both_switches_refuse(self):
+        """v0.76 warned and named v0.77; v0.77.0 reached it, so both the deprecated
+        values (#759, #795, #1418) and the staged fields (#808) are refused. Setting
+        either switch back to ``"warn"`` turns this red."""
+        version = _major_minor(soup_cli.__version__)
+        for name, deadline in _SWITCHES:
+            assert version >= _major_minor(deadline), (
+                f"soup_cli is {soup_cli.__version__}, before the v{deadline} deadline "
+                f"{name} names; this release was meant to refuse"
+            )
+            assert _switch(name) == "error", (
+                f"soup_cli is {soup_cli.__version__}, at or past the v{deadline} "
+                f"deadline: {name} must be 'error', not {_switch(name)!r}"
+            )
 
-    def test_the_deadline_is_the_next_minor(self):
-        """One release of notice: not zero, and not an open-ended future."""
-        major, minor = _major_minor(soup_cli.__version__)
-        assert _major_minor(DEPRECATED_VALUE_REJECTION_VERSION) == (major, minor + 1)
+    @pytest.mark.parametrize(("name", "deadline"), _SWITCHES)
+    def test_each_switch_refuses_exactly_from_its_deadline(self, name, deadline):
+        """Both directions, as ``UNKNOWN_KEY_SEVERITY`` is pinned: a switch cannot be
+        forgotten past its deadline, nor flipped before it. One commit flips both
+        (ruling 2026-10-12), so both deadlines also name the same release."""
+        reached = _major_minor(soup_cli.__version__) >= _major_minor(deadline)
+        assert _switch(name) == ("error" if reached else "warn"), (
+            f"soup_cli is {soup_cli.__version__} and {name} names v{deadline}, "
+            f"but the switch is {_switch(name)!r}"
+        )
+        assert deadline == DEPRECATED_VALUE_REJECTION_VERSION
 
     def test_the_version_is_written_out_in_exactly_one_source_file(self):
         needle = re.compile(
@@ -130,8 +168,18 @@ class TestTheDeadline:
         and a conscious edit of this test, not a quiet change of the constant."""
         assert DEPRECATED_VALUE_REJECTION_VERSION == "0.77"
 
-    def test_deadline_clause_is_exact(self):
-        """The sentence every warning ends with is built from the constant, word for word."""
+    def test_deadline_clause_is_exact(self, monkeypatch):
+        """The sentence every refusal ends with is built from the constant, word for word.
+        Pinned under the severity it describes, so it does not depend on the release's
+        switch (``TestTheDeadline``'s first test pins that)."""
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "error")
+        assert deprecation.deadline_clause() == (
+            f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        )
+
+    def test_deadline_clause_while_warning_is_exact(self, monkeypatch):
+        """The sentence v0.76's warnings ended with, still built from the constant."""
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         assert deprecation.deadline_clause() == (
             f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it."
         )
@@ -168,6 +216,42 @@ class TestTheDeadline:
         assert not any(
             pattern.search('f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it."')
             for pattern in _HARDCODED_DEADLINE
+        )
+
+
+def _release(version: str) -> tuple[int, int, int]:
+    """``"0.77.0"`` as ``(0, 77, 0)``; a version written without a patch reads as ``.0``."""
+    major, minor, patch = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", version).groups()
+    return int(major), int(minor), int(patch or 0)
+
+
+class TestTheExportRemovalRelease:
+    """``soup export --format awq`` / ``gptq`` name the release that removed them (#1710).
+
+    That release is a fact about the past, so it has its own constant. Built from
+    :data:`DEPRECATED_VALUE_REJECTION_VERSION` it would move with the next deprecation's
+    deadline, and the refusal would date the removal to a release that still shipped
+    both formats."""
+
+    def test_the_release_helper_compares_whole_releases(self):
+        assert _release("0.77.0") == (0, 77, 0)
+        assert _release("0.77") == (0, 77, 0)
+        assert _release("0.76.9") < _release("0.77.0") < _release("0.77.1")
+        assert _release("0.100.0") > _release("0.77.0")
+
+    def test_the_removal_release_is_written_out(self):
+        """The release that shipped the removal (#1951 merged before the v0.77.0 cut).
+        Changing it rewrites history in every refusal: it needs a changelog entry and a
+        conscious edit of this test."""
+        assert deprecation.EXPORT_FORMATS_REMOVED_IN == "0.77.0"
+
+    def test_this_version_is_at_or_past_the_removal_release(self):
+        """Pinned to ``__version__`` as the deadlines above are: a version before the
+        removal release would name, in the refusal, a release that has not shipped."""
+        removed_in = deprecation.EXPORT_FORMATS_REMOVED_IN
+        assert _release(soup_cli.__version__) >= _release(removed_in), (
+            f"soup_cli is {soup_cli.__version__}, before v{removed_in}, the release the "
+            "awq/gptq refusal says removed them"
         )
 
 

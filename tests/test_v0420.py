@@ -23,11 +23,13 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.config.loader import load_config_from_string
-from soup_cli.config.schema import DataConfig
+from soup_cli.config.schema import DataConfig, SoupConfig
+from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
 from soup_cli.data.formats import format_to_messages
 from soup_cli.utils import data_pipeline as dp
 
@@ -608,11 +610,28 @@ class TestPartEVocabExpansion:
         cfg = DataConfig(train="d.jsonl")
         assert cfg.remove_unused_columns is False
 
-    def test_remove_unused_columns_true_loads_with_a_warning_and_is_ignored(self):
-        """#759 revised ruling: `true` never took effect, and refusing it would
-        break configs Soup wrote itself, so it loads, warns, and is ignored."""
+    def test_remove_unused_columns_true_is_refused(self):
+        """#759: `true` never took effect. v0.76 loaded it with a warning for one
+        release (Soup's own writers had put it in configs); v0.77 refuses it."""
+        from pydantic import ValidationError
+
+        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+
+        with pytest.raises(ValidationError) as excinfo:
+            DataConfig(train="d.jsonl", remove_unused_columns=True)
+        assert excinfo.value.errors()[0]["msg"] == (
+            "Value error, data.remove_unused_columns: true never had an effect (no "
+            "trainer reads it; the trainers that set it pass false). Delete the line. "
+            f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        )
+
+    def test_remove_unused_columns_true_loads_with_a_warning_under_warn(self, monkeypatch):
+        """The v0.76 behaviour, kept behind ``DEPRECATED_VALUE_SEVERITY = "warn"``:
+        it loads, warns, and is ignored."""
+        from soup_cli.config import deprecation
         from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         with pytest.warns(
             SoupConfigDeprecationWarning, match=r"data\.remove_unused_columns: true"
         ) as record:
@@ -634,15 +653,51 @@ class TestPartEVocabExpansion:
         assert cfg.remove_unused_columns is False
         assert default.remove_unused_columns is False
 
-    def test_remove_unused_columns_true_warns_through_the_yaml_path(self, monkeypatch):
-        """The user-facing path: `soup train` loads YAML, so the warning has to be
-        printed there, once, and the value the run sees is False."""
+    def test_remove_unused_columns_true_is_refused_through_the_yaml_path(self, monkeypatch):
+        """The user-facing path: `soup train` loads YAML, so the refusal has to be
+        raised there, naming the line, with no warning printed first."""
         import io
 
         from rich.console import Console
 
         from soup_cli.config import loader
+        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
 
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            loader,
+            "console",
+            Console(file=buffer, width=500, force_terminal=False, color_system=None),
+        )
+        yaml_str = (
+            "base: sshleifer/tiny-gpt2\n"
+            "task: sft\n"
+            "data:\n"
+            "  train: d.jsonl\n"
+            "  remove_unused_columns: true\n"
+        )
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(yaml_str)
+        assert str(excinfo.value) == (
+            "data -> remove_unused_columns: Value error, data.remove_unused_columns: "
+            "true never had an effect (no trainer reads it; the trainers that set it "
+            "pass false). Delete the line. "
+            f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        )
+        assert buffer.getvalue() == ""
+
+    def test_remove_unused_columns_true_warns_through_the_yaml_path_under_warn(
+        self, monkeypatch
+    ):
+        """The v0.76 path, kept behind the switch: the warning is printed once, and
+        the value the run sees is False."""
+        import io
+
+        from rich.console import Console
+
+        from soup_cli.config import deprecation, loader
+
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
         buffer = io.StringIO()
         monkeypatch.setattr(
             loader,
@@ -662,28 +717,47 @@ class TestPartEVocabExpansion:
         assert out.count("data.remove_unused_columns: true") == 1, out
         assert "Delete the line" in out
 
-    def test_a_config_autopilot_wrote_on_the_old_default_still_loads(self, tmp_path):
+    def test_a_config_autopilot_wrote_on_the_old_default_is_refused(
+        self, tmp_path, monkeypatch
+    ):
         """The regression that revised the ruling: `soup autopilot` dumps the whole
         model (`write_yaml`, `exclude_none` only), so on the old default every
-        config it wrote carries `remove_unused_columns: true`."""
-        import yaml
+        config it wrote carries `remove_unused_columns: true`. v0.76 loaded such a
+        file with a warning; after that release of notice v0.77 refuses it, naming
+        the line, while what the writer produces today still loads."""
+        import io
+
+        from pydantic import ValidationError
+        from rich.console import Console
 
         from soup_cli.autopilot.generate_config import write_yaml
-        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+        from soup_cli.config import loader
         from soup_cli.config.loader import load_config
-        from soup_cli.config.schema import SoupConfig
 
         written = tmp_path / "soup.yaml"
         write_yaml(SoupConfig(base="sshleifer/tiny-gpt2", data={"train": "d.jsonl"}), written)
+        # Control: today's writer output loads.
+        assert load_config(written).data.remove_unused_columns is False
+
         dumped = yaml.safe_load(written.read_text(encoding="utf-8"))
         # What the v0.75.0-and-earlier writer produced: the old default, literally.
         dumped["data"]["remove_unused_columns"] = True
         written.write_text(yaml.safe_dump(dumped, sort_keys=False), encoding="utf-8")
 
-        with pytest.warns(SoupConfigDeprecationWarning):
+        with pytest.raises(ValidationError, match=r"remove_unused_columns: true never had"):
             SoupConfig(**dumped)
-        cfg = load_config(written)
-        assert cfg.data.remove_unused_columns is False
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            loader,
+            "console",
+            Console(file=buffer, width=500, force_terminal=False, color_system=None),
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            load_config(written)
+        assert excinfo.value.code == 1
+        out = " ".join(buffer.getvalue().split())
+        assert "data.remove_unused_columns: true never had an effect" in out, out
+        assert "Delete the line." in out, out
 
     def test_prompt_strategy_happy(self):
         cfg = DataConfig(
@@ -845,7 +919,21 @@ training:
   lr: 1.0e-4
 output: ./out
 """
-        cfg = load_config_from_string(yaml_str)
+        # Ten of these fields are staged (#808): the schema still parses them, and
+        # the loader refuses them as of v0.77, naming each in STAGED_FIELDS order.
+        cfg = SoupConfig(**yaml.safe_load(yaml_str))
+        staged = (
+            "video_dir", "video_fps", "video_maxlen", "image_min_pixels",
+            "image_max_pixels", "image_resize_algorithm", "split_thinking",
+            "eval_on_each_dataset", "resize_vocab", "extend_conversation",
+        )
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(yaml_str)
+        assert str(excinfo.value) == "\n".join(
+            f"data.{name} is accepted but read by nothing; refused as of "
+            f"v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+            for name in staged
+        )
         assert cfg.data.streaming is True
         assert cfg.data.buffer_size == 1024
         assert cfg.data.shards == 4

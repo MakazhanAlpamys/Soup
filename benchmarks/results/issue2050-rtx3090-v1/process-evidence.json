@@ -1,0 +1,775 @@
+{
+  "schema": "issue2050-compact-v1",
+  "original_commit": "95a08a21544359ed81ffd0581fc80ce642cbd9e8",
+  "digest_encoding": "UTF-8 JSON, sort_keys=True, separators=(',', ':'), ensure_ascii=True",
+  "digest_scope": "steps in update order; all logits/loss/gradient/updated-parameter hashes and names",
+  "retained_files": {
+    "freeze.json": "58ee66c0f9424411052e1ced9de1f3c2962d4d5b7c49c59ea35d2a71c99c2db8",
+    "independent-audit.json": "a4fe8656aaf5cd23a8f9d3c8b2dd2b4c9a1bac24c9adc9c4f8d7c194ff962a8c",
+    "ledger.json": "f20bcfab19250d4e72b27fec139a9cb48c0a5ce0882d8c1a4035c2c9ee097f88",
+    "s2048-exactness.json": "c6eb1ea31b1fbf70db0f8530748dcd6c0be40b2ba1a1f9846fe4c953f571f7b4",
+    "s2048-qkv-pairs/ledger.json": "5974943a9f7e5680e9500122801cebf06f203fb7df6ad3130436bf88b744b11d",
+    "s2048-qkv-pairs/p0-A.json": "c0382d3af451b8181baa809a879c6a8565a32a2383405a4950fff685418d8699",
+    "s2048-qkv-pairs/p0-A.log": "57e59c1c114e6fa838e4a1d57123f5eec7840e2045ee540c12cf5a4190150401",
+    "s2048-qkv-pairs/p0-B.json": "e187f3451e63a364651e76a57ac67f6c4e8846cfe371404fe452bc35bff8a843",
+    "s2048-qkv-pairs/p0-B.log": "df1f1e3ce8644dd8f0d52039f0544ad939919a330a313c8e894492ea2b1a1226",
+    "s2048-qkv-pairs/p1-A.json": "e808a19f727da6065488effd1baf3adf9550fb22201c0540a64cfa44d4548cc2",
+    "s2048-qkv-pairs/p1-A.log": "1094274614280b15583b1021b6e8b6e3381d835875a45fafdca5fd4bd55287bc",
+    "s2048-qkv-pairs/p1-B.json": "7abf1ac999c63e6c979a5b244188e32e3f9de59325e4d8d40a415c89e5876676",
+    "s2048-qkv-pairs/p1-B.log": "6c3a20a8d89c4a70b9fa31e591864d430480dcac56a22a5aa9f202b8ff2a80ab",
+    "s2048-qkv-pairs/p2-A.json": "bb5631806d92cac6436de70913d53f4d0ebf400ad69e5d0a29449b2d30a050a7",
+    "s2048-qkv-pairs/p2-A.log": "b551a46236c96da2cb82b6de8ee9091ccf5bce4c9516d472f34d0edfd5998e41",
+    "s2048-qkv-pairs/p2-B.json": "5fab7c91a0d40275a7df0fa1d7b565ea962fc2e9c879b7a32345e57459c5de95",
+    "s2048-qkv-pairs/p2-B.log": "b89e15bfcecb5d2b76f1ef07ef9cdbc6109f76315c62ccd3b6db698f23eb110b",
+    "s2048-qkv-pairs/p3-A.json": "cd6b01e7e313c401cc1ccfdc299c7e47c1ce84ceda77ad63344592cf6b2285b0",
+    "s2048-qkv-pairs/p3-A.log": "4fbe8b27ec59f4b1b22328637f82eeb9d390fbf7f9afb03a094a0f81a3a9e6d6",
+    "s2048-qkv-pairs/p3-B.json": "b4d41c1483525e85cb00cb00b54bb2c48f5ddcdc923fc245a13c8359299bc479",
+    "s2048-qkv-pairs/p3-B.log": "ee3861862774c97e510fa29e78080175dc3713754ff90ab04a212d12ae2a2186",
+    "s2048-qkv-pairs/p4-A.json": "2e3bec00ac8b5f60513c9e986b683de40e364a80693b384a7b18a7a2a02176b6",
+    "s2048-qkv-pairs/p4-A.log": "81e72cf7dbde3620fdc4a8d53b98741123ea0e719fedb9b2f4eb91e9b82fa129",
+    "s2048-qkv-pairs/p4-B.json": "883caa388265dc61ec398a829e91dd5cf94c3c85d0520c2abb17c4edf5066905",
+    "s2048-qkv-pairs/p4-B.log": "7a36a53da2e979f1ea98516af66f0c59b36c253f4823e102585efba271fc4a65",
+    "s2048-qkv-pairs/RULE.md": "2bbc30c9ed13a3c753d3236fe69361b207e478ddc896dd8c83e97dfeee9dbabf",
+    "s2048-qkv-pairs/summary.json": "eddb87b977db502c21490c9b92ea88edff581a4c40ab058e0ddc588954fc84dc",
+    "s2048-qkvo-pairs/ledger.json": "ca6a270a18e35c1e8254f8f336ab16bcfc2c8d1f2de3e59b47e3a86e5aaa5244",
+    "s2048-qkvo-pairs/p0-A.json": "6fd7d658ca637e8c85871e1410d39ebbd92e2bcbf8b03572394062c77f1ada71",
+    "s2048-qkvo-pairs/p0-A.log": "745f71a46f5ff75e7c71aafdb5709238713b81c3f59dd859bcc0fdc80228e141",
+    "s2048-qkvo-pairs/p0-B.json": "e24e0c04313116ffe07ab6f4ffa4fcfce5106fd928a63d5519dd22f9509f398a",
+    "s2048-qkvo-pairs/p0-B.log": "bc9c662a4173d3540e622a84c064746e8880677c2c7c772f426ebf806083d6f0",
+    "s2048-qkvo-pairs/p1-A.json": "49e826b55c34065fc456fa8c1d1e20c2680fbf2453d3b24777271350b8d3da21",
+    "s2048-qkvo-pairs/p1-A.log": "f163743e61b53b3fa2b363fadc1387e89849d9a70fc0c975e60875be9a17db2f",
+    "s2048-qkvo-pairs/p1-B.json": "d75529a6510661944259ca0916d214fc36d574c3ee48fa314d84adee11cf4ffb",
+    "s2048-qkvo-pairs/p1-B.log": "2307563304f2e66dd0b56a2c2b748fd8d55ff5e2e17fb2598e4f30cf7143cc97",
+    "s2048-qkvo-pairs/p2-A.json": "4d2248704b8a0cf22d2a761218a655e81bde46dc0f3d22a5ef3e657a80473a0a",
+    "s2048-qkvo-pairs/p2-A.log": "0ed29524001a656ad1d68739e5a31132fdb7f335bb45e3ad7d3736c5669028e5",
+    "s2048-qkvo-pairs/p2-B.json": "5c2ec99e195d20964447629f874b9703e756cf1fabc3d193cd8a1421fc20ae63",
+    "s2048-qkvo-pairs/p2-B.log": "f146c716aa7fc0014623af578a9e782e8b88a0d66f7dc16bee2875d947147608",
+    "s2048-qkvo-pairs/p3-A.json": "d88eb06cb9a6bbb6a844925092a62d85c8027f5ba1ed00511a9fec488a371df0",
+    "s2048-qkvo-pairs/p3-A.log": "e703b31a0ff15391b8e12a603c77cbbd5641761dabd9355cbb617f6c8bc0e262",
+    "s2048-qkvo-pairs/p3-B.json": "0c9bb1b128a710fb61fdef003da2254a37e44a58ddf0948969b6cbadf0af72b5",
+    "s2048-qkvo-pairs/p3-B.log": "95a6c6f624a1694eb3c41abe3778325ac565eee64d5c6b2a9f5c35815b1fd3b3",
+    "s2048-qkvo-pairs/p4-A.json": "fae4729cebd92cc0866c1fd1a9e4758bc5f259eb41cbabaff8222d77a094fdad",
+    "s2048-qkvo-pairs/p4-A.log": "f9e5fcdad62c9bcd6dc3685683c4cbe809144efb5161ab499fb37fc4c7acae7f",
+    "s2048-qkvo-pairs/p4-B.json": "7ba77fcc1db67e422bca92a8c13a5df0b9717121e62d9adfe3bed0333dbbccff",
+    "s2048-qkvo-pairs/p4-B.log": "5e52bca26d90a0cf574e48481a5844097c5a5928583bd8ac0d7e6eab6b18d3db",
+    "s2048-qkvo-pairs/RULE.md": "7fa65a8fef7adc9677054057edc0abf084cfd65f64bf6bce583dda543ca5f37c",
+    "s2048-qkvo-pairs/summary.json": "7c85e181f97447782edd6730391f043be60de1ccb316a3f36cdb41cc97bbd304",
+    "s512-exactness.json": "c6eb1ea31b1fbf70db0f8530748dcd6c0be40b2ba1a1f9846fe4c953f571f7b4",
+    "s512-qkv-pairs/ledger.json": "cebc12afa37748bae8ad91e77ae651aea89045e42b50c15498b53792971654a0",
+    "s512-qkv-pairs/p0-A.json": "f584d9c9dc3cecbbf21061ce068e271817d160c17175c73c284efa516cd703e7",
+    "s512-qkv-pairs/p0-A.log": "3400443d7013aea9119fdd50b4ac96696cffbfaba4f3a0682ecd9cf6ce40ebf5",
+    "s512-qkv-pairs/p0-B.json": "5c8acdacd30ed667f64ea400e410d846cff5712e4e892efd6b53bbe708731290",
+    "s512-qkv-pairs/p0-B.log": "415903be5fc638d3e38216ab7d1354926b318f02a7c06c5ffeb9ffbf88fa270b",
+    "s512-qkv-pairs/p1-A.json": "81154576af86ef375911f5065b3a7be8160ef3940b0b9f218c4fcc3f11a6939b",
+    "s512-qkv-pairs/p1-A.log": "d91534914286422388e24717bde4d59141613381894cedb26db9803b26ee7040",
+    "s512-qkv-pairs/p1-B.json": "2e21d8c87dbe3596af06243fe674cf055a80bad90a0fcf5f62e91e2256c77652",
+    "s512-qkv-pairs/p1-B.log": "412282fd7418ccfdee10f6e5a7cbac843fb6a37b49914cfd056b02ec51010eeb",
+    "s512-qkv-pairs/p2-A.json": "f1968f4c4e2b81f616b39bb156a04e639dac0528ef266ce4a541fe334e81acc9",
+    "s512-qkv-pairs/p2-A.log": "c94bfcd5d76c4507dd8e7f25f16cae501a1d4deb76d0ec5a98884ae9ddb7ca5b",
+    "s512-qkv-pairs/p2-B.json": "9f78fdeb16c8c5f818835b046a8a904f6e50cf440ca0d001fbe0d402cda35afa",
+    "s512-qkv-pairs/p2-B.log": "d02aebf8cbc80f436595bf967777dc3b92a67f2f94d3600b7e4935e9c44a3a22",
+    "s512-qkv-pairs/p3-A.json": "6f7b670562ffa14f196f4b2df739adce1b0f0283f69bcd4951465a0669dcc433",
+    "s512-qkv-pairs/p3-A.log": "469e387a5e7a6a88806042f5bdb99bd0b4e17affc27f1a69998ceb59cc889ad6",
+    "s512-qkv-pairs/p3-B.json": "a3135587b3723c55493c283a1853562b612863e3307a07a34ed26602d911c56a",
+    "s512-qkv-pairs/p3-B.log": "794d1c597fec3feadb59779bb196d476020f72224feacf94ed574f956bab731a",
+    "s512-qkv-pairs/p4-A.json": "b9b378f1e8e5c6c2f4bc39a037709e101c007cdbac842b5597210b6054580adf",
+    "s512-qkv-pairs/p4-A.log": "a83222b6c7493ce19f13df2b5ccc5a0141daf7833543d5c621c34ddf3372f16a",
+    "s512-qkv-pairs/p4-B.json": "e4cd94e84b155473938d16ad29337a25feb2ef390fe00fc4943ddd4cd1099b65",
+    "s512-qkv-pairs/p4-B.log": "05c12efe0c0e0e648f353a14b62ff82d595fa80feb9d2234f0029998dfcb38f4",
+    "s512-qkv-pairs/RULE.md": "b3e4c5f904454b2ac8a1b4c5aa881f9ad6a55f32e5ab55eb7f3958b657cb36b3",
+    "s512-qkv-pairs/summary.json": "702f134323eae6d106b5a9c82ed03d4570fc4b72b45b80ecddb6077ada34480f",
+    "s512-qkvo-pairs/ledger.json": "d9d40b4a380fe5d6a79319f7159079a887680075639b2ed42eea739a29823611",
+    "s512-qkvo-pairs/p0-A.json": "c3e454e53dc3c282e9394ff2c61de6d3569333c13d71ff65cf1dfd9ed000745f",
+    "s512-qkvo-pairs/p0-A.log": "4ef1f696a760c6cc195b4ced159e68e833c4759e030b639f2b72f7826e242652",
+    "s512-qkvo-pairs/p0-B.json": "a63c97fb4bd9b25913a3484aa56eec5df1fd20aa534279be70ecd6a2a95e2fac",
+    "s512-qkvo-pairs/p0-B.log": "b9cc7a776339d9e4c84f72950fe8dd55f71fd03543c078f81752bd2e430ded6d",
+    "s512-qkvo-pairs/p1-A.json": "d215529f7e69648dd38492757502e1fc0c41e748e1b1c96d115714eecacd0f83",
+    "s512-qkvo-pairs/p1-A.log": "8a7857f5518b5227f657c780df88fa01440702a6e1c1d5b04e54060654755ceb",
+    "s512-qkvo-pairs/p1-B.json": "5e7f48a465c63538cdf933c371fdcd123ad1195cdc37dfadae3da30fbdf0b1e7",
+    "s512-qkvo-pairs/p1-B.log": "d169d1194881f8c153ac620ea2d06cc0390c7364efb6571ff014e7af0aaaa375",
+    "s512-qkvo-pairs/p2-A.json": "9578c7ae5f8496147b0918f2a19f91805083352693c82e240a6ac431eff9d4bd",
+    "s512-qkvo-pairs/p2-A.log": "f913d8ce6c1795499219b5b192052ffed725081e3fbe7ed0d08ecf950da3e29f",
+    "s512-qkvo-pairs/p2-B.json": "edbc617a190d9b78558d1040e3511f4c95df9754a819e545b780ad1d6116ff07",
+    "s512-qkvo-pairs/p2-B.log": "5550f79066d2ba2c4dc4950bdc7ff09649773b64db53619cc559f0a900ed38f4",
+    "s512-qkvo-pairs/p3-A.json": "d893fb638e294ebcb1719ceb040dd7a351efec4608c12e7742854230241ddb59",
+    "s512-qkvo-pairs/p3-A.log": "7a71321012ea4b2086e49d8a9158ef5176786f4301a0d1444c700b47e4be83d1",
+    "s512-qkvo-pairs/p3-B.json": "9c57bdaa1f8b8730238380fd54d97e184d63f27fa909cc233ca3be1552c81c83",
+    "s512-qkvo-pairs/p3-B.log": "f9cfb8715ed2d2417a5b4bb575ef103ece4cc3a727654bf51c1176f7d1c54afc",
+    "s512-qkvo-pairs/p4-A.json": "27e40355fbecf12a596640f2f38b3b7c6a537af52c47015589aa32d7170c92d8",
+    "s512-qkvo-pairs/p4-A.log": "5a2f2c81632bf9c0f7e38e8cd6a22ffc0058b0e1fbd9a98162d78477de8351f0",
+    "s512-qkvo-pairs/p4-B.json": "2f999226e0d089512a2c624d807d5e141745bcefe2b0a3391bbb193caa09b3b3",
+    "s512-qkvo-pairs/p4-B.log": "7d2ff1f147db7fbf2e07a567704cecbf999521295af764fd7c591795f7af1bb8",
+    "s512-qkvo-pairs/RULE.md": "e44356ce1fec6d8771a6c521290644e248c59d432dfa33e51993ded68b269e55",
+    "s512-qkvo-pairs/summary.json": "c5c0230524ca0f95a0c50bc1544f4322a4de94b7987dfb7a851b7fb944eb77d5",
+    "source-blobs.json": "23e7ad786afa09c42be42aeae9d7117fefe428bfab19fd189c3eb072e64cb25f",
+    "status.json": "0b4f56dc82add7e26bfe9256e612c32322765dd380478a37634b83a6acd8a852"
+  },
+  "processes": {
+    "s512-full": {
+      "policy": "full",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 36,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 0,
+      "saved_tensors": 0,
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "06df29cfd740775e1422ec8a4584ebc595e59f912d40643f1a2c497bb508312b"
+    },
+    "s512-full-repeat": {
+      "policy": "full",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 0,
+      "saved_tensors": 0,
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "be939a5a4b38adca1b1c68748708314c7aee96e8f66191bbfb23862e88d74768"
+    },
+    "s512-qkv": {
+      "policy": "qkv",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 201326592,
+      "saved_tensors": 96,
+      "selected_ops": {
+        "aten.mm.default": 192
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "ac4e3e0fdcdc419d3714421bdbdd4dc5bec3ecc4c7c9db81bdeab8c13f4d9a3d"
+    },
+    "s512-qkvo": {
+      "policy": "qkvo",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 335544320,
+      "saved_tensors": 128,
+      "selected_ops": {
+        "aten.mm.default": 256
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "3b89ae8dc3623f05438f3bbc39476568e5eb66464663061a44a834b62aca10fd"
+    },
+    "s512-profile-full": {
+      "policy": "full",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": true,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 0,
+      "saved_tensors": 0,
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {
+        "backward:aten.bmm.default": 382,
+        "backward:aten.mm.default": 1592,
+        "backward:bitsandbytes.dequantize_4bit.default": 448,
+        "backward:bitsandbytes.dequantize_blockwise.default": 448,
+        "forward:aten.bmm.default": 128,
+        "forward:aten.mm.default": 706,
+        "forward:bitsandbytes.dequantize_4bit.default": 448,
+        "forward:bitsandbytes.dequantize_blockwise.default": 448
+      },
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "388407e57bcc9d2615bcdb5d71d27ca3a462681b14a8ed87bfa7bc5b3d0d1efd"
+    },
+    "s512-profile-qkv": {
+      "policy": "qkv",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": true,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 201326592,
+      "saved_tensors": 96,
+      "selected_ops": {
+        "aten.mm.default": 192
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {
+        "backward:aten.bmm.default": 382,
+        "backward:aten.mm.default": 1400,
+        "backward:bitsandbytes.dequantize_4bit.default": 448,
+        "backward:bitsandbytes.dequantize_blockwise.default": 448,
+        "forward:aten.bmm.default": 128,
+        "forward:aten.mm.default": 706,
+        "forward:bitsandbytes.dequantize_4bit.default": 448,
+        "forward:bitsandbytes.dequantize_blockwise.default": 448
+      },
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "0a56d5c3174ebba7f583cff33d512ae90ac99fac12192e0838cec2a8951b3268"
+    },
+    "s512-profile-qkvo": {
+      "policy": "qkvo",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": true,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 335544320,
+      "saved_tensors": 128,
+      "selected_ops": {
+        "aten.mm.default": 256
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "005bb2d0d2754f9c705d0de96b884dbc73da54af16e94545f4c694564094ec16",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "e91102beb085b42c5b94e2eb51613478112c47389a7e9d231fccca68938a951f",
+          "loss": "965ce3577732381d07af0f622fd1319b715317753a38d42a82785a3ccca93ebb",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "7e879723216de831b362402ddacc3ea815642c8138aa406601a61429b7deadd7",
+          "parameters_sha256": "2a1c631d61abd99509780eae775e97f66fc412ae6f744e44a9c8a8dcaf27da37"
+        },
+        {
+          "logits": "c8aed1d39d8aed60feae36dc8d0315f441f3f7d7ce1bec30895ff6c1ff9ce879",
+          "loss": "309eac32f52f651cf6df5b6daddcdde40731ba524d7a3084d280f306fff2583f",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "1d19bea046f580e09e66ed81c08a2b212cd529fd8a5f75358dab7ecff5c70a69",
+          "parameters_sha256": "5eece7f13a456ad668b8da734b10b18c0ff3360c9f46c23677cbe795ef8f2e5f"
+        }
+      ],
+      "operator_counts": {
+        "backward:aten.bmm.default": 382,
+        "backward:aten.mm.default": 1336,
+        "backward:bitsandbytes.dequantize_4bit.default": 448,
+        "backward:bitsandbytes.dequantize_blockwise.default": 448,
+        "forward:aten.bmm.default": 128,
+        "forward:aten.mm.default": 706,
+        "forward:bitsandbytes.dequantize_4bit.default": 448,
+        "forward:bitsandbytes.dequantize_blockwise.default": 448
+      },
+      "reference": "s512-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "d86d9bdb1e6e78572c4678e3e8afe74847f9cef1774f39de123db407821d8473"
+    },
+    "s2048-full": {
+      "policy": "full",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 38,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 0,
+      "saved_tensors": 0,
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "c0d1bce025c01c0a0308d5c64101a20bd55b80ed431feb4f75d25c32bdf33711"
+    },
+    "s2048-full-repeat": {
+      "policy": "full",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 37,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 0,
+      "saved_tensors": 0,
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "e0784cb384d65b462a4d986ae49cb30ad2bf993bba7e92680b71f654e7b632d7"
+    },
+    "s2048-qkv": {
+      "policy": "qkv",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 39,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 805306368,
+      "saved_tensors": 96,
+      "selected_ops": {
+        "aten.mm.default": 192
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "e4a3530494e8a8f59979ac86f5a4b1ab56799a4bba92699bd52d831c4d350e3a"
+    },
+    "s2048-qkvo": {
+      "policy": "qkvo",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": false,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 37,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 1342177280,
+      "saved_tensors": 128,
+      "selected_ops": {
+        "aten.mm.default": 256
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {},
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "eae18093c7617a396af6917a87c5a736e9680387a4e6caac176d500e475c0397"
+    },
+    "s2048-profile-full": {
+      "policy": "full",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": true,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 39,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 0,
+      "saved_tensors": 0,
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {
+        "backward:aten.bmm.default": 382,
+        "backward:aten.mm.default": 1592,
+        "backward:bitsandbytes.dequantize_4bit.default": 448,
+        "backward:bitsandbytes.dequantize_blockwise.default": 448,
+        "forward:aten.bmm.default": 128,
+        "forward:aten.mm.default": 706,
+        "forward:bitsandbytes.dequantize_4bit.default": 448,
+        "forward:bitsandbytes.dequantize_blockwise.default": 448
+      },
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "871cf455dcf13e4a7d1876fd835a3b1db2370bdf50de330e686005bc3f8b0649"
+    },
+    "s2048-profile-qkv": {
+      "policy": "qkv",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": true,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 37,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 805306368,
+      "saved_tensors": 96,
+      "selected_ops": {
+        "aten.mm.default": 192
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {
+        "backward:aten.bmm.default": 382,
+        "backward:aten.mm.default": 1400,
+        "backward:bitsandbytes.dequantize_4bit.default": 448,
+        "backward:bitsandbytes.dequantize_blockwise.default": 448,
+        "forward:aten.bmm.default": 128,
+        "forward:aten.mm.default": 706,
+        "forward:bitsandbytes.dequantize_4bit.default": 448,
+        "forward:bitsandbytes.dequantize_blockwise.default": 448
+      },
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "ce71e9071d887e7e2bdc36e033497a39a08aa0a1fefd83dc95ba20c419b1aed0"
+    },
+    "s2048-profile-qkvo": {
+      "policy": "qkvo",
+      "attention_backend": "sdpa_math",
+      "deterministic_algorithms": true,
+      "cache_checked": true,
+      "profile": true,
+      "gpu_uuid": "GPU-7b0178c9-5f01-96cd-6911-25d9e5fa4126",
+      "admission": {
+        "temperature_c": 39,
+        "memory_mib": 0,
+        "power_w": 350.0
+      },
+      "saved_bytes": 1342177280,
+      "saved_tensors": 128,
+      "selected_ops": {
+        "aten.mm.default": 256
+      },
+      "status": "ok",
+      "tensor_hashes_sha256": "c5110456fd432439e8704c05afb2df4f02b26fabd09d4971ba4d244a0ccd5e59",
+      "tensor_hash_count": 516,
+      "step_summaries": [
+        {
+          "logits": "1b9ecba448f383d8ec62740c73448f36684156041e227cb740f7116b73eac73b",
+          "loss": "13513fdf99c9e2a25ca374ea76ef683597d47d302ff508555fc86ce480d2a9e0",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "aef435320d23bdefc1336de9cc9c32f566fb6f6417b6ad457943c55766f3cf30",
+          "parameters_sha256": "425e04f1a3250e5c8f934411d4d60d4ec779b0ee45a1a49e8a1d5822802fdee9"
+        },
+        {
+          "logits": "6fa591bae464a6a691aa50449160ffe1edcc3bee10b19ee5734ae19aa41b3a33",
+          "loss": "3449238a5bf36f97f61c356e8e8e0279ae068f402157d11e33676672fd7b79df",
+          "gradient_count": 128,
+          "parameter_count": 128,
+          "names_sha256": "d988695c8efc9a9d6bb73cf2e600bf9a904b51da88a908cad70e273a9d075d84",
+          "gradients_sha256": "65a2c67e9496e77cba9bdfaefae5c604665957566528c1fa302e86fdc8008db7",
+          "parameters_sha256": "83c971f7652f9cdea0c16a27bbe0ca03925dfec7588d6a4fd2db0d0e98a9f18d"
+        }
+      ],
+      "operator_counts": {
+        "backward:aten.bmm.default": 382,
+        "backward:aten.mm.default": 1336,
+        "backward:bitsandbytes.dequantize_4bit.default": 448,
+        "backward:bitsandbytes.dequantize_blockwise.default": 448,
+        "forward:aten.bmm.default": 128,
+        "forward:aten.mm.default": 706,
+        "forward:bitsandbytes.dequantize_4bit.default": 448,
+        "forward:bitsandbytes.dequantize_blockwise.default": 448
+      },
+      "reference": "s2048-full",
+      "matches_reference": true,
+      "original_receipt_sha256": "21a5cf751de5a903f1ccc25230b033d7b35c743b016104e3c67ebd79249002e3"
+    }
+  }
+}

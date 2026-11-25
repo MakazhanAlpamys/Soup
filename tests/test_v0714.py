@@ -32,6 +32,15 @@ def _clean_help(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text).replace("\n", " ")
 
 
+#: Where post_pr_comment finds gh in these tests: an absolute path, whatever the
+#: machine running them has installed.
+_GH = "/usr/local/bin/gh"
+
+
+def _find_gh(name, path=None):
+    return _GH if name == "gh" else None
+
+
 @pytest.fixture()
 def temp_registry(tmp_path, monkeypatch):
     """Isolated registry + branches dir under cwd, returns a push helper."""
@@ -810,7 +819,10 @@ class TestTrainStage:
         out = ls.train_dpo_from_pairs(
             loop_env(), {"pairs_harvested": 1, "pairs_path": str(pairs)}
         )
-        assert out["skipped"] is True
+        # decision S3 (code review 2026-11-14): a failed run is not a skip
+        assert out["skipped"] is False
+        assert out["failed"] is True
+        assert out["run_id"] is None
 
 
 class TestGateStage:
@@ -907,10 +919,10 @@ class TestDeployStage:
 
 class TestPrewiredConfig:
     def test_build_returns_wired_config(self):
+        import soup_cli.utils.loop_stages as ls
         from soup_cli.utils.loop_stages import (
             build_prewired_watch_config,
             deploy_to_canary,
-            gate_against_baseline,
             harvest_from_traces,
             train_dpo_from_pairs,
         )
@@ -918,7 +930,8 @@ class TestPrewiredConfig:
         cfg = build_prewired_watch_config(max_iterations=1)
         assert cfg.harvest_fn is harvest_from_traces
         assert cfg.train_fn is train_dpo_from_pairs
-        assert cfg.gate_fn is gate_against_baseline
+        # The gate stage dispatches to soup ship or the eval gate (loop init --verify).
+        assert cfg.gate_fn is ls.verify_candidate
         assert cfg.deploy_fn is deploy_to_canary
 
 
@@ -975,6 +988,13 @@ class TestLoopStagesSourceWiring:
             assert forbidden not in head, f"top-level {forbidden!r} in loop_stages"
 
 
+def _task_eval_file() -> str:
+    """A one-task soup ship task eval in cwd: a pre-wired init checks --eval."""
+    with open("tasks.jsonl", "w", encoding="utf-8") as fh:
+        fh.write('{"prompt": "2+2", "expected": "4"}\n')
+    return "tasks.jsonl"
+
+
 class TestLoopCliPrewired:
     def _app(self):
         from soup_cli.commands.loop import app
@@ -983,7 +1003,7 @@ class TestLoopCliPrewired:
 
     def test_init_pre_wired_flag(self, loop_env, tmp_path):
         result = runner.invoke(self._app(), [
-            "init", "mymodel", "--eval", "evals/gate.yaml",
+            "init", "mymodel", "--eval", _task_eval_file(),
             "--baseline", "base-ref", "--pre-wired",
         ])
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -1000,7 +1020,7 @@ class TestLoopCliPrewired:
 
     def test_status_shows_pre_wired(self, loop_env):
         runner.invoke(self._app(), [
-            "init", "mymodel", "--eval", "evals/gate.yaml",
+            "init", "mymodel", "--eval", _task_eval_file(),
             "--baseline", "base-ref", "--pre-wired",
         ])
         result = runner.invoke(self._app(), ["status"])
@@ -1250,6 +1270,10 @@ class TestResolveGithubToken:
 
 
 class TestPostPrComment:
+    @pytest.fixture(autouse=True)
+    def _gh_on_path(self, monkeypatch):
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", _find_gh)
+
     def test_happy_path_invokes_gh(self):
         from soup_cli.utils.adapter_pr import post_pr_comment
 
@@ -1270,7 +1294,7 @@ class TestPostPrComment:
         )
         assert url == "https://github.com/o/r/pull/1#issuecomment-9"
         argv = captured["argv"]
-        assert argv[0] == "gh"
+        assert argv[0] == _GH
         assert "api" in argv
         assert "repos/o/r/issues/1/comments" in argv
         assert "--method" in argv and "POST" in argv
@@ -1450,9 +1474,14 @@ class TestPackIterationSafely:
 
         monkeypatch.setattr(li, "pack_iteration_as_can", boom)
 
+        # A cycle that trains something (an idle poll writes no manifest and packs nothing: N2).
         cfg = WatchConfig(
             poll_interval_sec=1.0, max_iterations=1, pack_iterations=True,
             served_model="mymodel",
+            harvest_fn=lambda state: {"pairs_harvested": 1},
+            train_fn=lambda state, harvested: {
+                "run_id": "run-1", "skipped": False, "adapter_path": "out/a",
+            },
         )
         final_state, n = watch(cfg)
         assert n == 1  # the daemon completed its single iteration
@@ -1482,6 +1511,10 @@ class TestPackIterationSafely:
 
 
 class TestGhArgvAdjacency:
+    @pytest.fixture(autouse=True)
+    def _gh_on_path(self, monkeypatch):
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", _find_gh)
+
     def test_method_and_input_flags_adjacent(self):
         from soup_cli.utils.adapter_pr import post_pr_comment
 
@@ -1503,11 +1536,15 @@ class TestGhArgvAdjacency:
         # `--method POST` and `--input -` must be value-adjacent.
         assert argv[argv.index("--method") + 1] == "POST"
         assert argv[argv.index("--input") + 1] == "-"
-        # No `shell=True` could ever apply — argv[0] is the bare binary.
-        assert argv[0] == "gh"
+        # No `shell=True` could ever apply — argv[0] is gh's absolute path.
+        assert argv[0] == _GH
 
 
 class TestPostPrCommentEnvAllowlist:
+    @pytest.fixture(autouse=True)
+    def _gh_on_path(self, monkeypatch):
+        monkeypatch.setattr("soup_cli.utils.tool_paths.find_tool", _find_gh)
+
     def test_secrets_not_leaked_to_child(self, monkeypatch):
         """When ``env`` is None, the gh child env is built from an allowlist
         so HF_TOKEN / OPENAI_API_KEY never reach the subprocess."""

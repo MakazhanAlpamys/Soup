@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app as soup_app
+from soup_cli.utils import adapter_diff as adapter_diff_module
 from soup_cli.utils.adapter_check import (
     AdapterCheckReport,
     check_adapter,
@@ -853,3 +855,259 @@ def test_every_rendered_name_is_stripped(
     monkeypatch.chdir(tmp_path)
     res = runner.invoke(soup_app, ["adapters", "check", "no\x1b[2Jdir"])
     assert res.exit_code == 1 and chr(27) not in res.output
+
+
+# ---------- bfloat16 adapters (#2058) ----------
+
+
+def _bf16_bits(arr: np.ndarray) -> np.ndarray:
+    """Round float32 to bfloat16 (round-to-nearest-even), as raw uint16 bits."""
+    bits = np.ascontiguousarray(arr, dtype=np.float32).view(np.uint32).astype(np.uint64)
+    bits = bits + 0x7FFF + ((bits >> 16) & 1)
+    return (bits >> 16).astype(np.uint16)
+
+
+def _bf16_to_f32(bits: np.ndarray) -> np.ndarray:
+    return (bits.astype(np.uint32) << 16).view(np.float32)
+
+
+def _write_raw_adapter(dir_path: Path, tensors: dict[str, tuple[str, tuple, bytes]]) -> None:
+    """Write a safetensors adapter by hand: ``{name: (dtype tag, shape, payload bytes)}``."""
+    header: dict = {}
+    payload = b""
+    for name, (tag, shape, raw) in tensors.items():
+        header[name] = {
+            "dtype": tag,
+            "shape": list(shape),
+            "data_offsets": [len(payload), len(payload) + len(raw)],
+        }
+        payload += raw
+    hdr = json.dumps(header).encode("utf-8")
+    hdr += b" " * (-len(hdr) % 8)
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / "adapter_model.safetensors").write_bytes(
+        len(hdr).to_bytes(8, "little") + hdr + payload
+    )
+    cfg = {
+        "peft_type": "LORA", "r": 8, "lora_alpha": 16.0,
+        "target_modules": ["q_proj", "v_proj"],
+    }
+    (dir_path / "adapter_config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+
+def _write_bf16_adapter(dir_path: Path, weights: dict[str, np.ndarray]) -> None:
+    """Write a bfloat16 safetensors adapter by hand (header + uint16 payload), no torch."""
+    _write_raw_adapter(
+        dir_path,
+        {name: ("BF16", arr.shape, _bf16_bits(arr).tobytes()) for name, arr in weights.items()},
+    )
+
+
+def _bf16_weights(b_value: float) -> tuple[dict, dict]:
+    rng = np.random.default_rng(0)
+    a = rng.standard_normal((8, 16)).astype(np.float32)
+    b = b_value * rng.standard_normal((16, 8)).astype(np.float32)
+    exact = {Q_LORA_A: _bf16_to_f32(_bf16_bits(a)), Q_LORA_B: _bf16_to_f32(_bf16_bits(b))}
+    return {Q_LORA_A: a, Q_LORA_B: b}, exact
+
+
+def test_bf16_adapter_check_matches_float32(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    weights, exact = _bf16_weights(0.5)
+    _write_bf16_adapter(tmp_path / "bf16", weights)
+    _write_synthetic_adapter(tmp_path / "f32", exact)
+
+    got = check_adapter("bf16")
+    want = check_adapter("f32")
+    assert got.verdict == "alive"
+    assert got.total_frobenius == pytest.approx(want.total_frobenius, rel=1e-9)
+    assert got.live_fraction == want.live_fraction
+
+    res = runner.invoke(soup_app, ["adapters", "check", "bf16"])
+    assert res.exit_code == 0, (res.output, repr(res.exception))
+    assert res.stdout.strip().splitlines()[-1] == "alive"
+
+
+def test_bf16_zero_lora_b_reports_inactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    weights, _ = _bf16_weights(0.0)
+    _write_bf16_adapter(tmp_path / "bf16_zero", weights)
+
+    report = check_adapter("bf16_zero")
+    assert report.verdict == "inactive"
+    assert report.verdict_line == "inactive: all lora_B layers are zero (1/1)"
+    res = runner.invoke(soup_app, ["adapters", "check", "bf16_zero"])
+    assert res.exit_code == 2, (res.output, repr(res.exception))
+
+
+def test_bf16_adapter_diff_matches_float32(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("safetensors")
+    from soup_cli.utils.adapter_diff import compute_adapter_diff
+
+    monkeypatch.chdir(tmp_path)
+    w1, e1 = _bf16_weights(0.5)
+    w2, e2 = _bf16_weights(0.9)
+    _write_bf16_adapter(tmp_path / "bf_a", w1)
+    _write_bf16_adapter(tmp_path / "bf_b", w2)
+    _write_synthetic_adapter(tmp_path / "f_a", e1)
+    _write_synthetic_adapter(tmp_path / "f_b", e2)
+
+    got = compute_adapter_diff("bf_a", "bf_b")
+    want = compute_adapter_diff("f_a", "f_b")
+    assert got.shared_layers == want.shared_layers == 2
+    assert [d.frobenius for d in got.per_layer] == pytest.approx(
+        [d.frobenius for d in want.per_layer], rel=1e-9
+    )
+    assert got.effective_rank_a == pytest.approx(want.effective_rank_a, rel=1e-9)
+
+
+@pytest.mark.parametrize("dtype", sorted(adapter_diff_module._NUMPY_DTYPES))
+@pytest.mark.parametrize("shape", [(3, 5), (), (0, 4)], ids=["matrix", "scalar", "empty"])
+def test_adapter_load_matches_safe_open_numpy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dtype: str, shape: tuple
+):
+    """Every dtype the reader maps comes back as ``safe_open(framework="numpy")`` gives it."""
+    pytest.importorskip("safetensors")
+    from safetensors import safe_open
+    from safetensors.numpy import save_file
+
+    from soup_cli.utils.adapter_diff import load_adapter_weights
+
+    monkeypatch.chdir(tmp_path)
+    rng = np.random.default_rng(1)
+    values = np.asarray(rng.standard_normal(shape) * 100)
+    if dtype == "bool":
+        array = np.asarray(values > 0)
+    elif np.issubdtype(np.dtype(dtype), np.unsignedinteger):
+        array = np.asarray(np.abs(values).astype(dtype))
+    else:
+        array = np.asarray(values.astype(dtype))
+    (tmp_path / "typed").mkdir()
+    target = tmp_path / "typed" / "adapter_model.safetensors"
+    save_file({Q_LORA_A: array}, str(target))
+
+    with safe_open(str(target), framework="numpy") as f:
+        want = f.get_tensor(Q_LORA_A)
+    got = load_adapter_weights("typed")[Q_LORA_A]
+    assert got.dtype == want.dtype, (got.dtype, want.dtype)
+    assert got.shape == want.shape, (got.shape, want.shape)
+    assert np.array_equal(got, want), (got, want)
+
+
+def test_bf16_adapter_widens_exactly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("safetensors")
+    from soup_cli.utils.adapter_diff import load_adapter_weights
+
+    monkeypatch.chdir(tmp_path)
+    weights, exact = _bf16_weights(0.5)
+    _write_bf16_adapter(tmp_path / "bf16", weights)
+
+    loaded = load_adapter_weights("bf16")
+    for name, want in exact.items():
+        assert loaded[name].dtype == np.float32
+        assert loaded[name].shape == want.shape
+        assert np.array_equal(loaded[name], want)
+
+
+def test_bf16_truncated_payload_is_a_named_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    weights, _ = _bf16_weights(0.5)
+    _write_bf16_adapter(tmp_path / "bf16", weights)
+    target = tmp_path / "bf16" / "adapter_model.safetensors"
+    target.write_bytes(target.read_bytes()[:-4])
+
+    with pytest.raises(ValueError, match="past the end of the file") as excinfo:
+        check_adapter("bf16")
+    assert str(excinfo.value).startswith(
+        "Corrupt or unreadable safetensors weights in adapter_model.safetensors: tensor "
+    ), str(excinfo.value)
+    assert str(excinfo.value).count("adapter_model.safetensors") == 1, str(excinfo.value)
+    res = runner.invoke(soup_app, ["adapters", "check", "bf16"])
+    assert res.exit_code == 1, (res.output, repr(res.exception))
+
+
+def test_bf16_adapter_over_the_tensor_cap_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pytest.importorskip("safetensors")
+    import soup_cli.utils.adapter_diff as adapter_diff
+
+    monkeypatch.chdir(tmp_path)
+    weights, _ = _bf16_weights(0.5)
+    _write_bf16_adapter(tmp_path / "bf16", weights)
+    monkeypatch.setattr(adapter_diff, "_MAX_LAYERS", 1)
+
+    with pytest.raises(ValueError, match="tensors"):
+        check_adapter("bf16")
+    with pytest.raises(ValueError, match="tensors"):
+        adapter_diff.load_adapter_weights("bf16")
+
+
+def test_payload_shorter_than_its_header_is_a_named_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The file shrinking after ``read_header`` checked it is refused, not reshaped."""
+    pytest.importorskip("safetensors")
+    import soup_cli.utils.adapter_diff as adapter_diff
+    from soup_cli.utils import safetensors_reader
+
+    monkeypatch.chdir(tmp_path)
+    weights, _ = _bf16_weights(0.5)
+    _write_bf16_adapter(tmp_path / "bf16", weights)
+    target = tmp_path / "bf16" / "adapter_model.safetensors"
+    real_read_header = safetensors_reader.read_header
+
+    def read_then_truncate(path: str):
+        entries = real_read_header(path)
+        target.write_bytes(target.read_bytes()[:-4])
+        return entries
+
+    monkeypatch.setattr(safetensors_reader, "read_header", read_then_truncate)
+    with pytest.raises(ValueError, match=f"tensor {Q_LORA_B!r} is truncated"):
+        adapter_diff.load_adapter_weights("bf16")
+
+
+@pytest.mark.parametrize("tag", ["F8_E4M3", "F8_E5M2"])
+def test_fp8_adapter_is_refused_with_tensor_and_dtype(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tag: str
+):
+    """``read_header`` knows the FP8 spellings, the numpy reader does not (#2061)."""
+    pytest.importorskip("safetensors")
+    from soup_cli.utils import safetensors_reader
+    from soup_cli.utils.adapter_diff import load_adapter_weights
+
+    monkeypatch.chdir(tmp_path)
+    _write_raw_adapter(tmp_path / "fp8", {Q_LORA_A: (tag, (4, 2), bytes(8))})
+    dtype = safetensors_reader._DTYPES[tag]
+    want = f"tensor {Q_LORA_A!r} has unsupported dtype {dtype!r}"
+
+    with pytest.raises(ValueError, match=re.escape(want)):
+        check_adapter("fp8")
+    with pytest.raises(ValueError, match=re.escape(want)):
+        load_adapter_weights("fp8")
+    res = runner.invoke(soup_app, ["adapters", "check", "fp8"])
+    assert res.exit_code == 1, (res.output, repr(res.exception))
+    assert "KeyError" not in res.output, res.output
+
+
+def test_unmapped_header_dtype_is_unsupported_not_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A dtype ``read_header`` refuses (U16) is reported as unsupported, file named once."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    _write_raw_adapter(tmp_path / "u16", {Q_LORA_A: ("U16", (4, 2), bytes(16))})
+
+    with pytest.raises(ValueError) as excinfo:
+        check_adapter("u16")
+    message = str(excinfo.value)
+    assert message.startswith(
+        "Unsupported safetensors weights in adapter_model.safetensors: tensor "
+    ), message
+    assert "Corrupt" not in message, message
+    assert message.count("adapter_model.safetensors") == 1, message

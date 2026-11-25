@@ -23,9 +23,11 @@ of the last prompt token into the answer), BOS is prepended and EOS appended
 when missing. Over-long rows are then cut by Soup's cap (prompt to
 ``max_length // 2``, ``keep_end`` as ``ORPOConfig`` defaults, completions to the
 remaining room), the same cap ``enforce_preference_sequence_limit`` applies to
-the transformers path. TRL's own in-tokenizer answer cut, which can empty the
-shorter answer, is not reproduced; on rows that fit, the two backends see the
-same tokens.
+the transformers path: a prompt that starts with the BOS keeps it in front of a
+``keep_end`` cut, followed by the last ``max_length // 2 - 1`` tokens
+(``_truncate_prompt``, #2487, #2545, #2567). TRL's own in-tokenizer answer cut,
+which can empty the shorter answer, is not reproduced; on rows that fit, the two
+backends see the same tokens.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from typing import Any
 
 from rich.console import Console
 
-from soup_cli.trainer._trl_compat import _truncate_tokens
+from soup_cli.trainer._trl_compat import _truncate_prompt
 from soup_cli.trainer.mlx_dpo import (
     DEFAULT_LOGIT_CHUNK,
     MLXDPOTrainerWrapper,
@@ -137,6 +139,8 @@ def build_orpo_example(
     TRL does. A pair whose two prompt renderings differ by more than one token
     raises :class:`PrefixUnstableError` (TRL raises a ``ValueError`` there) so
     the caller can skip it with a count.
+    Soup caps both prompts only when either complete input, including BOS/EOS,
+    exceeds ``max_length``, then clips each answer to the room its prompt leaves.
     """
     prompt, chosen, rejected = render_preference_text(_normalise_row(row), tokenizer)
     chosen_prompt, chosen_answer = _tokenized_answer(tokenizer, prompt, chosen)
@@ -150,7 +154,7 @@ def build_orpo_example(
 
     bos = getattr(tokenizer, "bos_token_id", None)
     eos = getattr(tokenizer, "eos_token_id", None)
-    sides = []
+    tokenized_sides = []
     pairs = ((chosen_prompt, chosen_answer), (rejected_prompt, rejected_answer))
     for prompt_ids, answer_ids in pairs:
         prompt_ids, answer_ids = list(prompt_ids), list(answer_ids)
@@ -158,8 +162,18 @@ def build_orpo_example(
             prompt_ids = [bos] + prompt_ids
         if eos is not None and (not answer_ids or answer_ids[-1] != eos):
             answer_ids = answer_ids + [eos]
-        # Soup's cap (enforce_preference_sequence_limit's ORPO branch).
-        prompt_ids = _truncate_tokens(prompt_ids, max_prompt_length, truncation_mode)
+        tokenized_sides.append((prompt_ids, answer_ids))
+
+    # Decide on the pair after BOS/EOS insertion. If either input overflows,
+    # cap both prompts, as enforce_preference_sequence_limit's ORPO branch does.
+    # The two prompt spans can differ by one token after a boundary merge.
+    overflows = any(len(prompt) + len(answer) > max_length for prompt, answer in tokenized_sides)
+    sides = []
+    for prompt_ids, answer_ids in tokenized_sides:
+        if overflows:
+            prompt_ids, _ = _truncate_prompt(
+                prompt_ids, [1] * len(prompt_ids), max_prompt_length, truncation_mode, bos
+            )
         answer_ids = answer_ids[: max(0, max_length - len(prompt_ids))]
         if not answer_ids:
             raise PreferenceRowError(
@@ -354,42 +368,3 @@ class MLXORPOTrainerWrapper(MLXDPOTrainerWrapper):
             "reference": "none (reference-free)",
             "truncation_mode": ORPO_TRUNCATION_MODE,
         }
-
-    def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
-        """Warm start only from an adapter of this objective and base.
-
-        The checkpoint's directory must hold the ``adapter_config.json`` the
-        run writes (it is written before the first step, so step checkpoints of
-        a run that stopped early have it too). An adapter of another task
-        (another preference objective, or SFT), a different base model, or no
-        metadata at all is refused before any tensor loads; the tensor names
-        and shapes are then checked by MLX SFT's loader. Subclasses reuse it
-        through ``objective`` and their metadata's ``task``.
-        """
-        import json
-        from pathlib import Path
-
-        name = self.objective
-        task = self._objective_metadata()["task"]
-        meta_path = Path(checkpoint_path).resolve().parent / "adapter_config.json"
-        if not meta_path.is_file():
-            raise ValueError(
-                f"MLX {name}: no adapter_config.json beside {checkpoint_path}; cannot "
-                f"confirm it is a task={task!r} adapter of this base model"
-            )
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise ValueError(f"MLX {name}: unreadable {meta_path}: {exc}") from exc
-        if meta.get("task") != task:
-            raise ValueError(
-                f"MLX {name}: {checkpoint_path} was trained with task="
-                f"{meta.get('task')!r}, not {task!r}; start a fresh run or resume "
-                "with the matching task"
-            )
-        if str(meta.get("model")) != str(self.config.base):
-            raise ValueError(
-                f"MLX {name}: {checkpoint_path} belongs to base {meta.get('model')!r}, "
-                f"not {self.config.base!r}"
-            )
-        super()._load_checkpoint_weights(checkpoint_path)

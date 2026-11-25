@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -60,7 +61,7 @@ def _extract_texts(input_path: Path) -> list[str]:
     texts: list[str] = []
     total_bytes = 0
     if input_path.suffix.lower() == ".jsonl":
-        with open(input_path, encoding="utf-8") as fh:
+        with open(input_path, encoding="utf-8-sig") as fh:
             for raw in fh:
                 if len(raw.encode("utf-8", errors="replace")) > _MAX_LINE_BYTES:
                     continue  # silently skip oversized line
@@ -92,7 +93,7 @@ def _extract_texts(input_path: Path) -> list[str]:
                 elif isinstance(row, str):
                     texts.append(row)
     else:
-        with open(input_path, encoding="utf-8") as fh:
+        with open(input_path, encoding="utf-8-sig") as fh:
             for raw in fh:
                 if len(raw.encode("utf-8", errors="replace")) > _MAX_LINE_BYTES:
                     continue
@@ -161,6 +162,11 @@ def train(
         console.print(f"[red]Input file not found:[/] {input_path}")
         raise typer.Exit(1)
     output_path = Path(output_real)
+    if output_path.exists() and not output_path.is_dir():
+        console.print(
+            f"[red]Output path is not a directory:[/] {for_terminal(output)}", emoji=False
+        )
+        raise typer.Exit(1)
 
     try:
         from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers

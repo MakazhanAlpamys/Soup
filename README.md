@@ -91,54 +91,38 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.76.0 — settings Soup accepted and never applied now stop the load.** Options that were
-validated and documented, and read by nothing on the path they claimed to configure, are now
-refused at load, naming the setting and what to change; the rest warn and name the release
-that will refuse them. A config that loaded before can stop loading: run
-`soup doctor --config soup.yaml` first.
+**v0.78.0 — a cut of `main` after v0.77.2: 271 pull requests, 218 of them from 48 people outside
+the maintainer.** It adds features and several rules that refuse input v0.77.2 accepted, so read the
+[v0.78.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0) before
+upgrading a config or a script. Coming from 0.76.x, run `soup doctor --config soup.yaml` first and
+read the [v0.77.0 release notes](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0).
 
-- **Breaking: a setting that never took effect is refused at load.** Among them
-  `training.quantization_aware: true` (it never ran quantization-aware training),
-  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`,
-  `training.rope_scaling_type` where no setup reads it, `freeze_layers` / `freeze_ratio`
-  outside the text `sft` / `tts` path on the transformers backend, `auto_mixed_precision`
-  outside `sft` / `tts`, and `backend: unsloth` on seven further tasks that have no unsloth
-  setup. Each message names the field and what to change. `lr_groups`, `early_stop_patience`,
-  `forgetting_eval_steps` and other unread knobs warn at load now and are refused from v0.77.
-- **Validation loss is now evaluated.** `data.val_split` held rows out of training on every
-  run, and no trainer on the transformers backend evaluated them. Every task that gets a
-  split now evaluates it at the end of each epoch, or every N steps with `training.eval_steps`,
-  and records the val loss; runs take a few percent longer. **Breaking for `grpo`, `ppo` and
-  `online_dpo`:** by default they no longer hold rows out (`data.val_split` is ignored with
-  a note), so every row trains.
-- **Breaking: every non-standard `grpo_variant` applies the `grpo_beta` KL penalty.** `gspo`,
-  `dapo`, `dr_grpo`, `bnpo`, `two_sided` and `rft` validated `grpo_beta` and dropped it, so
-  existing variant configs will not reproduce prior runs. `grpo_beta: 0` now runs KL-free and
-  skips the reference forward pass.
-- **Layer streaming reads its disk tier on a background thread, through direct I/O, and can
-  stripe it across NVMe drives.** On a 36 GB 70B-shaped NF4 store larger than RAM (one RTX 5070
-  Laptop 8 GB box), a cold step went from 110.5 s on the synchronous read to 16.2-17.3 s, and
-  from 17.4 s to 9.97 s across two drives with `SOUP_LAYER_STREAM_STRIPE_DIRS` (a sustained-load
-  probe: two rounds, 1.28x and 1.41x, no formal verdict;
-  [record](benchmarks/probe-rtx5070-two-drive-sustained.md)). A store that fits RAM is still
-  faster on the RAM tier, which `stream_source: auto` picks. Opt-in (`stream_layers: true`) and
-  still BETA; records: [direct I/O](benchmarks/gate-974-disk-tier-direct-io.md),
-  [striping](benchmarks/gate-two-drive-striping.md).
-- **New commands and options.** `soup adapters check` scans a LoRA adapter for silent failure;
-  `soup bench train` trains a fixed number of steps and exits 1 when the model was not training
-  (it covers `task: sft` on the transformers backend; `soup bench` is now a group, and
-  `soup bench infer` is the old inference benchmark);
-  `soup data clean` sanitizes and repairs a dataset without touching the input file;
-  `soup recipes verify` checks on the meta device, with no weights downloaded, that every shipped
-  recipe can attach a LoRA adapter; `soup rewind` names the dataset rows behind a loss spike.
-  `soup infer` gains opt-in `--batch-size` and an experimental `--cuda-graphs` (PyTorch 2.14 or
-  newer; on one RTX 5070 Laptop, unpinned, Qwen2.5-1.5B in FP16, the slowest run with it decoded
-  2.9x faster than the fastest without). `soup ab` runs a two-sided, variance-robust test, and
-  `soup adapters sign --backend sigstore` and `soup attest emit --sign sigstore` sign with
-  Sigstore keyless OIDC (`pip install "soup-cli[sigstore]"`).
+- **A continual-learning loop.** `soup serve` gives every answer an id and takes feedback on it
+  (thumbs, ratings, edits); `soup loop` trains a candidate from that feedback, judges it with
+  `soup ship --gate loop-v2`, runs it as a canary and rolls back on its own.
+- **`soup ship` shows what its number is made of.** Better/worse/same counts per task, a per-row
+  audit file, `--task-mode reward --reward-fn` to score with a function you supply (a `.py` file is
+  executed), how much the adapter changes the base, and `--base-adapter` to compare two adapters.
+- **New commands.** `soup eval retention` (forgetting across model versions), `soup data leakage`
+  (train/eval overlap), `soup docs search` (offline), `soup prune-layer-cache`, and
+  `soup eval quant-check --performance`.
+- **More on Apple Silicon.** Native MLX chat, merge, selective loss masks, preprocessing caches,
+  vocabulary expansion, RoPE extension and dense Llama SFT.
+- **Layer streaming does more.** A forward-only inference mode, pre-quantised NF4 import, and BCO,
+  IPO and `task: preference` with a single loss train on a streamed base.
+- **VRAM estimates that fit short rows.** A padded SFT run is priced by its longest row, 8-bit
+  checkpointing, cuBLAS workspaces and a distillation teacher are charged, and the pre-flight says
+  why a fit is not checked.
+- **8 new recipes** (181 in all), and a Triton kernel library for Qwen2 QLoRA SFT (no config key).
+- **Text shown as typed.** Dozens more commands print paths and names with brackets and `:name:`
+  text kept and terminal control characters removed.
 
-> From v0.77, Python **3.11–3.13** only: 3.10 reached end of life on 2026-10-01 (pip there stays
-> on v0.76); on 3.14+, pip falls back to v0.72.4 (no upper bound) and untested PyTorch wheels.
+**Behaviour changes to know.** A boolean in a numeric `training` field is refused. `--push-as`
+creates the repository private (`--push-public` to change that). An enabled eval gate on MLX,
+`prm`, `unlearn` or `moe_lora_routing` is refused. `soup serve --max-tokens` stops at 16384.
+`soup adapters merge` weights and the `tool_call_args_subset` score changed, so merges and ship
+verdicts can differ. Evidence files written by `soup ship` are version 2 when they carry the new
+per-row, function-scored or judge detail, and v0.77.x refuses those.
 
 Older highlights live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) page.
 
@@ -304,6 +288,7 @@ soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/I
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
+soup serve  --backend mlx --model ./mlx-output  # native dense text model / LoRA on Apple Silicon
 soup ui                               # local browser dashboard
 soup merge  --adapter ./output        # merge LoRA into the base model
 soup export --model ./output --format gguf           # export for deployment
@@ -339,7 +324,7 @@ Run Soup without installing CUDA or PyTorch locally (image published to GHCR on 
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # or build locally
 ```
 

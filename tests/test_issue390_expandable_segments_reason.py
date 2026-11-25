@@ -96,6 +96,19 @@ class TestExpandableSegmentsStatus:
 
         assert expandable_segments_status() == (True, "")
 
+    def test_another_exported_value_is_named_as_the_cause(self, fake_cuda, monkeypatch):
+        """#2149: once ``soup train`` sets the hint before CUDA starts, a user's own value
+        is the only way to reach this branch, and "already initialised" is not why."""
+        from soup_cli.utils.layer_stream_runtime import expandable_segments_status
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+        fake_cuda(available=True, initialized=True)
+
+        enabled, why = expandable_segments_status()
+        assert enabled is False
+        assert why == "PYTORCH_CUDA_ALLOC_CONF is set to something else"
+
     def test_no_cuda_says_no_cuda(self, fake_cuda, monkeypatch):
         from soup_cli.utils.layer_stream_runtime import expandable_segments_status
 

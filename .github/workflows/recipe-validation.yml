@@ -95,6 +95,10 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         # The pinned stack of ci.yml's pull-request cells: this workflow runs on pull requests and pushes only.
+        # CPU-only torch, as in ci.yml's `test` job (2026-10-21): the runner has no GPU, and the
+        # CUDA wheels are 2.4 GB more to download.
+        env:
+          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: pip install -e ".[dev]" -c .github/constraints/pinned-upstream.txt
       - name: Validate every recipe (parameterised pytest)
         run: pytest tests/test_recipes_v031.py tests/test_recipes.py -v --tb=short --no-cov

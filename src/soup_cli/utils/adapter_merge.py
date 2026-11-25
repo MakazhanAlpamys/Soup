@@ -5,11 +5,19 @@ Four strategies wrap mergekit-style math in pure numpy:
 - ``linear``: weighted average per-layer (baseline)
 - ``ties``: trim-elect-disjoint average (Yadav et al. 2023)
 - ``dare``: drop and rescale by 1/(1-density) (Yu et al. 2024)
-- ``svd``: low-rank SVD reconstruction of the merged delta
+- ``svd``: each LoRA module's merged delta ``B @ A`` truncated to ``--rank`` by SVD;
+  tensors that are not LoRA factors are not truncated (#2984)
 
-All strategies operate on the intersection of layer names; shape-mismatched
-tensors are silently skipped (rank changed between adapters). Live canary
+All strategies operate on the intersection of layer names. ``merge_adapters``
+refuses inputs that cannot be merged before anything is written (#2907): a
+shared tensor whose shape differs between inputs (the LoRA rank changed), or
+inputs that share no tensor name at all. The per-strategy functions still skip
+a shape-mismatched tensor when called directly. Live canary
 verdict via v0.55 eval gate is deferred to v0.57.1; stub returns ``None``.
+
+The merged adapter keeps the first input's ``adapter_config.json``, so every
+input's ``lora_B`` is first rescaled to decode at that adapter's LoRA scaling
+(:func:`fold_lora_scaling`).
 """
 
 from __future__ import annotations
@@ -23,7 +31,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, FrozenSet, Literal, Mapping, Optional, Sequence, Tuple
 
-from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.adapter_arithmetic import factor_coeff
+from soup_cli.utils.adapter_diff import (
+    WRITE_ADAPTER_DEPS,
+    WRITE_ADAPTER_DEPS_MSG,
+    lora_module_scaling,
+    peft_module_name,
+    read_adapter_config_or_none,
+    require_adapter_dependencies,
+)
+from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
 MergeStrategy = Literal["linear", "ties", "dare", "svd", "cmaes"]
 # A canary scorer: ``scorer(role, tasks) -> per-prompt scores`` where ``role``
@@ -89,11 +106,109 @@ def _validate_density(density: float, field: str) -> float:
     return val
 
 
+def _lora_rank_of(name: str, shape: Tuple[int, ...]) -> Optional[int]:
+    """LoRA rank a factor tensor carries, or ``None`` for any other tensor.
+
+    ``lora_A`` / ``lora_embedding_A`` hold the rank on axis 0, ``lora_B`` /
+    ``lora_embedding_B`` on axis 1 (linear, embedding and conv layers alike).
+    """
+    if "lora_A" in name or "lora_embedding_A" in name:
+        return int(shape[0]) if len(shape) >= 1 else None
+    if "lora_B" in name or "lora_embedding_B" in name:
+        return int(shape[1]) if len(shape) >= 2 else None
+    return None
+
+
+def _module_of(name: str) -> str:
+    """``...q_proj.lora_A.weight`` -> ``...q_proj``; other names unchanged."""
+    for marker in (".lora_embedding_A", ".lora_embedding_B", ".lora_A", ".lora_B"):
+        head, sep, _tail = name.partition(marker)
+        if sep:
+            return head
+    return name
+
+
+def check_mergeable(weights_list: Sequence[Mapping[str, Any]]) -> None:
+    """Refuse inputs that ``soup adapters merge`` cannot merge (#2907).
+
+    Every strategy merges only the tensors all inputs share and skips a shared
+    tensor whose shapes differ. Inputs with different LoRA ranks differ in
+    shape on every factor, so the merge used to be empty and still exit 0.
+    Raises ``ValueError`` when:
+
+    - the inputs share no tensor name at all (disjoint ``target_modules``), or
+    - a shared LoRA tensor differs in shape between inputs (on every module,
+      or on some only, as with ``rank_pattern``), or
+    - no shared tensor has one shape, so the merge would be empty.
+
+    Not a refusal, as before: a tensor present in only some inputs stays out
+    of the merge, and a shared tensor that is not a LoRA one (a
+    ``modules_to_save`` head, say) and differs in shape is skipped by the
+    strategy and listed as skipped.
+    """
+    import numpy as np
+
+    if len(weights_list) < _MIN_ADAPTERS:
+        return
+    shared = set(weights_list[0].keys())
+    for adapter in weights_list[1:]:
+        shared &= set(adapter.keys())
+    if not shared:
+        raise ValueError(
+            "cannot merge: the adapters share no tensor name, so the merged "
+            "adapter would hold no weights (the inputs target different "
+            "modules). Nothing was written."
+        )
+    mergeable = 0
+    for name in sorted(shared):
+        shapes = [tuple(np.shape(adapter[name])) for adapter in weights_list]
+        if len(set(shapes)) == 1:
+            mergeable += 1
+            continue
+        if "lora_" not in name:
+            continue
+        ranks = [_lora_rank_of(name, shape) for shape in shapes]
+        if None not in ranks and len(set(ranks)) > 1:
+            per_input = ", ".join(
+                f"rank {rank} in adapter {pos}" for pos, rank in enumerate(ranks, 1)
+            )
+            raise ValueError(
+                f"cannot merge: module {_module_of(name)!r} has LoRA {per_input}. "
+                "`soup adapters merge` needs the same rank on every module; for "
+                "mixed ranks use `soup adapters arithmetic ... --rank N`. "
+                "Nothing was written."
+            )
+        per_input = ", ".join(
+            f"{shape} in adapter {pos}" for pos, shape in enumerate(shapes, 1)
+        )
+        raise ValueError(
+            f"cannot merge: tensor {name!r} has shape {per_input}. "
+            "`soup adapters merge` needs every shared tensor to have one shape "
+            "(were the adapters trained on the same base model?). "
+            "Nothing was written."
+        )
+    if not mergeable:
+        raise ValueError(
+            "cannot merge: no tensor the adapters share has the same shape in "
+            "every input, so the merged adapter would hold no weights. "
+            "Nothing was written."
+        )
+
+
 def merge_linear(
     weights_list: Sequence[Mapping[str, Any]],
     weights: Sequence[float],
 ) -> Tuple[dict[str, Any], Tuple[str, ...]]:
-    """Weighted average per layer over the intersection of names."""
+    """Weighted merge per layer over the intersection of names.
+
+    A LoRA's delta is ``B @ A``, so a weight ``c`` on both factors would scale
+    that input's own delta by ``c²`` (#2908). Each ``lora_A`` / ``lora_B`` (and
+    ``lora_embedding_A`` / ``lora_embedding_B``) tensor is scaled by ``√c``
+    instead, so an input's own term is ``c`` times its delta — the rule
+    ``soup adapters arithmetic`` uses on its same-rank path. Any other tensor
+    keeps ``c``. Inputs that use the same rank slots also contribute cross
+    terms ``√(cᵢcⱼ)·Bᵢ@Aⱼ``, as they do there.
+    """
     import numpy as np
 
     if len(weights_list) < _MIN_ADAPTERS:
@@ -118,7 +233,7 @@ def merge_linear(
             continue
         acc = np.zeros_like(tensors[0])
         for c, t in zip(coeffs, tensors):
-            acc += c * t
+            acc += factor_coeff(name, c) * t
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
@@ -217,7 +332,7 @@ def merge_dare(
         for c, t in zip(coeffs, tensors):
             mask = rng.random(t.shape) < density_val
             rescaled = np.where(mask, t / density_val, 0.0)
-            acc += c * rescaled
+            acc += factor_coeff(name, c) * rescaled
         merged[name] = acc.astype(np.float32)
     return merged, tuple(skipped)
 
@@ -228,11 +343,35 @@ def merge_svd(
     *,
     rank: int | None = None,
 ) -> Tuple[dict[str, Any], Tuple[str, ...]]:
-    """SVD merge: linear-average, then low-rank reconstruct each 2D tensor.
+    """SVD merge: the linear merge, then each LoRA module's delta truncated to ``rank``.
 
-    Non-2D tensors are merged linearly without truncation.
+    Without ``rank`` this is :func:`merge_linear`. With it, each ``lora_A`` /
+    ``lora_B`` pair (and ``lora_embedding_A`` / ``lora_embedding_B`` pair) of the
+    linear merge, found through ``_lora_role`` and paired by module, kind and
+    adapter name (``lora_A.<name>.weight`` with ``lora_B.<name>.weight``), is
+    replaced by factors whose product is the best rank-``rank`` approximation
+    of that module's merged
+    delta ``B @ A`` (truncated SVD, computed in float64, written as float32),
+    so the result depends on the delta and not on how the inputs split it
+    between ``A`` and ``B`` (#2984). The new factors are zero-padded back to the
+    module's LoRA rank ``r``, so ``r`` and ``lora_alpha`` in
+    ``adapter_config.json`` stay valid. ``merge_adapters`` refuses inputs of
+    different rank before any strategy runs (#2907), so ``r`` is the rank the
+    inputs share.
+
+    A module whose ``rank`` is at or above ``r`` keeps the linear merge as it is:
+    its delta already has rank at most ``r``. Every tensor that is not a LoRA
+    factor (a ``modules_to_save`` weight, a ``lora_B.bias``, a DoRA magnitude
+    vector), a factor whose pair is missing, and a pair that is not 2-D (a conv
+    LoRA) are written as the linear merge gives them, never truncated.
     """
     import numpy as np
+
+    from soup_cli.utils.adapter_arithmetic import (
+        _lora_role,
+        _LoraStem,
+        _truncated_lora_factors,
+    )
 
     if rank is not None:
         if isinstance(rank, bool) or not isinstance(rank, int):
@@ -244,21 +383,105 @@ def merge_svd(
     if rank is None:
         return linear_merged, skipped
 
-    out: dict[str, Any] = {}
-    for name, tensor in linear_merged.items():
-        arr = np.asarray(tensor, dtype=np.float64)
-        if arr.ndim != 2:
-            out[name] = arr.astype(np.float32)
+    # A factor's stem is its module, its kind and its adapter name, so A is
+    # paired with the B of the same adapter name.
+    pairs: dict[_LoraStem, dict[str, str]] = {}
+    for name in linear_merged:
+        role = _lora_role(name)
+        if role is not None:
+            stem, which = role
+            pairs.setdefault(stem, {})[which] = name
+
+    out: dict[str, Any] = dict(linear_merged)
+    for roles in pairs.values():
+        if "A" not in roles or "B" not in roles:
+            continue
+        lora_a = np.asarray(linear_merged[roles["A"]], dtype=np.float64)
+        lora_b = np.asarray(linear_merged[roles["B"]], dtype=np.float64)
+        if lora_a.ndim != 2 or lora_b.ndim != 2 or lora_a.shape[0] != lora_b.shape[1]:
+            continue
+        lora_rank = lora_a.shape[0]
+        if rank >= lora_rank:
             continue
         try:
-            u_mat, sv, vt_mat = np.linalg.svd(arr, full_matrices=False)
+            new_b, new_a = _truncated_lora_factors(lora_b, lora_a, rank)
         except np.linalg.LinAlgError:
-            out[name] = arr.astype(np.float32)
             continue
-        r = min(rank, sv.shape[0])
-        reconstructed = u_mat[:, :r] @ np.diag(sv[:r]) @ vt_mat[:r, :]
-        out[name] = reconstructed.astype(np.float32)
+        pad = lora_rank - new_a.shape[0]
+        out[roles["A"]] = np.pad(new_a, ((0, pad), (0, 0))).astype(np.float32)
+        out[roles["B"]] = np.pad(new_b, ((0, 0), (0, pad))).astype(np.float32)
     return out, skipped
+
+
+#: The bias PEFT adds to ``lora_B``'s output for ``lora_bias=True``; scaled with it.
+_LORA_B_BIAS = ".lora_B.bias"
+
+
+def fold_lora_scaling(
+    weights_list: Sequence[Mapping[str, Any]],
+    adapter_dirs: Sequence[str],
+) -> list[Mapping[str, Any]]:
+    """Rescale every adapter's ``lora_B`` to decode at the first adapter's scaling.
+
+    The merge strategies combine raw ``lora_A`` / ``lora_B`` tensors, and the merged
+    adapter is written with the FIRST adapter's ``adapter_config.json``, so PEFT
+    decodes every merged module at that adapter's scaling. An input trained with a
+    different ``lora_alpha``, ``use_rslora`` or per-module ``alpha_pattern`` /
+    ``rank_pattern`` would otherwise contribute at the wrong strength (a
+    ``lora_alpha=32`` adapter merged under a ``lora_alpha=16`` template counts for
+    half). Each ``lora_B`` / ``lora_embedding_B``, and the ``lora_B`` bias of an adapter
+    saved with ``lora_bias=True``, is multiplied by its own module
+    scaling over the template's, so every ``B @ A`` keeps its effective delta.
+
+    Inputs whose scaling already matches the template are passed through
+    unchanged, as is any module whose scaling cannot be read from either config.
+    An input whose own scaling is 0 gets a zero ``lora_B``: it decoded to no delta and
+    still adds none. A template whose scaling is 0 (``lora_alpha: 0``) decodes every
+    module at 0 whatever the tensors hold, so the ratio is undefined and every input is
+    passed through as it is. DoRA's ``lora_magnitude_vector`` is not multiplied by the
+    scaling in PEFT's forward, so it is never rescaled; every ``lora_A`` is left alone.
+    """
+    import numpy as np
+
+    from soup_cli.utils.adapter_arithmetic import _lora_role
+
+    if len(weights_list) != len(adapter_dirs):
+        raise ValueError(
+            f"weights_list ({len(weights_list)}) and adapter_dirs "
+            f"({len(adapter_dirs)}) length mismatch"
+        )
+    if not weights_list:
+        return []
+    template = read_adapter_config_or_none(adapter_dirs[0])
+    if template is None:
+        return list(weights_list)
+
+    folded: list[Mapping[str, Any]] = [weights_list[0]]
+    for weights, adapter_dir in zip(weights_list[1:], adapter_dirs[1:]):
+        config = read_adapter_config_or_none(adapter_dir)
+        rescaled: Optional[dict[str, Any]] = None
+        if config is not None:
+            for name, tensor in weights.items():
+                parsed = _lora_role(name)
+                if parsed is not None:
+                    (stem, _kind, _adapter_name), role = parsed
+                    if role != "B":
+                        continue
+                elif name.endswith(_LORA_B_BIAS):
+                    # PEFT scales lora_B's output, its bias (lora_bias=True) included.
+                    stem = name.removesuffix(_LORA_B_BIAS)
+                else:
+                    continue
+                module = peft_module_name(stem)
+                target = lora_module_scaling(template, module)
+                own = lora_module_scaling(config, module)
+                if target is None or own is None or target == 0.0 or own == target:
+                    continue
+                if rescaled is None:
+                    rescaled = dict(weights)
+                rescaled[name] = np.asarray(tensor, dtype=np.float64) * (own / target)
+        folded.append(weights if rescaled is None else rescaled)
+    return folded
 
 
 def merge_adapters(
@@ -294,9 +517,17 @@ def merge_adapters(
     if len(adapter_paths) > _MAX_ADAPTERS:
         raise ValueError(f"at most {_MAX_ADAPTERS} adapters")
 
+    require_adapter_dependencies(WRITE_ADAPTER_DEPS)
     enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
+    ensure_distinct_paths(
+        [("adapter", path) for path in adapter_paths], [("output_dir", output_dir)]
+    )
 
     weights_list = [load_adapter_weights(p) for p in adapter_paths]
+    check_mergeable(weights_list)
+    # Inputs that pass are rescaled to the template's LoRA scaling (#2861); the
+    # fold changes lora_B values only, never a shape, so the check above holds.
+    weights_list = fold_lora_scaling(weights_list, adapter_paths)
 
     if weights is None:
         eq = 1.0 / len(adapter_paths)
@@ -371,12 +602,11 @@ def write_merged_adapter(
     (#305) so the emitted ``adapter_config.json``'s ``r`` matches the
     concatenated tensors and the adapter stays loadable.
     """
+    require_adapter_dependencies(WRITE_ADAPTER_DEPS)
     try:
         from safetensors.numpy import save_file
     except ImportError as exc:
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
+        raise RuntimeError(WRITE_ADAPTER_DEPS_MSG) from exc
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)

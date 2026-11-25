@@ -19,6 +19,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 if TYPE_CHECKING:  # static types only — the import is numpy-lazy at runtime
     from soup_cli.utils.spectrum_scan import LayerSNR, ScanResult
@@ -52,9 +55,13 @@ def _render_table(
     for layer in result.layers:
         groups[layer.group].append(layer)
 
+    # The model is typed text: a Text title is not read as markup or emoji codes. A Text
+    # does not get the italic a str title gets, so the table's title style is set by hand.
     table = Table(
-        title=f"Spectrum SNR — {escape(result.model)} "
-        f"(top {top_percent:g}% per group)"
+        title=Text(
+            f"Spectrum SNR — {strip_control(result.model)} (top {top_percent:g}% per group)",
+            style="table.title",
+        )
     )
     table.add_column("Type")
     table.add_column("Group")
@@ -68,7 +75,7 @@ def _render_table(
         n_kept = sum(1 for layer in items if param_prefix(layer.name) in kept_set)
         table.add_row(
             items[0].module_type,
-            escape(group),
+            Text(strip_control(group)),
             str(len(items)),
             str(n_kept),
             f"{min(snrs):.3f} / {sum(snrs) / len(snrs):.3f} / {max(snrs):.3f}",
@@ -118,18 +125,19 @@ def scan(
         try:
             enforce_under_cwd_and_no_symlink(output, "output")
         except (ValueError, TypeError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
             raise typer.Exit(2) from exc
 
     try:
         result = scan_model(model, modules=modules, use_cache=not no_cache)
     except (ValueError, FileNotFoundError, RuntimeError, OSError) as exc:
-        console.print(f"[red]Spectrum scan failed:[/] {escape(str(exc))}")
+        console.print(f"[red]Spectrum scan failed:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
     except Exception as exc:  # hub validation / unexpected — friendly, no traceback
         console.print(
             f"[red]Spectrum scan failed:[/] "
-            f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            f"{escape(type(exc).__name__)}: {for_terminal(exc)}",
+            emoji=False,
         )
         raise typer.Exit(1) from exc
 
@@ -145,7 +153,7 @@ def scan(
             result.layers, top_percent=top_percent, modules=modules
         )
     except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]", emoji=False)
         raise typer.Exit(2) from exc
 
     _render_table(result, kept, top_percent)
@@ -157,7 +165,8 @@ def scan(
     )
     console.print(
         Panel(
-            escape(yaml_block.rstrip()),
+            # The block holds the layer names of the model, which are its own text.
+            Text(strip_control(yaml_block.rstrip())),
             title="training.unfrozen_parameters",
             border_style="cyan",
         )
@@ -171,4 +180,4 @@ def scan(
         from soup_cli.utils.paths import atomic_write_text
 
         atomic_write_text(yaml_block, output, field="output")
-        console.print(f"[green]Wrote patch:[/] {escape(output)}")
+        console.print(f"[green]Wrote patch:[/] {for_terminal(output)}", emoji=False)

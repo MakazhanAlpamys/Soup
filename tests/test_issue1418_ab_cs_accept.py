@@ -263,16 +263,38 @@ class TestWording:
 
 
 # ---------------------------------------------------------------------------
-# --beta is retired: ignored, and never silently
+# --beta is retired: v0.76 ignored it with a warning, v0.77 refuses it
 # ---------------------------------------------------------------------------
 
 _ROWS = [0.80, 0.83, 0.77, 0.81, 0.79, 0.84, 0.78, 0.82, 0.80, 0.76] * 3
 _LOWER = [x - 0.1 for x in _ROWS]
 
 
+@pytest.fixture
+def warn(monkeypatch):
+    """The v0.76 setting, kept behind the switch (``config/deprecation.py``)."""
+    from soup_cli.config import deprecation
+
+    monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_SEVERITY", "warn")
+
+
 class TestRetiredBeta:
     @pytest.mark.parametrize("beta", [0.01, 0.2, 0.95])
-    def test_a_passed_beta_warns_and_changes_no_verdict(self, beta):
+    def test_a_passed_beta_is_refused(self, beta):
+        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+        from soup_cli.utils.ab_test import MsprtConfig
+
+        with pytest.raises(ValueError) as excinfo:
+            MsprtConfig(metric="judge_score", beta=beta)
+        message = str(excinfo.value)
+        assert message.startswith("beta no longer does anything (#1418)")
+        assert message.endswith(
+            "Remove beta; to make accept_h0 stricter, lower alpha. "
+            f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        )
+
+    @pytest.mark.parametrize("beta", [0.01, 0.2, 0.95])
+    def test_a_passed_beta_warns_and_changes_no_verdict_under_warn(self, beta, warn):
         from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 
         for control, treatment in ((_ROWS, _ROWS), (_ROWS, _LOWER), (_CONTROL, _TREATMENT)):
@@ -291,7 +313,7 @@ class TestRetiredBeta:
         assert MsprtConfig(metric="judge_score").beta is None
         assert not [w for w in recwarn if "beta" in str(w.message)]
 
-    def test_alpha_plus_beta_past_1_is_no_longer_refused(self):
+    def test_alpha_plus_beta_past_1_is_no_longer_refused(self, warn):
         """#1339's check guarded the old accept boundary; with beta unused it went."""
         from soup_cli.config.deprecation import SoupConfigDeprecationWarning
         from soup_cli.utils.ab_test import MsprtConfig
@@ -299,7 +321,34 @@ class TestRetiredBeta:
         with pytest.warns(SoupConfigDeprecationWarning):
             MsprtConfig(metric="judge_score", alpha=0.05, beta=0.95)
 
-    def test_the_cli_says_what_changed_and_points_at_alpha(self, tmp_path, monkeypatch, recwarn):
+    def test_alpha_plus_beta_past_1_is_refused_as_a_retired_beta(self):
+        """As shipped, the pair is refused, but for beta itself, not by #1339's check."""
+        from soup_cli.utils.ab_test import MsprtConfig
+
+        with pytest.raises(ValueError) as excinfo:
+            MsprtConfig(metric="judge_score", alpha=0.05, beta=0.95)
+        assert str(excinfo.value).startswith("beta no longer does anything (#1418)")
+        assert "alpha + beta" not in str(excinfo.value)
+
+    def test_the_cli_refuses_it_and_points_at_alpha(self, tmp_path, monkeypatch):
+        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+
+        result = _run_cli(tmp_path, monkeypatch, _ROWS, _ROWS, ("--beta", "0.95"))
+        # Exit 2, the code soup ab uses for its other flag errors; nothing runs.
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert "Error: --beta no longer does anything (#1418)" in out
+        assert "at level --alpha" in out
+        assert (
+            "Remove --beta; to make accept_h0 stricter, lower --alpha. "
+            f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."
+        ) in out
+        assert out.count("no longer does anything") == 1
+        assert "decision" not in out
+
+    def test_the_cli_says_what_changed_and_points_at_alpha_under_warn(
+        self, tmp_path, monkeypatch, recwarn, warn
+    ):
         without = _run_cli(tmp_path, monkeypatch, _ROWS, _ROWS, ())
         result = _run_cli(tmp_path, monkeypatch, _ROWS, _ROWS, ("--beta", "0.95"))
         # Said once, by the CLI: --beta is not passed on, so MsprtConfig does not

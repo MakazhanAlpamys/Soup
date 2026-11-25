@@ -224,6 +224,7 @@ def build_mii_app(
     model_name: str,
     max_tokens_default: int = 512,
     tokenizer: Any = None,
+    host: str = "127.0.0.1",
 ) -> Any:
     """Wrap a DeepSpeed-MII pipeline as a minimal OpenAI-compatible FastAPI
     app exposing ``/v1/chat/completions`` and ``/v1/models`` (#38, v0.33.0).
@@ -241,9 +242,14 @@ def build_mii_app(
             applied to incoming messages. ``None`` degrades to the legacy
             role-prefixed prompt — the same fallback the vLLM and transformers
             backends use when a model ships no template.
+        host: the address ``soup serve`` binds. ``/v1/chat/completions``
+            refuses a request whose ``Origin`` names another site (403), as the
+            transformers app's generation routes do.
     """
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
+
+    from soup_cli.utils.local_request_guard import browser_origin_dependency
 
     # THE shared prompt builder and finish_reason mapper (#332, #333). Imported
     # here rather than at module scope to keep ``soup --help`` fast, per the
@@ -263,6 +269,9 @@ def build_mii_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Origin-only check on the generation route; Host is not checked so a proxy
+    # can front it.
+    origin_check = Depends(browser_origin_dependency(host))
 
     @app.get("/v1/models")
     def _list_models() -> dict:
@@ -274,7 +283,7 @@ def build_mii_app(
             }],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[origin_check])
     def _chat(request: _MiiChatRequest) -> dict:
         import time
         import uuid

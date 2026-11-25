@@ -1,15 +1,17 @@
 """``DEPRECATED_VALUE_SEVERITY``: the switch that turns deprecated config values into refusals.
 
-v0.76 loads three values with a warning that names the release that will refuse
+v0.76 loaded three values with a warning that named the release that would refuse
 them (``config/deprecation.py``): ``data.remove_unused_columns: true`` (#759),
 ``training.quantization: 4bit`` / ``8bit`` on a task that never quantises (#795),
 and ``soup ab --beta`` / ``MsprtConfig.beta`` (#1418). Staged fields already had
 a switch (``STAGED_FIELD_SEVERITY``); deprecated values had none, so the release
 that reached the deadline would have kept printing "Soup v0.77 will refuse it."
 
-These tests pin both settings of the new switch, with the default ``"warn"``
-byte-identical to v0.76.0, and the two staged-field refusal fixes that ship with
-it (every refusal line indented; each one says to delete the line).
+v0.77.0 reached that deadline and ships ``"error"``: the three values are refused.
+These tests pin both settings of the switch -- ``"warn"`` (through the ``warn``
+fixture) byte-identical to v0.76.0, ``"error"`` as shipped -- and the two
+staged-field refusal fixes that ship with it (every refusal line indented; each
+one says to delete the line).
 """
 
 from __future__ import annotations
@@ -74,19 +76,18 @@ def refuse(monkeypatch):
 
 
 class TestTheSwitch:
-    def test_this_release_warns(self):
-        """v0.76 warns; the release that reaches the deadline must refuse. Flipping
-        it is a deliberate one-line change in that release's commit."""
-        if _major_minor(soup_cli.__version__) < _major_minor(VERSION):
-            assert deprecation.DEPRECATED_VALUE_SEVERITY == "warn", (
-                f"v{soup_cli.__version__} is before the v{VERSION} deadline, so "
-                "deprecated config values must warn, not refuse"
-            )
-        else:
-            assert deprecation.DEPRECATED_VALUE_SEVERITY == "error", (
-                f"v{soup_cli.__version__} has reached the v{VERSION} deadline: set "
-                "DEPRECATED_VALUE_SEVERITY to 'error'"
-            )
+    def test_this_release_refuses(self):
+        """v0.76 warned; v0.77.0 reached the deadline and refuses. The flip was a
+        deliberate one-line change in that release's commit, beside the version bump."""
+        assert _major_minor(soup_cli.__version__) >= _major_minor(VERSION), (
+            f"v{soup_cli.__version__} is before the v{VERSION} deadline this release "
+            "was cut to reach"
+        )
+        assert deprecation.DEPRECATED_VALUE_SEVERITY == "error", (
+            f"v{soup_cli.__version__} has reached the v{VERSION} deadline: set "
+            "DEPRECATED_VALUE_SEVERITY to 'error'"
+        )
+        assert deprecation.refuses_deprecated_values() is True
 
     def test_it_has_exactly_two_settings(self):
         assert deprecation.DEPRECATED_VALUE_SEVERITY in ("warn", "error")
@@ -115,6 +116,22 @@ class TestTheSwitch:
     def test_warn_deprecated_value_still_only_warns_by_default(self, warn):
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             deprecation.warn_deprecated_value("x: y is ignored.", refusal="x: y is refused.")
+        assert str(record[0].message) == f"x: y is ignored. {WILL_REFUSE}"
+
+    def test_another_refusals_fix_follows_the_deadline(self, refuse):
+        """The deadline belongs to the deprecated value; an older refusal's fix that
+        the same message names comes after it, not inside it (#795 with #1357)."""
+        with pytest.raises(ValueError) as excinfo:
+            deprecation.warn_deprecated_value(
+                "x: y is ignored.", refusal="x: y is refused.", after_deadline="Also, z."
+            )
+        assert str(excinfo.value) == f"x: y is refused. {REFUSED} Also, z."
+
+    def test_a_warning_does_not_carry_the_other_refusals_fix(self, warn):
+        with pytest.warns(SoupConfigDeprecationWarning) as record:
+            deprecation.warn_deprecated_value(
+                "x: y is ignored.", refusal="x: y is refused.", after_deadline="Also, z."
+            )
         assert str(record[0].message) == f"x: y is ignored. {WILL_REFUSE}"
 
 
@@ -331,6 +348,35 @@ class TestRetiredBeta:
         out = _plain(result.output)
         assert "decision accept_h0" in out
         assert "no longer does anything" not in out
+
+
+# ---------------------------------------------------------------------------
+# As shipped: no fixture, the switch as the release sets it
+# ---------------------------------------------------------------------------
+
+
+class TestAsShipped:
+    """v0.77.0 refuses each of the three values with the switch untouched."""
+
+    def test_remove_unused_columns_true_is_refused(self, printed):
+        with pytest.raises(ValueError) as excinfo:
+            loader.load_config_from_string(_RUC.format("true"))
+        assert str(excinfo.value) == (
+            f"data -> remove_unused_columns: Value error, {_RUC_REFUSAL}"
+        )
+
+    @pytest.mark.parametrize("quant", ["4bit", "8bit"])
+    def test_quantization_on_an_unquantised_task_is_refused(self, printed, quant):
+        with pytest.raises(ValueError) as excinfo:
+            loader.load_config_from_string(_PRM + f"training:\n  quantization: {quant}\n")
+        assert str(excinfo.value) == f": Value error, {_quant_refusal(quant)}"
+
+    def test_soup_ab_beta_is_a_usage_error(self, tmp_path, monkeypatch):
+        result = _run_ab(tmp_path, monkeypatch, "--beta", "0.95")
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert f"Remove --beta; to make accept_h0 stricter, lower --alpha. {REFUSED}" in out
+        assert "decision" not in out
 
 
 # ---------------------------------------------------------------------------

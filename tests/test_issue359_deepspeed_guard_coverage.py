@@ -33,7 +33,11 @@ _GUARD_CALL = re.compile(r"attach_empty_param_group_guard\s*\(")
 #: DeepSpeed reachability: the wrapper takes a config it can be launched with.
 _DEEPSPEED_CAPABLE = re.compile(r"\bdeepspeed_config\b")
 # Unlike forwarding exemptions, these trainers reject DeepSpeed before setup.
-_DEEPSPEED_REFUSING = {"csm.py"}
+_DEEPSPEED_REFUSING = {
+    "csm.py",
+    # #1976: names deepspeed_config only to refuse it in __init__ (one MLX process).
+    "mlx_grpo.py",
+}
 
 
 def _code_without_comments(text: str) -> str:
@@ -427,30 +431,35 @@ class TestUserSuppliedDeepspeedFileIsResolved:
         path = self._write(tmp_path, self._PLAIN)
         seen = {}
 
-        def _fake(config_path, *, gpu_count=None):
+        def _fake(config_path, *, gpu_count=None, precision=None):
             seen["path"] = config_path
+            seen["precision"] = precision
             return "/tmp/resolved.json"
 
         monkeypatch.setattr(ds, "resolve_user_deepspeed_file", _fake)
-        assert _resolve_deepspeed(str(path)) == "/tmp/resolved.json"
+        assert _resolve_deepspeed(str(path), precision="fp16") == "/tmp/resolved.json"
         assert seen["path"] == str(path)
+        assert seen["precision"] == "fp16"  # #2266: the trainer's precision reaches it
 
     def test_a_named_preset_still_takes_the_preset_path(self, monkeypatch):
         import soup_cli.utils.deepspeed as ds
         from soup_cli.commands.train import _resolve_deepspeed
 
-        monkeypatch.setattr(ds, "write_deepspeed_config", lambda stage: f"preset:{stage}")
+        monkeypatch.setattr(
+            ds, "write_deepspeed_config",
+            lambda stage, *, precision=None: f"preset:{stage}:{precision}",
+        )
         monkeypatch.setattr(
             ds, "resolve_user_deepspeed_file", lambda *a, **k: pytest.fail("not a file")
         )
-        assert _resolve_deepspeed("zero2") == "preset:zero2"
+        assert _resolve_deepspeed("zero2", precision="fp16") == "preset:zero2:fp16"
 
 
 def test_deepspeed_refusing_exemption_is_earned():
     from soup_cli.config.schema import SoupConfig
     from soup_cli.trainer.csm import CSMTrainerWrapper
 
-    assert _DEEPSPEED_REFUSING == {"csm.py"}
+    assert _DEEPSPEED_REFUSING == {"csm.py", "mlx_grpo.py"}
     config = SoupConfig(
         base="sesame/csm-1b", task="tts", modality="audio_out",
         data={"train": "speech.jsonl", "format": "audio"},
@@ -460,3 +469,16 @@ def test_deepspeed_refusing_exemption_is_earned():
     with pytest.raises(ValueError, match="single-device"):
         wrapper.setup({})
     assert wrapper.model is None and wrapper.trainer is None
+
+
+def test_mlx_grpo_deepspeed_refusal_is_earned():
+    """#1976: the MLX GRPO wrapper refuses DeepSpeed when it is built, before setup."""
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
+
+    config = load_config_from_string(
+        "base: tiny\ntask: grpo\nbackend: mlx\ndata: {train: d.jsonl}\n"
+        "training: {quantization: none}\noutput: ./out\n"
+    )
+    with pytest.raises(ValueError, match="--deepspeed is not supported"):
+        MLXGRPOTrainerWrapper(config, device="mps", deepspeed_config="ds.json")

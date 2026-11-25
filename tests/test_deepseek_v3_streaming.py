@@ -24,9 +24,41 @@ def test_deepseek_v3_is_an_admitted_stream_arch():
     assert stream_arch_of(SimpleNamespace(model_type="deepseek_v3")) == "deepseek_v3"
 
 
-def test_kimi_k2_model_type_is_still_refused_naming_the_allowlist():
-    """transformers registers no ``kimi_k2`` config, so the name stays refused;
-    the message must point at the admitted family."""
+def test_kimi_k2_is_admitted_through_the_guarded_config_loader(tmp_path):
+    """Kimi-K2-Base / -Instruct declare ``model_type: kimi_k2``, which AutoConfig refuses as
+    custom code. The streamed model's config loader (``utils/kimi_k2.py``) reads it into the
+    native ``DeepseekV3Config`` after a guard, so a K2 that passes streams as this family. The
+    gate is ``tests/test_kimi_k2_streaming.py`` (benchmarks/gate-kimi-k2-admission.md)."""
+    import json
+
+    pytest.importorskip("transformers")
+    from soup_cli.utils.kimi_k2 import load_stream_model_config
+    from soup_cli.utils.layer_stream import stream_arch_of
+    from tests.test_kimi_k2_streaming import K2_BASE_CONFIG
+
+    (tmp_path / "config.json").write_text(json.dumps(K2_BASE_CONFIG), encoding="utf-8")
+    assert stream_arch_of(load_stream_model_config(str(tmp_path))) == "deepseek_v3"
+
+
+def test_kimi_k2_that_fails_the_guard_is_refused_by_name(tmp_path):
+    """Kimi-K2-Thinking (compressed-tensors INT4) among them: the field and value are named."""
+    import json
+
+    pytest.importorskip("transformers")
+    from soup_cli.utils.kimi_k2 import UnsupportedKimiK2Error, load_stream_model_config
+    from tests.test_kimi_k2_streaming import K2_BASE_CONFIG, K2_THINKING_CHANGES
+
+    thinking = dict(K2_BASE_CONFIG, **K2_THINKING_CHANGES)
+    (tmp_path / "config.json").write_text(json.dumps(thinking), encoding="utf-8")
+    with pytest.raises(UnsupportedKimiK2Error) as caught:
+        load_stream_model_config(str(tmp_path))
+    assert "quantization_config.quant_method='compressed-tensors'" in str(caught.value)
+    assert "kimi_k2" in str(caught.value)
+
+
+def test_a_kimi_k2_config_that_bypassed_the_loader_is_still_refused_naming_the_allowlist():
+    """``kimi_k2`` itself is not an admitted name: a config still carrying it (K2's own remote
+    config class keeps it) did not pass the guard, and the message points at the family."""
     from soup_cli.utils.layer_stream import stream_arch_of
 
     with pytest.raises(ValueError, match="deepseek_v3") as caught:
@@ -141,14 +173,18 @@ def test_num_hidden_layers_is_validated(tmp_path, bad):
         )
 
 
-def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path):
+def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path, monkeypatch):
     """transformers keeps ``e_score_correction_bias`` in fp32 on load; a bf16
     shard would route with rounded values the resident model never sees."""
     import torch
     from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
 
     from soup_cli.utils.layer_shard import shard_checkpoint
 
+    monkeypatch.setattr(
+        DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", {"e_score_correction_bias"}
+    )
     weights = _write_layer_checkpoint(tmp_path / "w", n_layers=2, n_experts=4)
     index = shard_checkpoint(
         weights, str(tmp_path / "s"), dtype="bfloat16", arch="deepseek_v3", num_hidden_layers=2

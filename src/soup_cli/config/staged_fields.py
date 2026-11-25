@@ -1,8 +1,11 @@
 """Detect config fields staged for features that have not landed (#808).
 
-Warn-then-refuse across two releases following the #627 pattern:
-While warning, each of the staged fields prints:
+Warn-then-refuse across two releases following the #627 pattern. While warning
+(v0.76, or ``STAGED_FIELD_SEVERITY = "warn"`` in ``config/loader.py``), each of
+the staged fields prints:
     <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
+Once refused (as of v0.77, the shipped setting), the load stops with one line per field:
+    <field> is accepted but read by nothing; refused as of v<...>. Delete the line.
 
 The rejection version is pinned to :data:`STAGED_FIELD_REJECTION_VERSION` ("0.77").
 """
@@ -44,7 +47,7 @@ class StagedField:
 #: ``checkpoint_intelligence``, ``early_stop_on_regression``,
 #: ``convergence_detection``) continue to be reported by ``soup train``'s
 #: live honesty guard. The tunables themselves (Group B) are staged here (#808),
-#: so non-default values warn at load with the v0.77 refusal deadline.
+#: so non-default values are refused at load as of v0.77 (they warned in v0.76).
 STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "long_context_grpo"): False,
     ("training", "vision_grpo"): False,

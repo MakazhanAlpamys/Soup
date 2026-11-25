@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -52,13 +53,33 @@ class Leaderboard:
             if sort_by and sort_by in scores:
                 sort_score = scores[sort_by]
             else:
-                sort_score = (
-                    sum(scores.values()) / len(scores) if scores else 0.0
-                )
+                sort_score = _average(scores)
             result.append((model, scores, sort_score))
 
         result.sort(key=lambda item: item[2], reverse=True)
         return result
+
+
+def _average(scores: dict[str, float]) -> float:
+    """The arithmetic mean of a model's benchmark scores (0.0 for none).
+
+    The leaderboard's ``average`` in every format, whatever the rows are sorted by
+    (#3272). A sum that overflows to infinity is taken term by term instead, clamped
+    to the scores' own range.
+    """
+    if not scores:
+        return 0.0
+    average = sum(scores.values()) / len(scores)
+    if not math.isfinite(average):
+        average = sum(value / len(scores) for value in scores.values())
+        average = max(min(scores.values()), min(max(scores.values()), average))
+    return average
+
+
+def _require_finite_score(score: float, context: str) -> float:
+    if not math.isfinite(score):
+        raise ValueError(f"{context}: stored score {score!r} must be finite")
+    return score
 
 
 def build_leaderboard_from_tracker(
@@ -75,7 +96,10 @@ def build_leaderboard_from_tracker(
         entries.append(LeaderboardEntry(
             model_path=row.get("model_path", ""),
             benchmark=row.get("benchmark", ""),
-            score=row.get("score", 0.0),
+            score=_require_finite_score(
+                row["score"],
+                f"model {row.get('model_path', '')!r}, benchmark {row['benchmark']!r}",
+            ),
             run_id=row.get("run_id"),
             created_at=row.get("created_at", ""),
         ))
@@ -99,11 +123,15 @@ def compare_runs(
 
     scores_1: dict[str, float] = {}
     for row in newest_eval_rows(results_1):
-        scores_1[row["benchmark"]] = row["score"]
+        scores_1[row["benchmark"]] = _require_finite_score(
+            row["score"], f"run {run_id_1!r}, benchmark {row['benchmark']!r}",
+        )
 
     scores_2: dict[str, float] = {}
     for row in newest_eval_rows(results_2):
-        scores_2[row["benchmark"]] = row["score"]
+        scores_2[row["benchmark"]] = _require_finite_score(
+            row["score"], f"run {run_id_2!r}, benchmark {row['benchmark']!r}",
+        )
 
     all_benchmarks = sorted(set(scores_1.keys()) | set(scores_2.keys()))
 
@@ -115,6 +143,11 @@ def compare_runs(
         delta = None
         if score_a is not None and score_b is not None:
             delta = score_b - score_a
+            if not math.isfinite(delta):
+                raise ValueError(
+                    f"runs {run_id_1!r} and {run_id_2!r}, benchmark {bench!r}: "
+                    "score delta must be finite"
+                )
             if delta < -0.01:
                 regressions.append(bench)
 
@@ -144,9 +177,17 @@ def _csv_line(values: list[str]) -> str:
 def export_leaderboard(
     leaderboard: Leaderboard,
     fmt: str = "json",
+    sort_by: Optional[str] = None,
 ) -> str:
-    """Export leaderboard to JSON or CSV string."""
-    sorted_models = leaderboard.get_sorted_models()
+    """Export leaderboard to JSON or CSV string.
+
+    Rows follow ``sort_by`` as the table does (#3272); each row's ``average`` is the
+    arithmetic mean of its scores in either order, never the sort key.
+    """
+    sorted_models = [
+        (model, scores, _average(scores))
+        for model, scores, _ in leaderboard.get_sorted_models(sort_by=sort_by)
+    ]
 
     if fmt == "csv":
         # Collect all benchmarks

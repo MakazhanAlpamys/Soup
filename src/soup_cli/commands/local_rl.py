@@ -18,9 +18,9 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.local_rl import (
     SUPPORTED_LOCAL_RL_BACKENDS,
@@ -32,10 +32,21 @@ from soup_cli.utils.local_rl import (
     run_nightly_train,
 )
 from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
 app = typer.Typer(no_args_is_help=True, help="Personal-LLM flywheel daemon (v0.68.0).")
+
+
+# Database, prompt, output and scheduler paths come from the operator, and error
+# text from the checks on them, so every line that carries them is printed as
+# ``Text``: shown as typed, never read as markup or ``:name:`` emoji, control
+# characters removed (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
 
 
 @app.command(name="init")
@@ -48,13 +59,21 @@ def init_cmd(
     try:
         init_local_rl_db(db)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"DB:     [bold]{escape(db)}[/]\n"
-            f"Tables: [bold]interactions[/], [bold]thumbs[/], [bold]state[/]",
+            Text.assemble(
+                "DB:     ",
+                (strip_control(db), "bold"),
+                "\nTables: ",
+                ("interactions", "bold"),
+                ", ",
+                ("thumbs", "bold"),
+                ", ",
+                ("state", "bold"),
+            ),
             title="soup local-rl init",
         )
     )
@@ -74,12 +93,12 @@ def status_cmd(
     try:
         validate_db_path(db)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     real = os.path.abspath(db)
     if not os.path.exists(real):
-        console.print(f"[red]db not found: {escape(db)}[/]")
+        _refuse(f"db not found: {db}")
         raise typer.Exit(2)
 
     with sqlite3.connect(real) as conn:
@@ -93,7 +112,8 @@ def status_cmd(
             "SELECT COUNT(*) FROM interactions"
         ).fetchone()[0]
 
-    table = Table(title=f"soup local-rl status — {db}")
+    # A ``Text`` title does not get the table's title style, so it is named here.
+    table = Table(title=terminal_text(f"soup local-rl status — {db}", "table.title"))
     table.add_column("Metric")
     table.add_column("Count", justify="right")
     table.add_row("Interactions", str(interactions))
@@ -115,12 +135,10 @@ def record_cmd(
     try:
         record_thumb(db_path=db, prompt=prompt, response=response, thumb=thumb)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
-    console.print(
-        f"[green]Recorded {escape(thumb)} for prompt {escape(prompt[:32])}…[/]"
-    )
+    console.print(terminal_text(f"Recorded {thumb} for prompt {prompt[:32]}…", "green"))
 
 
 @app.command(name="harvest")
@@ -136,7 +154,7 @@ def harvest_cmd(
     try:
         pairs = harvest_dpo_pairs(db)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     lines = [json.dumps(dataclasses.asdict(p), ensure_ascii=False) for p in pairs]
@@ -144,14 +162,19 @@ def harvest_cmd(
     try:
         atomic_write_text(text, output, field="output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     console.print(
         Panel(
-            f"DB:     [bold]{escape(db)}[/]\n"
-            f"Output: [bold]{escape(output)}[/]\n"
-            f"Pairs:  [bold]{len(pairs)}[/]",
+            Text.assemble(
+                "DB:     ",
+                (strip_control(db), "bold"),
+                "\nOutput: ",
+                (strip_control(output), "bold"),
+                "\nPairs:  ",
+                (str(len(pairs)), "bold"),
+            ),
             title="soup local-rl harvest",
         )
     )
@@ -208,7 +231,7 @@ def train_cmd(
             train_method=train_method,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     if backend is not None:
@@ -233,18 +256,30 @@ def train_cmd(
                 output_dir=output,
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
-        files = "\n".join(f"  [bold]{escape(n)}[/]" for n in sorted(written))
+        files = Text("\n").join(
+            Text.assemble("  ", (strip_control(n), "bold")) for n in sorted(written)
+        )
         console.print(
             Panel(
-                f"Rendered the nightly-train scaffold into "
-                f"[bold]{escape(scheduler_dir)}[/]:\n{files}\n\n"
-                "[dim]Linux:[/] cp soup-local-rl.{service,timer} ~/.config/systemd/user/ "
-                "&& systemctl --user enable --now soup-local-rl.timer\n"
-                "[dim]macOS:[/] cp com.soup.local-rl.plist ~/Library/LaunchAgents/ "
-                "&& launchctl load ~/Library/LaunchAgents/com.soup.local-rl.plist\n"
-                "[dim]Now:[/] re-run with [bold]--once[/] for an ad-hoc train.",
+                Text.assemble(
+                    "Rendered the nightly-train scaffold into ",
+                    (strip_control(scheduler_dir), "bold"),
+                    ":\n",
+                    files,
+                    "\n\n",
+                    ("Linux:", "dim"),
+                    " cp soup-local-rl.{service,timer} ~/.config/systemd/user/ "
+                    "&& systemctl --user enable --now soup-local-rl.timer\n",
+                    ("macOS:", "dim"),
+                    " cp com.soup.local-rl.plist ~/Library/LaunchAgents/ "
+                    "&& launchctl load ~/Library/LaunchAgents/com.soup.local-rl.plist\n",
+                    ("Now:", "dim"),
+                    " re-run with ",
+                    ("--once", "bold"),
+                    " for an ad-hoc train.",
+                ),
                 title="soup local-rl train — scheduler scaffold",
             )
         )
@@ -257,13 +292,15 @@ def train_cmd(
             cfg, once=True, min_pairs=min_pairs, output_dir=output
         )
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
     except subprocess.SubprocessError as exc:
         # The underlying `soup train` subprocess failed (e.g. OOM / bad base).
         console.print(
             Panel(
-                f"[red]Training subprocess failed:[/] {escape(str(exc))}",
+                Text.assemble(
+                    ("Training subprocess failed:", "red"), " ", strip_control(exc)
+                ),
                 title="soup local-rl train — failed",
             )
         )
@@ -272,7 +309,7 @@ def train_cmd(
     if result.status.startswith("skipped"):
         console.print(
             Panel(
-                f"[yellow]Skipped:[/] {escape(result.reason)}",
+                Text.assemble(("Skipped:", "yellow"), " ", strip_control(result.reason)),
                 title="soup local-rl train — skipped",
             )
         )
@@ -280,9 +317,14 @@ def train_cmd(
 
     console.print(
         Panel(
-            f"Trained: [bold]{result.num_pairs}[/] pairs via "
-            f"[bold]{escape(cfg.train_method)}[/]\n"
-            f"Output:  [bold]{escape(result.output_dir or output)}[/]",
+            Text.assemble(
+                "Trained: ",
+                (str(result.num_pairs), "bold"),
+                " pairs via ",
+                (strip_control(cfg.train_method), "bold"),
+                "\nOutput:  ",
+                (strip_control(result.output_dir or output), "bold"),
+            ),
             title="soup local-rl train — done",
         )
     )

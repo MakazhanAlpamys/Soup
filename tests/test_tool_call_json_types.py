@@ -10,7 +10,8 @@ The policy implemented here is the one the issue's Expected section states:
 
 - ``tool_call_match`` gives ``0.0`` for a boolean/number substitution;
 - ``tool_call_args_subset`` keeps its ``0.5`` function-name credit and gives no argument
-  credit, so ``0.5``. Its existing ``0.5`` ``matched`` threshold is untouched;
+  credit, so ``0.5``. That row is not matched: since #2811 a row is matched only at
+  full credit;
 - numbers stay equal across forms, so ``1 == 1.0`` and ``0 == 0.0`` still match. The
   issue calls that a passing control and not a policy change.
 
@@ -137,13 +138,13 @@ class TestABooleanIsNotItsNumericTwin:
 
     def test_the_subset_scorer_keeps_exactly_its_name_credit(self) -> None:
         """CONTROL for the 0.5. Half the score is the function name matching, which is
-        unaffected; only the argument half is withheld. If this ever fell below 0.5 the
-        ``matched >= 0.5`` threshold in score_task would report the task as not matched,
-        which is a behaviour change the issue explicitly did not ask for."""
+        unaffected; only the argument half is withheld. The row is not matched: since
+        #2811 score_task counts a ``tool_call_args_subset`` row as matched only at full
+        credit, so a substituted argument is not a Correct answer."""
         result = score_task(task("tool_call_args_subset", {"enabled": True}),
                             call({"enabled": 1}))
         assert result.score == 0.5
-        assert result.matched is True, "the issue asked for no change to the 0.5 threshold"
+        assert result.matched is False
 
     def test_a_wrong_function_name_still_scores_zero_not_half(self) -> None:
         """CONTROL. The retained 0.5 is the NAME credit, so a name mismatch must still be

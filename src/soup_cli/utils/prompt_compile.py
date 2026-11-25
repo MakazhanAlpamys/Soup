@@ -31,6 +31,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
+from soup_cli.utils.jsonl_lines import jsonl_lines
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 # ---------------------------------------------------------------------------
@@ -282,7 +283,7 @@ def load_eval_examples(eval_suite_path: str) -> List[dict]:
     elif isinstance(parsed, dict):
         examples = [parsed]
     else:
-        for line in raw.splitlines():
+        for line in jsonl_lines(raw):
             line = line.strip()
             if not line:
                 continue

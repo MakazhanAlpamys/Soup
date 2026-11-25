@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.trainer.sft import SFTTrainerWrapper, console
 from soup_cli.utils.csm import validate_csm_config, validate_csm_dataset, validate_csm_row
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 
 class CSMDataCollator:
@@ -157,7 +159,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
         self.tokenizer = self.processor
         self.model = CsmForConditionalGeneration.from_pretrained(
             cfg.base,
-            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=tcfg.lora.r == 0),
+            dtype=resolve_base_load_dtype(self.device, full_finetune=tcfg.lora.r == 0),
             trust_remote_code=self._trust_remote_code,
             **base_revision_kwargs(cfg.base),
         )
@@ -200,9 +202,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
         self._batch_size = 1 if tcfg.batch_size == "auto" else tcfg.batch_size
         if tcfg.batch_size == "auto":
             console.print("[dim]Native CSM: batch_size=auto uses a conservative batch of 1.[/]")
-        output = Path(cfg.output)
-        if cfg.experiment_name:
-            output /= cfg.experiment_name
+        output = Path(training_output_dir(cfg.output, cfg.experiment_name))
         self._output_dir = str(output)
         # MPS evidence/limits: docs/training.md#native-sesame-csm (one tiny-model LoRA step).
         bf16, fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
@@ -213,7 +213,7 @@ class CSMTrainerWrapper(SFTTrainerWrapper):
             learning_rate=tcfg.lr, weight_decay=tcfg.weight_decay, max_grad_norm=tcfg.max_grad_norm,
             warmup_steps=resolve_trainer_warmup_steps(tcfg.warmup_ratio),
             optim=tcfg.optimizer, lr_scheduler_type=tcfg.scheduler,
-            logging_steps=tcfg.logging_steps, save_steps=tcfg.save_steps, save_total_limit=3,
+            logging_steps=tcfg.logging_steps, **save_kwargs(tcfg),
             bf16=bf16, fp16=fp16, use_cpu=self.device == "cpu", report_to=self.report_to,
             gradient_checkpointing=tcfg.gradient_checkpointing,
             gradient_checkpointing_kwargs={"use_reentrant": False},

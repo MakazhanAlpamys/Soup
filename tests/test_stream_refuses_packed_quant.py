@@ -32,7 +32,7 @@ import types
 import pytest
 
 _TAIL = "Layer streaming cannot dequantise it"
-_POINTER = "Point training.base at a bf16 or FP8-block copy of this model"
+_POINTER = "Point base at a bf16 or FP8-block copy of this model"
 _FP8_TAIL = "DeepSeek-V3's block FP8"
 
 #: Kimi-K2-Thinking's own quantization_config (text of its config.json, 2026-10).

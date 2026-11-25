@@ -21,8 +21,10 @@ from __future__ import annotations
 from typing import Optional
 
 from soup_cli.config.schema import SoupConfig
-
-_SUPPORTED_LOSSES: frozenset[str] = frozenset({"dpo", "simpo", "orpo", "ipo", "bco"})
+from soup_cli.utils.preference import (
+    SUPPORTED_PREFERENCE_LOSSES as _SUPPORTED_LOSSES,
+)
+from soup_cli.utils.preference import resolve_preference_loss as resolve_preference_loss
 
 
 def is_multi_objective_preference(cfg: SoupConfig) -> bool:
@@ -43,20 +45,6 @@ def get_loss_weights(cfg: SoupConfig) -> Optional[dict]:
     if weights is None:
         return None
     return dict(weights)
-
-
-def resolve_preference_loss(cfg: SoupConfig) -> Optional[str]:
-    """Return the preference loss name for a config, or ``None`` if N/A.
-
-    - ``task='preference'`` → ``training.preference_loss``.
-    - Legacy ``task in {dpo, simpo, orpo, ipo, bco}`` → that name (identity).
-    - Anything else → ``None``.
-    """
-    if cfg.task == "preference":
-        return cfg.training.preference_loss
-    if cfg.task in _SUPPORTED_LOSSES:
-        return cfg.task
-    return None
 
 
 def _make_inner_cfg(cfg: SoupConfig, loss: str) -> SoupConfig:
@@ -232,7 +220,8 @@ class PreferenceTrainerWrapper:
                         # over them. CPO / ORPO hand over policy log-probs;
                         # a dpo / ipo primary (trl's DPOTrainer) also gives
                         # the reference ones. A dpo / ipo term under a
-                        # simpo / orpo primary has no reference and refuses.
+                        # simpo / orpo primary reads an adapter-off
+                        # reference; without an adapter it refuses.
                         from soup_cli.utils.preference_combine import (
                             attach_policy_logp_capture,
                             attach_reference_logp_capture,

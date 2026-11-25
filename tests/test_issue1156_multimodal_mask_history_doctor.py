@@ -216,7 +216,7 @@ def test_mlx_reports_unread_flags_regardless_of_modality(
         backend: mlx
         modality: vision
         training:
-          seed: 42
+          use_galore: true
         data:
           train: ./data.jsonl
     """)
@@ -224,7 +224,7 @@ def test_mlx_reports_unread_flags_regardless_of_modality(
     doctor(nccl=False, disk=False, config=cfg_path)
     out = strip_ansi(capsys.readouterr().out)
     assert "Config check - task=sft backend=mlx modality=vision" in out
-    assert "training.seed" in out
+    assert "training.use_galore" in out
     assert (
         "1 setting(s) switched on here are not read on backend=mlx (modality=vision)"
         in out

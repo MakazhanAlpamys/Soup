@@ -16,6 +16,8 @@ import yaml
 from pydantic import ValidationError
 
 from soup_cli.config.loader import load_config_from_string
+from soup_cli.config.schema import SoupConfig
+from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
 from soup_cli.utils.prm import (
     KNOWN_VLM_REGEX,
     is_known_vlm_base,
@@ -321,8 +323,16 @@ class TestSchemaIntegrationVisionGRPO:
               reward_fn: accuracy
               num_generations: 2
         """).strip()
-        cfg = load_config_from_string(yml)
+        # vision_grpo is staged (#808): the schema's base probe still passes it, and
+        # the loader refuses it as of v0.77.
+        cfg = SoupConfig(**yaml.safe_load(yml))
         assert cfg.training.vision_grpo is True
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(yml)
+        assert str(excinfo.value) == (
+            "training.vision_grpo is accepted but read by nothing; "
+            f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b10e7bad5b4287de70b59bd0776c162f21da7e7cc0e2eda004dfdfc2bcc7fd24 -->
+<!-- synced-from: README.md sha256:e6a4e2a06a8102eddef79a3659b3c6d50b95498c67a4937abb04db6657305811 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -92,52 +92,38 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.76.0 — Soup が受け入れながら一度も適用していなかった設定は、読み込みを止めるようになりました。**
-検証され、文書化されていながら、設定対象と称する経路のどこからも読み取られていなかったオプションは、
-読み込み時に拒否され、設定名と変更すべき内容が示されます。それ以外は警告を出し、拒否することになる
-リリースを明示します。以前は読み込めた設定が読み込めなくなることがあります。まず
-`soup doctor --config soup.yaml` を実行してください。
+**v0.78.0 — v0.77.2 以降の `main` をそのまま切り出したリリース：プルリクエスト 271 件、うち 218 件は
+メンテナー以外の 48 人によるものです。** 新機能と、v0.77.2 が受け入れていた入力を拒否する規則を
+いくつか含みます。設定やスクリプトをアップグレードする前に
+[v0.78.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.78.0)を読んでください。0.76.x から移行する場合は、まず
+`soup doctor --config soup.yaml` を実行し、[v0.77.0 のリリースノート](https://github.com/MakazhanAlpamys/Soup/releases/tag/v0.77.0)を読んでください。
 
-- **破壊的変更: 一度も効果のなかった設定は、読み込み時に拒否されます。** 対象には、
-  `training.quantization_aware: true`（量子化対応学習は実際には一度も実行されていませんでした）、
-  `training.use_longlora`、`training.ebft_variant`、`training.gdpo_variant`、どのセットアップも読み取らない
-  場合の `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers バックエンドの
-  テキスト `sft` / `tts` 経路以外）、`auto_mixed_precision`（`sft` / `tts` 以外）、そして unsloth の
-  セットアップを持たないさらに七つのタスクでの `backend: unsloth` が含まれます。各メッセージは、該当する
-  フィールドと変更すべき内容を示します。`lr_groups`、`early_stop_patience`、`forgetting_eval_steps` など、
-  読み取られない他のつまみは、今は読み込み時に警告を出し、v0.77 から拒否されます。
-- **検証損失が評価されるようになりました。** `data.val_split` はすべての実行で行を学習から除外していましたが、
-  transformers バックエンドのどのトレーナーもそれらを評価していませんでした。今は、分割を受け取るすべての
-  タスクが、各エポックの終わりに、または `training.eval_steps` を指定した場合は N ステップごとにそれを評価し、
-  検証損失を記録します。実行時間は数パーセント長くなります。**`grpo`、`ppo`、`online_dpo` では破壊的変更です。**
-  既定では行を取り分けなくなり（`data.val_split` は注記付きで無視されます）、すべての行が学習に使われます。
-- **破壊的変更: 標準でないすべての `grpo_variant` が `grpo_beta` の KL ペナルティを適用します。**
-  `gspo`、`dapo`、`dr_grpo`、`bnpo`、`two_sided`、`rft` は `grpo_beta` を検証しながら捨てていたため、
-  既存のバリアント設定は以前の実行を再現できません。`grpo_beta: 0` は KL なしで動作し、参照モデルの
-  フォワードパスを省略するようになりました。
-- **レイヤーストリーミングは、ディスク階層をバックグラウンドスレッドでダイレクト I/O により読み込み、
-  NVMe ドライブにまたがってストライプ化できます。** RAM より大きい 36 GB の 70B 相当の NF4 ストア
-  （RTX 5070 Laptop 8 GB 搭載の一台）で、コールドステップは同期読み込みの 110.5 s から 16.2-17.3 s に短縮され、
-  `SOUP_LAYER_STREAM_STRIPE_DIRS` による 二台のドライブへの分散では 17.4 s から 9.97 s になりました
-  （持続負荷プローブ: 二ラウンド、1.28x と 1.41x、正式な判定なし。
-  [記録](benchmarks/probe-rtx5070-two-drive-sustained.md)）。RAM に収まるストアは、引き続き RAM 階層のほうが
-  高速で、`stream_source: auto` はそちらを選びます。オプトイン方式（`stream_layers: true`）で、まだ BETA です。
-  記録: [ダイレクト I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
-  [ストライピング](benchmarks/gate-two-drive-striping.md)。
-- **新しいコマンドとオプション。** `soup adapters check` は LoRA アダプターをスキャンして、サイレントな失敗を検出します。
-  `soup bench train` は決まったステップ数だけ学習し、モデルが学習していなかった場合は終了コード 1 で終了します
-  （transformers バックエンドの `task: sft` が対象です。`soup bench` はグループになり、`soup bench infer` が
-  従来の推論ベンチマークです）。`soup data clean` は、入力ファイルに触れずにデータセットをサニタイズして
-  修復します。`soup recipes verify` は、重みをダウンロードせずに meta デバイス上で、同梱のすべてのレシピが
-  LoRA アダプターを取り付けられることを確認します。`soup rewind` は、損失スパイクの原因となったデータセットの
-  行を特定します。`soup infer` には、オプトインの `--batch-size` と実験的な `--cuda-graphs` が加わりました
-  （PyTorch 2.14 以降が必要。RTX 5070 Laptop 一台、ピン留めなし、FP16 の Qwen2.5-1.5B で、これを使った最も遅い実行でも、
-  使わなかった最も速い実行より 2.9x 速くデコードできました）。`soup ab` は、分散に頑健な両側検定を実行します。
-  `soup adapters sign --backend sigstore` と `soup attest emit --sign sigstore` は、Sigstore のキーレス OIDC で
-  署名します（`pip install "soup-cli[sigstore]"`）。
+- **継続学習ループ。** `soup serve` はすべての回答に ID を付け、それに対するフィードバック
+  （高評価・評価点・修正）を受け取ります。`soup loop` はそのフィードバックから候補を学習し、
+  `soup ship --gate loop-v2` で判定し、カナリアとして動かし、自動でロールバックします。
+- **`soup ship` が数値の内訳を示します。** タスクごとの改善/悪化/変化なしの件数、行ごとの監査ファイル、
+  自分で用意した関数で採点する `--task-mode reward --reward-fn`（`.py` ファイルが実行されます）、
+  アダプターがベースをどれだけ変えるか、2 つのアダプターを比べる `--base-adapter`。
+- **新しいコマンド。** `soup eval retention`（モデルのバージョン間の忘却）、`soup data leakage`
+  （学習と評価の重複）、`soup docs search`（オフライン）、`soup prune-layer-cache`、
+  `soup eval quant-check --performance`。
+- **Apple Silicon でできることが増えました。** ネイティブ MLX のチャット、マージ、選択的な損失マスク、
+  前処理キャッシュ、語彙拡張、RoPE 拡張、密な Llama の SFT。
+- **レイヤーストリーミングでできることが増えました。** 順伝播のみの推論モード、事前量子化済み NF4 の
+  取り込み、ストリーミングしたベースでの BCO、IPO、単一の損失を指定した `task: preference` の学習。
+- **短い行に合う VRAM 見積もり。** パディングする SFT の実行は最長の行で見積もり、8 ビットの
+  チェックポイント、cuBLAS ワークスペース、蒸留の教師モデルを計上し、事前チェックは収まりを確認しない理由を
+  表示します。
+- **新しいレシピ 8 件**（合計 181 件）と、Qwen2 QLoRA SFT 向けの Triton カーネルライブラリ（設定キーなし）。
+- **テキストを入力どおりに表示。** さらに数十のコマンドが、パスと名前を、角括弧と `:name:` のテキストを
+  保ったまま、端末制御文字を取り除いて表示します。
 
-> Python は **3.11–3.13** のみ対応です。3.14 以降では、pip がテストされていない PyTorch の wheel を解決し、
-> Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
+**知っておくべき挙動の変更。** `training` の数値フィールドへの真偽値は拒否されます。`--push-as` は
+リポジトリを非公開で作成します（変えるには `--push-public`）。MLX、`prm`、`unlearn`、
+`moe_lora_routing` で有効にした eval gate は拒否されます。`soup serve --max-tokens` の上限は 16384 です。
+`soup adapters merge` の重みと `tool_call_args_subset` のスコアが変わったため、マージや ship の判定が
+変わることがあります。`soup ship` が書き出す証拠ファイルは、行ごと・関数採点・judge の新しい詳細を含む場合にバージョン 2
+となり、v0.77.x はそれを拒否します。
 
 過去のハイライトは [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) ページにあります。
 
@@ -302,6 +288,7 @@ soup train  --config soup.yaml        # 学習（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO
 soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # バッチ推論
 soup chat   --model ./output          # 対話型チャット
 soup serve  --model ./output          # OpenAI 互換 API サーバー
+soup serve  --backend mlx --model ./mlx-output  # Apple Silicon 上のネイティブな密モデル / LoRA
 soup ui                               # ローカルのブラウザダッシュボード
 soup merge  --adapter ./output        # LoRA をベースモデルにマージ
 soup export --model ./output --format gguf           # デプロイ用にエクスポート
@@ -337,7 +324,7 @@ CUDA や PyTorch をローカルにインストールせずに Soup を実行で
 
 ```bash
 docker pull ghcr.io/makazhanalpamys/soup:latest
-docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml
+docker run --gpus all -v $(pwd):/workspace ghcr.io/makazhanalpamys/soup train --config soup.yaml --yes
 docker compose up   # またはローカルでビルド
 ```
 

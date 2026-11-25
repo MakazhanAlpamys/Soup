@@ -1,0 +1,20 @@
+{
+  "args": {
+    "all": false,
+    "dry_run": false,
+    "model": "/workspace/payload/benchmarks/harness/ds_compare/model",
+    "only": null,
+    "part": "part3",
+    "phases": null,
+    "preflight": false,
+    "results": "/workspace/out/results"
+  },
+  "budget_usd": null,
+  "deadline_epoch": 1794068410.0,
+  "model": "/workspace/payload/benchmarks/harness/ds_compare/model",
+  "model_revision": "d10aef7999a2b5ba950ab3974312feeedbfe0b77",
+  "part": "part3",
+  "plan_slots": 15,
+  "rate_usd_per_hour": null,
+  "started": 1794058682.0394123
+}

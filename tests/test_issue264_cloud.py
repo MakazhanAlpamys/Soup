@@ -3,9 +3,12 @@ from pathlib import Path
 import pytest
 
 _SOUP_YAML = (
+    # A Hub id, not a local file: `--cloud` ships only the config, so a config
+    # naming a local data file is refused at plan time (#1430). These tests are
+    # about cloud plumbing, and the data is never fetched at plan time.
     "base: hf-internal-testing/tiny-random-gpt2\n"
     "task: sft\n"
-    "data:\n  train: data.jsonl\n  format: chatml\n"
+    "data:\n  train: teknium/OpenHermes-2.5\n  format: chatml\n"
     "output: ./out\n"
 )
 
@@ -67,7 +70,7 @@ class TestRenderLambdaLabsStub:
         compile(stub, "soup_lambda_app.py", "exec")
         namespace = {"__name__": "test"}
         exec(stub, namespace)
-        payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
+        payload = namespace["_launch_payload"]("us-tx-1", "registered-key", "test-name")
         assert payload["user_data"] == namespace["_USER_DATA"]
         assert "soup-cli[train]==0.71.22" in payload["user_data"]
         assert payload["ssh_key_names"] == ["registered-key"]
@@ -92,6 +95,8 @@ class TestRenderLambdaLabsStub:
         )
         namespace = {"__name__": "test"}
         exec(stub, namespace)
+        # ssh and scp count as installed wherever this runs.
+        namespace["_find_tool"] = lambda name: "/usr/bin/" + name
         requests = []
 
         def fake_request(api_key, path, *, method="GET", payload=None):
@@ -274,7 +279,7 @@ class TestCloudNoSecrets:
 
         namespace = {"__name__": "test"}
         exec(stub_lambda, namespace)
-        payload = namespace["_launch_payload"]("us-tx-1", "registered-key")
+        payload = namespace["_launch_payload"]("us-tx-1", "registered-key", "test-name")
         payload_str = str(payload)
         assert secret not in payload_str
         assert hf_token not in payload_str

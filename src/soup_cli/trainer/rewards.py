@@ -17,21 +17,25 @@ import json
 import math
 import os
 import re
-import shutil as _shutil
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from soup_cli.utils import final_answer
+from soup_cli.utils.process_tree import ProcessTree, popen_kwargs
+from soup_cli.utils.terminal import strip_control as for_terminal
 
 console = Console()
 
@@ -48,6 +52,9 @@ _CODE_EXEC_WARNING_SHOWN = False
 
 # Cached isolation strategy — recomputed on demand when tests reset to None
 _ISOLATION_STRATEGY_CACHE: "str | None" = None
+
+# macOS ships sandbox-exec at this fixed location; it is run from there only.
+_MACOS_SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
 # macOS sandbox-exec profile: default-deny, allow narrow process needs, block
 # network and writes outside /tmp. Defence-in-depth on top of RLIMIT + socket
@@ -100,6 +107,8 @@ def _get_safe_sandbox_env() -> dict[str, str]:
         "SYSTEMDRIVE",
         "WINDIR",
         "PATHEXT",
+        # Keeps the current directory out of the Windows program search.
+        "NODEFAULTCURRENTDIRECTORYINEXEPATH",
         "COMSPEC",
         "TEMP",
         "TMP",
@@ -125,8 +134,8 @@ def _compute_isolation_strategy() -> str:
         will best-effort `unshare(CLONE_NEWUSER|CLONE_NEWNET|CLONE_NEWPID)` in
         the child preexec_fn. Falls back at runtime if unprivileged user
         namespaces are disabled (EPERM/ENOSYS).
-      - "sandbox-exec" : macOS with `sandbox-exec` binary on PATH — we wrap
-        argv with `sandbox-exec -p <profile>`.
+      - "sandbox-exec" : macOS with ``/usr/bin/sandbox-exec`` — we wrap argv
+        with `sandbox-exec -p <profile>`.
       - "best-effort" : everything else (Windows, restricted Linux). Existing
         RLIMIT + socket-patch + ephemeral-cwd guards still apply.
 
@@ -135,7 +144,11 @@ def _compute_isolation_strategy() -> str:
     """
     if sys.platform == "linux" and hasattr(os, "unshare"):
         return "namespaces"
-    if sys.platform == "darwin" and _shutil.which("sandbox-exec") is not None:
+    if (
+        sys.platform == "darwin"
+        and os.path.isfile(_MACOS_SANDBOX_EXEC)
+        and os.access(_MACOS_SANDBOX_EXEC, os.X_OK)
+    ):
         return "sandbox-exec"
     return "best-effort"
 
@@ -375,6 +388,58 @@ class SandboxProcessResult:
     launch_failed: bool = False
 
 
+class SandboxIsolationError(PermissionError):
+    """A strict sandbox run could not start its isolated child.
+
+    Raised by ``_run_code_sandbox(..., strict_namespaces=True)`` when the child
+    fails to launch because the Linux namespaces could not be set up in the
+    pre-exec hook. The code did not run. (A ``sandbox-exec`` wrapper that fails
+    on macOS is a non-zero exit of a launched child, not this error.)
+    """
+
+
+#: How long removing the sandbox directory is retried while something still holds it.
+_DIRECTORY_RELEASE_SECONDS = 2.0
+
+
+def _remove_directory(path: str, wait_seconds: float) -> None:
+    """Remove ``path``, retrying while a process that was just ended still holds it.
+
+    Windows releases a working directory a moment after the process that used it has
+    ended. Never raises: a directory that is still held after ``wait_seconds`` is left
+    behind, because one completion must not abort a training run.
+    """
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                shutil.rmtree(path, ignore_errors=True)
+                return
+            time.sleep(0.02)
+
+
+@contextlib.contextmanager
+def _sandbox_directory():
+    """A fresh working directory for one sandboxed run, removed (with retries) afterwards.
+
+    ``TemporaryDirectory`` makes the first attempt (it also resets the permissions of
+    read-only files and directories the code left behind) and never raises here; a
+    directory that a just-ended process still held at that moment is then retried.
+    """
+    created = tempfile.TemporaryDirectory(prefix="soup-sandbox-", ignore_cleanup_errors=True)
+    try:
+        yield created.name
+    finally:
+        created.cleanup()
+        if os.path.isdir(created.name):
+            _remove_directory(created.name, _DIRECTORY_RELEASE_SECONDS)
+
+
 def _run_sandboxed_subprocess(
     argv: list[str],
     preexec_fn: Callable[[], None] | None = None,
@@ -382,15 +447,22 @@ def _run_sandboxed_subprocess(
     timeout_seconds: int = CODE_EXEC_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
 ) -> SandboxProcessResult:
-    """Execute a sandboxed subprocess under concurrency limit with streaming kill-on-overflow."""
+    """Execute a sandboxed subprocess under concurrency limit with streaming kill-on-overflow.
+
+    The child runs as a :class:`~soup_cli.utils.process_tree.ProcessTree`: when it times
+    out, floods its output, or simply exits, the processes it started are ended with it,
+    so none outlives the call, keeps the output pipes open or (Windows) keeps the
+    sandbox directory in use. The directory is removed afterwards with retries; one that
+    is still held is left behind rather than raising: one completion must not abort a
+    training run.
+    """
     if _get_isolation_strategy() == "sandbox-exec" and sys.platform == "darwin":
-        sandbox_bin = _shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
-        argv = [sandbox_bin, "-p", MACOS_SANDBOX_PROFILE, *argv]
+        argv = [_MACOS_SANDBOX_EXEC, "-p", MACOS_SANDBOX_PROFILE, *argv]
 
     if env is None:
         env = _get_safe_sandbox_env()
 
-    with _SANDBOX_SEMAPHORE, tempfile.TemporaryDirectory(prefix="soup-sandbox-") as tmpdir:
+    with _SANDBOX_SEMAPHORE, _sandbox_directory() as tmpdir:
         try:
             proc = subprocess.Popen(
                 argv,
@@ -399,6 +471,7 @@ def _run_sandboxed_subprocess(
                 cwd=tmpdir,
                 preexec_fn=preexec_fn,
                 env=env,
+                **popen_kwargs(),
             )
         except (PermissionError, OSError, subprocess.SubprocessError) as exc:
             return SandboxProcessResult(
@@ -408,82 +481,178 @@ def _run_sandboxed_subprocess(
                 launch_failed=True,
             )
 
-        stdout_chunks: list[bytes] = []
-        stderr_chunks: list[bytes] = []
-        output_exceeded = False
-        lock = threading.Lock()
-
-        def _reader(stream, chunks: list[bytes]) -> None:
-            nonlocal output_exceeded
-            try:
-                while True:
-                    chunk = stream.read(4096)
-                    if not chunk:
-                        break
-                    with lock:
-                        chunks.append(chunk)
-                        total = sum(len(c) for c in stdout_chunks) + sum(
-                            len(c) for c in stderr_chunks
-                        )
-                        if total > max_output_bytes:
-                            output_exceeded = True
-                            with contextlib.suppress(Exception):
-                                proc.kill()
-                            break
-            finally:
-                stream.close()
-
-        t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_chunks))
-        t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_chunks))
-        t_out.daemon = True
-        t_err.daemon = True
-        t_out.start()
-        t_err.start()
-
         try:
-            proc.wait(timeout=timeout_seconds)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            timed_out = True
+            tree = ProcessTree(proc)
+        except BaseException:
+            # No tree to end it with: do not leave the child running.
             with contextlib.suppress(Exception):
                 proc.kill()
-            with contextlib.suppress(Exception):
                 proc.wait(timeout=1.0)
-
-        t_out.join(timeout=1.0)
-        t_err.join(timeout=1.0)
-
-        if timed_out:
-            return SandboxProcessResult(None, "", "", timed_out=True)
-
-        if output_exceeded:
-            return SandboxProcessResult(
-                proc.returncode if proc.returncode is not None else 1,
-                "",
-                "sandbox output exceeded limit",
-                output_exceeded=True,
-            )
-
-        raw_out = b"".join(stdout_chunks)
-        raw_err = b"".join(stderr_chunks)
-        if len(raw_out) + len(raw_err) > max_output_bytes:
-            return SandboxProcessResult(
-                proc.returncode if proc.returncode is not None else 1,
-                "",
-                "sandbox output exceeded limit",
-                output_exceeded=True,
-            )
-
-        stdout = raw_out.decode("utf-8", errors="replace").strip()
-        stderr = raw_err.decode("utf-8", errors="replace").strip()
-        return SandboxProcessResult(proc.returncode, stdout, stderr)
+            for stream in (proc.stdout, proc.stderr):
+                with contextlib.suppress(Exception):
+                    stream.close()
+            raise
+        try:
+            return _collect_sandbox_result(proc, tree, max_output_bytes, timeout_seconds)
+        finally:
+            # Also reached when the caller is interrupted: nothing the child started
+            # is left running, and (Windows) the job has released the directory.
+            tree.kill()
+            if sys.platform != "win32":
+                # An unreaped leader still answers the group probe, so without this
+                # ``wait_gone`` would spend all of its time on an interrupted run.
+                with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                    proc.wait(timeout=_REAP_SECONDS)
+            tree.wait_gone(_PROCESS_TREE_GONE_SECONDS)
+            tree.close()
 
 
-def _run_code_sandbox(code: str) -> "str | None":
+#: Longest wait, after the kill, for the processes of a Windows job to release the
+#: sandbox directory before it is removed.
+_PROCESS_TREE_GONE_SECONDS = 2.0
+#: Longest wait for a killed child to be reaped (POSIX); SIGKILL ends it at once.
+_REAP_SECONDS = 1.0
+#: Longest wait for a reader thread to reach end-of-file once the tree has been ended.
+_READER_JOIN_SECONDS = 1.0
+
+
+def _collect_sandbox_result(
+    proc: subprocess.Popen,
+    tree: ProcessTree,
+    max_output_bytes: int,
+    timeout_seconds: int,
+) -> SandboxProcessResult:
+    """Read ``proc``'s output until it ends, is killed for running too long, or floods."""
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    output_exceeded = False
+    lock = threading.Lock()
+
+    def _reader(stream, chunks: list[bytes]) -> None:
+        nonlocal output_exceeded
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    break
+                with lock:
+                    chunks.append(chunk)
+                    total = sum(len(c) for c in stdout_chunks) + sum(
+                        len(c) for c in stderr_chunks
+                    )
+                    if total > max_output_bytes:
+                        output_exceeded = True
+                        with contextlib.suppress(Exception):
+                            proc.kill()
+                        break
+        finally:
+            stream.close()
+
+    t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_chunks))
+    t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_chunks))
+    t_out.daemon = True
+    t_err.daemon = True
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout_seconds)
+        timed_out = False
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    # Whether the child ended or ran too long, end everything it started before the
+    # readers are joined: a process that is still holding the pipes open would keep
+    # them from reaching end-of-file.
+    tree.kill()
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=1.0)
+
+    t_out.join(timeout=_READER_JOIN_SECONDS)
+    t_err.join(timeout=_READER_JOIN_SECONDS)
+
+    if timed_out:
+        return SandboxProcessResult(None, "", "", timed_out=True)
+
+    if output_exceeded:
+        return SandboxProcessResult(
+            proc.returncode if proc.returncode is not None else 1,
+            "",
+            "sandbox output exceeded limit",
+            output_exceeded=True,
+        )
+
+    raw_out = b"".join(stdout_chunks)
+    raw_err = b"".join(stderr_chunks)
+    if len(raw_out) + len(raw_err) > max_output_bytes:
+        return SandboxProcessResult(
+            proc.returncode if proc.returncode is not None else 1,
+            "",
+            "sandbox output exceeded limit",
+            output_exceeded=True,
+        )
+
+    stdout = raw_out.decode("utf-8", errors="replace").strip()
+    stderr = raw_err.decode("utf-8", errors="replace").strip()
+    return SandboxProcessResult(proc.returncode, stdout, stderr)
+
+
+# The program ``/v1/tools/python`` starts: the network guard, then the caller's
+# code, which arrives as the next argument and is compiled under the file name
+# ``<code>`` so a traceback gives the caller's own line numbers. As before, the
+# code runs in the child's ``__main__`` namespace, and ``pop`` leaves
+# ``sys.argv`` as ``['-c']``.
+_CODE_TOOL_PROGRAM = (
+    SANDBOX_NETWORK_GUARD
+    + "import sys\n"
+    + "exec(compile(sys.argv.pop(1), '<code>', 'exec'))\n"
+)
+
+
+def _run_python_sandboxed(
+    program_args: list[str], strict_namespaces: bool
+) -> SandboxProcessResult:
+    """Start ``python -I -S *program_args`` in the sandbox and return its result.
+
+    With ``strict_namespaces``, a child that could not start raises
+    :class:`SandboxIsolationError` instead of returning a ``launch_failed`` result.
+    """
+    _show_code_exec_warning_once()
+
+    preexec: Callable[[], None] | None = None
+    if sys.platform != "win32":
+        preexec = (
+            partial(_apply_rlimit, strict_namespaces=True)
+            if strict_namespaces
+            else _apply_rlimit
+        )
+
+    argv: list[str] = [sys.executable, "-I", "-S", *program_args]
+
+    result = _run_sandboxed_subprocess(argv, preexec)
+    if strict_namespaces and result.launch_failed:
+        raise SandboxIsolationError(result.stderr)
+    return result
+
+
+def _run_code_sandbox_process(
+    code: str, strict_namespaces: bool = False
+) -> SandboxProcessResult:
+    """Run code in a subprocess sandbox and return the complete SandboxProcessResult.
+
+    Used by ``soup serve``'s ``/v1/tools/python`` to report full process diagnostics
+    (stdout, stderr, exit_code, timed_out). Tracebacks name the code ``<code>`` and
+    give its own line numbers.
+    """
+    return _run_python_sandboxed(["-c", _CODE_TOOL_PROGRAM, code], strict_namespaces)
+
+
+def _run_code_sandbox(code: str, strict_namespaces: bool = False) -> "str | None":
     """Run code in a subprocess sandbox with timeout, rlimits, and output caps.
 
     Security posture (best-effort, NOT a strong sandbox):
-    - Hard wall-clock timeout via subprocess.
+    - Hard wall-clock timeout via subprocess; on timeout, on an output flood and on
+      exit the processes the code started are ended with it (a process group on
+      POSIX, a job object on Windows; see ``utils/process_tree.py``).
     - POSIX ``RLIMIT_AS`` (address space) and ``RLIMIT_CPU`` via preexec_fn.
     - Output truncated to ``MAX_CODE_OUTPUT_BYTES``.
     - Python-level socket monkey-patch (bypassable via os.system / ctypes).
@@ -491,18 +660,24 @@ def _run_code_sandbox(code: str) -> "str | None":
       the child's default relative writes land in an ephemeral sandbox dir.
     - Uses ``python -I -S`` to disable site packages and user customization.
 
+    ``strict_namespaces`` (default off) is for ``soup serve``'s
+    ``/v1/tools/python``: as in ``_run_bash_sandbox``, a failed namespace
+    ``unshare`` under the ``namespaces`` strategy stops the launch instead of
+    falling back, and a launch failure raises :class:`SandboxIsolationError`
+    instead of returning None. The reward and recipe callers keep the default,
+    which runs the code without the namespaces where they cannot be created.
+
     Returns stdout string or None on failure.
     """
-    _show_code_exec_warning_once()
-
-    wrapped = SANDBOX_NETWORK_GUARD + "\n" + code
-
-    preexec = _apply_rlimit if sys.platform != "win32" else None
-
-    argv: list[str] = [sys.executable, "-I", "-S", "-c", wrapped]
-
-    result = _run_sandboxed_subprocess(argv, preexec)
-    if result.returncode != 0 or result.timed_out or result.output_exceeded or result.launch_failed:
+    result = _run_python_sandboxed(
+        ["-c", SANDBOX_NETWORK_GUARD + "\n" + code], strict_namespaces
+    )
+    if (
+        result.returncode != 0
+        or result.timed_out
+        or result.output_exceeded
+        or result.launch_failed
+    ):
         return None
     return result.stdout
 
@@ -523,7 +698,10 @@ def _run_bash_sandbox(command: str) -> SandboxProcessResult:
     def preexec() -> None:
         _apply_rlimit(strict_namespaces=True)
 
-    bash_bin = _shutil.which("bash") or "/bin/bash"
+    from soup_cli.utils.tool_paths import find_tool
+
+    # bash from an absolute PATH directory, else the system one.
+    bash_bin = find_tool("bash") or "/bin/bash"
     argv: list[str] = [bash_bin, "-c", command]
 
     result = _run_sandboxed_subprocess(argv, preexec)
@@ -656,9 +834,19 @@ VERIFIABLE_DOMAINS: dict[str, Callable] = {
 }
 
 
+#: A reward function that carries this attribute set to True may score a
+#: completion ``None``: no score, which TRL 0.29 turns into NaN and leaves out of
+#: the logged mean (#2047). Every other reward must return finite numbers.
+REWARD_MAY_RETURN_NONE = "_soup_reward_may_return_none"
+
+
 def _validated_reward_fn(reward_fn: Callable) -> Callable:
-    """Wrap one reward function with TRL's one-score-per-completion contract."""
+    """Wrap one reward function with TRL's one-score-per-completion contract.
+
+    ``None`` passes only for a reward that declares :data:`REWARD_MAY_RETURN_NONE`.
+    """
     reward_name = getattr(reward_fn, "__name__", "reward_fn")
+    allows_none = getattr(reward_fn, REWARD_MAY_RETURN_NONE, False) is True
 
     @wraps(reward_fn)
     def checked(*args: Any, **kwargs: Any) -> Any:
@@ -688,6 +876,8 @@ def _validated_reward_fn(reward_fn: Callable) -> Callable:
                 "score per completion and verify the required dataset columns"
             )
         for index, reward in enumerate(rewards):
+            if reward is None and allows_none:
+                continue
             if isinstance(reward, bool):
                 raise ValueError(
                     f"Reward function {reward_name!r} returned boolean score at "
@@ -746,6 +936,13 @@ def load_reward_fn(
         )
         return VERIFIABLE_DOMAINS[verifiable_domain]
 
+    if reward_fn_spec == "judge_rank":
+        raise ValueError(
+            "judge_rank needs a GRPO config: it is built from training.grpo_judge and "
+            "the other training.grpo_judge_* fields, so it runs only as a task: grpo "
+            "reward (#2047)"
+        )
+
     # Built-in reward function
     if reward_fn_spec in BUILTIN_REWARDS:
         console.print(f"[dim]Using built-in reward function: {reward_fn_spec}[/]")
@@ -756,7 +953,7 @@ def load_reward_fn(
     if reward_path.exists() and reward_path.suffix == ".py":
         console.print(
             f"[bold yellow]Warning:[/] Loading custom reward function from: "
-            f"[bold]{reward_path.resolve()}[/]\n"
+            f"[bold]{escape(for_terminal(str(reward_path.resolve())))}[/]\n"
             f"[yellow]This will execute arbitrary Python code. "
             f"Only use reward files you trust.[/]"
         )
@@ -781,7 +978,10 @@ def load_reward_fn(
 
 
 def load_reward_fns(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
+    *,
+    builders: "Mapping[str, Callable[[], Callable]] | None" = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
@@ -796,6 +996,10 @@ def load_reward_fns(
     by ``__name__`` in the ``rm_ensemble`` capture buffer, silently shrinking the
     ensemble). A ``.py`` path containing a literal comma is not supported — rename
     the file.
+
+    ``builders`` maps a segment name to a function that builds that reward from
+    the caller's config (GRPO's ``judge_rank``, #2047); every other segment goes
+    through :func:`load_reward_fn`.
     """
     if not isinstance(reward_fn_spec, str):
         raise ValueError(
@@ -818,4 +1022,9 @@ def load_reward_fns(
                 "duplicate rewards collide in the ensemble"
             )
         seen.add(seg)
-    return [load_reward_fn(seg, verifiable_domain=verifiable_domain) for seg in segments]
+    builders = builders or {}
+    return [
+        builders[seg]() if seg in builders
+        else load_reward_fn(seg, verifiable_domain=verifiable_domain)
+        for seg in segments
+    ]

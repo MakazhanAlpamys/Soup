@@ -60,6 +60,10 @@ _LLAMA_ENV_ALLOWLIST = frozenset(
         "LC_CTYPE",
         "TERM",
         "COLORTERM",
+        # Windows needs these to start a program, and to find the ones it starts.
+        "SYSTEMROOT",
+        "PATHEXT",
+        "NoDefaultCurrentDirectoryInExePath",
         # llama.cpp-recognised toggles.
         "LLAMA_CPP_HOME",
         "GGML_CUDA",
@@ -70,8 +74,13 @@ _LLAMA_ENV_ALLOWLIST = frozenset(
 
 
 def _filtered_env() -> dict:
-    """Return a minimal env for the child binary."""
-    return {k: v for k, v in os.environ.items() if k in _LLAMA_ENV_ALLOWLIST}
+    """Return a minimal env for the child binary.
+
+    Names are matched as the OS matches them: ignoring case on Windows.
+    """
+    from soup_cli.utils.tool_paths import filtered_environment
+
+    return filtered_environment(_LLAMA_ENV_ALLOWLIST, os.environ)
 
 
 def _run(subcommand: str, raw_args: list[str]) -> None:

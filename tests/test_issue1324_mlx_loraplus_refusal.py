@@ -94,7 +94,7 @@ def test_train_dry_run_exits_nonzero_on_mlx_loraplus(tmp_path: Path):
 
 @pytest.mark.parametrize(
     "task, data_format",
-    [("ipo", "dpo"), ("kto", "kto"), ("pretrain", "plaintext"), ("embedding", "alpaca")],
+    [("ipo", "dpo"), ("ppo", "dpo"), ("pretrain", "plaintext"), ("embedding", "alpaca")],
 )
 def test_a_task_mlx_cannot_run_is_refused_for_that_first(task, data_format):
     """The MLX task gate runs first: switching backend is the whole fix there."""

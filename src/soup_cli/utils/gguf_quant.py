@@ -337,7 +337,8 @@ def _resolve_quantize_binary(llama_cpp_dir: str) -> Path:
     ]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            # Absolute, so the binary runs from this directory even when it is ".".
+            return Path(os.path.abspath(candidate))
     raise FileNotFoundError(
         f"llama-quantize binary not found under {llama_cpp_dir!r}. "
         "Build llama.cpp with cmake first."
@@ -359,7 +360,8 @@ def _resolve_imatrix_binary(llama_cpp_dir: str) -> Path:
     ]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            # Absolute, so the binary runs from this directory even when it is ".".
+            return Path(os.path.abspath(candidate))
     raise FileNotFoundError(
         f"llama-imatrix binary not found under {llama_cpp_dir!r}. "
         "Build llama.cpp tools with `cmake --build . --target llama-imatrix` "
@@ -581,6 +583,11 @@ def export_advanced_gguf(
             f"Unknown gguf flavour {flavour!r}. "
             "See ALL_ADVANCED_GGUF_FORMATS."
         )
+    # The check above matches case-insensitively, but the imatrix table and the
+    # ``UD-`` prefix strip below compare exact strings: ``iq2_m`` skipped the
+    # importance matrix (and ignored --calibration-data) that ``IQ2_M`` gets, and
+    # ``ud-iq2_m`` reached llama-quantize with its prefix. Use the canonical name.
+    flavour = cast(str, _resolve_canonical(flavour))
 
     _enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
     _enforce_under_cwd_and_no_symlink(output_path, "output_path")

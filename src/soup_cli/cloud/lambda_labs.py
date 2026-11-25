@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shlex
 import sys
 import types
 from collections.abc import Callable, Mapping
@@ -49,7 +50,9 @@ _LAMBDA_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 # environment it needs, listed here by name:
 #   * the Lambda variables the rendered controller reads in ``main()``;
 #   * the OS variables ``ssh`` / ``scp`` and ``os.path.expanduser`` use to find
-#     the executables, the home directory (keys, known_hosts) and temp files;
+#     the executables, the home directory (keys, known_hosts) and temp files,
+#     with the Windows executable extensions and the setting that keeps the
+#     current directory out of the Windows program search;
 #   * ``SSH_AUTH_SOCK``, so a passphrase-protected key still works under
 #     ``BatchMode=yes``;
 #   * the proxy and certificate variables ``urllib`` / ``ssl`` read for the
@@ -64,6 +67,8 @@ _CONTROLLER_ENV_NAMES: frozenset[str] = frozenset({
     "LAMBDA_SSH_PRIVATE_KEY",
     "LAMBDA_REGION",
     "PATH",
+    "PATHEXT",
+    "NoDefaultCurrentDirectoryInExePath",
     "HOME",
     "USERPROFILE",
     "HOMEDRIVE",
@@ -112,6 +117,8 @@ def _validate_remote_output(value: object) -> str:
     path = PurePosixPath(output)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("Lambda output_dir must be a relative path without '..'")
+    if any(part.startswith("-") for part in path.parts):
+        raise ValueError("Lambda output_dir parts must not start with '-'")
     if not _REMOTE_OUTPUT_RE.fullmatch(output):
         raise ValueError(
             "Lambda output_dir may contain only letters, digits, '.', '_', '-', and '/'"
@@ -146,12 +153,17 @@ def render_lambda_stub(
             f"and be <= {_MAX_VERSION_LEN} chars"
         )
 
+    from soup_cli.utils.tool_paths import controller_source
+
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     pip_spec = f"soup-cli[train]=={soup_version}"
     user_data = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "mkdir -p /home/ubuntu/soup\n"
+        # #2234 - the log exists before the first step that can fail, so a failed
+        # install is visible in the tail the controller fetches on a non-zero exit.
+        ": > /home/ubuntu/soup/train.log\n"
         "finish() {\n"
         "  rc=$?\n"
         "  printf '%s\\n' \"$rc\" > /home/ubuntu/soup.exit\n"
@@ -160,12 +172,12 @@ def render_lambda_stub(
         "  exit \"$rc\"\n"
         "}\n"
         "trap finish EXIT\n"
-        "apt-get update\n"
-        "apt-get install -y python3-pip\n"
-        f"python3 -m pip install {pip_spec!r}\n"
+        "apt-get update 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        "apt-get install -y python3-pip 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
+        f"python3 -m pip install {pip_spec!r} 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
-        "soup train --config soup.yaml --yes 2>&1 | tee /home/ubuntu/soup/train.log\n"
+        "soup train --config soup.yaml --yes 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
     )
 
     lines = [
@@ -175,11 +187,33 @@ def render_lambda_stub(
         "import os",
         "import pathlib",
         "import re",
+        "import signal",
         "import subprocess",
         "import sys",
         "import time",
         "import urllib.error",
         "import urllib.request",
+        "import uuid",
+        "",
+        # ssh and scp are found and given their environment the way soup runs every
+        # external program (soup_cli/utils/tool_paths.py); this script runs without
+        # soup_cli, so it carries their source.
+        *controller_source().splitlines(),
+        "",
+        "_find_tool = find_tool",
+        "_MISSING_TOOLS = 'OpenSSH ssh and scp must be installed and on PATH before Lambda "
+        "submission.'",
+        "",
+        "def _tool(name):",
+        "    path = _find_tool(name)",
+        "    if path is None:",
+        "        raise RuntimeError(_MISSING_TOOLS)",
+        "    return path",
+        "",
+        "def _tool_environment():",
+        "    # ssh and scp get the controller's environment without the Lambda API key,",
+        "    # which they do not use.",
+        "    return tool_environment(drop=('LAMBDA_API_KEY',))",
         "",
         "# Started with -I, which ignores PYTHONIOENCODING and PYTHONUTF8: replace what the",
         "# output encoding cannot show, so a log line is printed rather than raising.",
@@ -195,6 +229,14 @@ def render_lambda_stub(
         '_REGION_RE = re.compile(r"^[a-z0-9-]{1,64}$")',
         '_INSTANCE_ID_RE = re.compile(r"^[a-z0-9-]+$")',
         "",
+        "class _LambdaAPIError(RuntimeError):",
+        "    def __init__(self, message: str, status: int, method: str) -> None:",
+        "        super().__init__(message)",
+        "        self.status = status",
+        "        self.method = method",
+        "        # A 4xx (except 408) on the launch POST means no instance was created.",
+        "        self.create_rejected = method == 'POST' and 400 <= status < 500 and status != 408",
+        "",
         "def _request_json(api_key, path, *, method='GET', payload=None):",
         "    data = None if payload is None else json.dumps(payload).encode('utf-8')",
         "    request = urllib.request.Request(_API_BASE + path, data=data, method=method)",
@@ -206,16 +248,18 @@ def render_lambda_stub(
         "            return json.loads(response.read().decode('utf-8'))",
         "    except urllib.error.HTTPError as exc:",
         "        detail = exc.read().decode('utf-8', errors='replace')",
-        "        raise RuntimeError(",
-        "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}'",
+        "        raise _LambdaAPIError(",
+        "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}',",
+        "            exc.code, method,",
         "        ) from exc",
         "",
-        "def _launch_payload(region, ssh_key_name):",
+        "def _launch_payload(region, ssh_key_name, name):",
         "    return {",
         "        'region_name': region,",
         "        'instance_type_name': _INSTANCE_TYPE,",
         "        'ssh_key_names': [ssh_key_name],",
         "        'user_data': _USER_DATA,",
+        "        'name': name,",
         "    }",
         "",
         "def _wait_for_ip(api_key, instance_id):",
@@ -241,14 +285,41 @@ def render_lambda_stub(
         "            record = _request_json(",
         "                api_key, f'/instances/{instance_id}',",
         "            ).get('data', {})",
-        "        except RuntimeError as exc:",
-        "            if 'HTTP 404' in str(exc):",
+        "        except _LambdaAPIError as exc:",
+        "            if exc.status == 404:",
         "                return",
         "            raise",
         "        if record.get('status') == 'terminated':",
         "            return",
         "        time.sleep(5)",
         "    raise RuntimeError('Lambda did not confirm termination within 5 minutes')",
+        "",
+        "def _valid_instance_id(value):",
+        "    return isinstance(value, str) and _INSTANCE_ID_RE.fullmatch(value) is not None",
+        "",
+        "def _recover_created(api_key, name):",
+        "    \"\"\"A lost POST response must not cause another POST or delete "
+        "unrelated instances.\"\"\"",
+        "    deadline = time.monotonic() + 60",
+        "    while time.monotonic() < deadline:",
+        "        records = _request_json(api_key, '/instances')",
+        "        if not isinstance(records, dict) or not isinstance(",
+        "            records.get('data'), list",
+        "        ):",
+        "            raise RuntimeError(",
+        "                'Lambda could not reconcile the launch; check the console'",
+        "            )",
+        "        found = [",
+        "            item.get('id') for item in records['data']",
+        "            if isinstance(item, dict) and item.get('name') == name",
+        "        ]",
+        "        if found:",
+        "            if not all(_valid_instance_id(instance_id) for instance_id in found):",
+        "                raise RuntimeError('Lambda returned an invalid matching instance ID')",
+        "            return list(dict.fromkeys(found))",
+        "        time.sleep(5)",
+        "    raise RuntimeError('Lambda launch result is unknown; check the console')",
+        "",
         "_SSH_OUTAGE_WINDOW = 900",
         "_SCP_RETRY_WINDOW = 900",
         "_LOG_TAIL_LINES = 50",
@@ -271,9 +342,9 @@ def render_lambda_stub(
         "    cmd = f'tail -n {_LOG_TAIL_LINES} /home/ubuntu/soup/train.log'",
         "    try:",
         "        res = subprocess.run(",
-        "            ['ssh', *common, f'ubuntu@{ip}', cmd],",
+        "            [_tool('ssh'), *common, f'ubuntu@{ip}', cmd],",
         "            check=False, capture_output=True, encoding='utf-8', errors='replace',",
-        "            timeout=_LOG_FETCH_TIMEOUT,",
+        "            timeout=_LOG_FETCH_TIMEOUT, env=_tool_environment(),",
         "        )",
         "        if res.returncode != 0:",
         "            err_lines = res.stderr.strip().splitlines()",
@@ -310,14 +381,16 @@ def render_lambda_stub(
         '        \'else echo MISSING; fi ;; \'',
         '        \'esac\'',
         "    )",
+        "    ssh, scp = _tool('ssh'), _tool('scp')",
+        "    env = _tool_environment()",
         "    overall_deadline = time.monotonic() + 90000",
         "    outage_start = None",
         "    backoff = 1",
         "    while True:",
         "        try:",
         "            wait = subprocess.run(",
-        "                ['ssh', *common, f'ubuntu@{ip}', poll_cmd],",
-        "                check=False, capture_output=True, text=True, timeout=30,",
+        "                [ssh, *common, f'ubuntu@{ip}', poll_cmd],",
+        "                check=False, capture_output=True, text=True, timeout=30, env=env,",
         "            )",
         "        except subprocess.TimeoutExpired:",
         "            now = time.monotonic()",
@@ -371,7 +444,8 @@ def render_lambda_stub(
         "    scp_backoff = 1",
         "    while True:",
         "        copied = subprocess.run(",
-        "            ['scp', *common, '-r', source, str(destination)], check=False,",
+        "            [scp, *common, '-r', '--', source, str(destination)], check=False,",
+        "            env=env,",
         "        )",
         "        if copied.returncode == 0:",
         "            break",
@@ -399,36 +473,78 @@ def render_lambda_stub(
         "    if not pathlib.Path(private_key).is_file():",
         "        print('LAMBDA_SSH_PRIVATE_KEY does not name a readable file.')",
         "        return 2",
+        "    if not all(_find_tool(command) for command in ('ssh', 'scp')):",
+        "        print(_MISSING_TOOLS)",
+        "        return 2",
         "    instance_id = None",
         "    rc = 1",
+        "    name = 'soup-' + uuid.uuid4().hex",
+        "    launched = False",
         "    try:",
+        "        launched = True",
         "        response = _request_json(",
         "            api_key, '/instance-operations/launch', method='POST',",
-        "            payload=_launch_payload(region, ssh_key_name),",
+        "            payload=_launch_payload(region, ssh_key_name, name),",
         "        )",
-        "        instance_ids = response.get('data', {}).get('instance_ids', [])",
-        "        if len(instance_ids) != 1:",
-        "            raise RuntimeError(f'Lambda launch returned {instance_ids!r}')",
-        "        instance_id = str(instance_ids[0])",
+        "        data = response.get('data') if isinstance(response, dict) else None",
+        "        instance_ids = data.get('instance_ids') if isinstance(data, dict) else None",
+        "        if (not isinstance(instance_ids, list) or len(instance_ids) != 1",
+        "                or not _valid_instance_id(instance_ids[0])):",
+        "            raise RuntimeError('Lambda launch returned an invalid instance ID result')",
+        "        instance_id = instance_ids[0]",
         "        print(f'Lambda instance launched: {instance_id}')",
         "        ip = _wait_for_ip(api_key, instance_id)",
         "        _train_and_copy(ip, private_key)",
         "        print(f'Training completed; checkpoints copied to {_LOCAL_OUTPUT}')",
         "        rc = 0",
         "    except Exception as exc:",
+        "        # Definite rejection: _LambdaAPIError with 4xx (except 408) from the launch POST "
+        "means the instance was never created.",
+        "        if getattr(exc, 'create_rejected', False):",
+        "            launched = False",
         "        print(f'Lambda training failed: {exc}')",
         "    finally:",
-        "        if instance_id is not None:",
-        "            try:",
+        "        # Repeated Ctrl+C must not abandon cleanup of a billable resource.",
+        "        # A second interrupt during cleanup is ignored so the recovery",
+        "        # runs to completion.",
+        "        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)",
+        "        try:",
+        "            if instance_id is not None:",
+        "                # Known-ID path: we have the ID, terminate and verify it.",
         "                _request_json(",
         "                    api_key, '/instance-operations/terminate', method='POST',",
         "                    payload={'instance_ids': [instance_id]},",
         "                )",
         "                _wait_for_termination(api_key, instance_id)",
         "                print(f'Lambda instance termination verified: {instance_id}')",
-        "            except Exception as exc:",
+        "            elif launched:",
+        "                # Ambiguous launch: the POST was sent but we never got a confirmed ID.",
+        "                try:",
+        "                    ids = _recover_created(api_key, name)",
+        "                    for owned_id in ids:",
+        "                        _request_json(",
+        "                            api_key, '/instance-operations/terminate', method='POST',",
+        "                            payload={'instance_ids': [owned_id]},",
+        "                        )",
+        "                        _wait_for_termination(api_key, owned_id)",
+        "                    print(",
+        "                        f'Lambda termination verified for ambiguous launch: {ids}',",
+        "                    )",
+        "                except Exception:",
+        "                    print(",
+        "                        (f'CRITICAL: Lambda cleanup unconfirmed; check the console "
+        "for {name}'),",
+        "                    )",
+        "                    rc = 1",
+        "            else:",
+        "                # Definite rejection: no instance was created, nothing to clean up.",
+        "                print('Lambda create request rejected; no instance to clean up.')",
+        "        except Exception as exc:",
+        "            if instance_id is not None:",
         "                print(f'CRITICAL: Lambda termination failed for {instance_id}: {exc}')",
         "                rc = 1",
+        "        finally:",
+        "            signal.signal(signal.SIGINT, previous)",
         "    return rc",
         "",
         "if __name__ == '__main__':",
@@ -445,13 +561,21 @@ def plan_lambda_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_lambda_app.py",
+    config_yaml: str | None = None,
 ) -> CloudPlan:
-    """Build a Lambda controller plan from a cwd-contained config."""
+    """Build a Lambda controller plan from a cwd-contained config.
+
+    ``config_yaml`` is the text to embed. The caller passes the *effective*
+    config (the loaded object with every CLI override applied), not the file's
+    text, so the remote run trains what the local run said it would (#1430).
+    Reading ``config_path`` remains the fallback for a direct caller.
+    """
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(config_path, "--config")
-    with open(config_path, encoding="utf-8") as fh:
-        config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
+    if config_yaml is None:
+        with open(config_path, encoding="utf-8") as fh:
+            config_yaml = fh.read(_MAX_LAMBDA_CONFIG_BYTES + 1)
     if len(config_yaml.encode("utf-8")) > _MAX_LAMBDA_CONFIG_BYTES:
         raise ValueError(f"config exceeds {_MAX_LAMBDA_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
@@ -474,7 +598,7 @@ def plan_lambda_run(
         output_dir=output_dir,
         stub_path=stub_path,
         stub_text=stub_text,
-        run_command=f"python -I {stub_path}",
+        run_command=f"python -I {shlex.quote(stub_path)}",
     )
 
 

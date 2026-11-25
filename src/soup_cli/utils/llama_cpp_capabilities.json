@@ -1,18 +1,29 @@
 {
   "schema_version": 1,
-  "tag": "b5270",
-  "commit": "3bf785f3efa89ed28294fbf73054558a2b034bfb",
-  "source_url": "https://github.com/ggml-org/llama.cpp/blob/3bf785f3efa89ed28294fbf73054558a2b034bfb/convert_hf_to_gguf.py",
-  "source_sha256": "b69d3b6a51636b580966bf931088fa095d88cd3f13bc91083eb85b29c23eb05e",
-  "source_git_blob": "838999531e58041976c8e612bc97b382874bf227",
+  "tag": "b12423",
+  "commit": "f4d0673917c75493c73fc9b64ab42841600ba944",
+  "source_url": "https://github.com/ggml-org/llama.cpp/blob/f4d0673917c75493c73fc9b64ab42841600ba944/convert_hf_to_gguf.py",
+  "source_sha256": "297502d115010e97b996e20dc9cdcfc90ee293df9b616259e5a646b64f410630",
+  "source_git_blob": "8cee1f8646e113accba4de2c5e68b7b0804252eb",
   "architectures": {
     "TEXT": [
+      "AfmoeForCausalLM",
+      "ApertusForCausalLM",
+      "ArceeForCausalLM",
       "ArcticForCausalLM",
+      "AudioFlamingo3ForConditionalGeneration",
       "BaiChuanForCausalLM",
       "BaichuanForCausalLM",
       "BailingMoeForCausalLM",
+      "BailingMoeV2ForCausalLM",
+      "BailingMoeV3ForCausalLM",
+      "BailingMoeV3VLForConditionalGeneration",
+      "BambaForCausalLM",
+      "BeamForCausalLM",
       "BertForMaskedLM",
+      "BertForSequenceClassification",
       "BertModel",
+      "BitNetForCausalLM",
       "BitnetForCausalLM",
       "BloomForCausalLM",
       "BloomModel",
@@ -21,17 +32,58 @@
       "ChameleonForConditionalGeneration",
       "ChatGLMForConditionalGeneration",
       "ChatGLMModel",
+      "ChatterboxModel",
+      "ClefModel",
+      "CloverMoeModelLM",
       "CodeShellForCausalLM",
+      "CogVLMForCausalLM",
       "Cohere2ForCausalLM",
+      "Cohere2MoeForCausalLM",
       "CohereForCausalLM",
+      "D1Model",
+      "D1OmniModel",
+      "DFlash2DraftModel",
+      "DFlashDraftModel",
+      "DSparkDraftModel",
+      "DSparkMiniMaxDraftModel",
+      "DSparkSpeculator",
       "DbrxForCausalLM",
       "DeciLMForCausalLM",
       "DeepseekForCausalLM",
+      "DeepseekOCRForCausalLM",
       "DeepseekV2ForCausalLM",
+      "DeepseekV32ForCausalLM",
       "DeepseekV3ForCausalLM",
+      "DeepseekV41ForCausalLM",
+      "DeepseekV4DSparkModel",
+      "DeepseekV4ForCausalLM",
+      "DistilBertForMaskedLM",
+      "DistilBertForSequenceClassification",
+      "DistilBertModel",
+      "Dots1ForCausalLM",
+      "Dots3NoteForCausalLM",
+      "Dots3NoteForConditionalGeneration",
+      "Dots3NoteTextForCausalLM",
+      "DotsOCRForCausalLM",
+      "DreamModel",
+      "Eagle3DraftModel",
+      "Eagle3LlamaForCausalLM",
+      "Eagle3Speculator",
+      "EmbeddingGemma2Model",
+      "Ernie4_5ForCausalLM",
+      "Ernie4_5_ForCausalLM",
+      "Ernie4_5_MoeForCausalLM",
+      "EuroBertModel",
+      "Exaone4ForCausalLM",
+      "Exaone4_5_ForConditionalGeneration",
       "ExaoneForCausalLM",
+      "ExaoneMoEForCausalLM",
+      "ExaoneMoeForCausalLM",
       "FalconForCausalLM",
+      "FalconH1ForCausalLM",
       "FalconMambaForCausalLM",
+      "FishOmniModel",
+      "FlintForCausalLM",
       "GPT2LMHeadModel",
       "GPTBigCodeForCausalLM",
       "GPTNeoXForCausalLM",
@@ -39,80 +91,815 @@
       "Gemma2ForCausalLM",
       "Gemma3ForCausalLM",
       "Gemma3ForConditionalGeneration",
+      "Gemma3TextModel",
+      "Gemma3nForCausalLM",
+      "Gemma3nForConditionalGeneration",
+      "Gemma4AssistantForCausalLM",
+      "Gemma4DSparkModel",
+      "Gemma4ForCausalLM",
+      "Gemma4ForConditionalGeneration",
+      "Gemma4UnifiedAssistantForCausalLM",
+      "Gemma4UnifiedForConditionalGeneration",
       "GemmaForCausalLM",
       "Glm4ForCausalLM",
+      "Glm4MoeForCausalLM",
+      "Glm4MoeLiteForCausalLM",
+      "Glm4vForConditionalGeneration",
+      "Glm4vMoeForConditionalGeneration",
+      "Glm5NextForConditionalGeneration",
       "GlmForCausalLM",
+      "GlmMoeDsaForCausalLM",
+      "GlmOcrForConditionalGeneration",
+      "GptOssForCausalLM",
+      "Granite4VisionForConditionalGeneration",
       "GraniteForCausalLM",
       "GraniteMoeForCausalLM",
+      "GraniteMoeHybridForCausalLM",
+      "GraniteMoeSWAForCausalLM",
+      "GraniteMoeSharedForCausalLM",
+      "GraniteSWAForCausalLM",
+      "GraniteSpeechForConditionalGeneration",
+      "GraniteSpeechPlusForConditionalGeneration",
+      "GraniteSwitchForCausalLM",
+      "Grok1ForCausalLM",
       "GrokForCausalLM",
+      "GroveMoeForCausalLM",
+      "H2OLightningModel",
+      "HYV3ForCausalLM",
+      "HYV4ForCausalLM",
+      "HrmTextForCausalLM",
+      "HunYuanDenseV1ForCausalLM",
+      "HunYuanMoEV1ForCausalLM",
+      "HunYuanVLForConditionalGeneration",
+      "IQuestCoderForCausalLM",
+      "Inkling2ForCausalLM",
+      "Inkling2ForConditionalGeneration",
       "InternLM2ForCausalLM",
       "InternLM3ForCausalLM",
       "JAISLMHeadModel",
+      "Jais2ForCausalLM",
+      "JambaForCausalLM",
+      "JanusForConditionalGeneration",
       "JinaBertForMaskedLM",
       "JinaBertModel",
+      "JinaEmbeddingsV5Model",
+      "K2HorizonForCausalLM",
+      "KORMoForCausalLM",
+      "KevModel",
+      "KimiK25ForConditionalGeneration",
+      "KimiK31ForConditionalGeneration",
+      "KimiK3ForConditionalGeneration",
+      "KimiLinearForCausalLM",
+      "KimiLinearModel",
+      "KimiVLForConditionalGeneration",
+      "Kolibri1ForCausalLM",
+      "LFM2ForCausalLM",
+      "LLaDAMoEModel",
+      "LLaDAMoEModelLM",
+      "LLaDAModelLM",
       "LLaMAForCausalLM",
+      "LagunaForCausalLM",
+      "LevModel",
+      "Lfm25AudioTokenizer",
+      "Lfm2BidirectionalForMaskedLM",
+      "Lfm2BidirectionalModel",
+      "Lfm2DSparkDraftModel",
+      "Lfm2ForCausalLM",
+      "Lfm2Model",
+      "Lfm2MoeForCausalLM",
+      "Lfm3D1Model",
+      "Lfm3ForCausalLM",
+      "Lfm3OmniForConditionalGeneration",
+      "Lfm3VlForConditionalGeneration",
+      "LiLiCorrDraftModel",
+      "LimiteForCausalLM",
+      "LingDSparkModel",
+      "Llama4ForCausalLM",
       "Llama4ForConditionalGeneration",
+      "LlamaBidirectionalModel",
       "LlamaForCausalLM",
+      "LlamaForCausalLMEagle3",
+      "LlamaModel",
       "LlavaForConditionalGeneration",
+      "LlavaOnevision2ForConditionalGeneration",
       "LlavaStableLMEpochForCausalLM",
       "MPTForCausalLM",
       "MT5ForConditionalGeneration",
+      "MaincoderForCausalLM",
+      "Mamba2ForCausalLM",
       "MambaForCausalLM",
       "MambaLMHeadModel",
+      "MapleForCausalLM",
+      "MellumForCausalLM",
+      "Metis16ForCausalLM",
+      "MiMoV2FlashForCausalLM",
+      "MiMoV2ForCausalLM",
       "MiniCPM3ForCausalLM",
       "MiniCPMForCausalLM",
+      "MiniCPMOCRForSequenceClassification",
+      "MiniCPMOcrForConditionalGeneration",
+      "MiniCPMV4_6ForConditionalGeneration",
+      "MiniCPMV4_7ForConditionalGeneration",
+      "MiniMaxM1ForCausalLM",
+      "MiniMaxM2ForCausalLM",
+      "MiniMaxM3SparseForCausalLM",
+      "MiniMaxM3SparseForConditionalGeneration",
+      "MiniMaxText01ForCausalLM",
+      "Ministral3ForCausalLM",
+      "Ministral3Model",
       "Mistral3ForConditionalGeneration",
+      "Mistral3Model",
       "MistralForCausalLM",
+      "MistralLarge4ForConditionalGeneration",
       "MixtralForCausalLM",
+      "ModernBertDecisionModel",
+      "ModernBertForMaskedLM",
+      "ModernBertForSequenceClassification",
+      "ModernBertModel",
+      "MuseGlimmerAssistantModel",
+      "MuseGlimmerForConditionalGeneration",
+      "MuseSparkForConditionalGeneration",
+      "NEOChatModel",
+      "NanbeigeForCausalLM",
+      "Nemotron3_5TranscribeForConditionalGeneration",
       "NemotronForCausalLM",
+      "NemotronHForCausalLM",
+      "NemotronHPuzzleForCausalLM",
+      "NeoBERT",
+      "NeoBERTForSequenceClassification",
+      "NeoBERTLMHead",
+      "NimbleModel",
       "NomicBertModel",
       "OLMoForCausalLM",
       "Olmo2ForCausalLM",
+      "Olmo3ForCausalLM",
       "OlmoForCausalLM",
       "OlmoeForCausalLM",
       "OpenELMForCausalLM",
+      "OpenJevModel",
       "OrionForCausalLM",
       "PLMForCausalLM",
+      "PLaMo2ForCausalLM",
+      "PLaMo3ForCausalLM",
+      "PaddleOCRVLForConditionalGeneration",
+      "PanguEmbeddedForCausalLM",
       "Phi3ForCausalLM",
+      "Phi4ForCausalLMV",
       "PhiForCausalLM",
       "PhiMoEForCausalLM",
+      "Plamo2ForCausalLM",
+      "Plamo3ForCausalLM",
       "PlamoForCausalLM",
+      "PocketTTSModel",
+      "PplxDeciderModel",
       "QWenLMHeadModel",
+      "Qwen2AudioForConditionalGeneration",
       "Qwen2ForCausalLM",
       "Qwen2Model",
       "Qwen2MoeForCausalLM",
       "Qwen2VLForConditionalGeneration",
+      "Qwen2VLModel",
+      "Qwen2_5OmniModel",
       "Qwen2_5_VLForConditionalGeneration",
+      "Qwen3ASRForConditionalGeneration",
+      "Qwen3DSparkModel",
       "Qwen3ForCausalLM",
+      "Qwen3Model",
       "Qwen3MoeForCausalLM",
+      "Qwen3NextForCausalLM",
+      "Qwen3OmniMoeForConditionalGeneration",
+      "Qwen3TTSForConditionalGeneration",
+      "Qwen3VLForConditionalGeneration",
+      "Qwen3VLMoeForConditionalGeneration",
+      "Qwen3_5ForCausalLM",
+      "Qwen3_5ForConditionalGeneration",
+      "Qwen3_5MoeForCausalLM",
+      "Qwen3_5MoeForConditionalGeneration",
+      "Qwen3_5TextModel",
+      "Qwen4ExpForCausalLM",
+      "Qwen4ExpForConditionalGeneration",
+      "RND1",
       "RWForCausalLM",
       "RWKV6Qwen2ForCausalLM",
       "RWKV7ForCausalLM",
+      "RicursiveForCausalLM",
+      "RobertaForSequenceClassification",
       "RobertaModel",
+      "RuGPT3XLForCausalLM",
       "Rwkv6ForCausalLM",
       "Rwkv7ForCausalLM",
       "RwkvHybridForCausalLM",
+      "Sarashina2VisionForCausalLM",
+      "SarvamMoEForCausalLM",
+      "SeedOssForCausalLM",
+      "SmallThinkerForCausalLM",
+      "SmolLM3ForCausalLM",
+      "SolarOpenForCausalLM",
+      "SopranoTextModel",
+      "Spark2_5ForCausalLM",
       "StableLMEpochForCausalLM",
       "StableLmForCausalLM",
       "Starcoder2ForCausalLM",
+      "Step3p5ForCausalLM",
+      "Step3p7ForConditionalGeneration",
+      "StepVLForConditionalGeneration",
       "T5EncoderModel",
       "T5ForConditionalGeneration",
       "T5WithLMHeadModel",
+      "TalkieForCausalLM",
       "UMT5ForConditionalGeneration",
+      "UMT5Model",
+      "UltravoxModel",
+      "UnlimitedOCRForCausalLM",
       "VLlama3ForCausalLM",
+      "VllmD3Model",
+      "VllmDecision2Model",
+      "VoxtralForConditionalGeneration",
+      "VoxtralRealtimeForConditionalGeneration",
       "WavTokenizerDec",
       "XLMRobertaForSequenceClassification",
       "XLMRobertaModel",
-      "XverseForCausalLM"
+      "Xing4_0ForCausalLM",
+      "XverseForCausalLM",
+      "YoutuForCausalLM",
+      "YoutuVLForConditionalGeneration"
     ],
     "VISION": [
+      "AudioFlamingo3ForConditionalGeneration",
+      "BailingMoeV3VLForConditionalGeneration",
+      "ChatterboxModel",
+      "ClefModel",
+      "CogVLMForCausalLM",
+      "Cohere2VisionForConditionalGeneration",
+      "D1OmniModel",
+      "DeepseekOCR2ForCausalLM",
+      "DeepseekOCRForCausalLM",
+      "DeepseekV41ForCausalLM",
+      "DeepseekV4ForCausalLM",
+      "Dots3NoteForCausalLM",
+      "Dots3NoteForConditionalGeneration",
+      "DotsOCRForCausalLM",
+      "EmbeddingGemma2Model",
+      "Exaone4_5_ForConditionalGeneration",
+      "FishOmniModel",
       "Gemma3ForConditionalGeneration",
+      "Gemma3nForConditionalGeneration",
+      "Gemma4ForConditionalGeneration",
+      "Gemma4UnifiedForConditionalGeneration",
+      "Glm4vForConditionalGeneration",
+      "Glm4vMoeForConditionalGeneration",
+      "Glm5NextForConditionalGeneration",
+      "Glm5vForConditionalGeneration",
+      "GlmOcrForConditionalGeneration",
+      "GlmasrModel",
+      "Granite4VisionForConditionalGeneration",
+      "GraniteSpeechForConditionalGeneration",
+      "GraniteSpeechPlusForConditionalGeneration",
+      "H2OLightningModel",
+      "HunYuanVLForConditionalGeneration",
       "Idefics3ForConditionalGeneration",
+      "Inkling2ForConditionalGeneration",
+      "InternVisionModel",
+      "JanusForConditionalGeneration",
+      "KimiK25ForConditionalGeneration",
+      "KimiK31ForConditionalGeneration",
+      "KimiVLForConditionalGeneration",
+      "Lfm2AudioForConditionalGeneration",
+      "Lfm2VlForConditionalGeneration",
+      "Lfm3AudioForConditionalGeneration",
+      "Lfm3OmniForConditionalGeneration",
+      "Lfm3VlForConditionalGeneration",
+      "LightOnOCRForConditionalGeneration",
+      "Llama4ForConditionalGeneration",
       "LlavaForConditionalGeneration",
+      "LlavaOnevision2ForConditionalGeneration",
+      "MERaLiON2ForConditionalGeneration",
+      "MiMoV2ForCausalLM",
+      "MiniCPMOCRForSequenceClassification",
+      "MiniCPMOcrForConditionalGeneration",
+      "MiniCPMV4_6ForConditionalGeneration",
+      "MiniCPMV4_7ForConditionalGeneration",
+      "MiniMaxM3SparseForConditionalGeneration",
       "Mistral3ForConditionalGeneration",
+      "Mistral3Model",
+      "MuseGlimmerForConditionalGeneration",
+      "MuseSparkForConditionalGeneration",
+      "NEOVisionModel",
+      "Nemotron3_5TranscribeForConditionalGeneration",
+      "NemotronH_Nano_VL_V2",
+      "NemotronH_Omni_Reasoning_V3",
+      "OpenJevModel",
+      "PaddleOCRVisionModel",
+      "Phi4ForCausalLMV",
+      "PocketTTSModel",
+      "PplxDeciderModel",
+      "Qwen2AudioForConditionalGeneration",
       "Qwen2VLForConditionalGeneration",
+      "Qwen2VLModel",
+      "Qwen2_5OmniModel",
       "Qwen2_5_VLForConditionalGeneration",
-      "SmolVLMForConditionalGeneration"
+      "Qwen3ASRForConditionalGeneration",
+      "Qwen3OmniMoeForConditionalGeneration",
+      "Qwen3TTSForConditionalGeneration",
+      "Qwen3VLForConditionalGeneration",
+      "Qwen3VLMoeForConditionalGeneration",
+      "Qwen3_5ForConditionalGeneration",
+      "Qwen3_5MoeForConditionalGeneration",
+      "Qwen4ExpForConditionalGeneration",
+      "RADIOModel",
+      "Sarashina2VisionForCausalLM",
+      "SmolVLMForConditionalGeneration",
+      "SopranoModel",
+      "Step3p7ForConditionalGeneration",
+      "StepVLForConditionalGeneration",
+      "UltravoxModel",
+      "UnlimitedOCRForCausalLM",
+      "VllmD3Model",
+      "VoxtralForConditionalGeneration",
+      "VoxtralRealtimeForConditionalGeneration",
+      "YoutuVLForConditionalGeneration"
     ]
+  },
+  "sources": {
+    "conversion/__init__.py": {
+      "sha256": "c922e7710c53a8352789c999f00b7c8cc49c1733c21453c566af73334194300b",
+      "git_blob": "fb6b8464c4a1e99fbefd58aa856d89b1f8b6d5cd"
+    },
+    "conversion/afmoe.py": {
+      "sha256": "d1d91663fd703614b242ddcd6c4f14907068e19539113d5dde7db87258cb46ae",
+      "git_blob": "844925dca7be44a648c6011f4ef60e4f6ea0d612"
+    },
+    "conversion/arctic.py": {
+      "sha256": "0f81fda5dfdcca4859c6955270d2d7c352ffd20c0a64c4fc4f557cb24d40b556",
+      "git_blob": "843e24a7b9edcb0a981af546cdca426d78688052"
+    },
+    "conversion/baichuan.py": {
+      "sha256": "698f48eab3fffb30226ef8ccd69fd4544ca7cac070fb44e50e70e60d235aae1d",
+      "git_blob": "769bdd56780ebf3828ef7c7e35acb0d04fdcd5ef"
+    },
+    "conversion/bailingmoe.py": {
+      "sha256": "719ea7b699d1df9351fb67af5041a188705540a94d84aa554322493c33dcc163",
+      "git_blob": "18fe8a2b700605c99dad67683e9e0f8130e0e2e1"
+    },
+    "conversion/bailingmoe3.py": {
+      "sha256": "6a29102ec553d62596a74516df27b26392626f6a525f821b684cd596d10773d0",
+      "git_blob": "36b931564927f4eff5354bbe61d9c8341718f00b"
+    },
+    "conversion/base.py": {
+      "sha256": "a8264f8f293a0978a2a6e2e7bc91c010e84f2e6d25c35454fdfa6f2d0f3d2a58",
+      "git_blob": "7558fdcb4043d334ae91e9ad1c823ae4c9bcac31"
+    },
+    "conversion/beam.py": {
+      "sha256": "95c98b589ce5894f62f3bf97eb244d7b3e4469243d218956582b211e705c184e",
+      "git_blob": "66b28d8f677c49a8a4fe0dcc3a871523308dfcae"
+    },
+    "conversion/bert.py": {
+      "sha256": "13d46d473f62f766adc68297516d7a29f3b401f17e0d4b293c561bbba1d33faf",
+      "git_blob": "150b2667cc6629c4cd107ca059a55eacfdef1026"
+    },
+    "conversion/bitnet.py": {
+      "sha256": "175b64e46105466314e0382ecafb02ebc73db732b8c582604f20ee4f9ab6caa5",
+      "git_blob": "82bcadaf9a69839662e72efcc00d7a52a64c835d"
+    },
+    "conversion/bloom.py": {
+      "sha256": "cf17a9c8717c45121c843112dfce7a2fd2aeab060158fb6349f50397f4963c1d",
+      "git_blob": "9654cd4a0f51b50e561555c81e371aaa508a277c"
+    },
+    "conversion/chameleon.py": {
+      "sha256": "96db50d7987eaeb7ac720680577aa1fc97616afc5cb1dbcbf24bd29991a18d34",
+      "git_blob": "8f2065df6634367853236fda5b3e3b3b96160fb1"
+    },
+    "conversion/chatglm.py": {
+      "sha256": "29022b2ce9b177beef8a18e50e56f983b1a5e7b660d3b06cd3bfad10604bdaa1",
+      "git_blob": "fb10393cbdcdd4a2886e7f42d3e0a856b831643e"
+    },
+    "conversion/chatterbox.py": {
+      "sha256": "a922a6dbb2243c7e1f77d9223f66f064aba711274deb18021551fac8eba3cf2a",
+      "git_blob": "d438228e5acbdd80026efb11a1037d8e1e1480e4"
+    },
+    "conversion/clef.py": {
+      "sha256": "b8d3729aa734c9a91e1fcb31487677dc8a3dfd37e6d109045e548cc067032543",
+      "git_blob": "b793d92c8d329c893bc5977d7000a768fc748872"
+    },
+    "conversion/clover.py": {
+      "sha256": "975125388ad8935686967c6945c7f28cc0da9cac38cdc223c3a2a40d962862c9",
+      "git_blob": "d757b64ede6bf5d2ab38a14df2f92edf19845d89"
+    },
+    "conversion/codeshell.py": {
+      "sha256": "d717e5059b63090878ec1db6fb2e50cd9cdc6980111e9b3e89e89b00e8b95a00",
+      "git_blob": "1c7f1129b549ed2511ae1640b3204454ad5c568d"
+    },
+    "conversion/cogvlm.py": {
+      "sha256": "4d0349fd3276f318a11423a2b6349176dbf3a2dd7bfd76dfe69bae6a26ce22dd",
+      "git_blob": "13c314441bfaa2663ade2c279367aa64f4f8fe63"
+    },
+    "conversion/command_r.py": {
+      "sha256": "cb71ea9bf998cf069334ac1c726792cd4bc4e781ae9bcdd197d6b03662829829",
+      "git_blob": "0db6eb68afc8bf3a3c52fe35ca0a82f120de6969"
+    },
+    "conversion/dbrx.py": {
+      "sha256": "7b28f1384af62bde5e009c0f90f5f0bf26409af447ad6ce91c8511f8eb5b42d4",
+      "git_blob": "d37ce83e784577082d93ba82398dd101bd0edca1"
+    },
+    "conversion/deci.py": {
+      "sha256": "1feb845f3430f023f4e9d47777dda5a783eff6c325fba6fb3dce1d1effa1672a",
+      "git_blob": "2ccaa92a98efe28131ff95a44f47358a604b8628"
+    },
+    "conversion/deepseek.py": {
+      "sha256": "329bf3a75e49945965d576b03fc1c310bad3a7c198d74a9f66c16978d0843fa8",
+      "git_blob": "733a5e5f9a2cf9f9d16493bdccdec7c8f202f71e"
+    },
+    "conversion/deepseek41.py": {
+      "sha256": "579f2eeaebde7582ea8cc4d48715d47bf230ed597df6d0fcd3f771a1b647bb59",
+      "git_blob": "9a03b9912460610056bab5e70da35c6f246a1845"
+    },
+    "conversion/dots1.py": {
+      "sha256": "e730b03e8fdff313907876c8e7a56f405a97009b2bbf0c951e6c0362b9696b54",
+      "git_blob": "ffa3b6db4459cb1370fdbe692fa887190ec968f5"
+    },
+    "conversion/dots3.py": {
+      "sha256": "eb2bc5dc58fab2069e17a45343d61fa201b25b86573fc54ffcdd3f890d00a2b4",
+      "git_blob": "e34793e58bafb526a53a459b89d31573d3d24e60"
+    },
+    "conversion/dotsocr.py": {
+      "sha256": "cdd09c97f594b8c411e6df727c71df51df28c8d722c35bd78fdcdd8ffb108d83",
+      "git_blob": "ace6aa9a13d5de8e50d8c5b28ca7c2573300b62c"
+    },
+    "conversion/drama3.py": {
+      "sha256": "66353744f76aebfb9b13f1c3a56c737813ae090c914af43fb3ce211a7723937a",
+      "git_blob": "ac01f481c98afc9c00efac62ebe6b64ef3e13fb9"
+    },
+    "conversion/dream.py": {
+      "sha256": "1554ba66921a90c4a76eec4ff1644e99a3dd982e5db11573c2738f8cf1003a0b",
+      "git_blob": "46c245eeea9921a9588c43d52ec2b4602f0cdc1f"
+    },
+    "conversion/ernie.py": {
+      "sha256": "828db416eef663c28610bf64e6c0d81529558bee16d8fce97d3e54b6157b2519",
+      "git_blob": "3c4226a2598af81188e5f6f6b549ecc9885ce7b1"
+    },
+    "conversion/exaone.py": {
+      "sha256": "9f3dd7859cf59bcf6e900560954fb094e931d603cd3d8b1300ec664ad778b356",
+      "git_blob": "0919d2ffafe8a04df86ca62f46213cab02b79be0"
+    },
+    "conversion/falcon.py": {
+      "sha256": "57697368f41af0ddca9278d2fde3c1d200f92efe9296aa61c51bbd7d217b6a42",
+      "git_blob": "2c55511a09b428ee8a71db5023823c3890f906dc"
+    },
+    "conversion/falcon_h1.py": {
+      "sha256": "950a28acfdf998c0b3c5dca7fc715f342300fd96040f58aa429d5b9d6bbab4d4",
+      "git_blob": "6686f7001c7a2dbe0779e73f00c2129e2c750667"
+    },
+    "conversion/flint.py": {
+      "sha256": "21b58e5d0d68e23bb02a46957b07e4262d505505a20d6dcfa730a3fbc76b92d1",
+      "git_blob": "a69314a9bcc8be78968b0d73a184d4a869dc638a"
+    },
+    "conversion/gemma.py": {
+      "sha256": "e0704e560cdbedea9a89a7d5b49a570e7482971301dc80389ce39ac9ac3c9aac",
+      "git_blob": "ab2d90610d609e4b90a2d5223423d08c562ac4ee"
+    },
+    "conversion/glm.py": {
+      "sha256": "0754351ff3285a04f8d0f2e2c2e73967ad2d3d9b61a3f65f944cc36daa14fa45",
+      "git_blob": "4aa2288dea73b9355eaa33a1008d0cee9b859ba4"
+    },
+    "conversion/gpt2.py": {
+      "sha256": "b6c57b549c5545fb228b28e863e29a8b449e59d8370f94f0c3c781d40806e03b",
+      "git_blob": "06dff9e4c7f6a8cdd2715ee85bde78b7b1ef9e0b"
+    },
+    "conversion/gpt_oss.py": {
+      "sha256": "a8f2be2e48fa2c11a0e4c0c5e060f212f7b29d294b8adf4715b29efa4c4d0083",
+      "git_blob": "c4cae961139950ee76707ac53571ad795422a53b"
+    },
+    "conversion/gptneox.py": {
+      "sha256": "63e06a691f471828e1cd2671b6dd0749953bb347aab525a260ad4c0b2b81e6c2",
+      "git_blob": "0b0e91c4f516c97f41563f0810ac1e61dc98f71d"
+    },
+    "conversion/granite.py": {
+      "sha256": "c2400756a0d4355fa79b3ed48b969c565abad6ff31483e39ceb921676185290a",
+      "git_blob": "8bfae264487b28925ff82e57b3c33290cebf8992"
+    },
+    "conversion/grok.py": {
+      "sha256": "7784cb4ad5860e0ddc9667a4379e0dafbf11700553249d87fb5b9819354b1fd1",
+      "git_blob": "b966361d299d1ee017fb9314500241e55eef76c2"
+    },
+    "conversion/grovemoe.py": {
+      "sha256": "1a20e35f996016fcaf8dfdaa18ee1e1167001ae13e067ac5c0dd45b7e8525e69",
+      "git_blob": "f418f18ac407854607134cee9f5e90d666805b5f"
+    },
+    "conversion/h2o_lightning.py": {
+      "sha256": "e5171baf2a0d8469f5c59c3e13fd2b319531c9eac21be0a533353402c46aabc8",
+      "git_blob": "764da4b970dc81f0e1b358ebd7cf3b650b4d262e"
+    },
+    "conversion/hrm_text.py": {
+      "sha256": "01f6d22c1a626db41d256cac0e43afbab4c80884bf08e8fe2013ba954091da1a",
+      "git_blob": "3684fe912a15aac73e617fb51e0903e74b3cc711"
+    },
+    "conversion/hunyuan.py": {
+      "sha256": "b7e22e8227822595c1e43c5dc5c4b7ac9fe4da5ba1c1dec52f0648a18442c59f",
+      "git_blob": "2088953c1aa1a2b215a4dae3663797604f1d4538"
+    },
+    "conversion/hy_v4.py": {
+      "sha256": "0958cc54309901322dd951809cc57a1f9ed33a1aa12cb86653e45ee8e18ca7d0",
+      "git_blob": "358e21fe59ae1448f48e7f1d89f936a7a7b1dd9c"
+    },
+    "conversion/inkling2.py": {
+      "sha256": "7195dc7130a219ec2962d8368c9d397491bfbdd1f7275792586a46ea1e0f3307",
+      "git_blob": "5b839637828824186732785c06e1fb9dc3802255"
+    },
+    "conversion/internlm.py": {
+      "sha256": "62eac8f39d3fb9d0d5b9e27f7ddd0a7261fedb1b124047ef3614a32589a1989d",
+      "git_blob": "b1c7bddd39d15b0ee30df40a829648f8238b894a"
+    },
+    "conversion/internvl.py": {
+      "sha256": "275186d2ea58e4504fe643190037bb158ea5390e631de43327bcf00f464d95b0",
+      "git_blob": "799e23f5f58a5ea580e3d34b148b2b0dc9d7c28b"
+    },
+    "conversion/jais.py": {
+      "sha256": "752f826b35c2217019c1ce98dfcd42255cac34a0ad8870d31bdc0aa7da588b39",
+      "git_blob": "f3f96c3efd6551e95ace72e1a6a7de3644aa40fe"
+    },
+    "conversion/jamba.py": {
+      "sha256": "1a66ca03190d682a55311c650869299d384227f55cadde7c0d6dc4caa03afbcb",
+      "git_blob": "a2e642cb0168f287fdfc5e82997d778aacbaf297"
+    },
+    "conversion/januspro.py": {
+      "sha256": "0ca502908248bacb54a94df515945d2863a9b3174247bcdf046748b45a203280",
+      "git_blob": "0f71ab3cd66b94acdb0f06c63fe61ed14ef3c953"
+    },
+    "conversion/k2_horizon.py": {
+      "sha256": "171243a1a972598eaae619f4a1c81a4df2e9f386aac879ec1ceac64a1823f465",
+      "git_blob": "8122005f5153de40e5a66620a3962e7056d006bd"
+    },
+    "conversion/kimi_k3.py": {
+      "sha256": "8ceedfad232a2b3c7c2ca92d5d93fab8e05ab2306fb03865ff775f3bfeb56853",
+      "git_blob": "6ea151f72d8f752842f9a00b1906fcb890c23948"
+    },
+    "conversion/kimi_linear.py": {
+      "sha256": "e88472df4e0dbfe46f3ac45b676c659c18c4421e3148c7bdab5dc4fc766a26df",
+      "git_blob": "c205003a5958523f5e9719a5efe202c644e02446"
+    },
+    "conversion/kimivl.py": {
+      "sha256": "843c9caa5f2bff3e7dc87dba5b8c4cb24e0f2b163bc24b41d5e18908865056f3",
+      "git_blob": "8234ac0271d44a2a6e356ce5a8fddb5356b2f6fd"
+    },
+    "conversion/kolibri1.py": {
+      "sha256": "bc8a76e24d6cd5c1b1ec762f09da4c832a4836e0863e8e67dbd8af0113d04604",
+      "git_blob": "845501f4ef383fddb4b9faddd1662eea35627032"
+    },
+    "conversion/laguna.py": {
+      "sha256": "b4535ecd0bfb90f70cd4fa9897ba1116e8d7e8c539c42b75bb9f6037eb5bc392",
+      "git_blob": "29e0b3d6b318b73aa7f5c608103b9e3a90ddd271"
+    },
+    "conversion/lev.py": {
+      "sha256": "df51f36c8ffb38ebe1786c482c919ba8b3dddb557ff29417363270b1d6c1ffc7",
+      "git_blob": "5c319ec25fb3e8b88fb642bc0ad58108211083f6"
+    },
+    "conversion/lfm2.py": {
+      "sha256": "8dceb8a5e513434ebaabc6ccbb646f0bbe54db016337988cfa62d4f148425be1",
+      "git_blob": "61b7a0b2b9f0ea8691a668549828feb353391ea3"
+    },
+    "conversion/lfm3.py": {
+      "sha256": "f5130c3d484bbcf418c61c823a6299c11ef90a8055b3d1be86fe11d49956753e",
+      "git_blob": "38fbb5a31a9ebe9ef9f927be1285e31ca4ac633d"
+    },
+    "conversion/lighton_ocr.py": {
+      "sha256": "df7f8030f4469eaa10aac0b70dda8af2a22b2ddfc6af6f41112e03795ed58c77",
+      "git_blob": "8686fe5c9186887e7472f69d9904b7358dd83bc3"
+    },
+    "conversion/limite.py": {
+      "sha256": "767bba0cb165d93f8217221e7ed601099b4b4817e32e4871658326d6af155e07",
+      "git_blob": "7d413302b8c4b4a11e603c809ba06fa98965b08f"
+    },
+    "conversion/llada.py": {
+      "sha256": "cf15eddeafcdf09583d3bca5892aaeed9a6827d40af3c3351fd8167e07d8fcd6",
+      "git_blob": "7f91536e13e047cb6a1646f15a6c6871ff67747a"
+    },
+    "conversion/llama.py": {
+      "sha256": "33d3068838f923bdb3f3aea8113ad43bdbe932a25e4554f35fb80ee278c1dde2",
+      "git_blob": "b04f54d41912aae2fa80fa76e54325bc9e9a78b6"
+    },
+    "conversion/llama4.py": {
+      "sha256": "a39647bb645f2a667effa2998d6be8a71bdbf412f71b8e095b45a7594f20fbbc",
+      "git_blob": "280e309dd5a14ee4fc19f870525a6b19b986e338"
+    },
+    "conversion/llava.py": {
+      "sha256": "1010252e27f817c407b23536e0e9b36f462fe47aab3c822b9a651aaaf925e5e6",
+      "git_blob": "e193f0b95da425ee69e66d6b224e7c41309fcb94"
+    },
+    "conversion/magevl.py": {
+      "sha256": "0c51a72ced5ef89b46ee9a80756324fb4d3a90b7fd211d57f9244a940c34fbc1",
+      "git_blob": "910aeecf160d2c04eeeda44df16ce03a2225cda6"
+    },
+    "conversion/maincoder.py": {
+      "sha256": "7ce3968578f4dfd62e6b1639d1ab4aa012b9a3f33b78063a7692be79a682e715",
+      "git_blob": "2e291b8a96187b647b5547cde425e4209d70b561"
+    },
+    "conversion/mamba.py": {
+      "sha256": "8e11ee0c94754f0471762a6770d953c988bbf3744b6734e669a325460492059d",
+      "git_blob": "8a2a4637529a4f8140836ab089654684f85f96c9"
+    },
+    "conversion/maple.py": {
+      "sha256": "f82105b61d8479cfd2af2a45107e9340dc78b1ee459ae2bfb50f3b5bfc0eab02",
+      "git_blob": "fb0e87804d53f5ff027921dadc94ab4973268ce0"
+    },
+    "conversion/mellum.py": {
+      "sha256": "74229c11266afd41e58ae71a2bf1cf1a4166560b3b48fad86abc52f4c8e2ae0b",
+      "git_blob": "9dc2192f377896a72cb5b599d32123d09065ecdf"
+    },
+    "conversion/metis.py": {
+      "sha256": "25ec765acd99552b5c43c7828ea0150671151ba2a573831f22bf055b6dbef2ca",
+      "git_blob": "a073ed4df0a9c79b827e10b2a143600f5d2b9d16"
+    },
+    "conversion/mimo.py": {
+      "sha256": "f0ab957609eb1807d1d9a4c75d4fff26e2c3f82c7e34224499d99aa247a51b75",
+      "git_blob": "982594e858cfa6a9ec44f1ad485eb54cf58bb2a1"
+    },
+    "conversion/minicpm.py": {
+      "sha256": "622ea05dc959596a1cb07991323bcc7305309f123f20a71414b13e91e14de374",
+      "git_blob": "2b239437cd8eae28eae5c8aac4c93c2fbd98f6c4"
+    },
+    "conversion/minimax.py": {
+      "sha256": "011e2294dacdaa0aae5a6eabf0fdccb3e472d114b37e0cd26b32dcdefd3f15e8",
+      "git_blob": "c9f512f5fa6fc392667cbc95c9dd8542338a540e"
+    },
+    "conversion/mistral.py": {
+      "sha256": "8b34e2663ee4964e29aa3a28d6c1e565e087453767da370172d3afe2c3fc36d8",
+      "git_blob": "b2b5b255786aad0f7a8637e2df03de0201cac6da"
+    },
+    "conversion/mistral3.py": {
+      "sha256": "99460e8f5f9cec21db47b121aaed9af6f8372958f8804ded4d4ef35c85d5dadd",
+      "git_blob": "6c771b26f3ba80717faaced8c6ed78f4ae678884"
+    },
+    "conversion/mistral4.py": {
+      "sha256": "f589d8d86fe9e12e407b450a1c754abacfd925891d2a0e04350eaf56be1f8e34",
+      "git_blob": "dea6b3ecb9b2071b6accf934894042f0327cb0b0"
+    },
+    "conversion/mpt.py": {
+      "sha256": "07513d08befc56233d5520714876bfcf43fdece0f8c8f934249db8dcfe2bae99",
+      "git_blob": "d5d849ff35a6fd05296e3b55ba3bc3bf5dc057ed"
+    },
+    "conversion/muse_glimmer.py": {
+      "sha256": "df2620d93e2fd5a952a71715830e2d4155be817df35a8ec8655cfb87a11260ee",
+      "git_blob": "f00b3e6b582350217aa1897b4810f13a6d1c3ac5"
+    },
+    "conversion/muse_spark.py": {
+      "sha256": "4da483a876ea0a6840bce18c1addb8a6d16566afc9707a7c6742a5c47f9b21cc",
+      "git_blob": "5378b43aca211a091d55d8bf368e2a6527c3527f"
+    },
+    "conversion/nanbeige.py": {
+      "sha256": "a3256dfb8253eaff6f5f16f36ec03bb072392599829404d1c97ef1df59b9db58",
+      "git_blob": "a5b269a7a2a76a5ccaf4c6eac7c9201a1f215578"
+    },
+    "conversion/nemotron.py": {
+      "sha256": "481c279b8274f465aace7283b143de9c79a502888272e0809278137597c44a29",
+      "git_blob": "76aa357ab952b5661931dd7a66814d44040fb600"
+    },
+    "conversion/olmo.py": {
+      "sha256": "d97ad239165f720f7c393374cd04d4d1bf7bba55d27ef2111bfa632ccc7cf6b9",
+      "git_blob": "e6faa1975864870b2be71ec2eae9e9c43e15b6fb"
+    },
+    "conversion/openelm.py": {
+      "sha256": "bf93fe8be8611a7d5bdc5ee0a1a724db80f69a2045bbab74debb0e99b02cb73c",
+      "git_blob": "8863378bbfaad776d235f56a3a3af3913b3d6a12"
+    },
+    "conversion/orion.py": {
+      "sha256": "1b072a79944a52290b4299b047c0a7f91f7bcb131d332239caa5be86c032802a",
+      "git_blob": "3e4c633c18698590c73f97beab48839d3e1172ba"
+    },
+    "conversion/pangu.py": {
+      "sha256": "3c69073f05db63a812735d5a94c8ca75f3eb74916f61ed1b3c72c9752bae408e",
+      "git_blob": "74c76532b5a6b1beb69e58b9b93daa5cf64eb91a"
+    },
+    "conversion/phi.py": {
+      "sha256": "c8b05d9c91db3a60496b38ffdc2e085e67dec226d15047ab7b1fcf9c0890498c",
+      "git_blob": "7d2532067bb0f2053ddc4a31cf493fa9318ad6c8"
+    },
+    "conversion/pixtral.py": {
+      "sha256": "ad39d0eb893e05aaa025d520d92834c6645c186398553ffb396ea5fec079a0fd",
+      "git_blob": "acd9ce1cf702e8c8d7c6e8e9556b7d737ca7ed52"
+    },
+    "conversion/plamo.py": {
+      "sha256": "d577815a1e69c21b26d010a695b281a6da6fbab686c7bdfa7acb20c6912907a3",
+      "git_blob": "a843e059a11ff2db0c89c1375bd2960e3c908d90"
+    },
+    "conversion/plm.py": {
+      "sha256": "f11eeb8836b675dd26d2f8bb429860821f59fd202a1a36dee1d07179f9b0423e",
+      "git_blob": "bca0147e63008dead3f62de80b12a9efa3a83b63"
+    },
+    "conversion/pockettts.py": {
+      "sha256": "17c1c9d6d0d299a7a0e2939dd07bc08c57a3309ee78b2cbdc4de5724cfcfa0d8",
+      "git_blob": "b0cddc685ca02ecb9da38c27c8721f0b65a016be"
+    },
+    "conversion/pplx_decider.py": {
+      "sha256": "5f70ed71685c2017181da25647ac2438954a7af4def7eb3923bdac8a405b795f",
+      "git_blob": "6507d29faecb79376f4e0eea5ab2899130e6ad3c"
+    },
+    "conversion/qwen.py": {
+      "sha256": "2f62b62fb1527c7693a8e178ca39fae6f04578dd089fb609725e1fce99b5c0cf",
+      "git_blob": "376535460a2cd860747aac42b601633a011c5094"
+    },
+    "conversion/qwen3tts.py": {
+      "sha256": "9c0b246bfd6e8064ad7abfd611dd7d9c37e56ffccb3268519a614a88ae0d251b",
+      "git_blob": "28bb6e095f56d2baeb063e23019f22039e6a8166"
+    },
+    "conversion/qwen3vl.py": {
+      "sha256": "00d0a0cb212772551c0d8602dfe740cae6959ff08c4186d61aa77d075af0770b",
+      "git_blob": "9458366b100102f33964d3df78af5fda0d7cbb6e"
+    },
+    "conversion/qwen4exp.py": {
+      "sha256": "ccb2e3d5f985c6deccb1cdf6ff74c6e348b7c2f31c510479305d5bc0249a9903",
+      "git_blob": "9680d2937dfba4f58a8011e4e8d29912d0333e04"
+    },
+    "conversion/qwenvl.py": {
+      "sha256": "ec8fb850a2ebf19191893a861f18f9db4cfc23ff059543036b7227e5feda73ea",
+      "git_blob": "579a86a99f57f610d5ce7e5bc302020dba8222d7"
+    },
+    "conversion/refact.py": {
+      "sha256": "af232c6d49ab59e507d5bf672fb34780ff1e1b753402eefb68789d986d94822b",
+      "git_blob": "d6361512f716b537e652741a36981fe2bb02bc27"
+    },
+    "conversion/ricursive.py": {
+      "sha256": "4ca74eff2fa13033dae36a8d99317b0894b602e3341826a368c72e8545f042fe",
+      "git_blob": "13cb77367ed4a2513096aaaf1fbd85278e65b487"
+    },
+    "conversion/rwkv.py": {
+      "sha256": "0d9c40c1966c5eff5f90c088c42bd7e36ad0a9d789d558b9069d0209743a057e",
+      "git_blob": "e6fa84264efd433e81dd3b3697e5b0b9039a7989"
+    },
+    "conversion/sarashina2.py": {
+      "sha256": "fd2a42fbe127c4e6c20afa1640f8e9736a8d825e301e8bc12a156cb303a0c0a0",
+      "git_blob": "fdb3e78da66a96c7926b3972805b15878e9c9e13"
+    },
+    "conversion/sensenova_u1.py": {
+      "sha256": "cf337638bc93b162b2e1fbf052729214df4f7f5e4cce7e4da2a6f139165791ef",
+      "git_blob": "bde5f9d9b38811792528c49b682a0808e3f19eae"
+    },
+    "conversion/smallthinker.py": {
+      "sha256": "e976485465e39adcfd794764111d5c51bf051cdc7aca888c4790938c2ddb7636",
+      "git_blob": "73d07b51a341324782039752463877341b9986a7"
+    },
+    "conversion/smolvlm.py": {
+      "sha256": "4f069f17c96876ca940fa027fe7a79d05bcb3d18b47694d78d497b3aa8516f53",
+      "git_blob": "0cccb8f6f97b3409f2f47f5c7b058c8242140925"
+    },
+    "conversion/soprano.py": {
+      "sha256": "42886478daf5a0a8b438dad07fccb7bc5a0732b46b88b003eafbde1c02b5c236",
+      "git_blob": "cf4c959c6ba00048b50acfe39c3ca3b7c081acb0"
+    },
+    "conversion/spark2_5.py": {
+      "sha256": "dfe5873de23884e1686619d6743cfaeca3368ce4687f055f0ad5a23549b89e40",
+      "git_blob": "44a0bd262e6a53f559445ac925c278042ba0f900"
+    },
+    "conversion/stablelm.py": {
+      "sha256": "d5d382d98299484f3dc5308419bfd67c49cf44e55431f98ea7e68b8392112685",
+      "git_blob": "ac3a1ca9e1f1f91ec70703896c4669b87917181d"
+    },
+    "conversion/starcoder.py": {
+      "sha256": "d6b83fba5ad11f03d2f904f44ac0e0bac122ef5a392be446bc5dd8ca2ebdc14e",
+      "git_blob": "4a726ac36ad9c2e9b74d5661580912dc86c30bc8"
+    },
+    "conversion/step3.py": {
+      "sha256": "594ae4b97df840ea6790d6cba3710f4454f38675de6c9d064102a23e5e3f62b4",
+      "git_blob": "93eb3134e09e578e66a59d720282014a8300dba6"
+    },
+    "conversion/t5.py": {
+      "sha256": "ff1d091d856fca44f33b5a55a7e0ce1e4fe1e116e8794e7a0ce14c9cd58fe6ce",
+      "git_blob": "e42525794098d2fb6b34d821b74073ff7e781ebe"
+    },
+    "conversion/talkie.py": {
+      "sha256": "ab06701e8ccba86cae232e8f377d9d877dfe00a84288ec641ae73886241bd48c",
+      "git_blob": "31445243de8bf45c2c1a0537fc501de7eaddd32e"
+    },
+    "conversion/ultravox.py": {
+      "sha256": "aabb7d8065727248b01d68f7d585f176f1ad03dbaa419465a3d66658067b02d2",
+      "git_blob": "4a246daa1466207ee1384040396467c3f1629a5f"
+    },
+    "conversion/vllm_d3.py": {
+      "sha256": "933e1af99f494655433ad5d7ae8df4f77e77e0362ce3759341adb107761fcc94",
+      "git_blob": "1e4595fa96a2812ace031ce12ba22eaf9fba4f59"
+    },
+    "conversion/vllm_decision2.py": {
+      "sha256": "2a45f421e6810a3efc064d40d0fef9ab69a8a8661eabe94fd652c27bd9581984",
+      "git_blob": "3e7085f14e50da27b55327f95d48ffbe702bc6f4"
+    },
+    "conversion/wavtokenizer.py": {
+      "sha256": "cc6c6fd91cb17070593b37175624c769e904bde584b3e7024906809cfb25a1d8",
+      "git_blob": "c9a4b505da93900a72d6503fec09d732a2c57d9e"
+    },
+    "conversion/xing.py": {
+      "sha256": "ac7dc6d64dd8cf7577e429a69f7863182a4540f2a9ca628988fed020cb3aa59a",
+      "git_blob": "5ee4670505ef755321695836573cc53584238aea"
+    },
+    "conversion/xverse.py": {
+      "sha256": "3138dbd23ef5b5295520260ff3ed8ee9b2df03d1a0a03a12e11021cd1b2635aa",
+      "git_blob": "27fcff9d37a96310fcb6d9218e2c6549b6bdab64"
+    },
+    "conversion/youtuvl.py": {
+      "sha256": "e93fb9ebeff14d11efcfeac22bfd408921a67a8b57f12b499d11cd2c368be60e",
+      "git_blob": "e9726107721533a90d8b236c98d61e7393094aff"
+    },
+    "convert_hf_to_gguf.py": {
+      "sha256": "297502d115010e97b996e20dc9cdcfc90ee293df9b616259e5a646b64f410630",
+      "git_blob": "8cee1f8646e113accba4de2c5e68b7b0804252eb"
+    }
   }
 }

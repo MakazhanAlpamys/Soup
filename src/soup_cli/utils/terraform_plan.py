@@ -35,14 +35,18 @@ Public surface:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+
+if TYPE_CHECKING:
+    from soup_cli.config.schema import SoupConfig
 
 DEFAULT_STATE_FILE = "soup.tfstate"
 _SHA_REGEX_LEN = 64
@@ -59,8 +63,10 @@ class TrainingPlan:
     dataset_sha: str
     estimated_cost_usd: float
     estimated_minutes: float
-    peak_vram_gb: float
+    #: ``None`` when the run could not be priced; ``peak_vram_reason`` says why (#2049).
+    peak_vram_gb: Optional[float]
     spot_price_usd_per_hour: float
+    peak_vram_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         _check_non_empty_str(self.base, "base", max_len=_MAX_BASE_LEN)
@@ -69,7 +75,10 @@ class TrainingPlan:
         _check_sha(self.dataset_sha, "dataset_sha")
         _check_non_negative_finite(self.estimated_cost_usd, "estimated_cost_usd")
         _check_non_negative_finite(self.estimated_minutes, "estimated_minutes")
-        _check_non_negative_finite(self.peak_vram_gb, "peak_vram_gb")
+        if self.peak_vram_gb is None:
+            _check_non_empty_str(self.peak_vram_reason, "peak_vram_reason", max_len=512)
+        else:
+            _check_non_negative_finite(self.peak_vram_gb, "peak_vram_gb")
         _check_non_negative_finite(self.spot_price_usd_per_hour, "spot_price_usd_per_hour")
 
 
@@ -216,7 +225,6 @@ def compute_dataset_sha(path: object) -> str:
 # being a pre-flight estimate. Live measurement is whatever the trainer
 # emits at finish time (v0.34 cost path).
 _DEFAULT_SPOT_PRICE = 0.30  # ~$/hr for a 24 GB consumer GPU
-_DEFAULT_PEAK_VRAM = 8.0
 
 
 def _to_float(value: Any, default: float) -> float:
@@ -245,12 +253,71 @@ def _estimate_runtime_minutes(config: Mapping[str, Any]) -> float:
     return max(0.5, base)
 
 
+def estimate_peak_vram(
+    config: "SoupConfig", *, on_hub_request: Optional[Callable[[], None]] = None
+) -> Tuple[Optional[float], Optional[str]]:
+    """The train pre-flight's peak (GB, before its margin), or ``None`` and why.
+
+    #2049: the plan used to record a fixed 8.0 GB whatever the run. It now records
+    the shared estimate when the model's ``config.json`` can be read, and says why
+    it cannot price a run instead of printing a number that is not about it.
+    #2306: ``config`` is the validated config, so the run is validated once; when the
+    estimate cannot price it, the reason names the field that stops it.
+    ``on_hub_request`` is called just before the first request to the Hub, if one is made.
+    """
+    from soup_cli.utils.hardware_fit import (
+        FitUnavailable,
+        estimate_peak_vram_gb,
+        hardware_fit_input_or_reason,
+    )
+
+    if getattr(config.training, "stream_layers", False):
+        return None, "layer streaming: the streaming planner sizes this run when it starts"
+    if getattr(config, "backend", None) == "mlx":
+        return None, "backend mlx: no CUDA estimate"
+    inp = hardware_fit_input_or_reason(config, on_hub_request=on_hub_request)
+    if isinstance(inp, FitUnavailable):
+        return None, inp.reason
+    if inp.shape is None or inp.shape.guessed:
+        return None, "could not read the model's config.json (local, cache or Hub)"
+    return round(estimate_peak_vram_gb(inp).total_gb, 3), None
+
+
+def _validated_or_none(config: Mapping[str, Any]) -> Optional["SoupConfig"]:
+    """``config`` validated, or ``None`` when it does not validate."""
+    from soup_cli.config.loader import config_from_mapping
+
+    # A guard, not a known need: no validator is known to change the mapping it is
+    # given (those that rewrite one copy it first), and the caller's dict must stay
+    # as the YAML round trip this replaces left it.
+    try:
+        return config_from_mapping(copy.deepcopy(dict(config)))
+    except (ValueError, TypeError):
+        return None
+
+
 def _estimate_cost(minutes: float, spot_price: float) -> float:
     return max(0.0, (minutes / 60.0) * spot_price)
 
 
-def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
-    """Render a TrainingPlan from a soup-config-shaped dict."""
+def build_plan(
+    config: Mapping[str, Any],
+    *,
+    estimate_vram: bool = True,
+    on_hub_request: Optional[Callable[[], None]] = None,
+    soup_config: Optional["SoupConfig"] = None,
+) -> TrainingPlan:
+    """Render a TrainingPlan from a soup-config-shaped dict.
+
+    ``estimate_vram=False`` leaves the peak-VRAM estimate out (``peak_vram_gb`` is
+    ``None`` with a reason): ``soup apply`` compares hashes only, and pricing the model
+    can mean requests to the Hub. ``on_hub_request`` is called just before the first
+    request the estimate makes to the Hub, if it makes one.
+
+    ``soup_config`` is ``config`` already validated; the estimate prices it and the
+    hashes still come from ``config``. Without it, the estimate validates ``config``
+    itself and records "the config does not validate" if it does not (#2306).
+    """
     if not isinstance(config, Mapping):
         raise TypeError(f"config must be a mapping, got {type(config).__name__}")
     base = config.get("base")
@@ -288,6 +355,17 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
 
     minutes = _estimate_runtime_minutes(config)
     cost = _estimate_cost(minutes, _DEFAULT_SPOT_PRICE)
+    if estimate_vram:
+        if soup_config is None:
+            soup_config = _validated_or_none(config)
+        if soup_config is None:
+            peak_vram_gb, peak_vram_reason = None, "the config does not validate"
+        else:
+            peak_vram_gb, peak_vram_reason = estimate_peak_vram(
+                soup_config, on_hub_request=on_hub_request
+            )
+    else:
+        peak_vram_gb, peak_vram_reason = None, "not estimated: soup apply compares hashes only"
     return TrainingPlan(
         base=base,
         task=task,
@@ -295,13 +373,14 @@ def build_plan(config: Mapping[str, Any]) -> TrainingPlan:
         dataset_sha=dataset_sha,
         estimated_cost_usd=cost,
         estimated_minutes=minutes,
-        peak_vram_gb=_DEFAULT_PEAK_VRAM,
+        peak_vram_gb=peak_vram_gb,
         spot_price_usd_per_hour=_DEFAULT_SPOT_PRICE,
+        peak_vram_reason=peak_vram_reason,
     )
 
 
 def _plan_to_dict(plan: TrainingPlan) -> dict:
-    return {
+    out = {
         "base": plan.base,
         "task": plan.task,
         "config_sha": plan.config_sha,
@@ -311,6 +390,9 @@ def _plan_to_dict(plan: TrainingPlan) -> dict:
         "peak_vram_gb": plan.peak_vram_gb,
         "spot_price_usd_per_hour": plan.spot_price_usd_per_hour,
     }
+    if plan.peak_vram_gb is None:
+        out["peak_vram_reason"] = plan.peak_vram_reason
+    return out
 
 
 def _plan_from_dict(d: Mapping[str, Any]) -> TrainingPlan:
@@ -321,8 +403,10 @@ def _plan_from_dict(d: Mapping[str, Any]) -> TrainingPlan:
         dataset_sha=str(d["dataset_sha"]),
         estimated_cost_usd=float(d["estimated_cost_usd"]),
         estimated_minutes=float(d["estimated_minutes"]),
-        peak_vram_gb=float(d["peak_vram_gb"]),
+        # A state file written before #2049 always has a number here.
+        peak_vram_gb=None if d["peak_vram_gb"] is None else float(d["peak_vram_gb"]),
         spot_price_usd_per_hour=float(d["spot_price_usd_per_hour"]),
+        peak_vram_reason=d.get("peak_vram_reason"),
     )
 
 

@@ -1,0 +1,23 @@
+{
+  "arm_changes_pct": {
+    "S2": 0.84839410298561,
+    "S3": 0.8258491390919531,
+    "S4": -65.64443829738778,
+    "S5": -1.1722693789028837,
+    "S6": 2.507307129027464,
+    "S7": -0.005221165545757299
+  },
+  "env": {},
+  "recompute_conflict_dropped": "S3",
+  "rule": "every single change S2..S7 faster than S1 by more than S1's spread, combined",
+  "s1_median_tok_per_s": 61.99133543956563,
+  "s1_spread": 0.007487204259411132,
+  "selected": [
+    "S2",
+    "S6"
+  ],
+  "training": {
+    "stream_buffers": 3,
+    "stream_recompute": "auto"
+  }
+}

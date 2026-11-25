@@ -155,76 +155,28 @@ def validate_shell(value: object) -> str:
     return normalised
 
 
-def render_bash_script() -> str:
-    """Render a bash completion script for the `soup` CLI.
+def _render_typer_script(shell: str) -> str:
+    """Use the installed Typer's matching instruction and response formats."""
+    from typer.completion import get_completion_script
 
-    Defers to Typer/Click's built-in ``COMPLETE`` env machinery so the
-    completion stays in sync with the live Typer app (new commands /
-    flags are picked up automatically).
-    """
-    return (
-        "# Soup bash completion (v0.64.0)\n"
-        "# Source this file from ~/.bashrc:\n"
-        "#   eval \"$(soup completions bash)\"\n"
-        "_soup_complete() {\n"
-        "    local IFS=$'\\n'\n"
-        "    local response\n"
-        "    response=$(env COMP_WORDS=\"${COMP_WORDS[*]}\" \\\n"
-        "        COMP_CWORD=$COMP_CWORD \\\n"
-        "        _SOUP_COMPLETE=bash_complete \\\n"
-        "        $1 2>/dev/null)\n"
-        "    for completion in $response; do\n"
-        "        IFS=',' read type value <<< \"$completion\"\n"
-        "        if [[ $type == 'plain' ]]; then\n"
-        "            COMPREPLY+=(\"$value\")\n"
-        "        fi\n"
-        "    done\n"
-        "    return 0\n"
-        "}\n"
-        "complete -o nosort -F _soup_complete soup\n"
-    )
+    return get_completion_script(
+        prog_name="soup", complete_var="_SOUP_COMPLETE", shell=shell
+    ) + "\n"
+
+
+def render_bash_script() -> str:
+    """Render a bash completion script for the live Typer command tree."""
+    return _render_typer_script("bash")
 
 
 def render_zsh_script() -> str:
-    """Render a zsh completion script for `soup`."""
-    return (
-        "#compdef soup\n"
-        "# Soup zsh completion (v0.64.0)\n"
-        "# Source this file from ~/.zshrc:\n"
-        "#   eval \"$(soup completions zsh)\"\n"
-        "_soup_complete() {\n"
-        "    local -a completions\n"
-        "    local -a completions_with_descriptions\n"
-        "    local -a response\n"
-        "    response=(\"${(@f)$(env COMP_WORDS=\"${words[*]}\" \\\n"
-        "        COMP_CWORD=$((CURRENT-1)) \\\n"
-        "        _SOUP_COMPLETE=zsh_complete soup 2>/dev/null)}\")\n"
-        "    for type_value in \"${response[@]}\"; do\n"
-        "        IFS=',' read -r -A parts <<< \"$type_value\"\n"
-        "        completions+=(\"${parts[2]}\")\n"
-        "    done\n"
-        "    _describe '' completions\n"
-        "}\n"
-        "compdef _soup_complete soup\n"
-    )
+    """Render a zsh completion script for the live Typer command tree."""
+    return _render_typer_script("zsh")
 
 
 def render_fish_script() -> str:
-    """Render a fish completion script for `soup`."""
-    return (
-        "# Soup fish completion (v0.64.0)\n"
-        "# Source this file from ~/.config/fish/completions/soup.fish\n"
-        "function _soup_complete\n"
-        "    set -l response (env _SOUP_COMPLETE=fish_complete \\\n"
-        "        COMP_WORDS=(commandline -cp) \\\n"
-        "        COMP_CWORD=(commandline -t) soup 2>/dev/null)\n"
-        "    for item in $response\n"
-        "        set parts (string split \",\" $item)\n"
-        "        echo $parts[2]\n"
-        "    end\n"
-        "end\n"
-        "complete -c soup -f -a \"(_soup_complete)\"\n"
-    )
+    """Render a fish completion script for the live Typer command tree."""
+    return _render_typer_script("fish")
 
 
 def render_completion_script(shell: object) -> str:

@@ -131,6 +131,11 @@
     "training.grpo_beta": 0.1,
     "training.grpo_delta": null,
     "training.grpo_fp16": false,
+    "training.grpo_judge": null,
+    "training.grpo_judge_max_calls": null,
+    "training.grpo_judge_max_failure_rate": null,
+    "training.grpo_judge_max_tokens": null,
+    "training.grpo_judge_rubric": null,
     "training.grpo_variant": null,
     "training.hub": "hf",
     "training.ipo_tau": 0.1,
@@ -207,6 +212,7 @@
     "training.ppo_kl_penalty": 0.05,
     "training.preference_loss": null,
     "training.preference_loss_weights": null,
+    "training.prefix_tree": false,
     "training.prm_aggregate": "min",
     "training.prm_reward": null,
     "training.quantization": "4bit",
@@ -261,6 +267,7 @@
     "training.rollout_func": null,
     "training.rope_scaling_type": null,
     "training.save_steps": 100,
+    "training.save_strategy": "steps",
     "training.scheduler": "cosine",
     "training.seed": null,
     "training.simpo_gamma": 0.5,
@@ -269,11 +276,12 @@
     "training.stream_disk_kind": null,
     "training.stream_expert_layout": "fused",
     "training.stream_layers": false,
-    "training.stream_nf4_scale_cache": false,
     "training.stream_loss_chunk": null,
+    "training.stream_nf4_scale_cache": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,
+    "training.stream_recompute": "on",
     "training.stream_source": "auto",
     "training.stream_vram_override": null,
     "training.stream_vram_probe": false,
@@ -804,32 +812,10 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2-Base",
-      "data.format": "auto",
-      "data.max_length": 8192,
-      "data.train": "./data/train.jsonl",
-      "training.epochs": 2,
-      "training.lora.alpha": 32,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.moe_lora": true
+      "$unavailable": "resident Kimi K2 route: training.quantization '4bit' is refused \u2014 the resident route loads bf16 only; set training.quantization: none for this route, or train 4-bit through training.stream_layers: true (--trust-remote-code for the tokenizer and pip install tiktoken; see docs/performance-and-quantization.md, Kimi K2)."
     },
     "kimi-k2-thinking-grpo": {
-      "base": "moonshotai/Kimi-K2-Thinking",
-      "data.format": "auto",
-      "data.max_length": 4096,
-      "data.train": "./data/reasoning_prompts.jsonl",
-      "task": "grpo",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 8,
-      "training.gradient_checkpointing": true,
-      "training.grpo_beta": 0.04,
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 5e-06,
-      "training.verifiable_domain": "math"
+      "$unavailable": "Resident Kimi K2 is unsupported on Transformers 5.x. No supported route yet."
     },
     "kimi-k2.5-dpo": {
       "base": "moonshotai/Kimi-K2.5",
@@ -1249,6 +1235,22 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 0.0002
+    },
+    "minimax-m3-dpo": {
+      "base": "MiniMaxAI/MiniMax-M3",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "modality": "vision",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 5e-06
     },
     "minimax-m3-sft": {
       "base": "MiniMaxAI/MiniMax-M3",
@@ -1719,6 +1721,16 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "qwen3.5-0.8b-dpo": {
+      "base": "Qwen/Qwen3.5-0.8B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
     "qwen3.5-0.8b-grpo": {
       "base": "Qwen/Qwen3.5-0.8B",
       "data.format": "auto",
@@ -1731,12 +1743,56 @@
       "training.lora.r": 16,
       "training.lr": 1e-05
     },
+    "qwen3.5-0.8b-pretrain": {
+      "base": "Qwen/Qwen3.5-0.8B-Base",
+      "data.format": "plaintext",
+      "data.max_length": 4096,
+      "data.train": "./data/corpus.jsonl",
+      "task": "pretrain",
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 0.0001
+    },
     "qwen3.5-0.8b-sft": {
       "base": "Qwen/Qwen3.5-0.8B",
       "data.format": "auto",
       "data.train": "./data/train.jsonl",
       "training.lora.r": 8,
       "training.lr": 0.0003
+    },
+    "qwen3.5-122b-a10b-dpo": {
+      "base": "Qwen/Qwen3.5-122B-A10B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
+    "qwen3.5-122b-a10b-grpo": {
+      "base": "Qwen/Qwen3.5-122B-A10B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
     },
     "qwen3.5-122b-a10b-sft": {
       "base": "Qwen/Qwen3.5-122B-A10B",
@@ -1753,6 +1809,29 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "qwen3.5-27b-dpo": {
+      "base": "Qwen/Qwen3.5-27B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
+    "qwen3.5-27b-grpo": {
+      "base": "Qwen/Qwen3.5-27B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05
+    },
     "qwen3.5-27b-sft": {
       "base": "Qwen/Qwen3.5-27B",
       "data.format": "auto",
@@ -1762,6 +1841,16 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
+    },
+    "qwen3.5-2b-dpo": {
+      "base": "Qwen/Qwen3.5-2B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
     },
     "qwen3.5-2b-grpo": {
       "base": "Qwen/Qwen3.5-2B",
@@ -1774,6 +1863,18 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
+    },
+    "qwen3.5-2b-pretrain": {
+      "base": "Qwen/Qwen3.5-2B-Base",
+      "data.format": "plaintext",
+      "data.max_length": 4096,
+      "data.train": "./data/corpus.jsonl",
+      "task": "pretrain",
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 0.0001
     },
     "qwen3.5-2b-sft": {
       "base": "Qwen/Qwen3.5-2B",
@@ -1810,6 +1911,20 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "qwen3.5-35b-a3b-pretrain": {
+      "base": "Qwen/Qwen3.5-35B-A3B-Base",
+      "data.format": "plaintext",
+      "data.max_length": 4096,
+      "data.train": "./data/corpus.jsonl",
+      "task": "pretrain",
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 0.0001,
+      "training.moe_lora": true
+    },
     "qwen3.5-35b-a3b-sft": {
       "base": "Qwen/Qwen3.5-35B-A3B",
       "data.format": "auto",
@@ -1820,6 +1935,38 @@
       "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
+      "training.moe_lora": true
+    },
+    "qwen3.5-397b-a17b-dpo": {
+      "base": "Qwen/Qwen3.5-397B-A17B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 32,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
+    "qwen3.5-397b-a17b-grpo": {
+      "base": "Qwen/Qwen3.5-397B-A17B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 32,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 1e-05,
       "training.moe_lora": true
     },
     "qwen3.5-397b-a17b-sft": {
@@ -1836,6 +1983,28 @@
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
+    },
+    "qwen3.5-4b-dpo": {
+      "base": "Qwen/Qwen3.5-4B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
+    "qwen3.5-4b-grpo": {
+      "base": "Qwen/Qwen3.5-4B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05
     },
     "qwen3.5-4b-pretrain": {
       "base": "Qwen/Qwen3.5-4B-Base",
@@ -1879,6 +2048,18 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
+    },
+    "qwen3.5-9b-pretrain": {
+      "base": "Qwen/Qwen3.5-9B-Base",
+      "data.format": "plaintext",
+      "data.max_length": 4096,
+      "data.train": "./data/corpus.jsonl",
+      "task": "pretrain",
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 0.0001
     },
     "qwen3.5-9b-sft": {
       "base": "Qwen/Qwen3.5-9B",

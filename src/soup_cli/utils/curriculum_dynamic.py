@@ -1,19 +1,16 @@
-"""Curriculum-Aware dynamic re-weighting (v0.48.0 Part A — BETA).
+"""Curriculum-Aware dynamic telemetry tracking (v0.48.0 Part A — BETA).
 
 Online uncertainty estimation: every N steps, aggregate per-sample loss and
-gradient-norm fingerprints into bucket-level weights and surface a recommended
-sampler weight per bucket. Up-weight high-uncertainty / under-fit buckets;
-down-weight already-mastered ones.
+gradient-norm fingerprints into bucket-level weights and surface recommended
+bucket weights. Track high-uncertainty / under-fit buckets vs
+already-mastered ones for telemetry and curve inspection.
 
 DDP / grad-accum safety: all-reduce of per-sample stats across ranks is the
 well-known footgun for dynamic curriculum learning. We document the contract
 here and surface a cross-validator that rejects ``curriculum_dynamic=true``
 combined with launches that have not declared rank coordination.
 
-This module ships BETA-flagged: the math is pure-Python + numpy-free; the live
-HF Trainer callback wiring is deferred to v0.48.1 once external benchmarks have
-landed (mirrors the v0.27.0 MII / v0.37.0 multipack / v0.41.0 LLaMA Pro
-stub-then-live pattern).
+This module ships BETA-flagged: the math is pure-Python + numpy-free.
 """
 
 from __future__ import annotations
@@ -62,14 +59,14 @@ def _reject_bool_float(name: str, value) -> float:
 
 @dataclass(frozen=True)
 class DynamicCurriculumPolicy:
-    """Frozen config for the dynamic re-weighting policy.
+    """Frozen config for the dynamic curriculum telemetry policy.
 
     Attributes:
         num_buckets: Number of difficulty buckets (must match
             ``training.curriculum_buckets`` schema field).
-        recompute_every_n_steps: Refresh sampler weights every N global steps.
+        recompute_every_n_steps: Refresh bucket weights every N global steps.
         floor: Minimum normalised per-bucket weight (defends against
-            "starve a bucket" pathology). In ``(0, 1/num_buckets]``.
+            near-zero bucket weight values). In ``(0, 1/num_buckets]``.
         temperature: Softmax temperature applied to uncertainty signal. Higher
             values flatten the distribution toward uniform; lower values
             concentrate weight on the hardest buckets.
@@ -226,7 +223,7 @@ def compute_bucket_weights(
     stats: Mapping[int, Mapping[str, float]],
     policy: DynamicCurriculumPolicy,
 ) -> Tuple[float, ...]:
-    """Return normalised sampler weights per bucket.
+    """Return normalised bucket weights per bucket.
 
     Buckets with no recorded samples fall back to the uniform prior. Buckets
     with higher mean loss + grad norm receive more weight; the floor parameter
@@ -311,7 +308,7 @@ def validate_distributed_curriculum(
 
     When ``curriculum_dynamic=true`` and the launch is multi-rank, the caller
     MUST attest that an ``all_reduce`` of per-sample stats is wired (otherwise
-    each rank computes a divergent weight and the sampler desynchronises).
+    each rank computes a divergent telemetry weight).
 
     Args:
         enabled: Resolved value of ``training.curriculum_dynamic``.

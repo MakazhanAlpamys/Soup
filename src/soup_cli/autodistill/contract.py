@@ -16,6 +16,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from soup_cli.utils.jsonl_lines import jsonl_lines
+
 AUTODISTILL_PLAN_SCHEMA = "soup.autodistill.plan.v1"
 CAPTURE_TOKEN_SCHEMA = "soup.autodistill.capture-token.v1"
 SHARD_MANIFEST_SCHEMA = "soup.autodistill.shard-manifest.v1"
@@ -733,7 +735,7 @@ def canonicalize_jsonl_bytes(data: bytes) -> bytes:
         return result
 
     canonical_rows: list[bytes] = []
-    for index, line in enumerate(text.splitlines(), start=1):
+    for index, line in enumerate(jsonl_lines(text), start=1):
         if not line.strip():
             raise ValueError(f"blank JSONL row at line {index}")
         try:

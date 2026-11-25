@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+UNSLOTH_LORA_TARGETS = (
+    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+)
+
 
 def is_unsloth_available() -> bool:
     """Check if unsloth is installed and importable."""
@@ -101,10 +105,7 @@ def load_model_and_tokenizer(
     # Resolve target_modules for LoRA
     if target_modules == "auto" or target_modules is None:
         # Unsloth default: all linear layers for maximum performance
-        target_modules = [
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ]
+        target_modules = list(UNSLOTH_LORA_TARGETS)
     elif isinstance(target_modules, str):
         target_modules = [target_modules]
 

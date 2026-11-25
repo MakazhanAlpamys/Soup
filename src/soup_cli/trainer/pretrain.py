@@ -7,7 +7,9 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -16,9 +18,13 @@ from soup_cli.utils.gpu import (
     resolve_base_load_dtype,
     resolve_device_map,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -131,11 +137,9 @@ class PretrainTrainerWrapper:
         # via `soup data preprocess`. Skips the raw-text load entirely.
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
-        # #1054: pass ``tcfg`` -- ``preprocess_mask_mode`` reads
-        # ``training.train_on_eot`` from it, and ``task: pretrain`` is in the
-        # sft-family set the schema allows that flag on. Omitting it dropped the
-        # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
-        # was refused by a hash the re-run advised in the error reproduces.
+        # #1054: pass ``tcfg`` so the cache key is derived the same way as in
+        # ``soup data preprocess``. The schema refuses ``training.train_on_eot``
+        # on ``task: pretrain`` (#806), so the mask mode here is the default.
         pretok = _maybe_load_pretokenized(
             cfg.data, cfg.base, console, getattr(cfg, "training", None),
             task=cfg.task,
@@ -150,9 +154,7 @@ class PretrainTrainerWrapper:
                 eval_ds = Dataset.from_list(dataset["val"])
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Calculate warmup steps from ratio (#1431) ---
@@ -178,8 +180,7 @@ class PretrainTrainerWrapper:
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             "bf16": _bf16,
             "fp16": _fp16,
             "report_to": self.report_to,
@@ -309,7 +310,7 @@ class PretrainTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model
@@ -334,7 +335,7 @@ class PretrainTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_base_load_dtype(
+            "dtype": resolve_base_load_dtype(
                 self.device, full_finetune=tcfg.lisa_enabled
             ),
         }
@@ -386,13 +387,15 @@ class PretrainTrainerWrapper:
             )
 
         if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.kbit_prepare import kbit_compute_dtype, prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_model_for_kbit_training(
+            self.model = prepare_kbit_model(
                 self.model,
                 use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
                     tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                 ),
+                compute_dtype=kbit_compute_dtype(self.device),
             )
 
         # v0.53.4 #83 — LLaMA Pro block expansion (centralised — see SFT).
@@ -527,7 +530,14 @@ class PretrainTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
-            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            # TRL's SFTTrainer casts a 4/8-bit base's adapter to bf16 when it is
+            # built, and the checkpoint reload upcasts it to fp32. Without this a
+            # resumed pretrain run trains and saves another dtype than the
+            # uninterrupted one, as SFT did before #1503 (and DPO/GRPO before #1573).
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
+            with manual_save_context(self.trainer):
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
         # Save final model; ReLoRA output is dense.

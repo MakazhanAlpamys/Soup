@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 import soup_cli.commands.export as export_mod
 import soup_cli.commands.quantize as quantize_mod
 from soup_cli.cli import app
+from soup_cli.config import deprecation
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
@@ -47,6 +48,37 @@ class TestExportRefusesRemovedFormats:
         assert f"--format {fmt} was removed in v0.77." in output
         for remaining in STAYING_EXPORT:
             assert remaining in output
+
+    @pytest.mark.parametrize("fmt", REMOVED)
+    def test_export_refusal_names_the_removal_release(
+        self, fmt: str, tmp_path: pathlib.Path
+    ) -> None:
+        """The sentence names the release that removed the format, in full."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        result = CliRunner().invoke(app, ["export", "--model", str(model_dir), "--format", fmt])
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert f"--format {fmt} was removed in v0.77.0." in _plain(result.output)
+
+    @pytest.mark.parametrize("fmt", REMOVED)
+    def test_a_later_deprecation_deadline_does_not_move_the_removal(
+        self, fmt: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The next deprecation moves ``DEPRECATED_VALUE_REJECTION_VERSION``; the removal
+        stays dated to the release that made it."""
+        monkeypatch.setattr(deprecation, "DEPRECATED_VALUE_REJECTION_VERSION", "0.78")
+        monkeypatch.setattr(export_mod, "DEPRECATED_VALUE_REJECTION_VERSION", "0.78", raising=False)
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+
+        result = CliRunner().invoke(app, ["export", "--model", str(model_dir), "--format", fmt])
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        output = _plain(result.output)
+        assert f"--format {fmt} was removed in v0.77.0." in output
+        assert "0.78" not in output
 
     @pytest.mark.parametrize("fmt", REMOVED)
     def test_export_refusal_does_not_mention_deprecation(
@@ -91,6 +123,42 @@ class TestQuantizeRefusesRemovedFormats:
         assert result.exit_code == 2
         output = _plain(result.output)
         assert "--to must be one of" in output
+
+    @pytest.mark.parametrize("typed", ["awq", "gptq", "AWQ", "GPTQ", "Gptq", " awq "])
+    def test_quantize_refusal_names_the_removal_release(self, typed: str) -> None:
+        result = CliRunner().invoke(app, ["quantize", "./out", "--to", typed])
+
+        assert result.exit_code == 2
+        output = _plain(result.output)
+        refusal = f"--to must be one of {sorted(quantize_mod.VALID_FORMATS)}; got {typed!r}"
+        removed_in = deprecation.EXPORT_FORMATS_REMOVED_IN
+        removal = f"--to {typed.strip().lower()} was removed in v{removed_in}."
+        assert refusal in output
+        assert removal in output
+        assert output.index(refusal) < output.index(removal)
+
+    @pytest.mark.parametrize("typed", ["bogus", "", "a\x1bb"])
+    def test_quantize_unknown_format_does_not_mention_removal(self, typed: str) -> None:
+        result = CliRunner().invoke(app, ["quantize", "./out", "--to", typed])
+
+        assert result.exit_code == 2
+        output = _plain(result.output)
+        assert (
+            f"--to must be one of {sorted(quantize_mod.VALID_FORMATS)}; got {typed!r}"
+            in output
+        )
+        assert "removed" not in output
+
+    @pytest.mark.parametrize("typed", ["[/]", "[bold]x[/bold]"])
+    def test_quantize_shows_a_markup_value_as_typed(self, typed: str) -> None:
+        result = CliRunner().invoke(app, ["quantize", "./out", "--to", typed])
+
+        assert result.exit_code == 2
+        output = _plain(result.output)
+        assert (
+            f"--to must be one of {sorted(quantize_mod.VALID_FORMATS)}; got {typed!r}"
+            in output
+        )
 
     def test_quantize_help_omits_removed_formats(self) -> None:
         result = CliRunner().invoke(app, ["quantize", "--help"])

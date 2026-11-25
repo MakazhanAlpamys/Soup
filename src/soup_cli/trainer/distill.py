@@ -31,14 +31,17 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import bf16_fp16_flags, resolve_device_map
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 if TYPE_CHECKING:
     import torch as _torch_typ
 
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 
@@ -386,6 +389,7 @@ def _map_distill_rows(
     split: str,
     max_length: int,
     trust_source_index: bool = False,
+    rollout_tokenizer: Any | None = None,
 ) -> Any:
     """Tokenize distill rows and attach human-facing row number to causal-loss
     target failures (#1242).
@@ -394,12 +398,30 @@ def _map_distill_rows(
 
     from soup_cli.data.loss_mask import (
         NoCausalLossTargetError,
+        coerce_token_ids,
         ensure_causal_loss_target,
     )
 
     def checked_format_row(example: dict, row_index: int) -> dict:
         try:
             formatted = format_row(example)
+            if rollout_tokenizer is not None:
+                from soup_cli.utils.distill import extract_prompt_messages
+
+                prompt = extract_prompt_messages(formatted.pop("messages"))
+                if not any(message.get("role") != "system" for message in prompt):
+                    raise ValueError(
+                        "MiniLLM on-policy requires a non-empty prompt before the target "
+                        "response; supply explicit prompt and response rows"
+                    )
+                encoded = rollout_tokenizer.apply_chat_template(
+                    prompt, tokenize=True, add_generation_prompt=True, return_dict=True,
+                )
+                prompt_ids = coerce_token_ids(encoded)[-max_length:]
+                if not prompt_ids:
+                    raise ValueError("MiniLLM on-policy prompt has no usable tokens")
+                formatted["rollout_input_ids"] = prompt_ids
+                formatted["rollout_attention_mask"] = [1] * len(prompt_ids)
             labels = formatted.get("labels")
             if labels is not None:
                 ensure_causal_loss_target(labels, max_length=max_length)
@@ -417,6 +439,10 @@ def _map_distill_rows(
                 raise ValueError(f"{split} row {row_num}: {msg}") from exc
             row_num = row_index + 1
             raise ValueError(f"{split} row {row_num}: {exc}") from exc
+        except ValueError as exc:
+            if rollout_tokenizer is not None:
+                raise ValueError(f"{split} row {row_index + 1}: {exc}") from exc
+            raise
 
     raw_ds = Dataset.from_list(rows) if isinstance(rows, list) else rows
     return raw_ds.map(
@@ -424,6 +450,36 @@ def _map_distill_rows(
         with_indices=True,
         remove_columns=raw_ds.column_names,
     )
+
+
+class _DistillCollator:
+    """Keep rollout padding separate from the supervised Seq2Seq collator."""
+
+    def __init__(self, tokenizer: Any) -> None:
+        from transformers import DataCollatorForSeq2Seq
+
+        self.tokenizer = tokenizer
+        self.ce_collator = DataCollatorForSeq2Seq(
+            tokenizer=tokenizer, label_pad_token_id=-100, padding=True,
+        )
+
+    def __call__(self, features: list[dict]) -> dict:
+        ce_features = [dict(feature) for feature in features]
+        rollout_features = []
+        for feature in ce_features:
+            if "rollout_input_ids" in feature:
+                rollout_features.append({
+                    "input_ids": feature.pop("rollout_input_ids"),
+                    "attention_mask": feature.pop("rollout_attention_mask"),
+                })
+        batch = self.ce_collator(ce_features)
+        if rollout_features:
+            rollout = self.tokenizer.pad(
+                rollout_features, padding=True, padding_side="left", return_tensors="pt",
+            )
+            batch["rollout_input_ids"] = rollout["input_ids"]
+            batch["rollout_attention_mask"] = rollout["attention_mask"]
+        return batch
 
 
 class DistillTrainerWrapper:
@@ -781,6 +837,7 @@ class DistillTrainerWrapper:
             data_cfg=cfg.data,
             console=console,
             training_cfg=tcfg,
+            include_messages=minillm_cb is not None and minillm_cb.config.on_policy,
         )
         raw_train = dataset["train"]
         train_ds = _map_distill_rows(
@@ -789,6 +846,7 @@ class DistillTrainerWrapper:
             split="train",
             max_length=int(cfg.data.max_length),
             trust_source_index=sequence_mode,
+            rollout_tokenizer=self.tokenizer if tcfg.minillm_on_policy else None,
         )
         eval_ds = None
         if "val" in dataset and dataset["val"]:
@@ -798,15 +856,15 @@ class DistillTrainerWrapper:
                 split="val",
                 max_length=int(cfg.data.max_length),
                 trust_source_index=sequence_mode,
+                rollout_tokenizer=self.tokenizer if tcfg.minillm_on_policy else None,
             )
 
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 4
         # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
         from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
@@ -819,13 +877,15 @@ class DistillTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
@@ -886,6 +946,9 @@ class DistillTrainerWrapper:
             ):
                 import torch
 
+                inputs = dict(inputs)
+                rollout_ids = inputs.pop("rollout_input_ids", None)
+                rollout_mask = inputs.pop("rollout_attention_mask", None)
                 labels = inputs.get("labels")
                 outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
                 student_logits = outputs.logits
@@ -946,8 +1009,8 @@ class DistillTrainerWrapper:
                     rollout_loss = _minillm_cb.on_policy_term(
                         model,
                         teacher_ref,
-                        inputs["input_ids"],
-                        inputs.get("attention_mask"),
+                        rollout_ids,
+                        rollout_mask,
                     )
                     _tracker = getattr(self, "nonfinite_tracker", None)
                     if _tracker is not None:
@@ -1094,7 +1157,7 @@ class DistillTrainerWrapper:
         # via the tokenizer AND pads ``labels`` with ``label_pad_token_id``
         # (-100 = IGNORE_INDEX). ``DataCollatorForLanguageModeling`` does
         # NOT pad labels — incorrect for our pre-tokenised loss-masked rows.
-        from transformers import DataCollatorForSeq2Seq, TrainerCallback
+        from transformers import TrainerCallback
 
         self.trainer = _DistillTrainer(
             model=self.model,
@@ -1102,11 +1165,7 @@ class DistillTrainerWrapper:
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
-            data_collator=DataCollatorForSeq2Seq(
-                tokenizer=self.tokenizer,
-                label_pad_token_id=-100,
-                padding=True,
-            ),
+            data_collator=_DistillCollator(self.tokenizer),
             tracker=nonfinite_tracker,
         )
 
@@ -1186,7 +1245,8 @@ class DistillTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         if getattr(self, "nonfinite_tracker", None) is not None:
             self.nonfinite_tracker.check_and_warn()
         duration = time.time() - start

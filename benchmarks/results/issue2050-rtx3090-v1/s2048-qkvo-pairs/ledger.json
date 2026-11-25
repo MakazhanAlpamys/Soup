@@ -1,0 +1,72 @@
+[
+  {
+    "pair": 0,
+    "arm": "A",
+    "rc": 0,
+    "wall_s": 170.6,
+    "free_gib_before": 108.95
+  },
+  {
+    "pair": 0,
+    "arm": "B",
+    "rc": 0,
+    "wall_s": 164.5,
+    "free_gib_before": 108.92
+  },
+  {
+    "pair": 1,
+    "arm": "B",
+    "rc": 0,
+    "wall_s": 164.6,
+    "free_gib_before": 108.98
+  },
+  {
+    "pair": 1,
+    "arm": "A",
+    "rc": 0,
+    "wall_s": 170.2,
+    "free_gib_before": 109.0
+  },
+  {
+    "pair": 2,
+    "arm": "A",
+    "rc": 0,
+    "wall_s": 172.2,
+    "free_gib_before": 107.26
+  },
+  {
+    "pair": 2,
+    "arm": "B",
+    "rc": 0,
+    "wall_s": 165.2,
+    "free_gib_before": 104.77
+  },
+  {
+    "pair": 3,
+    "arm": "B",
+    "rc": 0,
+    "wall_s": 164.6,
+    "free_gib_before": 110.14
+  },
+  {
+    "pair": 3,
+    "arm": "A",
+    "rc": 0,
+    "wall_s": 169.8,
+    "free_gib_before": 105.77
+  },
+  {
+    "pair": 4,
+    "arm": "A",
+    "rc": 0,
+    "wall_s": 171.4,
+    "free_gib_before": 109.69
+  },
+  {
+    "pair": 4,
+    "arm": "B",
+    "rc": 0,
+    "wall_s": 164.4,
+    "free_gib_before": 110.01
+  }
+]

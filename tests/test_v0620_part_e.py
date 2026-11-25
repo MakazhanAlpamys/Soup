@@ -344,5 +344,19 @@ training:
 
 output: ./output
 """
-        cfg = load_config_from_string(yaml_text)
+        import yaml
+
+        from soup_cli.config.schema import SoupConfig
+        from soup_cli.config.staged_fields import STAGED_FIELD_REJECTION_VERSION
+
+        # The three fields are staged (#808): the schema still accepts them, and the
+        # loader refuses them as of v0.77, one line each, in STAGED_FIELDS order.
+        cfg = SoupConfig(**yaml.safe_load(yaml_text))
         assert cfg.training.grace_codebook is True
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(yaml_text)
+        assert str(excinfo.value) == "\n".join(
+            f"training.{name} is accepted but read by nothing; "
+            f"refused as of v{STAGED_FIELD_REJECTION_VERSION}. Delete the line."
+            for name in ("grace_codebook", "grace_codebook_size", "grace_codebook_dim")
+        )

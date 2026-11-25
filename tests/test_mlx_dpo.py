@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from pathlib import Path
 
 import pytest
 
@@ -185,7 +186,7 @@ class TestBuildPreferenceExample:
     def test_prompt_capped_keep_start(self):
         ex = self._build(
             {"prompt": "abcdefgh", "chosen": "x", "rejected": "y"},
-            max_length=100,
+            max_length=10,
             max_prompt_length=4,
         )
         assert ex.prompt_ids == [BOS, ord("a"), ord("b"), ord("c")]
@@ -193,7 +194,7 @@ class TestBuildPreferenceExample:
     def test_prompt_capped_keep_end(self):
         ex = self._build(
             {"prompt": "abcdefgh", "chosen": "x", "rejected": "y"},
-            max_length=100,
+            max_length=10,
             max_prompt_length=3,
             mode="keep_end",
         )
@@ -468,9 +469,9 @@ class TestConfig:
         fields = {entry.field for entry in check_config(cfg)}
         assert fields == {"training.use_galore"}
 
-    # orpo and simpo have their own MLX trainers since #2004 / #1999
-    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py).
-    @pytest.mark.parametrize("task", ["ipo", "kto", "ppo"])
+    # orpo, simpo and kto have their own MLX trainers since #2004 / #1999 / #2000
+    # (tests/test_mlx_orpo.py, tests/test_mlx_simpo.py, tests/test_mlx_kto.py).
+    @pytest.mark.parametrize("task", ["ipo", "ppo"])
     def test_other_preference_tasks_still_refused(self, task):
         from soup_cli.config.loader import load_config_from_string
 
@@ -478,14 +479,14 @@ class TestConfig:
         with pytest.raises(Exception, match="MLX backend"):
             load_config_from_string(yaml_str)
 
-    def test_the_preference_alias_is_refused_naming_task_dpo(self):
+    def test_the_preference_alias_selects_native_dpo(self):
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
 
         alias = (_MLX_DPO_YAML.replace("task: dpo", "task: preference")
                  .replace("  lr: 1e-6\n", "  lr: 1e-6\n  preference_loss: dpo\n"))
-        with pytest.raises(Exception, match="task='preference' has no trainer") as info:
-            load_config_from_string(alias)
-        assert "Use task: dpo for the native MLX trainer." in str(info.value)
+        assert isinstance(build_trainer(load_config_from_string(alias)), MLXDPOTrainerWrapper)
 
 
 # --------------------------------------------------------------------------
@@ -716,6 +717,60 @@ class TestPromptCapIsWired:
         assert len(example.prompt_ids) + len(example.chosen_ids) <= 40
 
 
+class TestThePlanHooksKeepDpoAndOrpoBehaviour:
+    """Pins the 5ce31005 refactor (no MLX): DPO and ORPO still plan seeded,
+    shuffled, whole batches and run ``auto`` at 1; only KTO overrides the hooks."""
+
+    def _wrapper(self, cls, yaml_text):
+        from soup_cli.config.loader import load_config_from_string
+
+        return cls(load_config_from_string(yaml_text))
+
+    def _both(self):
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+        from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
+        from tests.test_mlx_orpo import _ORPO_YAML
+
+        return [self._wrapper(MLXDPOTrainerWrapper, _MLX_DPO_YAML),
+                self._wrapper(MLXORPOTrainerWrapper, _ORPO_YAML)]
+
+    def test_the_plan_is_seeded_shuffled_and_drops_the_partial_batch(self):
+        for wrapper in self._both():
+            plan = wrapper._plan_batches(7, 2, 2, 3)
+            assert plan == wrapper._plan_batches(7, 2, 2, 3)
+            assert plan != wrapper._plan_batches(7, 2, 2, 4)
+            assert len(plan) == 6 and all(len(b) == 2 for b in plan)
+            for epoch in (plan[:3], plan[3:]):  # 6 distinct rows; the 7th never trains
+                rows = [i for b in epoch for i in b]
+                assert len(set(rows)) == 6 and set(rows) <= set(range(7))
+            sequential = [[0, 1], [2, 3], [4, 5]] * 2
+            assert any(wrapper._plan_batches(7, 2, 2, s) != sequential for s in range(3))
+
+    def test_auto_batch_size_is_one(self):
+        for wrapper in self._both():
+            wrapper.config.training.batch_size = "auto"
+            assert wrapper._resolve_batch_size() == 1
+            wrapper.config.training.batch_size = 3
+            assert wrapper._resolve_batch_size() == 3
+
+    def test_only_kto_overrides_the_hooks(self):
+        from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+        from soup_cli.trainer.mlx_kto import MLXKTOTrainerWrapper
+        from soup_cli.trainer.mlx_orpo import MLXORPOTrainerWrapper
+
+        for hook in ("_plan_batches", "_resolve_batch_size", "_check_train_rows",
+                     "_on_plan_cut"):
+            base = getattr(MLXDPOTrainerWrapper, hook)
+            assert getattr(MLXORPOTrainerWrapper, hook) is base, hook
+            assert getattr(MLXKTOTrainerWrapper, hook) is not base, hook
+
+    def test_fewer_pairs_than_a_batch_is_still_refused(self):
+        wrapper = self._both()[0]
+        with pytest.raises(ValueError, match=r"3 training pair\(s\) remain, fewer than "
+                                             r"training.batch_size \(4\), after skipping 1"):
+            wrapper._check_train_rows(3, 4, 1)
+
+
 class TestConfigRefusals:
     def _load(self, extra_top="", extra_training=""):
         from soup_cli.config.loader import load_config_from_string
@@ -841,6 +896,88 @@ class TestResume:
         # The policy starts trained, the reference is the base model, so the
         # first loss is already below log 2 (it is exactly log 2 from scratch).
         assert result["losses"][0] < math.log(2) - 1e-3
+
+    @pytest.mark.parametrize("change, match", [
+        ({"task": "orpo"}, "MLX DPO: .* task='orpo', not 'dpo'"),
+        ({"task": "sft"}, "task='sft', not 'dpo'"),
+        ("no task", "task=None, not 'dpo'"),
+        ({"model": "other-base"}, "belongs to base"),
+        (None, "no adapter_config.json"),
+    ])
+    def test_mismatched_or_missing_metadata_is_refused(self, tmp_path, monkeypatch, change, match):
+        first = _seeded_wrapper(tmp_path / "a", monkeypatch, batch_size=2, epochs=3, seed=1)
+        first.train()
+        checkpoint = tmp_path / "a" / "output" / "adapters.safetensors"
+        meta = checkpoint.parent / "adapter_config.json"
+        if change is None:
+            meta.unlink()
+        elif change == "no task":
+            meta.write_text(json.dumps(
+                {k: v for k, v in json.loads(meta.read_text()).items() if k != "task"}))
+        else:
+            meta.write_text(json.dumps({**json.loads(meta.read_text()), **change}))
+        resumed = _seeded_wrapper(tmp_path / "b", monkeypatch, batch_size=2, seed=1)
+        with pytest.raises(ValueError, match=match):
+            resumed.train(resume_from_checkpoint=str(checkpoint))
+
+    @pytest.mark.parametrize("module, cls, task, data_format, name", [
+        ("mlx_dpo", "MLXDPOTrainerWrapper", "dpo", "dpo", "DPO"),
+        ("mlx_orpo", "MLXORPOTrainerWrapper", "orpo", "dpo", "ORPO"),
+        ("mlx_simpo", "MLXSimPOTrainerWrapper", "simpo", "dpo", "SimPO"),
+        ("mlx_kto", "MLXKTOTrainerWrapper", "kto", "kto", "KTO"),
+    ])
+    @pytest.mark.parametrize("change, match", [
+        ("other task", "MLX {name}: .* task='{other}', not '{task}'"),
+        ({"task": "sft"}, "task='sft', not '{task}'"),
+        ("no task", "task=None, not '{task}'"),
+        ({"model": "some/other-base"}, "belongs to base 'some/other-base'"),
+        (None, "no adapter_config.json"),
+    ])
+    def test_metadata_is_checked_before_any_tensor_loads(self, tmp_path, monkeypatch,
+                                                         module, cls, task, data_format,
+                                                         name, change, match):
+        """No MLX: the check runs on the wrapper alone, before MLX SFT's loader.
+
+        ORPO, SimPO and KTO inherit the check from the DPO wrapper, so each is
+        run with its own ``task``. "no task" is the shape of a real MLX SFT
+        adapter, whose ``adapter_config.json`` has no ``task`` key.
+        """
+        import importlib
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+        wrapper_cls = getattr(importlib.import_module(f"soup_cli.trainer.{module}"), cls)
+        other = "orpo" if task == "dpo" else "dpo"
+        match = match.format(task=task, other=other, name=name)
+
+        loaded = []
+        monkeypatch.setattr(MLXSFTTrainerWrapper, "_load_checkpoint_weights",
+                            lambda self, path: loaded.append(path))
+        text = _MLX_DPO_YAML.replace("task: dpo", f"task: {task}").replace(
+            "format: dpo", f"format: {data_format}")
+        wrapper = wrapper_cls(load_config_from_string(text))
+        checkpoint = tmp_path / "adapters.safetensors"
+        checkpoint.write_bytes(b"")
+        meta = {"task": task, "model": wrapper.config.base}
+        (tmp_path / "adapter_config.json").write_text(json.dumps(meta))
+
+        wrapper._load_checkpoint_weights(str(checkpoint))
+        assert loaded == [str(checkpoint)]
+
+        if change is None:
+            (tmp_path / "adapter_config.json").unlink()
+        elif change == "no task":
+            (tmp_path / "adapter_config.json").write_text(
+                json.dumps({"model": wrapper.config.base}))
+        elif change == "other task":
+            (tmp_path / "adapter_config.json").write_text(
+                json.dumps({**meta, "task": other}))
+        else:
+            (tmp_path / "adapter_config.json").write_text(json.dumps({**meta, **change}))
+        with pytest.raises(ValueError, match=match):
+            wrapper._load_checkpoint_weights(str(checkpoint))
+        assert loaded == [str(checkpoint)]
 
 
 class TestGradientAccumulation:
@@ -1000,3 +1137,86 @@ class TestRefusalsAndReporting:
         wrapper.train(display=Display())
         assert events and all(e.type == "metric" and e.loss is not None for e in events)
         assert any(e.val_loss is not None for e in events)
+
+
+# Preference aliases share these native loops and adapter contracts.
+@pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo"])
+@pytest.mark.parametrize("resume_alias", [False, True], ids=["native-resume", "alias-resume"])
+def test_alias_trains_a_native_adapter_that_the_native_task_can_resume(
+    loss: str, resume_alias: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mx = pytest.importorskip("mlx.core")
+    pytest.importorskip("mlx_lm")
+    from mlx_lm.models import llama
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.dispatch import build_trainer
+    from tests.test_mlx_orpo import CharTokenizer
+    from tests.test_mlx_preference import _config
+
+    monkeypatch.chdir(tmp_path)
+    text = _config(loss, training=(
+        "  quantization: none\n"
+        "  batch_size: 2\n"
+        "  gradient_accumulation_steps: 1\n"
+        "  gradient_checkpointing: false\n"
+        "  save_steps: 1\n"
+        "  lora: {r: 2, alpha: 4, dropout: 0.0}\n"
+    ), data="  max_length: 64\n")
+    args = llama.ModelArgs(
+        model_type="llama", hidden_size=32, num_hidden_layers=2, intermediate_size=64,
+        num_attention_heads=4, num_key_value_heads=2, rms_norm_eps=1e-5, vocab_size=200,
+        tie_word_embeddings=True,
+    )
+    rows = [{"prompt": f"q{i}:", "chosen": " good", "rejected": " bad"} for i in range(4)]
+    cfg = load_config_from_string(text)
+    cfg.output = str(tmp_path / "alias")
+    trainer = build_trainer(cfg)
+    mx.random.seed(0)
+    trainer.model = llama.Model(args)
+    trainer.tokenizer = CharTokenizer()
+    trainer._dataset = {"train": rows, "val": []}
+    result = trainer.train()
+
+    assert result["losses"] and all(math.isfinite(value) for value in result["losses"])
+    metadata = json.loads((tmp_path / "alias" / "adapter_config.json").read_text())
+    assert metadata["task"] == loss
+    assert metadata["model"] == "local-test-model"
+    weights = mx.load(str(tmp_path / "alias" / "adapters.safetensors"))
+    updates = [value for name, value in weights.items() if name.endswith("lora_b")]
+    assert updates and any(bool(mx.any(value != 0).item()) for value in updates)
+
+    native = text.replace("task: preference\n", f"task: {loss}\n").replace(
+        f"  preference_loss: {loss}\n", "",
+    )
+    resumed_cfg = load_config_from_string(text if resume_alias else native)
+    resumed_cfg.output = str(tmp_path / "resumed")
+    resumed = build_trainer(resumed_cfg)
+    mx.random.seed(0)
+    resumed.model = llama.Model(args)
+    resumed.tokenizer = CharTokenizer()
+    resumed._dataset = {"train": rows, "val": []}
+    if resume_alias:
+        meta_path = tmp_path / "alias" / "adapter_config.json"
+        for change, message in [
+            ({"task": "sft"}, "was trained with task='sft'"),
+            ({"model": "different-base"}, "belongs to base"),
+        ]:
+            mx.random.seed(0)
+            resumed.model = llama.Model(args)
+            meta_path.write_text(json.dumps({**metadata, **change}), encoding="utf-8")
+            with pytest.raises(ValueError, match=message):
+                resumed.train(
+                    resume_from_checkpoint=str(tmp_path / "alias" / "adapters.safetensors"),
+                )
+        meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+        mx.random.seed(0)
+        resumed.model = llama.Model(args)
+    resumed_result = resumed.train(
+        resume_from_checkpoint=str(tmp_path / "alias" / "adapters.safetensors"),
+    )
+    assert resumed_result["losses"] and all(
+        math.isfinite(value) for value in resumed_result["losses"]
+    )
+    resumed_meta = json.loads((tmp_path / "resumed" / "adapter_config.json").read_text())
+    assert resumed_meta["task"] == loss

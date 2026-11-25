@@ -23,7 +23,13 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
 from soup_cli.mcp_server.execution import ExecutionManager
-from soup_cli.mcp_server.registry import McpToolError, ToolSpec, build_registry, call_tool
+from soup_cli.mcp_server.registry import (
+    ENGINE_DESCRIBE,
+    McpToolError,
+    ToolSpec,
+    build_registry,
+    call_tool,
+)
 
 SERVER_NAME = "soup"
 
@@ -46,7 +52,7 @@ def _tool_descriptors(specs: List[ToolSpec]) -> List[types.Tool]:
     ]
 
 
-def _dispatch_tool(by_name, name: str, arguments: dict) -> str:
+def _dispatch_tool(by_name, name: str, arguments: dict | None) -> str:
     """Run one tool and return its pretty-printed JSON text.
 
     Raises :class:`_DispatchError` with a path-free, C0/ESC-free message for
@@ -113,7 +119,7 @@ def build_server(specs: List[ToolSpec]) -> Server:
 
         async def _on_call_tool(ctx, params) -> types.CallToolResult:
             try:
-                text = _dispatch_tool(by_name, params.name, params.arguments or {})
+                text = _dispatch_tool(by_name, params.name, params.arguments)
             except _DispatchError as exc:
                 # Shaped explicitly rather than raised: on 2.x an exception out
                 # of a handler becomes a JSON-RPC error, which is a different
@@ -142,11 +148,24 @@ def build_server(specs: List[ToolSpec]) -> Server:
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> List[types.TextContent]:
         try:
-            text = _dispatch_tool(by_name, name, arguments or {})
+            text = _dispatch_tool(by_name, name, arguments)
         except _DispatchError as exc:
             # 1.x turns a raised ValueError into the isError result itself.
             raise ValueError(str(exc)) from None
         return [types.TextContent(type="text", text=text)]
+
+    if ENGINE_DESCRIBE in by_name:
+        # MCP 1.x otherwise rejects an extra key before the describe handler can
+        # report the stable error. Keep the SDK validator for all other tools.
+        validated = server.request_handlers[types.CallToolRequest]
+        server.call_tool(validate_input=False)(_call_tool)
+        describe = server.request_handlers[types.CallToolRequest]
+
+        async def _route_call(request: types.CallToolRequest):
+            handler = describe if request.params.name == ENGINE_DESCRIBE else validated
+            return await handler(request)
+
+        server.request_handlers[types.CallToolRequest] = _route_call
 
     return server
 
@@ -158,6 +177,7 @@ def run_stdio_server(*, allow_mutating: bool, allow_execute: bool) -> None:
         allow_mutating=allow_mutating,
         allow_execute=allow_execute,
         execution=execution,
+        transport="stdio",
     ))
 
     async def _main() -> None:
@@ -364,6 +384,7 @@ def build_asgi_app(
         allow_mutating=allow_mutating,
         allow_execute=allow_execute,
         execution=ExecutionManager(),
+        transport=transport,
     ))
     security = _security_settings(host, port)
     inner = _sse_app(server, security) if transport == "sse" else _http_app(server, security)

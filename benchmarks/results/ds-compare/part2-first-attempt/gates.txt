@@ -1,0 +1,20 @@
+G1  S1/D1 = 1.56  threshold 2.64  LOWER   S0/D1 = n/a
+    S1 61.99 tok/s  D1 39.79 tok/s
+G2  80 GB  SB/DS-best = 0.23  (SB 64.36 tok/s, best DeepSpeed D3 280.72 tok/s, peak VRAM MiB 3487 / 17515; with prefetch variants 0.23)
+G2  24 GB  no DeepSpeed arm was run at this budget  (SB n/a tok/s, best DeepSpeed None n/a tok/s, peak VRAM MiB n/a / n/a; with prefetch variants n/a)
+G2  16 GB  no DeepSpeed arm was run at this budget  (SB n/a tok/s, best DeepSpeed None n/a tok/s, peak VRAM MiB n/a / n/a; with prefetch variants n/a)
+G3  R1/SB = 6.32  (peak VRAM MiB 16529 / 3487)
+G3  R2/SB = 3.45  (peak VRAM MiB 16383 / 3487)
+G4  shape B  SB/D-best(D3) = 0.22  SB/D1 = 1.55  R1/SB = 6.47  REVERSED
+    peak VRAM MiB: {'SB': '6693', 'D_best': '20807', 'D1': '9333', 'R1': '19885'}
+G4  shape C  SB/D-best(D3) = 0.42  SB/D1 = 1.57  R1/SB = 2.75  REVERSED
+    peak VRAM MiB: {'SB': '17083', 'D_best': '30969', 'D1': '22353', 'R1': '30061'}
+Ablation vs S1 (61.99 tok/s, spread 0.7%)
+    S2: 0.8%  faster
+    S3: 0.8%  faster
+    S4: -65.6%  slower
+    S5: -1.2%  slower
+    S6: 2.5%  faster
+    S7: -0.0%  no measurable effect
+    S8: -0.0%  no measurable effect [informational]
+SM clock session median 1980 MHz; valid runs more than 5% below it: 0

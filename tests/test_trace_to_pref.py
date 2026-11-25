@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -121,6 +122,78 @@ class TestSoupServeParser:
         assert traces[0].prompt == "What?"
 
 
+    @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\u0085"])
+    def test_unicode_separator_inside_jsonl_string(self, tmp_path, separator):
+        from soup_cli.data.traces.parsers import parse_soup_serve
+
+        trace_dir = tmp_path / "traces"
+        trace_dir.mkdir()
+        expected_prompt = f"Prompt{separator}still prompt"
+        expected_response = f"Answer{separator}still answer"
+        rows = [
+            {
+                "id": "first", "prompt": expected_prompt,
+                "response": expected_response, "signal": "thumbs_up",
+            },
+            {
+                "id": "second", "prompt": "Next prompt",
+                "response": "Next answer", "signal": "thumbs_down",
+            },
+        ]
+        (trace_dir / "serve.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+        traces = list(parse_soup_serve(str(trace_dir)))
+
+        assert [
+            (trace.trace_id, trace.prompt, trace.output, trace.signal)
+            for trace in traces
+        ] == [
+            ("first", expected_prompt, expected_response, "thumbs_up"),
+            ("second", "Next prompt", "Next answer", "thumbs_down"),
+        ]
+
+    @pytest.mark.parametrize("line_ending", [b"\r\n", b"\r"], ids=["crlf", "cr"])
+    def test_jsonl_carriage_return_line_endings(self, tmp_path, line_ending):
+        from soup_cli.data.traces.parsers import parse_soup_serve
+
+        trace_dir = tmp_path / "traces"
+        trace_dir.mkdir()
+        rows = [
+            {"id": "first", "prompt": "Q1", "response": "A1"},
+            {"id": "second", "prompt": "Q2", "response": "A2"},
+        ]
+        (trace_dir / "serve.jsonl").write_bytes(
+            line_ending.join(json.dumps(row).encode("utf-8") for row in rows)
+            + line_ending
+        )
+
+        traces = list(parse_soup_serve(str(trace_dir)))
+
+        assert [(t.trace_id, t.prompt, t.output) for t in traces] == [
+            ("first", "Q1", "A1"),
+            ("second", "Q2", "A2"),
+        ]
+
+    def test_utf8_bom_and_malformed_jsonl_lines(self, tmp_path):
+        from soup_cli.data.traces.parsers import parse_soup_serve
+
+        trace_dir = tmp_path / "traces"
+        trace_dir.mkdir()
+        record = {"id": "valid", "prompt": "Question", "response": "Answer"}
+        (trace_dir / "serve.jsonl").write_text(
+            json.dumps(record) + "\nnot json\n", encoding="utf-8-sig",
+        )
+
+        traces = list(parse_soup_serve(str(trace_dir)))
+
+        assert [(t.trace_id, t.prompt, t.output) for t in traces] == [
+            ("valid", "Question", "Answer"),
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Pair builder
 # ---------------------------------------------------------------------------
@@ -224,6 +297,40 @@ class TestFromTracesCLI:
         assert len(pairs) == 1
         assert pairs[0]["chosen"] == "Hello!"
         assert pairs[0]["rejected"] == "Ugh."
+
+    @pytest.mark.parametrize(("extra", "expected"), [
+        ([], []),
+        ([("Q", "Better", 1)], [("Better", "Same")]),
+        ([("Q", "Worse", 0), ("Q", "Better", 1)], [("Same", "Worse")]),
+        pytest.param(
+            [("Q", "Worse", 0), ("Q", "Awful", 0)], [("Same", "Worse")],
+            id="first-distinct-downvote",
+        ),
+        pytest.param(
+            [("Q", "Better", 1), ("Q", "Best", 1)], [("Better", "Same")],
+            id="first-distinct-upvote",
+        ),
+    ])
+    def test_thumbs_require_distinct_completions(self, tmp_path, monkeypatch, extra, expected):
+        monkeypatch.chdir(tmp_path)
+        logs = tmp_path / "traces.jsonl"
+        self._write_langchain_log(logs, [
+            ("Q", "Same", 1),
+            ("Q", "Same", 0),
+            ("Other prompt", "Unrelated", 0),
+            *extra,
+        ])
+        output = tmp_path / "prefs.jsonl"
+        result = runner.invoke(app, [
+            "data", "from-traces", "--logs", str(logs), "--format", "langchain",
+            "--signal", "thumbs_up", "--output", str(output),
+        ])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        pairs = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+        assert pairs == [
+            {"prompt": "Q", "chosen": chosen, "rejected": rejected, "source": "thumbs_up"}
+            for chosen, rejected in expected
+        ]
 
     def test_invalid_format_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -1,0 +1,171 @@
+## date
+2026-11-07T07:52:57Z
+## uname
+Linux 2d1c4ec0ab1b 6.8.0-138-generic #138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC  x86_64 x86_64 x86_64 GNU/Linux
+## os-release
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+## nvidia-smi
+Sat Nov  7 07:52:57 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.207                Driver Version: 570.207        CUDA Version: 12.8     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:C4:00.0 Off |                    0 |
+| N/A   34C    P0             70W /  700W |       9MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+## nvidia-smi query
+index, name, memory.total [MiB], driver_version, clocks.current.sm [MHz], clocks.max.sm [MHz], pcie.link.gen.current, pcie.link.width.current
+0, NVIDIA H100 80GB HBM3, 81559 MiB, 570.207, 345 MHz, 1980 MHz, 4, 16
+## nvidia-smi topo
+	[4mGPU0	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	0-47	0		N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+## nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Fri_Feb_21_20:23:50_PST_2025
+Cuda compilation tools, release 12.8, V12.8.93
+Build cuda_12.8.r12.8/compiler.35583870_0
+## lscpu
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           43 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  48
+On-line CPU(s) list:                     0-47
+Vendor ID:                               AuthenticAMD
+Model name:                              AMD EPYC 7402P 24-Core Processor
+CPU family:                              23
+Model:                                   49
+Thread(s) per core:                      2
+Core(s) per socket:                      24
+Socket(s):                               1
+Stepping:                                0
+Frequency boost:                         enabled
+CPU max MHz:                             2800.0000
+CPU min MHz:                             1500.0000
+BogoMIPS:                                5589.48
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip rdpid overflow_recov succor smca sev sev_es ibpb_exit_to_user
+Virtualization:                          AMD-V
+L1d cache:                               768 KiB (24 instances)
+L1i cache:                               768 KiB (24 instances)
+L2 cache:                                12 MiB (24 instances)
+L3 cache:                                128 MiB (8 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-47
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; untrained return thunk; SMT enabled with STIBP protection
+Vulnerability Spec rstack overflow:      Mitigation; Safe RET
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Mitigation; IBPB before exit to userspace
+## free -g
+               total        used        free      shared  buff/cache   available
+Mem:             157           2         151           0           3         153
+Swap:              1           0           1
+## ulimit -l (KB)
+8192
+## df -h
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         120G   19M  120G   1% /
+tmpfs            64M     0   64M   0% /dev
+shm              78G     0   78G   0% /dev/shm
+/dev/nvme1n1     12T  1.5T   11T  13% /etc/hosts
+tmpfs            16G   14M   16G   1% /run/nvidia-persistenced/socket
+/dev/nvme0n1p2  1.8T   48G  1.7T   3% /usr/bin/nvidia-smi
+tmpfs           4.0K  4.0K     0 100% /run/nvidia-ctk-hook/7a27c734-7cc5-40e9-8ac4-a655d041ac33
+tmpfs           4.0K     0  4.0K   0% /proc/acpi
+## block devices (ROTA=1 means the guest reports a rotational disk)
+NAME    ROTA TYPE   SIZE MODEL
+loop0      0 loop     4K
+loop1      0 loop  74.3M
+loop2      0 loop    74M
+loop3      0 loop  66.8M
+loop4      0 loop 271.2M
+loop5      0 loop 283.8M
+loop6      0 loop 505.1M
+loop7      0 loop 531.5M
+loop8      0 loop 615.3M
+loop9      0 loop  91.7M
+loop10     0 loop   402M
+loop12     0 loop    12M
+loop13     0 loop  38.8M
+loop14     0 loop  44.7M
+loop15     0 loop   500K
+loop16     0 loop   828K
+loop17     0 loop  11.6M
+sda        1 disk     0B Virtual HDisk0
+sr0        1 rom   1024M Virtual CDROM0
+nvme1n1    0 disk  11.6T Micron_7450_EEFDKCC12T8TFS
+nvme0n1    0 disk   1.8T CT2000P1SSD8
+/sys/block/loop0/queue/rotational: 0
+/sys/block/loop1/queue/rotational: 0
+/sys/block/loop10/queue/rotational: 0
+/sys/block/loop11/queue/rotational: 0
+/sys/block/loop12/queue/rotational: 0
+/sys/block/loop13/queue/rotational: 0
+/sys/block/loop14/queue/rotational: 0
+/sys/block/loop15/queue/rotational: 0
+/sys/block/loop16/queue/rotational: 0
+/sys/block/loop17/queue/rotational: 0
+/sys/block/loop2/queue/rotational: 0
+/sys/block/loop3/queue/rotational: 0
+/sys/block/loop4/queue/rotational: 0
+/sys/block/loop5/queue/rotational: 0
+/sys/block/loop6/queue/rotational: 0
+/sys/block/loop7/queue/rotational: 0
+/sys/block/loop8/queue/rotational: 0
+/sys/block/loop9/queue/rotational: 0
+/sys/block/nvme0n1/queue/rotational: 0
+/sys/block/nvme1n1/queue/rotational: 0
+/sys/block/sda/queue/rotational: 1
+/sys/block/sr0/queue/rotational: 1
+## root mount
+overlay on / type overlay (rw,relatime,lowerdir=/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8790/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8715/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8712/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8711/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8708/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8706/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8684/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8683/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8680/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8679/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/5985/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/5980/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1856/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1855/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1854/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1853/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1852/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1851/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1850/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1849/fs:/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1848/fs,upperdir=/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8791/fs,workdir=/var/lib/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8791/work,nouserxattr)
+## python
+/opt/conda/bin/python3
+Python 3.11.14
+## g++
+g++ (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
