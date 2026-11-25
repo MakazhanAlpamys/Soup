@@ -1,4 +1,6 @@
 name: CI
+run-name: >-
+  ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'ci:full' && format('PR #{0} approval', github.event.number) || '' }}
 
 on:
   push:
@@ -90,12 +92,10 @@ on:
 # commit. `release/**` keeps the per-commit key, because the release checklist
 # needs a green matrix on the exact commit being tagged.
 concurrency:
-  # A run started by adding any label other than `ci:full` keys on its run id, so
-  # nothing shares its group: it cannot cancel a full matrix already running on
-  # the pull request, and no later push cancels it. Adding `ci:full` keys on the
-  # ref like every other pull-request event, so the full run supersedes the quick
-  # one. The whole policy is in the comment above the `plan` job.
-  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('labeled-{0}', github.run_id) || github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  # Quick and approval runs use independent groups. A delayed quick event for
+  # the approved head cannot cancel its matrix. The trusted synchronize
+  # workflow cancels a verified obsolete approval. Other label updates run no jobs.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && (github.event.label.name == 'ci:full' && format('approval-{0}-{1}', github.ref, github.event.pull_request.head.sha) || format('labeled-{0}', github.run_id)) || github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Bound every job explicitly.
@@ -230,7 +230,7 @@ jobs:
   #   manual dispatch with             APPROVAL: the four required cells + the four gated
   #     matrix=approval (2026-11-15)     jobs, on the pinned stack, plus the jobs that only
   #                                      a run that is not a pull request has (below)
-  #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
+  #   pull request adds ci:full        APPROVAL: the four required test cells (ubuntu
   #                                      on 3.11 and 3.12, Windows and macOS on
   #                                      3.12) + the four gated jobs that run on a
   #                                      pull request (not type-check, not
@@ -281,8 +281,8 @@ jobs:
   #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
-  # The plan job reads the current labels. If lookup fails, it warns and uses
-  # the triggering event's labels. Remove ci:full to go back to quick runs.
+  # That label event can approve only its own still-current head. A later push
+  # runs quick CI. Once the new head is ready, remove and re-add ci:full.
   # A labelled run is an ordinary pull_request run, with the token and secrets a
   # push to that pull request already gets.
   #
@@ -293,25 +293,11 @@ jobs:
   #   trip starts later than it used to. One that needs 3.13, on any OS, surfaces
   #   after the merge, in the nightly run; one that needs Windows or macOS on 3.11,
   #   on the release branch.
-  # - The required smokes (mlx-smoke, pytorch-smoke, transformers-floor) read as
-  #   SKIPPED on a quick run, and branch protection counts a job skipped by its
-  #   `if:` as passing. So the smokes are not what blocks a merge; the test cells
-  #   are. `test` takes its matrix from `plan`, so a quick run never CREATES the
-  #   other three required `test (...)` contexts, and a required context nothing
-  #   reported stays "Expected" and keeps the merge button locked. Do not turn the
-  #   matrix back into a static list with a per-cell `if:`: a skipped cell passes.
-  #   For the same reason APPROVAL and branch protection must name the same
-  #   cells: a required cell APPROVAL drops is never reported and locks every
-  #   merge, and an APPROVAL cell that is not required gates nothing.
-  # - Maintainers merge only when all 8 required checks read SUCCESS on the
-  #   current head. Skipped is not success: a quick run after an approval run on the
-  #   same head (say the label was removed and another one added) replaces the
-  #   smokes' results, a failure included, with skipped -- which the merge button
-  #   accepts.
-  # - Adding any other label to a pull request that already carries `ci:full`
-  #   starts a second approval run, in a concurrency group of its own so it cannot
-  #   cancel the first, and no later push cancels it either. Add other labels
-  #   before `ci:full`.
+  # - Quick PR runs report the smokes under different names. The approval
+  #   names remain Expected until tested on the exact head. This avoids a late
+  #   quick run overwriting a required smoke result with a skipped job.
+  # - Maintainers merge only when all eight required checks read SUCCESS on
+  #   the current head. Adding an unrelated label runs neither plan nor lint.
   # - Coverage is not measured on a pull request at all (2026-10-21). The one cell that
   #   measures it, enforces the 77% floor and uploads to Codecov is `test (ubuntu-latest,
   #   3.11)` of a run that is NOT a pull request: the nightly run, a manual dispatch and
@@ -363,13 +349,11 @@ jobs:
   # `timeout-minutes: 5` is not a measurement: one shell step, no checkout, no
   # install.
   plan:
-    # Everything but a draft pull request. `lint` carries the same condition, and
-    # every other job needs `plan`, so it is skipped with it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # Drafts and unrelated labels need no runner. Lint uses the same gate.
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Only what the docs-only step reads: the pull request's file list. There is no
-    # checkout, so no `contents`; naming one permission makes every other one `none`.
+    # Only the PR metadata and changed files. There is no checkout.
     permissions:
       pull-requests: read
     env:
@@ -404,75 +388,62 @@ jobs:
       constraints: ${{ steps.decide.outputs.constraints }}
       docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
-      - name: Read the pull request's labels as they are now
-        # 2026-11-23: the labels are read from the API when this job RUNS, and the event's own
-        # payload is only the fallback. A maintainer adds `ci:full` a second or two after a push;
-        # GitHub makes a run for `labeled` and a run for the push in ONE concurrency group, the
-        # later-created run cancels the earlier, and the push event was generated before the
-        # label existed, so its payload has no `ci:full`. When that run was the later one it chose
-        # the QUICK matrix, the other required contexts were never created, and the label had to
-        # be removed and added again (#3156 and #3166, 2026-11-21 and 2026-11-22; 11 of the last
-        # 100 merged pull requests carry that remove-and-re-add pair). When the live read succeeds,
-        # the surviving run computes the matrix from labels current at lookup time, including
-        # changes made while it waited for a runner. The call is one GET of the
-        # pull request, with the `pull-requests: read` this job already has; the filter prints
-        # `true` or `false`, matched case-insensitively like the expression it replaces. An error,
-        # or any other answer, falls back to the payload with a warning. If the required cells
-        # are missing after a fallback, remove and re-add `ci:full`. Only a pull
-        # request has the label: no other event makes the call. Values come in through `env:`,
-        # never into the script text. tests/test_ci_plan_live_labels.py pins it.
-        id: labels
+      - name: Verify the explicitly approved head is still current
+        id: approval
+        if: github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'ci:full'
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          EVENT_HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -u
-          ci_full=false
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            if [ "$EVENT_HAS_LABEL" = "true" ]; then
-              ci_full=true
+          set -euo pipefail
+          current=false
+          if live=$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" and .draft == false then .head.sha else "" end'); then
+            if [[ "$EVENT_HEAD" =~ ^[0-9a-f]{40}$ && "$live" = "$EVENT_HEAD" ]]; then
+              current=true
             fi
-            if [ -n "$PR_NUMBER" ]; then
-              if live=$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'any(.labels[]; (.name | ascii_downcase) == "ci:full")'); then
-                case "$live" in
-                  true|false) ci_full=$live ;;
-                  *) echo "::warning title=Label check::unexpected answer reading the pull request's labels; using the labels of the event" ;;
-                esac
-              else
-                echo "::warning title=Label check::could not read the pull request's labels; using the labels of the event"
-              fi
-            fi
+          else
+            echo "::warning title=Approval head::could not verify the approved head; selecting quick CI"
           fi
-          echo "ci_full=$ci_full" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
 
       - name: Choose the release, full, approval or quick matrix
         id: decide
         env:
           RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
           FULL: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.matrix != 'approval') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
-          APPROVAL: ${{ (github.event_name == 'pull_request' && steps.labels.outputs.ci_full == 'true') || (github.event_name == 'workflow_dispatch' && inputs.matrix == 'approval') }}
+          EVENT_NAME: ${{ github.event_name }}
+          APPROVAL: ${{ (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'ci:full' && steps.approval.outputs.current == 'true') || (github.event_name == 'workflow_dispatch' && inputs.matrix == 'approval') }}
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then
+            mode=Release
             full=true
             matrix="$RELEASE_MATRIX"
             constraints=""
           elif [ "$FULL" = "true" ]; then
+            mode=Nightly-or-manual
             full=true
             matrix="$FULL_MATRIX"
             constraints=""
           elif [ "$APPROVAL" = "true" ]; then
+            mode=Approval
             full=true
             matrix="$APPROVAL_MATRIX"
             constraints="-c $PINNED_CONSTRAINTS"
           else
+            mode=Quick
             full=false
             matrix="$QUICK_MATRIX"
             constraints="-c $PINNED_CONSTRAINTS"
-            echo "::notice title=Quick CI run::lint and test (ubuntu-latest, 3.12) only. A pull request gets the other required test cells and the smoke jobs when a maintainer adds the ci:full label; main gets the full matrix every night."
+          fi
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "CI mode is **$mode**." >> "$GITHUB_STEP_SUMMARY"
+            if [ "$mode" = Quick ] && [ "$EVENT_NAME" = pull_request ]; then
+              echo 'An existing `ci:full` label is left in place and does not approve this run.' >> "$GITHUB_STEP_SUMMARY"
+              echo 'A maintainer can remove and re-add `ci:full` on the current head to start all required cells and smokes.' >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           {
             echo "full=$full"
@@ -526,8 +497,9 @@ jobs:
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
   lint:
-    # Skipped on a draft pull request, like `plan`: see the comment above `plan`.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'lint (label update)' || 'lint' }}
+    # The alternate name keeps a skipped label update out of required lint history.
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -598,6 +570,7 @@ jobs:
           mypy || echo "::warning title=mypy::Type issues reported (non-blocking baseline — see the log above)"
 
   mlx-smoke:
+    name: ${{ github.event_name == 'pull_request' && needs.plan.outputs.full != 'true' && 'mlx-smoke (approval pending)' || 'mlx-smoke' }}
     needs: plan
     if: needs.plan.outputs.full == 'true'
     # #394: prove the documented standalone install on an Apple Silicon runner.
@@ -685,6 +658,7 @@ jobs:
             tests/test_issue835_fp8_gate.py \
             tests/test_v07121.py
   pytorch-smoke:
+    name: ${{ github.event_name == 'pull_request' && needs.plan.outputs.full != 'true' && 'pytorch-smoke (approval pending)' || 'pytorch-smoke' }}
     needs: plan
     if: needs.plan.outputs.full == 'true'
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
@@ -828,6 +802,7 @@ jobs:
   # The ordinary test matrix resolves the newest Typer, which is how a floor no
   # command could run on stayed declared. Keep the name; branch protection requires it.
   transformers-floor:
+    name: ${{ github.event_name == 'pull_request' && needs.plan.outputs.full != 'true' && 'transformers-floor (approval pending)' || 'transformers-floor' }}
     needs: plan
     if: needs.plan.outputs.full == 'true'
     runs-on: ubuntu-latest
