@@ -69,12 +69,16 @@ def test_hf_training_run_records_every_row_once(tmp_path, monkeypatch):
 def test_hf_rewind_preserves_fresh_and_resumed_training_row_order(
     tmp_path,
     monkeypatch,
-    aten_half_matmuls,
     capsys,
+    request,
 ):
-    from transformers import TrainerCallback
+    from tests.test_issue341_seed_and_fullft import _requires_train_extra, _tiny_llama_dir
 
-    from tests.test_issue341_seed_and_fullft import _tiny_llama_dir
+    # The MLX smoke lane has no Torch. Guard before the fixture imports it.
+    _requires_train_extra()
+    request.getfixturevalue("aten_half_matmuls")
+
+    from transformers import TrainerCallback
 
     class SaveResumePoints(TrainerCallback):
         def on_step_end(self, args, state, control, **kwargs):
