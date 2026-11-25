@@ -132,3 +132,26 @@ counted (`steps_stock`).
 - Speed on any other card. The 5070 Laptop's link to the host read 1.7 GB/s in the 1.5B run, which
   is below the planner's threshold for moving activations, so that run kept them on the GPU.
 - Qwen3, fp16 on a T4, several GPUs: out of scope (see the docs section).
+
+## Re-run on the merged head 92375494e, 2026-11-25
+
+The Qwen2.5-1.5B-Instruct row only, on head `92375494e` (the #3178 head merged with current main plus
+the `training.prefix_tree` refusal fix). Same command lines as above for the 1.5B arms, same 840 rows
+(sha256 `eba8a5bc...79c8`), seed 3407, 105 steps, one run per arm. WSL2 Ubuntu, RTX 5070 Laptop 8 GB,
+Python 3.13, torch 2.11.0+cu128, triton 3.6.0, transformers 5.17.0, peft 0.20.0, trl 0.29.1,
+bitsandbytes 0.50.2. The GPU held no other process before the run. The run printed
+`[packed_lora] PCIe is slow (3.4 GB/s): activations stay on the GPU` and
+`[packed_lora] steps: 105 packed, 0 stock`.
+
+| arm | tok/s (steps 6-105) | median step | torch peak allocated | step 1 loss |
+|---|---:|---:|---:|---:|
+| plain Soup, 2 x 4 | 2,066.3 | 1.919 s | 3,133.7 MiB | 1.4454 |
+| `packed_lora: {enabled: true}`, 8 x 1 | 5,063.7 | 0.805 s | 5,703.3 MiB | 1.4442 |
+
+2.45 times the tokens per second, 1.82 times the peak memory. Plain Soup is faster and smaller than in
+the historical table (1,569.0 tok/s, 4,107.8 MiB), as the note at the top says for the #2609 changes to
+stock 4-bit SFT; the packed arm is unchanged within 2.3 % (5,183.6 before).
+
+Loss over steps 1-105: plain 1.24539, packed 1.24536, packed against plain -0.003 %. Step by step the
+largest relative difference is 0.227 % (step 58) and the mean is 0.047 %. The step-2 offset of the
+historical run is not present here (plain 1.5612, packed 1.5599). One run per arm, one seed.
