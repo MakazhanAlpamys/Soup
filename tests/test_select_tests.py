@@ -1,5 +1,6 @@
 """The local selector reads code without importing Soup or running pytest."""
 
+import json
 import shlex
 import subprocess
 
@@ -43,6 +44,7 @@ def test_uses_reverse_imports_including_helpers_and_name_conventions(checkout):
         "tests/feature/feature_test.py",
         "tests/test_direct.py",
         "tests/test_dynamic.py",
+        "tests/test_patch_only.py",
         "tests/test_rank_score_cli.py",
     )
 
@@ -156,6 +158,11 @@ def test_git_failure_prints_a_full_command_on_stdout(monkeypatch, capsys):
     assert captured.out.strip() == "python -m pytest tests/"
     assert "Full suite" in captured.err
     assert "Git" in captured.err
+    assert _selection_record(captured.err) == {
+        "mode": "full",
+        "reason": "Git could not run rev-parse",
+        "dynamic_files": 0,
+    }
 
 
 def test_shell_safe_focused_command_and_no_full_coverage_for_a_subset():
@@ -168,3 +175,113 @@ def test_shell_safe_focused_command_and_no_full_coverage_for_a_subset():
     )
     full = select_tests.TestPlan(("tests/",), reason="uncertain")
     assert select_tests.pytest_command(full, shell="powershell") == "python -m pytest tests/"
+
+
+def _add_sources(checkout, monkeypatch, extra):
+    for path, code in extra.items():
+        file = checkout / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(code, encoding="utf-8")
+    monkeypatch.setattr(select_tests, "_candidate_paths", lambda root: SOURCE.keys() | extra.keys())
+
+
+def _selection_record(stderr):
+    lines = [line for line in stderr.splitlines() if line.startswith("SOUP_TEST_SELECTION ")]
+    assert len(lines) == 1
+    return json.loads(lines[0].split(" ", 1)[1])
+
+
+def test_string_only_paths_use_longest_existing_module_prefix(checkout, monkeypatch):
+    extra = {
+        "src/soup_cli/utils/rank_score_copy.py": "",
+        "tests/test_patch_neighbor.py": "mock.patch('soup_cli.utils.rank_score_copy.score')\n",
+        "tests/test_mock_only.py": "mock.patch('soup_cli.utils.rank_score.Engine.run')\n",
+        "tests/test_registry.py": "routes = {'feature': 'soup_cli.utils.rank_score:score'}\n",
+    }
+    _add_sources(checkout, monkeypatch, extra)
+
+    plan = select_tests.plan_tests(checkout, [CORE])
+
+    assert plan.reason is None
+    assert "tests/test_patch_only.py" in plan.paths
+    assert "tests/test_mock_only.py" in plan.paths
+    assert "tests/test_registry.py" in plan.paths
+    assert "tests/test_patch_neighbor.py" not in plan.paths
+
+
+def test_dynamic_importers_add_direct_tests_and_reverse_consumers(checkout, monkeypatch):
+    extra = {
+        "tests/test_lazy_builtin.py": "mod = __import__(name)\n",
+        "tests/test_lazy_importlib.py": "mod = importlib.import_module(name=target)\n",
+        "src/soup_cli/commands/plugin_loader.py": "module = importlib.import_module(target)\n",
+        "tests/test_registry_client.py": "from soup_cli.commands import plugin_loader\n",
+        "tests/test_unrelated_prefix.py": "importlib.import_module(f'soup_cli.envs.{name}')\n",
+    }
+    _add_sources(checkout, monkeypatch, extra)
+
+    selected = select_tests.plan_tests(checkout, [CORE])
+
+    assert selected.reason is None
+    assert {
+        "tests/test_lazy_builtin.py",
+        "tests/test_lazy_importlib.py",
+        "tests/test_registry_client.py",
+    } <= set(selected.paths)
+    assert "tests/test_unrelated_prefix.py" not in selected.paths
+    assert selected.dynamic_files == 3
+    fallback = select_tests.plan_tests(checkout, [CORE], max_files=len(selected.paths) - 1)
+    assert fallback.paths == ("tests/",)
+    assert "more than" in fallback.reason
+    assert fallback.dynamic_files == 3
+
+
+def test_relative_import_inside_a_function_reaches_its_test(checkout, monkeypatch):
+    extra = {
+        "src/soup_cli/utils/other_wrapper.py": (
+            "def run():\n    from . import rank_score\n    return rank_score.score()\n"
+        ),
+        "tests/test_other_wrapper.py": "from soup_cli.utils.other_wrapper import run\n",
+    }
+    _add_sources(checkout, monkeypatch, extra)
+
+    assert "tests/test_other_wrapper.py" in select_tests.plan_tests(checkout, [CORE]).paths
+
+
+@pytest.mark.parametrize("stem", ["utils", "base", "common", "helpers"])
+def test_generic_name_does_not_override_import_evidence(checkout, monkeypatch, stem):
+    generic = f"src/soup_cli/utils/{stem}.py"
+    extra = {
+        generic: "",
+        f"tests/test_unrelated_{stem}_behavior.py": "",
+        "tests/test_authoritative.py": f"from soup_cli.utils import {stem}\n",
+    }
+    _add_sources(checkout, monkeypatch, extra)
+
+    plan = select_tests.plan_tests(checkout, [generic])
+
+    assert plan.paths == ("tests/test_authoritative.py",)
+
+
+def test_main_focused_returns_zero_and_prints_machine_readable_status(
+    checkout, monkeypatch, capsys
+):
+    monkeypatch.setattr(select_tests, "REPO_ROOT", checkout)
+    monkeypatch.chdir(checkout)
+
+    assert select_tests.main(["--shell", "posix", CORE]) == 0
+
+    captured = capsys.readouterr()
+    plan = select_tests.plan_tests(checkout, [CORE])
+    assert shlex.split(captured.out) == ["python", "-m", "pytest", "--no-cov", *plan.paths]
+    assert _selection_record(captured.err) == {
+        "mode": "focused",
+        "reason": None,
+        "dynamic_files": 0,
+    }
+
+
+def test_main_usage_error_retains_exit_two_and_empty_stdout(capsys):
+    with pytest.raises(SystemExit) as exc:
+        select_tests.main(["--base", "HEAD", CORE])
+    assert exc.value.code == 2
+    assert capsys.readouterr().out == ""
