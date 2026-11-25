@@ -366,6 +366,17 @@ class TestExportCheckCLI:
         result = runner.invoke(app, ["eval", "export-check"])
         assert result.exit_code == EXIT_USAGE_ERROR
 
+    @pytest.mark.parametrize("spelling", ["nan", "NaN", "NAN", "+nan", "-nan"])
+    def test_cli_min_agreement_refuses_nan(self, spelling):
+        result = runner.invoke(app, [
+            "eval", "export-check",
+            "--adapter", "a",
+            "--exported", "e",
+            "--min-agreement", spelling,
+        ])
+        assert result.exit_code == EXIT_USAGE_ERROR
+        assert "nan is not in the range" in _clean_output(result.output)
+
     def test_cli_missing_prompts_exits_usage_error_with_guidance(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         adapter_dir, exported_dir = self._setup_dirs(tmp_path)

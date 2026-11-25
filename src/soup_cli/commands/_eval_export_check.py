@@ -17,6 +17,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.commands._common import refuse_nan
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
     EXIT_OK,
@@ -71,6 +72,7 @@ def register(app: typer.Typer, console: Console) -> None:
             "--min-agreement",
             min=0.0,
             max=1.0,
+            callback=refuse_nan,
             help=(
                 "Minimum required average character-overlap agreement between "
                 "the exported model and adapter reference on prompts where the "
