@@ -993,6 +993,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     f"{ckpt_plan.description}"
                 )
 
+        if tcfg.lisa_enabled and training_kwargs.get("gradient_checkpointing"):
+            # LISA freezes decoder parameters after DDP registers them.
+            training_kwargs["ddp_find_unused_parameters"] = True
+
         # NEFTune — noisy embeddings for better fine-tuning quality
         if tcfg.neftune_alpha is not None:
             training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
