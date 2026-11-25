@@ -81,6 +81,15 @@ against your own data, and check what got dropped.
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
 
+Semantic dedup compares with an absolute `1e-6` tolerance for float32 rounding.
+At a positive `--threshold`, a row must have strictly positive cosine and meet
+`cosine >= threshold - 1e-6`; the tolerance never makes an exact zero match.
+At `--threshold 0.0`, the comparison remains inclusive (`cosine >= 0.0`). This
+lets identical nonzero embeddings match at `--threshold 1.0`; audit pairs keep
+the raw measured cosine, rather than rounding it to 1.0. True zero vectors have
+a dot product of zero and stay distinct at every positive threshold. Empty text
+that produces a nonzero embedding follows the same comparison as any other text.
+
 With either backend, a nonempty `--field` must occur in at least one loaded
 row. A field absent from every row is refused before backend work or output
 writes, preserving any existing output. Present-but-empty values and fields
