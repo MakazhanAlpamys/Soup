@@ -1,0 +1,1160 @@
+{
+  "source_commit": "d6f7f733e09599327c61e67a3cf5434bfaa78164",
+  "source_path": "benchmarks/harness/a4_activation_budget.py",
+  "source_sha256": "cb2a1f26c340e2350412c21d7d87b4aa0a4ae34e3a5e0e916e8a97f8c85d4ee1",
+  "scope": "StoreLayout with pinned_floor_bytes=0; captured from pinned upstream Git object, no GPU measurement",
+  "cases": [
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 1
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 8194
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 1
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 1
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 65552
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 1
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 4096
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 4096
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 4096
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 4096
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 12288
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 32768
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 32768
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 12288
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 262144
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 262144
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 1048576
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 2105344
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 1048576
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 4194304
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 1048576
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 1,
+      "expected_bytes": 16842752
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 1048576
+    },
+    {
+      "n_layers": 1,
+      "k": 1,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 1,
+      "expected_bytes": 33554432
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 10
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 8200
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 8194
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 10
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 16390
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 10
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 65558
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 65552
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 10
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 131078
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 40960
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 40960
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 40960
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 40960
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 40960
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 155648
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 40960
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 155648
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 122880
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 106496
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 32768
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 163840
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 32768
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 122880
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 335872
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 262144
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 163840
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 360448
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 262144
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 10485760
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 8396800
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 2105344
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 10485760
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 10485760
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 4194304
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 10485760
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 2,
+      "expected_bytes": 23134208
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 5,
+      "expected_bytes": 16842752
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 10485760
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 2,
+      "expected_bytes": 39845888
+    },
+    {
+      "n_layers": 5,
+      "k": 2,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 5,
+      "expected_bytes": 33554432
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 128
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 8258
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 8194
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 128
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 16448
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 128
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 65616
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 65552
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 128
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 131136
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 524288
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 278528
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 524288
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 278528
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 16384
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 524288
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 393216
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 524288
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 393216
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 4096,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 131072
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 1572864
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 819200
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 32768
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 2097152
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 1081344
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 32768
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 1572864
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 1048576
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 262144
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 2097152
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 1310720
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 12288,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 262144
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 134217728
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 69214208
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 2105344
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 134217728
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 71303168
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 1,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 4194304
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 0,
+      "expected_bytes": 134217728
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 16,
+      "expected_bytes": 83951616
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": false,
+      "spill_layers": 32,
+      "expected_bytes": 16842752
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 0,
+      "expected_bytes": 134217728
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 16,
+      "expected_bytes": 100663296
+    },
+    {
+      "n_layers": 32,
+      "k": 4,
+      "chunk_bytes": 1048576,
+      "ring": 8,
+      "pin": true,
+      "spill_layers": 32,
+      "expected_bytes": 33554432
+    }
+  ]
+}
