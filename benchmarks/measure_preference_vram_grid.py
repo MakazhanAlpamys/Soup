@@ -10,7 +10,9 @@ Example (one task per thermally monitored stage)::
 
     python benchmarks/measure_preference_vram_grid.py --task dpo \
       --source-tree ../soup-1141-cuda --model-path <local-qwen-snapshot> \
-      --main-sha <main-commit> --output-dir benchmarks/results/gate-2878-rtx3050 \
+      --main-sha <main-commit> --probe-sha <probe-commit> \
+      --tree-sha <measurement-tree-commit> \
+      --output-dir benchmarks/results/gate-2878-rtx3050 \
       --report benchmarks/gate-2878-rtx3050.md
 
 Repeat for ``orpo``, ``simpo`` and ``kto``.  Every probe and real training
@@ -624,10 +626,19 @@ def _render_report(
 ) -> None:
     rows_dir = output_dir / "rows"
     rows = {}
+    expected_commits = {
+        "main_commit": main_sha,
+        "probe_commit": probe_sha,
+        "measurement_tree": tree_sha,
+    }
     for path in sorted(rows_dir.glob("*.json")) if rows_dir.exists() else []:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            continue
+        # Rows can survive in a reused output directory. Do not attribute a
+        # prior run's measurements to the SHAs printed in this report.
+        if any(value.get(field) != expected for field, expected in expected_commits.items()):
             continue
         rows[(value.get("task"), value.get("sequence_length"), value.get("mode"))] = value
 

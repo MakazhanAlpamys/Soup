@@ -111,12 +111,16 @@ def test_report_calls_out_measured_under_read(tmp_path):
     rows_dir.mkdir()
     (rows_dir / "dpo-seq2048-probe.json").write_text(
         '{"task":"dpo","sequence_length":2048,"mode":"probe",'
-        '"status":"success","probe_peak_bytes":900}',
+        '"status":"success","probe_peak_bytes":900,'
+        '"main_commit":"main","probe_commit":"probe",'
+        '"measurement_tree":"tree"}',
         encoding="utf-8",
     )
     (rows_dir / "dpo-seq2048-step.json").write_text(
         '{"task":"dpo","sequence_length":2048,"mode":"step",'
-        '"status":"success","real_step_peak_bytes":1000}',
+        '"status":"success","real_step_peak_bytes":1000,'
+        '"main_commit":"main","probe_commit":"probe",'
+        '"measurement_tree":"tree"}',
         encoding="utf-8",
     )
     report = tmp_path / "report.md"
@@ -132,3 +136,50 @@ def test_report_calls_out_measured_under_read(tmp_path):
     text = report.read_text(encoding="utf-8")
     assert "under-read" in text
     assert "keep this loss refused" in text
+
+
+def test_report_omits_rows_from_other_commit_trees(tmp_path):
+    rows_dir = tmp_path / "rows"
+    rows_dir.mkdir()
+    current = (
+        '"main_commit":"main","probe_commit":"probe",'
+        '"measurement_tree":"tree"'
+    )
+    stale = (
+        '"main_commit":"old-main","probe_commit":"old-probe",'
+        '"measurement_tree":"old-tree"'
+    )
+    (rows_dir / "dpo-seq2048-probe.json").write_text(
+        '{"task":"dpo","sequence_length":2048,"mode":"probe",'
+        f'"status":"success","probe_peak_bytes":900,{current}' + "}",
+        encoding="utf-8",
+    )
+    (rows_dir / "dpo-seq2048-step.json").write_text(
+        '{"task":"dpo","sequence_length":2048,"mode":"step",'
+        f'"status":"success","real_step_peak_bytes":1000,{current}' + "}",
+        encoding="utf-8",
+    )
+    (rows_dir / "orpo-seq2048-probe.json").write_text(
+        '{"task":"orpo","sequence_length":2048,"mode":"probe",'
+        f'"status":"success","probe_peak_bytes":1,{stale}' + "}",
+        encoding="utf-8",
+    )
+    (rows_dir / "orpo-seq2048-step.json").write_text(
+        '{"task":"orpo","sequence_length":2048,"mode":"step",'
+        f'"status":"success","real_step_peak_bytes":2,{stale}' + "}",
+        encoding="utf-8",
+    )
+    report = tmp_path / "report.md"
+
+    _render_report(
+        tmp_path,
+        report,
+        main_sha="main",
+        probe_sha="probe",
+        tree_sha="tree",
+    )
+
+    text = report.read_text(encoding="utf-8")
+    assert "| DPO | 2048 | 1 | 0.00 | 0.00 | 0.900 |" in text
+    assert "| ORPO | 2048 | 1 | — | — | — | — | incomplete |" in text
+    assert "old-main" not in text
