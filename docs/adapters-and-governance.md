@@ -263,11 +263,16 @@ soup loop init registry://abc12 --eval evals/tasks.jsonl --baseline registry://p
 #                         The parameter count is read without loading weights: the
 #                         safetensors headers of a local model directory (a symlink is
 #                         refused), else the Hub's header-only metadata for a repo id (not
-#                         asked when HF_HUB_OFFLINE is set). An unknown count, no CUDA device,
-#                         no torch, or a probe that fails or times out also gives 4bit. The
-#                         iteration's notes say which, for example "sft quantization auto:
+#                         asked when HF_HUB_OFFLINE is set), else what the Hugging Face cache
+#                         holds of the repo: its cached safetensors headers, else its cached
+#                         config.json (an estimate). So offline, a cached base is still
+#                         measured; a size in the repo name is not a count. An unknown count,
+#                         no CUDA device, no torch, or a probe that fails or times out also
+#                         gives 4bit. The iteration's notes and the train line of
+#                         progress.jsonl say which, for example "sft quantization auto:
 #                         none (need 3.0 GB, free 7.1 GB)" or "sft quantization auto: 4bit
-#                         (parameter count unknown)".
+#                         (parameter count unknown: the Hub is offline and the cache has no
+#                         config.json or weights to count)".
 # The recipe also writes data.max_length from the rows it just built, so that soup train's
 # hardware-fit gate prices the run that will happen and not 2048 tokens per row: the longest row
 # of the dataset in tokens of the BASE model's tokenizer (the chat template applied for sft), plus
@@ -435,6 +440,9 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # hold, not while the deploy is waiting.
 # `soup loop status` shows a `pending_deploy` row for the waiting, due or held state, and the
 # cycle notes start with deploy_backoff: or deploy_held: while applicable.
+# If `SOUP_LOOP_SERVE_ENDPOINT` is missing when a saved deploy retry is due, the candidate,
+# cursor and retry count are kept. The status shows why the last poll waited. When the endpoint
+# is available again, the loop retries that same candidate.
 # A stage that RAISES (the cost, harvest, train or gate stage: a locked thumbs database, a
 # directory that went away) does not stop the daemon. The cycle is recorded as failed with the
 # stage's name and the exception's type in last_failure and the iteration, the traceback goes to

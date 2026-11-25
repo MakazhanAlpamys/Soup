@@ -597,7 +597,7 @@ def test_a_new_loop_trains_sft_on_corrections_and_liked_answers_then_canaries_it
         "quantization": "4bit",  # recipe "auto", measured: no CUDA device, base size unknown
     }
     assert (
-        "sft quantization auto: 4bit (parameter count unknown)"
+        "sft quantization auto: 4bit (parameter count unknown: "
         in read_iteration(loop["created"][-1]).notes
     )
     answers = [row["messages"][-1]["content"] for row in rows]

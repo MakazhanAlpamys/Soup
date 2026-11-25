@@ -75,6 +75,56 @@ class TestDataSplitCLI:
         assert len(train_rows) + len(val_rows) == 100
         assert len(val_rows) == 20
 
+    @pytest.mark.parametrize(
+        ("flag", "split_name", "output_suffix"),
+        [("--val", "validation", "val"), ("--test", "test", "test")],
+    )
+    def test_positive_percentage_rounding_to_zero_is_reported(
+        self, tmp_path, flag, split_name, output_suffix,
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 3)
+
+        result = CliRunner().invoke(
+            app, ["data", "split", str(data_file), flag, "10"],
+        )
+        output = _plain(result.output)
+        assert result.exit_code == 0, output
+        assert f"--{output_suffix} 10% rounds to 0 rows" in output
+        assert split_name in output
+        assert "larger percentage" in output and "--absolute" in output
+
+        train_file = tmp_path / "data_train.jsonl"
+        omitted_file = tmp_path / f"data_{output_suffix}.jsonl"
+        assert len(_read_jsonl(train_file)) == 3
+        assert not omitted_file.exists()
+
+    @pytest.mark.parametrize(
+        ("flag", "output_suffix"), [("--val", "val"), ("--test", "test")],
+    )
+    def test_absolute_count_one_still_writes_requested_split(
+        self, tmp_path, flag, output_suffix,
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_file = tmp_path / "data.jsonl"
+        _make_jsonl(data_file, 3)
+
+        result = CliRunner().invoke(
+            app, ["data", "split", str(data_file), flag, "1", "--absolute"],
+        )
+        output = _plain(result.output)
+        assert result.exit_code == 0, output
+        assert "rounds to 0 rows" not in output
+        split_file = tmp_path / f"data_{output_suffix}.jsonl"
+        assert len(_read_jsonl(split_file)) == 1
+
     def test_split_train_val_test(self, tmp_path):
         """Split with --val 10 --test 10 should produce three files."""
         from typer.testing import CliRunner

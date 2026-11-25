@@ -927,6 +927,7 @@ Usage: `soup cost [OPTIONS]`
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--gpu`, `-g` | text |  |  | Filter by specific GPU (e.g., A100, H100, RTX 4090) |
 | `--json` | flag | off |  | Output as JSON for scripting |
+| `--history` | flag | off |  | Use comparable local SFT runs with one GPU selected by --gpu. |
 
 ## `soup data`
 
@@ -1670,6 +1671,7 @@ Usage: `soup data validate [OPTIONS] PATH`
 | `PATH` | text |  | yes | Path to dataset file |
 | `--format`, `-f` | text | `auto` |  | Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext |
 | `--min-valid-fraction` | float, 0.0 to 1.0 | `0.0` |  | Exit 2 when the fraction of valid rows is below this value |
+| `--result-json` | flag | off |  | Emit a machine-readable result (preview) |
 
 ## `soup delinearize-llama4`
 
@@ -2315,7 +2317,7 @@ Usage: `soup eval leaderboard [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--sort-by`, `-s` | text |  |  | Sort by specific benchmark (default: average) |
+| `--sort-by`, `-s` | text |  |  | Sort the table, JSON and CSV rows by one benchmark (default: average) |
 | `--format`, `-f` | text | `table` |  | Output format: table, json, csv |
 
 ### `soup eval lock`
@@ -2909,7 +2911,7 @@ Usage: `soup mcp runs reconcile [OPTIONS]`
 
 ### `soup mcp serve`
 
-Start the MCP server (read-only tools by default).
+Start the MCP server (ungated tools available by default).
 
 Usage: `soup mcp serve [OPTIONS]`
 
@@ -3833,6 +3835,7 @@ Usage: `soup train [OPTIONS]`
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
+| `--result-json` | flag | off |  | Emit a machine-readable dry-run result (preview). |
 
 ## `soup tui`
 

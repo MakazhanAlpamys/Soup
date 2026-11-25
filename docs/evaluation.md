@@ -278,9 +278,19 @@ A task `name` must also be non-empty and free of NUL characters; a suite with
 such a name is refused at load time (`soup eval gate` exits `3`), before any
 model setup or verdict.
 
-Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+Each task's `threshold` must be a finite number from 0 to 1000 inclusive.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
 construction; use numeric `0` when a zero cutoff is intended.
+
+When you edit a loaded suite through the SDK, `run_gate` applies the same
+threshold rules and checks any supplied `scorer`. Use `exact`, `contains`,
+`answer`, `regex` or `semantic`. An invalid value raises `ValueError` before
+any task runs.
+
+For a `type: custom` task, set `tasks` to a JSONL file under the current
+working directory. Relative paths start from the working directory where you
+run Soup. If the path resolves outside it, the task fails without reading the
+file or generating answers, even if you assigned the path after loading the suite.
 
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
@@ -289,10 +299,12 @@ handling and strict drop boundary; CLI and config bounds are unchanged (#1844).
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 `training.eval_gate.baseline: previous` is not implemented and is refused when the
-config loads; use a path to a baseline results file instead. A baseline set in
-`training.eval_gate` that cannot be resolved (a missing or invalid file, an unknown
-`registry://` reference) stops `soup train` when training starts, with an error naming
-`training.eval_gate.baseline`, instead of running the gate with no baseline (#2523).
+config loads, even when `training.eval_gate.enabled` is `false`; use a path to a
+baseline results file instead. A baseline file or a `registry://` reference is resolved
+only when the gate runs: one that cannot be resolved (a missing or invalid file, an
+unknown `registry://` reference) stops `soup train` when training starts with the gate
+enabled, with an error naming `training.eval_gate.baseline`, instead of running the gate
+with no baseline (#2523).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
 task and file. It has no measured score, fails the gate even at threshold zero,
@@ -478,9 +490,10 @@ With a local `--adapter`, ship reads the adapter weights before loading either m
 tensor is non-zero, the adapter adds nothing to the base model: the verdict is DON'T SHIP with
 failed rule `adapter_noop`, and no evidence is written. Adapters without `lora_B` keys (VeRA and
 other PEFT types) are not refused, and an `--adapter` that is not a local directory (a Hub id) is
-skipped without a message. Weights the reader refuses (`adapter_model.bin`, a symlink, a path
-outside the working directory, or a file over 2 GiB) print a warning and the live run continues
-(#2410).
+skipped without a message. Weights the reader refuses (a symlink, a path outside the working
+directory, or a file over 2 GiB) print a warning and the live run continues (#2410). Pickle
+weights (`adapter_model.bin`, `.pt`) are not among them: they are refused with exit 3, as the
+next paragraph says.
 
 `--base-adapter <path>` (and `--adapter`) must not hold pickle weights (`adapter_model.bin`, `.pt`): `soup ship` refuses them before PEFT reads the directory (exit 3, `unsafe weight file (pickle / PyTorch-classic)`), so use safetensors; a safetensors file that is merely unreadable is not refused, only warned about. It swaps the *before* side from the bare base to `base + that LoRA adapter`,
 so a continual-learning loop can compare a candidate (`base + --adapter`) with the version
@@ -1032,7 +1045,8 @@ shown as "0 %". The warning line is added only when the fraction is **below `1e-
 
 **Why a warning and not a rule.** The instrument was calibrated by training seven runs
 with Soup on the same Qwen2.5-1.5B-Instruct and data, measuring their adapters at several
-checkpoints (42 adapters), plus nine public adapters on seven bases. Sorted by changed
+checkpoints (31 adapters), plus two take-home adapters and nine public adapters on seven
+bases, 42 in all. Sorted by changed
 fraction, the near-zero-learning-rate controls do **not** fall below the real runs — they
 interleave:
 
@@ -1430,8 +1444,8 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   `A-Z a-z 0-9 _ . -` and must start with a letter or digit. The file's SHA-256 is
   pinned in the ledger; if a registered file later changes, the run is refused (exit
   `3`) with a message naming the task and both hashes, because a silently swapped
-  control set would fake retention. Register the new file under a new task name
-  instead. The same name with the same bytes is a no-op, or updates the stored path if
+  control set would fake retention. Restore the exact original bytes to keep using that
+  ledger. The same name with the same bytes is a no-op, or updates the stored path if
   you moved the file: pass `--add-task NAME=NEWPATH` (a missing control file is refused
   with exactly that hint). The file is read once and the bytes that are hashed are the
   bytes that are parsed.
@@ -1454,6 +1468,13 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   lost or reset ledger makes every task new, so nothing can regress and the run exits
   `0`; in CI pass the flag so that cannot pass silently. Without the flag a run with no
   earlier version prints a warning that names it.
+
+**Correcting a registered control file.** You can add a control under a new task name
+once all original controls match their registered bytes and pass validation. The ledger
+keeps checking every original control. To replace an unusable control, fix or remove
+any invalid rows, such as those with missing, null or blank `expected` values. Start
+a fresh `--ledger NEW.json`, register the controls with `--add-task`, and establish
+the first baseline with `--record` and without `--require-history`.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
 the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,
@@ -1896,6 +1917,22 @@ The table, JSON and markdown all include this additional result only when
 `scoring` must be a supported string label; omitted values default to `exact`.
 Invalid values name the `scoring` field and physical JSONL line, including blank
 lines, before model loading or result writes. `soup eval custom` exits 1 for these errors.
+
+Every row states its `expected`, under every `scoring`. A row whose `expected` is
+missing, `null`, or empty or whitespace-only is refused, naming the line:
+`Line 2: field 'expected' is missing`, `Line 2: field 'expected' is null` or
+`Line 2: field 'expected' is empty or whitespace-only`. Such a row used to load
+(#3240). A missing or empty `expected` then scored 1.0 for every output, an empty
+one included, under `contains` and under `regex` (an empty pattern matches
+anywhere); `contains` also strips a whitespace-only one to nothing. A `null` one
+loaded as the text `None`. `answer` already refused a missing or blank `expected`.
+A number or a boolean is an answer and loads as its text (`4` as `4`, `0` as `0`,
+`false` as `False`). `soup eval custom` exits 1 for this error, `soup eval
+quant-check` and `soup eval retention` exit 3, and an eval gate task fails with
+the message instead of a score. `soup ship --task-mode judge_score`, `pairwise`
+and `reward` accept a prompt-only file: the judge modes take their reference from
+`--judge-reference`, validated on its own, and the reward function receives
+`expected` as `answer` (empty when the row has none).
 
 Regex-scored custom tasks reject structurally unsafe patterns before matching
 model output and name `eval.custom.expected` in the error. The diagnose

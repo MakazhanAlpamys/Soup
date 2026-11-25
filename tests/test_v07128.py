@@ -359,6 +359,7 @@ _EXPECTED_READONLY = {
     "profile",
     "diagnose_evidence",
     "ship_evidence",
+    "engine_describe",
 }
 
 
@@ -589,8 +590,8 @@ class TestMutatingTools:
             )
 
     def test_registry_count_includes_execution_tools(self):
-        assert len(reg.build_registry(allow_mutating=True, allow_execute=False)) == 18
-        assert len(reg.build_registry(allow_mutating=False, allow_execute=False)) == 18
+        assert len(reg.build_registry(allow_mutating=True, allow_execute=False)) == 19
+        assert len(reg.build_registry(allow_mutating=False, allow_execute=False)) == 19
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +628,7 @@ class TestServerRoundTrip:
         # guard covers both. Skips cleanly on a partial install.
         pytest.importorskip("mcp")
 
-    def test_list_tools_returns_all_18(self):
+    def test_list_tools_returns_all_19(self):
         from soup_cli.mcp_server.registry import build_registry
         from soup_cli.mcp_server.server import build_server
         from tests.mcp_roundtrip import connected_session
@@ -640,10 +641,64 @@ class TestServerRoundTrip:
 
         result = _run(_go())
         names = {t.name for t in result.tools}
-        assert len(names) == 18
+        assert len(names) == 19
         assert "recipes_search" in names and "train_start" in names
         # every advertised tool carries an inputSchema object
         assert all(input_schema(t).get("type") == "object" for t in result.tools)
+
+    @pytest.mark.parametrize("arguments", [None, {}])
+    def test_describe_roundtrip_accepts_empty_arguments(self, arguments):
+        from soup_cli.mcp_server.server import build_server
+
+        server = build_server(reg.build_registry(allow_mutating=False))
+        result = _roundtrip(server, "engine_describe", arguments)
+        assert not is_error(result)
+        description = json.loads(result.content[0].text)
+        assert description["contract_version"] == 1
+        assert description["gates"] == {"mutating": False, "execute": False}
+        assert len(description["tools"]) == 15
+
+    def test_describe_roundtrip_rejects_extra_key_without_echoing_input(self):
+        from soup_cli.mcp_server.server import build_server
+
+        server = build_server(reg.build_registry(allow_mutating=True))
+        result = _roundtrip(server, "engine_describe", {"sensitive-key": "sensitive-value"})
+        assert is_error(result)
+        message = result.content[0].text
+        assert message.startswith("soup.engine.invalid_arguments")
+        assert "sensitive-" not in message
+
+    def test_describe_real_stdio_reports_transport_and_execution_gate(self, tmp_path):
+        import asyncio
+        import sys
+        from pathlib import Path
+
+        from mcp import ClientSession
+        from mcp.client.stdio import StdioServerParameters, stdio_client
+
+        source = Path(__file__).resolve().parents[1] / "src"
+        pythonpath = str(source)
+        if os.environ.get("PYTHONPATH"):
+            pythonpath += os.pathsep + os.environ["PYTHONPATH"]
+        server = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "soup_cli", "mcp", "serve", "--allow-execute"],
+            cwd=tmp_path,
+            env={**os.environ, "PYTHONPATH": pythonpath},
+        )
+
+        async def connect():
+            async with stdio_client(server) as (read, write):
+                async with ClientSession(read, write) as client:
+                    await client.initialize()
+                    return await client.call_tool("engine_describe")
+
+        result = _run(asyncio.wait_for(connect(), timeout=20))
+        assert not is_error(result)
+        description = json.loads(result.content[0].text)
+        assert description["transport"] == "stdio"
+        assert description["gates"] == {"mutating": True, "execute": True}
+        assert len(description["tools"]) == 19
 
     def test_call_recipes_search_returns_json(self):
         from soup_cli.mcp_server.registry import build_registry
