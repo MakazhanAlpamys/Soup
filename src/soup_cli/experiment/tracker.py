@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable
 from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from soup_cli.experiment.reward_columns import finite_reward
 from soup_cli.experiment.row_kinds import check_loss_summary_kind, check_metric_row_kind
@@ -25,6 +25,9 @@ from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
 from soup_cli.utils.crash import REDACTION_FAILED, redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
 from soup_cli.utils.terminal import for_terminal, strip_control
+
+if TYPE_CHECKING:
+    from soup_cli.utils.run_status import RunStatus
 
 # error_message is operator-facing text read in `soup runs show`, not a
 # diagnostic dump — capped well short of a full traceback so one runaway
@@ -39,6 +42,17 @@ _MAX_ERROR_MESSAGE_CHARS = 2000
 _STATUS_RUNNING = "running"
 _STATUS_TERMINATED = "terminated"
 _STATUS_LAUNCHING = "launching"
+
+_RUN_STATUS_COLUMNS = frozenset({"run_status_owner", "run_status_state", "run_status_json"})
+_RUN_STATUS_UPDATES = {
+    "launching": {"launching", "failed", "cancelled", "orphaned"},
+    "running": {"running", "finalizing", "failed", "cancelled", "orphaned"},
+    "finalizing": {"finalizing", "done", "failed", "cancelled", "orphaned"},
+}
+
+
+class RunStatusStorageError(RuntimeError):
+    """The row has a status record that cannot be read safely."""
 
 
 class ActiveLaunchingRunError(RuntimeError):
@@ -81,7 +95,10 @@ CREATE TABLE IF NOT EXISTS runs (
     exit_code       INTEGER,
     loss_summary_kind TEXT,
     error_message   TEXT,
-    cost_history_eligible INTEGER
+    cost_history_eligible INTEGER,
+    run_status_owner TEXT,
+    run_status_state TEXT,
+    run_status_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -272,6 +289,9 @@ class ExperimentTracker:
             # columns by name, so both orders work without rebuilding any table.
             ("metrics", "reward", "ALTER TABLE metrics ADD COLUMN reward REAL"),
             ("metrics", "reward_std", "ALTER TABLE metrics ADD COLUMN reward_std REAL"),
+            ("runs", "run_status_owner", "ALTER TABLE runs ADD COLUMN run_status_owner TEXT"),
+            ("runs", "run_status_state", "ALTER TABLE runs ADD COLUMN run_status_state TEXT"),
+            ("runs", "run_status_json", "ALTER TABLE runs ADD COLUMN run_status_json TEXT"),
         ):
             existing = {
                 row[1]
@@ -288,6 +308,13 @@ class ExperimentTracker:
                 if "duplicate column" not in str(exc).lower():
                     raise
         conn.commit()
+        # Preserve the legacy row shape, even for older physical layouts. Do
+        # not fetch private status bytes for legacy readers or their selectors.
+        self._legacy_run_columns = ", ".join(
+            '"' + row[1].replace('"', '""') + '"'
+            for row in conn.execute("PRAGMA table_info(runs)")
+            if row[1].lower() not in _RUN_STATUS_COLUMNS
+        )
 
     def init_db(self) -> None:
         """Public alias for schema initialization (v0.25.0+)."""
@@ -639,6 +666,98 @@ class ExperimentTracker:
         )
         conn.commit()
 
+    def get_run_status(self, run_id: str) -> RunStatus | None:
+        """Read the bounded snapshot for one full run ID."""
+        from soup_cli.utils.command_result import MAX_COMMAND_RESULT_BYTES
+        from soup_cli.utils.run_status import decode_run_status
+
+        row = self._get_conn().execute(
+            """SELECT run_status_owner IS NULL AND run_status_state IS NULL
+                          AND run_status_json IS NULL AS is_legacy,
+                      typeof(run_status_owner) = 'text' AND length(run_status_owner) > 0
+                          AS has_owner,
+                      CASE WHEN typeof(run_status_state) = 'text'
+                           AND length(CAST(run_status_state AS BLOB)) <= 16
+                           THEN CAST(run_status_state AS BLOB) END AS state,
+                      CASE WHEN typeof(run_status_json) = 'text'
+                           AND length(CAST(run_status_json AS BLOB)) <= ?
+                           THEN CAST(run_status_json AS BLOB) END AS payload
+               FROM runs WHERE run_id = ?""",
+            (MAX_COMMAND_RESULT_BYTES, run_id),
+        ).fetchone()
+        if row is None or row["is_legacy"]:
+            return None
+        if not row["has_owner"] or row["payload"] is None:
+            raise RunStatusStorageError("stored run status is invalid")
+        try:
+            status = decode_run_status(row["payload"])
+        except ValueError:
+            raise RunStatusStorageError("stored run status is invalid") from None
+        if status.run_id != run_id or status.state.encode("ascii") != row["state"]:
+            raise RunStatusStorageError("stored run status is invalid")
+        return status
+
+    def initialize_run_status(self, owner: str, status: RunStatus) -> bool:
+        """Reserve an existing row with a launching snapshot and internal owner."""
+        from soup_cli.utils.run_status import encode_run_status
+
+        if status.state != "launching":
+            return False
+        if not isinstance(owner, str) or not owner:
+            raise ValueError("run status requires an owner")
+        payload = encode_run_status(status).decode("utf-8")
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """UPDATE runs SET run_status_owner = ?, run_status_state = ?, run_status_json = ?
+                   WHERE run_id = ? AND run_status_owner IS NULL
+                     AND run_status_state IS NULL AND run_status_json IS NULL""",
+                (owner, status.state, payload, status.run_id),
+            )
+        return cursor.rowcount == 1
+
+    def claim_run_status(self, owner: str, expected: RunStatus, status: RunStatus) -> bool:
+        """Claim the matching launch reservation by recording the first running snapshot."""
+        if (expected.state, status.state) != ("launching", "running"):
+            return False
+        return self._write_run_status(owner, expected, status)
+
+    def update_run_status(self, owner: str, expected: RunStatus, status: RunStatus) -> bool:
+        """Persist an allowed transition against the exact previous snapshot."""
+        if status.state not in _RUN_STATUS_UPDATES.get(expected.state, ()):
+            return False
+        return self._write_run_status(owner, expected, status)
+
+    def _write_run_status(self, owner: str, expected: RunStatus, status: RunStatus) -> bool:
+        from soup_cli.utils.run_status import encode_run_status
+
+        if not isinstance(owner, str) or not owner:
+            raise ValueError("run status requires an owner")
+        # A strictly increasing timestamp gives every persisted state a distinct
+        # revision, even when state and progress otherwise stay the same.
+        if (
+            status.run_id != expected.run_id
+            or status.started_by != expected.started_by
+            or status.started_at != expected.started_at
+            or status.command != expected.command
+            or status.updated_at <= expected.updated_at
+            or (expected.step is not None and (status.step is None or status.step < expected.step))
+        ):
+            return False
+        before = encode_run_status(expected).decode("utf-8")
+        after = encode_run_status(status).decode("utf-8")
+        conn = self._get_conn()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """UPDATE runs SET run_status_state = ?, run_status_json = ?
+                   WHERE run_id = ? AND run_status_owner = ?
+                     AND run_status_state = ? AND run_status_json = ?""",
+                (status.state, after, status.run_id, owner, expected.state, before),
+            )
+        return cursor.rowcount == 1
+
     def _reconcile_orphaned_run(self, run: dict) -> dict:
         """Rewrite a stale 'running' row whose process is gone (issue #401).
 
@@ -671,7 +790,8 @@ class ExperimentTracker:
         conn = self._get_conn()
         sql_limit = limit if select_runs is None or limit == 0 else -1
         with closing(conn.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (sql_limit,)
+            f"SELECT {self._legacy_run_columns} FROM runs "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?", (sql_limit,),
         )) as cursor:
             rows = map(dict, cursor)
             selected = list(rows) if select_runs is None else select_runs(rows)
@@ -685,7 +805,7 @@ class ExperimentTracker:
         """
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT * FROM runs WHERE status IN ('launching', 'running') "
+            f"SELECT {self._legacy_run_columns} FROM runs WHERE status IN ('launching', 'running') "
             "ORDER BY created_at DESC, rowid DESC"
         ).fetchall()
         return [self._reconcile_orphaned_run(dict(row)) for row in rows]
@@ -695,14 +815,14 @@ class ExperimentTracker:
         conn = self._get_conn()
         # Try exact match first
         row = conn.execute(
-            "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+            f"SELECT {self._legacy_run_columns} FROM runs WHERE run_id = ?", (run_id,)
         ).fetchone()
 
         # An empty id is not a prefix: its pattern is "%", which names every run,
         # so with a single run `soup runs delete ""` would delete it.
         if row is None and run_id:
             rows = conn.execute(
-                "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
+                f"SELECT {self._legacy_run_columns} FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
                 "ORDER BY created_at DESC",
                 (_run_id_prefix_pattern(run_id),),
             ).fetchall()
