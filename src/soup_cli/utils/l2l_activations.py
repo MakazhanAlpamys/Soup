@@ -4,7 +4,7 @@ Layer-major micro-batching keeps the input of
 every decoder layer for every micro-batch between the forward walk and the
 backward walk: ``n_layers x k`` chunks of ``(1, seq, hidden)``. On the 70B
 shape one chunk is 512 x 8192 x 2 B = 8 MiB, an exact power of two, so pinned
-chunks do not pay #901's power-of-two rounding.
+chunks do not pay torch's power-of-two rounding of pinned requests.
 
 Layers ``[0, spill_layers)`` go to a spill file instead. They are written first
 in the forward and read last in the backward, so their I/O has the most compute
@@ -119,7 +119,7 @@ class BufferedSpillFile(SpillBackend):
 
     def __init__(self, path: str, size: int):
         self.path = str(path)
-        with open(self.path, "wb") as handle:
+        with create_exclusive(self.path) as handle:
             handle.truncate(size)
         self._writer: Optional[io.FileIO] = io.FileIO(self.path, "r+b")
         self._reader: Optional[io.FileIO] = io.FileIO(self.path, "rb")
@@ -138,6 +138,24 @@ class BufferedSpillFile(SpillBackend):
         self._writer = self._reader = None
         if remove:
             self._remove()
+
+
+def create_exclusive(path: str) -> io.FileIO:
+    """Create ``path`` for writing, refusing an existing entry of any kind.
+
+    ``O_CREAT | O_EXCL`` fails on an existing file and on a symlink (dangling or not), so a
+    planted entry is never opened or written through; ``O_NOFOLLOW`` and ``O_BINARY`` are added
+    where the platform has them. The mode keeps the file private to its owner.
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            exc.errno, f"the spill file {path} already exists; it was not opened", path
+        ) from exc
+    return io.FileIO(descriptor, "wb", closefd=True)
 
 
 def _open_unbuffered(path: str) -> io.FileIO:
@@ -163,7 +181,9 @@ def _open_unbuffered(path: str) -> io.FileIO:
         return io.FileIO(fd, "r+b", closefd=True)
     direct = getattr(os, "O_DIRECT", None)
     if direct is not None:
-        return io.FileIO(os.open(path, os.O_RDWR | direct), "r+b", closefd=True)
+        return io.FileIO(
+            os.open(path, os.O_RDWR | direct | getattr(os, "O_NOFOLLOW", 0)), "r+b", closefd=True
+        )
     if sys.platform == "darwin":
         import fcntl
 
@@ -206,7 +226,7 @@ class DirectSpillFile(SpillBackend):
         self._reader: Optional[io.FileIO] = None
         created = False
         try:
-            with open(self.path, "wb") as handle:
+            with create_exclusive(self.path) as handle:
                 created = True
                 handle.truncate(size)
             self._writer = _open_unbuffered(self.path)

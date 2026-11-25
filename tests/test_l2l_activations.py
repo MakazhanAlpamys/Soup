@@ -770,3 +770,42 @@ def test_raw_io_zero_progress_still_raises_short_transfer(tmp_path, direction):
 
             with pytest.raises(OSError, match="short write"):
                 acts._write_all(StalledWrite(), 0, buf)
+
+
+# --------------------------------------------------------------------------
+# exclusive creation: a planted entry is never opened or written through
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("backend", ["buffered", "direct"])
+def test_a_file_planted_at_the_spill_path_is_refused_and_left_intact(tmp_path, backend):
+    target = tmp_path / "spill.bin"
+    target.write_bytes(b"precious")
+    factory = acts.BufferedSpillFile if backend == "buffered" else acts.DirectSpillFile
+    with pytest.raises(FileExistsError, match="already exists; it was not opened") as caught:
+        factory(str(target), 4096)
+    assert str(target) in str(caught.value)
+    assert target.read_bytes() == b"precious"
+
+
+@pytest.mark.parametrize("backend", ["buffered", "direct"])
+def test_a_symlink_at_the_spill_path_is_refused_without_writing_through(tmp_path, backend):
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"precious")
+    link = tmp_path / "spill.bin"
+    try:
+        link.symlink_to(victim)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+    factory = acts.BufferedSpillFile if backend == "buffered" else acts.DirectSpillFile
+    with pytest.raises(OSError):
+        factory(str(link), 4096)
+    assert victim.read_bytes() == b"precious"
+    assert link.is_symlink()
+
+
+def test_the_spill_file_name_carries_128_random_bits():
+    from soup_cli.utils.l2l_spill import _OWN_FILE, spill_file_name
+
+    name = spill_file_name()
+    match = _OWN_FILE.match(name)
+    assert match and len(match.group(2)) == 32
+    assert name != spill_file_name()

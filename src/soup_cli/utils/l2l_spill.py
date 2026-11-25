@@ -25,9 +25,7 @@ the lowest layers go to an unbuffered file instead, as many as needed and no mor
 * **Cleanup** is best-effort: the trainer closes the store on every exit it sees, and
   the next run in the same directory removes files of processes that are gone.
 
-Ported from the A4 harness (``a4_activation_budget``, ``a4_box``, ``a4_spill_store``,
-``arm_validity``), not imported from it. Standard library at the top level; torch is
-imported inside functions.
+Standard library at the top level; torch is imported inside functions.
 """
 
 from __future__ import annotations
@@ -51,7 +49,7 @@ from soup_cli.utils.l2l_activations import SECTOR_BYTES, sector_round_up
 logger = logging.getLogger(__name__)
 console = Console()
 
-#: Staging buffers per direction for the trainer's store: the depth A4 validated.
+#: Staging buffers per direction for the trainer's store (the depth it was validated with).
 #: ``l2l_activations.DEFAULT_RING`` stays for the other callers of the store.
 TRAINER_RING = 4
 
@@ -61,8 +59,9 @@ SPILL_FILE_PREFIX = "soup-l2l-spill-"
 PROBE_FILE_PREFIX = "soup-l2l-probe-"
 SPILL_FILE_GLOB = SPILL_FILE_PREFIX + "*.bin"
 PROBE_FILE_GLOB = PROBE_FILE_PREFIX + "*.bin"
-#: Our own file names, and only them: ``soup-l2l-{spill|probe}-<pid>-<8 hex>.bin``.
-_OWN_FILE = re.compile(r"^soup-l2l-(?:spill|probe)-(\d{1,10})-([0-9a-f]{8})\.bin$")
+#: Our own file names, and only them: ``soup-l2l-{spill|probe}-<pid>-<hex>.bin``
+#: (32 hex digits; 8 are still recognised so older stale files are swept).
+_OWN_FILE = re.compile(r"^soup-l2l-(?:spill|probe)-(\d{1,10})-([0-9a-f]{8}(?:[0-9a-f]{24})?)\.bin$")
 
 #: Roots the RAM budget and the volume checks read; module constants so tests can point
 #: them at fake trees.
@@ -76,8 +75,8 @@ SYS_ROOT = "/sys"
 UNLIMITED_BYTES = 1 << 60
 
 #: What the rest of a training step may still allocate after the store is planned: the
-#: budget never leaves less than this free. Chosen, not measured. A3's one GPU measurement
-#: (Mistral-7B NF4, LoRA r 8, k 4, seq 512) saw about 183 MB of growth outside the store after
+#: budget never leaves less than this free. Chosen, not measured. One GPU run
+#: (7B NF4, LoRA r 8, k 4, seq 512) saw about 183 MB of growth outside the store after
 #: the budget was read; a 0.3 headroom alone left 130 MB there and the run was OOM-killed.
 #: Above ``RAM_RESERVE_BYTES / (1 - RAM_TIER_HEADROOM)`` (1.79 GB) the 0.7 share decides.
 RAM_RESERVE_BYTES = 512 << 20
@@ -607,8 +606,8 @@ def plan_spill(
 # file names, the stale sweep
 # ---------------------------------------------------------------------------
 def spill_file_name(prefix: str = SPILL_FILE_PREFIX) -> str:
-    """A new file name of this process: ``<prefix><pid>-<8 hex>.bin``."""
-    return f"{prefix}{os.getpid()}-{secrets.token_hex(4)}.bin"
+    """A new file name of this process: ``<prefix><pid>-<32 hex>.bin`` (128 random bits)."""
+    return f"{prefix}{os.getpid()}-{secrets.token_hex(16)}.bin"
 
 
 def _plain_entry(info: os.stat_result, *, directory: bool = False) -> bool:
@@ -1250,7 +1249,7 @@ def check_weights_disk(
     spill_dir: str, weight_dirs: Sequence[str], *, explicit: bool,
     notify: Optional[Callable[[str], Any]] = None,
 ) -> None:
-    """Disk tier (A4's G5): the spill must not share a physical disk with the layer cache.
+    """Disk tier: the spill must not share a physical disk with the layer cache.
 
     Same disk or unknown with the default directory: refused. With an explicitly set
     ``training.l2l_spill_dir``: allowed with a warning.
