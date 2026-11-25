@@ -53,16 +53,27 @@ class Leaderboard:
             if sort_by and sort_by in scores:
                 sort_score = scores[sort_by]
             else:
-                sort_score = (
-                    sum(scores.values()) / len(scores) if scores else 0.0
-                )
-                if not math.isfinite(sort_score):
-                    sort_score = sum(value / len(scores) for value in scores.values())
-                    sort_score = max(min(scores.values()), min(max(scores.values()), sort_score))
+                sort_score = _average(scores)
             result.append((model, scores, sort_score))
 
         result.sort(key=lambda item: item[2], reverse=True)
         return result
+
+
+def _average(scores: dict[str, float]) -> float:
+    """The arithmetic mean of a model's benchmark scores (0.0 for none).
+
+    The leaderboard's ``average`` in every format, whatever the rows are sorted by
+    (#3272). A sum that overflows to infinity is taken term by term instead, clamped
+    to the scores' own range.
+    """
+    if not scores:
+        return 0.0
+    average = sum(scores.values()) / len(scores)
+    if not math.isfinite(average):
+        average = sum(value / len(scores) for value in scores.values())
+        average = max(min(scores.values()), min(max(scores.values()), average))
+    return average
 
 
 def _require_finite_score(score: float, context: str) -> float:
@@ -166,9 +177,17 @@ def _csv_line(values: list[str]) -> str:
 def export_leaderboard(
     leaderboard: Leaderboard,
     fmt: str = "json",
+    sort_by: Optional[str] = None,
 ) -> str:
-    """Export leaderboard to JSON or CSV string."""
-    sorted_models = leaderboard.get_sorted_models()
+    """Export leaderboard to JSON or CSV string.
+
+    Rows follow ``sort_by`` as the table does (#3272); each row's ``average`` is the
+    arithmetic mean of its scores in either order, never the sort key.
+    """
+    sorted_models = [
+        (model, scores, _average(scores))
+        for model, scores, _ in leaderboard.get_sorted_models(sort_by=sort_by)
+    ]
 
     if fmt == "csv":
         # Collect all benchmarks

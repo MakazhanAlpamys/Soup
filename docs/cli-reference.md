@@ -2317,7 +2317,7 @@ Usage: `soup eval leaderboard [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--sort-by`, `-s` | text |  |  | Sort by specific benchmark (default: average) |
+| `--sort-by`, `-s` | text |  |  | Sort the table, JSON and CSV rows by one benchmark (default: average) |
 | `--format`, `-f` | text | `table` |  | Output format: table, json, csv |
 
 ### `soup eval lock`

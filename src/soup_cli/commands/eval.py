@@ -947,7 +947,7 @@ def compare(
 def leaderboard(
     sort_by: Optional[str] = typer.Option(
         None, "--sort-by", "-s",
-        help="Sort by specific benchmark (default: average)",
+        help="Sort the table, JSON and CSV rows by one benchmark (default: average)",
     ),
     fmt: str = typer.Option(
         "table", "--format", "-f",
@@ -956,6 +956,7 @@ def leaderboard(
 ):
     """Show local leaderboard across all evaluated models."""
     from soup_cli.eval.leaderboard import (
+        _average,
         build_leaderboard_from_tracker,
         export_leaderboard,
     )
@@ -976,7 +977,7 @@ def leaderboard(
         raise typer.Exit(1)
 
     if fmt in ("json", "csv"):
-        output = export_leaderboard(lb, fmt=fmt)
+        output = export_leaderboard(lb, fmt=fmt, sort_by=sort_by)
         # Machine-readable JSON/CSV: raw stdout, not console.print — Rich folds
         # rows/lines at the console width and parses ``[...]`` as markup when
         # piped, corrupting the output (issue #1468).
@@ -999,7 +1000,8 @@ def leaderboard(
         table.add_column(terminal_text(bench), justify="right")
     table.add_column("Avg", justify="right", style="green")
 
-    for rank, (model_name, scores, avg) in enumerate(sorted_models, 1):
+    # Avg is the mean of the row's scores, not the --sort-by key the rows are ranked by (#3272).
+    for rank, (model_name, scores, _) in enumerate(sorted_models, 1):
         row: list[str | Text] = [
             str(rank), terminal_text(_short_model_name(model_name, markup=False)),
         ]
@@ -1008,7 +1010,7 @@ def leaderboard(
                 row.append(f"{scores[bench]:.4f}")
             else:
                 row.append("-")
-        row.append(f"{avg:.4f}")
+        row.append(f"{_average(scores):.4f}")
         table.add_row(*row)
 
     console.print(table)
