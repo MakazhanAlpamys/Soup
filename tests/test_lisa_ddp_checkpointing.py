@@ -62,6 +62,18 @@ def _gloo_worker(rank, directory, task):
             "LOCAL_WORLD_SIZE": "2",
         }.items():
             patch.setenv(key, value)
+        patch.setattr(torch.backends.mps, "is_available", lambda: False)
+        patch.setattr(torch.mps, "is_available", lambda: False)
+        patch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
+
+        # Accelerate passes the rank as a device ID. PyTorch would use that ID
+        # with the host accelerator, even for this CPU Gloo group.
+        barrier = dist.barrier
+
+        def cpu_barrier(group=None, async_op=False, device_ids=None, **kwargs):
+            return barrier(group=group, async_op=async_op, **kwargs)
+
+        patch.setattr(dist, "barrier", cpu_barrier)
         dist.init_process_group(
             "gloo", init_method=(root / "rendezvous").as_uri(),
             rank=rank, world_size=2, timeout=timedelta(seconds=60),
@@ -71,6 +83,7 @@ def _gloo_worker(rank, directory, task):
                 task, root / f"rank-{rank}", patch, lisa=True, checkpointing="full",
             )
             trainer = wrapper.trainer
+            assert trainer.args.device.type == "cpu"
             assert trainer.args.world_size == 2
             assert trainer.args.gradient_checkpointing is True
             expected_layers = (3, 3, 3, 3, 0, 0, 2, 2)
