@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
+from soup_cli.autodistill.capture import _validate_teacher_expert_rows
 from soup_cli.autodistill.contract import (
     ArtifactCorruptionError,
     AutoDistillPlan,
@@ -141,34 +142,7 @@ class CaptureShardPublisher:
 
     def _capture_payload(self, captures: Sequence[CaptureToken]) -> bytes:
         rows = tuple(captures)
-        if not rows:
-            raise ValueError("a capture shard must contain at least one token row")
-        closed_examples: set[str] = set()
-        current_example: str | None = None
-        expected_position = 0
-        for row in rows:
-            if not isinstance(row, CaptureToken):
-                raise TypeError("captures must contain CaptureToken instances")
-            if row.trajectory_kind != "teacher_expert":
-                raise ValueError("Milestone B1 publishes teacher_expert rows only")
-            if row.vocab_size != self.plan.capture.vocab_size:
-                raise ValueError("capture vocabulary does not match plan")
-            if row.temperature != self.plan.probability_policy.temperature:
-                raise ValueError("capture temperature does not match plan")
-            if len(row.top_k_token_ids) != self.plan.probability_policy.top_k:
-                raise ValueError("capture top-k cardinality does not match plan")
-            if len(row.context_token_ids) > self.plan.capture.max_sequence_length:
-                raise ValueError("capture context exceeds plan max_sequence_length")
-            if row.example_id != current_example:
-                if row.example_id in closed_examples:
-                    raise ValueError("capture examples must form contiguous groups")
-                if current_example is not None:
-                    closed_examples.add(current_example)
-                current_example = row.example_id
-                expected_position = 0
-            if row.position != expected_position:
-                raise ValueError("capture positions must be contiguous and start at zero")
-            expected_position += 1
+        _validate_teacher_expert_rows(rows, self.plan)
         return b"".join(canonical_json_bytes(row) + b"\n" for row in rows)
 
     def _stage(self, payload: bytes, row_count: int) -> ShardManifest:
