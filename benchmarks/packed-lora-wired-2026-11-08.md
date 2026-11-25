@@ -135,8 +135,10 @@ counted (`steps_stock`).
 
 ## Re-run on the merged head 92375494e, 2026-11-25
 
-The Qwen2.5-1.5B-Instruct row only, on head `92375494e` (the #3178 head merged with current main plus
-the `training.prefix_tree` refusal fix). Same command lines as above for the 1.5B arms, same 840 rows
+The Qwen2.5-1.5B-Instruct row only. The code measured is `92375494e` (the #3178 head merged with current
+main plus the `training.prefix_tree` refusal fix); the later commit that adds this section changes only
+the record, not the code. Batch shapes: plain Soup 2 x 4 (micro-batch 2, accumulation 4); packed 8 x 1
+(micro-batch 8, accumulation 1); 8 rows per optimizer step in both, 105 steps. Same 840 rows
 (sha256 `eba8a5bc...79c8`), seed 3407, 105 steps, one run per arm. WSL2 Ubuntu, RTX 5070 Laptop 8 GB,
 Python 3.13, torch 2.11.0+cu128, triton 3.6.0, transformers 5.17.0, peft 0.20.0, trl 0.29.1,
 bitsandbytes 0.50.2. The GPU held no other process before the run. The run printed
@@ -152,6 +154,9 @@ bitsandbytes 0.50.2. The GPU held no other process before the run. The run print
 the historical table (1,569.0 tok/s, 4,107.8 MiB), as the note at the top says for the #2609 changes to
 stock 4-bit SFT; the packed arm is unchanged within 2.3 % (5,183.6 before).
 
-Loss over steps 1-105: plain 1.24539, packed 1.24536, packed against plain -0.003 %. Step by step the
+Loss over steps 1-105, from the 105 raw per-step values of each arm: plain 1.245394, packed 1.245362,
+packed against plain -0.0026 % (the earlier -0.003 % was worked from the rounded means). The per-step data
+of both arms (loss and grad norm per step; throughput, median step time and memory per arm) are in
+[`evidence/packed-lora-wired-rerun-92375494e.json`](evidence/packed-lora-wired-rerun-92375494e.json). Step by step the
 largest relative difference is 0.227 % (step 58) and the mean is 0.047 %. The step-2 offset of the
 historical run is not present here (plain 1.5612, packed 1.5599). One run per arm, one seed.
