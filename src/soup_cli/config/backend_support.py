@@ -87,12 +87,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
-        "training.use_ring_attention",
-        IGNORED,
-        "Ring Attention has no MLX path",
-        trainer_reads=True,
-    ),
-    SupportEntry(
         "training.use_flash_attn",
         IGNORED,
         "MLX has its own attention kernels",
@@ -202,7 +196,6 @@ _MLX_KTO: tuple[SupportEntry, ...] = _MLX_DPO
 #: refused at config load for this task, and load-time refusals have no rows.
 _MLX_GRPO_FIELDS = frozenset({
     "training.use_galore",
-    "training.use_ring_attention",
     "training.moe_lora",
     "training.use_fsdp2_compile",
 })

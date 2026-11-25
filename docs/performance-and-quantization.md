@@ -1737,7 +1737,7 @@ training:
 
   # Long-context (128k+ tokens)
   rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, llama3; sft/tts/pretrain on backend: transformers only
-  # use_ring_attention: true  # Sequence parallelism across GPUs
+  # use_ring_attention: true  # Refused at config load (#2044): no trainer applies ring attention; use rope_scaling_type instead
 
 data:
   max_length: 131072          # Up to 1M tokens supported

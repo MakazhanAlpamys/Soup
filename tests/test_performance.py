@@ -9,6 +9,7 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from soup_cli.config.schema import TEMPLATES, SoupConfig
 
@@ -287,13 +288,14 @@ class TestRingAttentionConfig:
         cfg = SoupConfig(base="test/model", data={"train": "./data.jsonl"})
         assert cfg.training.use_ring_attention is False
 
-    def test_use_ring_attention_enabled(self):
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"use_ring_attention": True},
-        )
-        assert cfg.training.use_ring_attention is True
+    def test_use_ring_attention_enabled_is_refused_at_load(self):
+        # #2044: no trainer applies ring attention, so true is refused everywhere.
+        with pytest.raises(ValidationError, match=r"#2044"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"use_ring_attention": True},
+            )
 
 
 class TestRingAttentionUtils:
@@ -701,14 +703,12 @@ class TestCombinedPerformanceConfig:
             training={
                 "use_liger": True,
                 "use_flash_attn": True,
-                "use_ring_attention": True,
                 "rope_scaling_type": "dynamic",
                 "gradient_checkpointing": True,
             },
         )
         assert cfg.training.use_liger is True
         assert cfg.training.use_flash_attn is True
-        assert cfg.training.use_ring_attention is True
         assert cfg.training.rope_scaling_type == "dynamic"
         assert cfg.training.gradient_checkpointing is True
         assert cfg.data.max_length == 131072
