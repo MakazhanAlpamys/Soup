@@ -5,7 +5,10 @@ train`` steps on an RTX 3060 Laptop (``benchmarks/gate-2049-resident-vram.md``).
 Each row's model shape is taken from the ``config.json`` and safetensors count
 recorded with it, so this runs offline. The estimate's allocated terms (everything
 but ``overhead``, which ``max_memory_allocated`` cannot see) must land within the
-stated band of the measured peak for the row's kind of run. The bands are as tight as
+stated band of the measured peak for the row's kind of run. Every row was measured
+before #2609, with peft's fp32 embeddings, norms and head, so the rows are priced with
+``kbit_fp32=True``; the bf16 default is checked against its own measured row in
+``tests/test_vram_estimate_kbit_bf16.py``. The bands are as tight as
 each kind fits: an under-prediction lets a run through that then runs out of memory,
 an over-prediction refuses a run that fits.
 """
@@ -71,6 +74,7 @@ def _predicted_allocated(row: dict) -> int:
         gradient_checkpointing=run["gradient_checkpointing"],
         lora_r=run["lora_r"],
         target_modules=run["target_modules"],
+        kbit_fp32=True,  # the rows predate #2609: peft's fp32 embeddings, norms and head
     )
     est = estimate_vram(shape, spec)
     return est.total_bytes - est.terms["overhead"]
@@ -109,3 +113,35 @@ def test_without_the_logits_term_large_vocabulary_rows_fail(monkeypatch):
         if _predicted_allocated(row) / row["peak_allocated"] < BANDS[_kind(row)][0]
     ]
     assert under == [_ident(row) for row in large]
+
+
+def _step_term(row: dict) -> int:
+    config, run = row["config"], row["run"]
+    shape = shape_from_config(config, params=config["params"], params_source="safetensors")
+    quant = run["quantization"]
+    full = run["lora_r"] == 0
+    spec = RunSpec(
+        seq_len=run["seq"],
+        batch_size=run["batch"],
+        quant=quant,
+        peft="full" if full else ("qlora" if quant == "4bit" else "lora"),
+        optimizer=run["optimizer"],
+        gradient_checkpointing=run["gradient_checkpointing"],
+        lora_r=run["lora_r"],
+        target_modules=run["target_modules"],
+        kbit_fp32=True,  # the rows predate #2609: peft's fp32 embeddings, norms and head
+    )
+    return estimate_vram(shape, spec).terms["optimizer_step"]
+
+
+def test_without_the_step_scratch_the_step_phase_rows_fail(monkeypatch):
+    """Mutation check from #2277: the scratch is what prices the rows the step sets."""
+    step_rows = [_ident(row) for row in _rows() if _step_term(row) > 0]
+    assert step_rows
+    monkeypatch.setattr(ve, "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM", {})
+    under = [
+        _ident(row)
+        for row in _rows()
+        if _predicted_allocated(row) / row["peak_allocated"] < BANDS[_kind(row)][0]
+    ]
+    assert under == step_rows

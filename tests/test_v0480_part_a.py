@@ -565,6 +565,59 @@ def test_curriculum_curve_render_jsonl(tmp_path, monkeypatch):
     assert "100" in result.output
 
 
+@pytest.mark.parametrize(
+    "lines, reason",
+    [
+        (
+            [
+                json.dumps({"step": 5, "weights": [0.25, 0.25, 0.25, 0.25]}),
+                json.dumps({"step": 5, "weights": [0.2, 0.3, 0.5]}),
+            ],
+            "weights length 3 != num_buckets 4",
+        ),
+        (
+            [
+                json.dumps({"step": 5, "weights": [0.5, 0.5]}),
+                '{"step": 10, "weights": [0.5',
+            ],
+            "line 2 is not valid JSON",
+        ),
+        (["[0.5, 0.5]"], "history row must be Mapping"),
+    ],
+    ids=["mixed-bucket-counts", "truncated-line", "list-row"],
+)
+def test_curriculum_curve_malformed_history_exits_2(
+    tmp_path, monkeypatch, lines, reason
+):
+    from typer.testing import CliRunner
+
+    import soup_cli.experiment.tracker as et
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    history = tmp_path / "history.jsonl"
+    history.write_text("\n".join(lines) + "\n")
+
+    class FakeTracker:
+        def get_run(self, run_id):
+            return {"run_id": run_id, "output_dir": "."}
+
+    monkeypatch.setattr(et, "ExperimentTracker", FakeTracker)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "runs", "curriculum-curve", "stub",
+            "--history", str(history),
+        ],
+    )
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    output = " ".join(strip_ansi(result.output).split())
+    assert "history malformed" in output
+    assert reason in output
+    assert "Error:" not in output
+
+
 # ---------- Review-fix coverage -------------------------------------------
 
 
@@ -652,8 +705,8 @@ def test_should_recompute_boundary_minus_one():
     assert p.should_recompute(50) is True
 
 
-def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
-    """Use the recommended `(result.output, repr(result.exception))` assert form."""
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_curriculum_curve_renders_every_history_row(tmp_path, monkeypatch, encoding):
     from typer.testing import CliRunner
 
     import soup_cli.experiment.tracker as et
@@ -661,9 +714,8 @@ def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     history = tmp_path / "history.jsonl"
-    history.write_text(
-        json.dumps({"step": 100, "weights": [0.5, 0.5]}) + "\n"
-    )
+    rows = [{"step": 100, "weights": [0.25, 0.75]}, {"step": 200, "weights": [0.75, 0.25]}]
+    history.write_bytes("".join(json.dumps(row) + "\n" for row in rows).encode(encoding))
 
     class FakeTracker:
         def get_run(self, run_id):
@@ -675,6 +727,11 @@ def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
         app, ["runs", "curriculum-curve", "stub", "--history", str(history)]
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert [line.split() for line in strip_ansi(result.output).splitlines()] == [
+        ["step", "B0", "B1"],
+        ["100", "0.2500", "0.7500"],
+        ["200", "0.7500", "0.2500"],
+    ]
 
 
 def test_curriculum_curve_corrupt_history(tmp_path, monkeypatch):

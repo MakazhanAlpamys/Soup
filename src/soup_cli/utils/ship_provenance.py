@@ -94,6 +94,15 @@ def check_binding(payload: dict[str, Any], expected: dict[str, Any]) -> None:
             or not isinstance(benchmarks, dict)
             or set(benchmarks) != set(expected["suites"]["names"])):
         raise ValueError("provenance does not describe the evidence task mode or benchmark set")
+    # The reward function the scores name (``task.reward``: what the evidence's reader and its
+    # replay print) must be the one the binding recorded: the binding is hash-checked above, the
+    # task block is not, and a hand-edited ``fn`` or ``sha256`` would otherwise pass.
+    if (expected["policy"]["task_mode"] == "reward"
+            and task.get("reward") != got["policy"].get("reward")):
+        raise ValueError(
+            "stale provenance: task.reward is not the reward function recorded in "
+            "provenance.binding.policy.reward"
+        )
 
 
 def judge_identity(judge: str | None) -> str | None:

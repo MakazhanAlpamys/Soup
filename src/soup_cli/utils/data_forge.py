@@ -596,7 +596,7 @@ def make_judge_provider_fn(
     Args:
         provider: one of ``"ollama"`` / ``"anthropic"`` / ``"vllm"``.
         model: backend model name (e.g. ``llama3.1`` for Ollama,
-            ``claude-3-5-sonnet-latest`` for Anthropic).
+            ``claude-haiku-5-5`` for Anthropic).
         base_url: HTTP base URL (Ollama / vLLM only). Defaults to loopback.
         temperature: sampling temperature.
         timeout_seconds: per-call HTTP timeout.

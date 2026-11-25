@@ -1205,8 +1205,6 @@ class TestTheAdvisoryGoesToStderr:
         stdout a document."""
         import json as _json
 
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
         from tests.test_issue1122_glm4_granite_moe_targets import _granite_config
 
@@ -1220,13 +1218,9 @@ class TestTheAdvisoryGoesToStderr:
             "training:\n  lora:\n    r: 8\n    target_modules: auto\n",
             encoding="utf-8",
         )
-        # Ask this runner: Typer may use a vendored implementation whose API
-        # is independent of the installed standalone Click version.
-        import inspect
+        from tests.conftest import make_cli_runner
 
-        supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
-        kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
-        runner = CliRunner(**kwargs)
+        runner = make_cli_runner()
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         rows = _json.loads(result.stdout)
@@ -1340,11 +1334,9 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
 
         v0.77 refuses both, so the warning path is reached through the switch it
         is kept behind, for the next value that gets a release of notice."""
-        import inspect
         import json as _json
 
         from transformers import LlamaConfig
-        from typer.testing import CliRunner
 
         from soup_cli.cli import app
         from soup_cli.config import deprecation
@@ -1364,9 +1356,9 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
             "training:\n  lora:\n    r: 8\n    target_modules: [q_proj, v_proj]\n",
             encoding="utf-8",
         )
-        supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
-        kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
-        runner = CliRunner(**kwargs)
+        from tests.conftest import make_cli_runner
+
+        runner = make_cli_runner()
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         assert result.exit_code == 0, (result.output, result.exception)

@@ -1,0 +1,378 @@
+{
+  "G1": {
+    "D1": {
+      "arm": "D1",
+      "max_memory_reserved_gib_median": 3.54296875,
+      "peak_vram_mib_median": 4979.0,
+      "runs_valid": 3,
+      "spread": 0.018914683013316325,
+      "status": "measured",
+      "tok_per_s_median": 39.78527993208528
+    },
+    "S0": {
+      "arm": "S0",
+      "max_memory_reserved_gib_median": null,
+      "peak_vram_mib_median": null,
+      "runs_valid": 0,
+      "spread": null,
+      "status": "not run",
+      "tok_per_s_median": null
+    },
+    "S0_over_D1": null,
+    "S1": {
+      "arm": "S1",
+      "max_memory_reserved_gib_median": 2.017578125,
+      "peak_vram_mib_median": 2921.0,
+      "runs_valid": 3,
+      "spread": 0.007487204259411132,
+      "status": "measured",
+      "tok_per_s_median": 61.99133543956563
+    },
+    "definition": "median tok/s(S1) / median tok/s(D1), Shape A, 80 GB",
+    "near_miss": false,
+    "ratio": 1.558147524546435,
+    "threshold": 2.64,
+    "verdict": "LOWER"
+  },
+  "G2": {
+    "16": {
+      "SB": {
+        "arm": "SB",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "budget_gb": 16,
+      "ds_arms_attempted": [],
+      "note": "no DeepSpeed arm was run at this budget",
+      "ratio": null
+    },
+    "24": {
+      "SB": {
+        "arm": "SB",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "budget_gb": 24,
+      "ds_arms_attempted": [],
+      "note": "no DeepSpeed arm was run at this budget",
+      "ratio": null
+    },
+    "80": {
+      "SB": {
+        "arm": "SB",
+        "max_memory_reserved_gib_median": 2.8046875,
+        "peak_vram_mib_median": 3487.0,
+        "runs_valid": 3,
+        "spread": 0.003974726510766904,
+        "status": "measured",
+        "tok_per_s_median": 64.3599126992981
+      },
+      "best_deepspeed": {
+        "arm": "D3",
+        "max_memory_reserved_gib_median": 15.4375,
+        "peak_vram_mib_median": 17515.0,
+        "runs_valid": 3,
+        "spread": 0.004465821755431338,
+        "status": "measured",
+        "tok_per_s_median": 280.717144580295
+      },
+      "best_deepspeed_with_prefetch_variants": {
+        "arm": "D3",
+        "max_memory_reserved_gib_median": 15.4375,
+        "peak_vram_mib_median": 17515.0,
+        "runs_valid": 3,
+        "spread": 0.004465821755431338,
+        "status": "measured",
+        "tok_per_s_median": 280.717144580295
+      },
+      "budget_gb": 80,
+      "ds_arms_attempted": [
+        "D1",
+        "D2",
+        "D3",
+        "D4"
+      ],
+      "ratio": 0.22926961869580043,
+      "ratio_with_prefetch_variants": 0.22926961869580043
+    }
+  },
+  "G3": {
+    "R1": {
+      "ratio_over_SB": 6.320503716798339,
+      "reading": "resident faster than SB",
+      "stats": {
+        "arm": "R1",
+        "max_memory_reserved_gib_median": 15.40234375,
+        "peak_vram_mib_median": 16529.0,
+        "runs_valid": 3,
+        "spread": 0.00547901480123805,
+        "status": "measured",
+        "tok_per_s_median": 406.7870674287303
+      }
+    },
+    "R2": {
+      "ratio_over_SB": 3.4486979752302354,
+      "reading": "resident faster than SB",
+      "stats": {
+        "arm": "R2",
+        "max_memory_reserved_gib_median": 15.259765625,
+        "peak_vram_mib_median": 16383.0,
+        "runs_valid": 3,
+        "spread": 0.010608947360878257,
+        "status": "measured",
+        "tok_per_s_median": 221.9579006120641
+      }
+    },
+    "SB": {
+      "arm": "SB",
+      "max_memory_reserved_gib_median": 2.8046875,
+      "peak_vram_mib_median": 3487.0,
+      "runs_valid": 3,
+      "spread": 0.003974726510766904,
+      "status": "measured",
+      "tok_per_s_median": 64.3599126992981
+    }
+  },
+  "G4": {
+    "B": {
+      "D1": {
+        "arm": "D1",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "D_best": {
+        "arm": "D3",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "R1": {
+        "arm": "R1",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "R1_over_SB": null,
+      "S1": {
+        "arm": "S1",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "S1_over_D1": null,
+      "SB": {
+        "arm": "SB",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "SB_over_D1": null,
+      "SB_over_Dbest": null,
+      "near_miss": false,
+      "note": null,
+      "verdict": null
+    },
+    "C": {
+      "D1": {
+        "arm": "D1",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "D_best": {
+        "arm": "D3",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "R1": {
+        "arm": "R1",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "R1_over_SB": null,
+      "S1": {
+        "arm": "S1",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "S1_over_D1": null,
+      "SB": {
+        "arm": "SB",
+        "max_memory_reserved_gib_median": null,
+        "peak_vram_mib_median": null,
+        "runs_valid": 0,
+        "spread": null,
+        "status": "not run",
+        "tok_per_s_median": null
+      },
+      "SB_over_D1": null,
+      "SB_over_Dbest": null,
+      "near_miss": false,
+      "note": null,
+      "verdict": null
+    },
+    "d_best_arm": "D3"
+  },
+  "ablation": {
+    "S1": {
+      "arm": "S1",
+      "max_memory_reserved_gib_median": 2.017578125,
+      "peak_vram_mib_median": 2921.0,
+      "runs_valid": 3,
+      "spread": 0.007487204259411132,
+      "status": "measured",
+      "tok_per_s_median": 61.99133543956563
+    },
+    "arms": {
+      "S2": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": 0.84839410298561,
+        "informational_only": false,
+        "reading": "faster",
+        "stats": {
+          "arm": "S2",
+          "max_memory_reserved_gib_median": 2.39453125,
+          "peak_vram_mib_median": 3295.0,
+          "runs_valid": 3,
+          "spread": 0.02269835322689569,
+          "status": "measured",
+          "tok_per_s_median": 62.517266273796935
+        }
+      },
+      "S3": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": 0.8258491390919531,
+        "informational_only": false,
+        "reading": "faster",
+        "stats": {
+          "arm": "S3",
+          "max_memory_reserved_gib_median": 2.158203125,
+          "peak_vram_mib_median": 3065.0,
+          "runs_valid": 3,
+          "spread": 0.0015655147049296698,
+          "status": "measured",
+          "tok_per_s_median": 62.50329034960489
+        }
+      },
+      "S4": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": -65.64443829738778,
+        "informational_only": false,
+        "reading": "slower",
+        "stats": {
+          "arm": "S4",
+          "max_memory_reserved_gib_median": 2.017578125,
+          "peak_vram_mib_median": 2891.0,
+          "runs_valid": 3,
+          "spread": 0.01850034011260332,
+          "status": "measured",
+          "tok_per_s_median": 21.297471497213287
+        }
+      },
+      "S5": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": -1.1722693789028837,
+        "informational_only": false,
+        "reading": "slower",
+        "stats": {
+          "arm": "S5",
+          "max_memory_reserved_gib_median": 2.0078125,
+          "peak_vram_mib_median": 2911.0,
+          "runs_valid": 3,
+          "spread": 0.11243605678466859,
+          "status": "measured",
+          "tok_per_s_median": 61.26462999663463
+        }
+      },
+      "S6": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": 2.507307129027464,
+        "informational_only": false,
+        "reading": "faster",
+        "stats": {
+          "arm": "S6",
+          "max_memory_reserved_gib_median": 2.427734375,
+          "peak_vram_mib_median": 3341.0,
+          "runs_valid": 3,
+          "spread": 0.0033070231094646384,
+          "status": "measured",
+          "tok_per_s_median": 63.54564861242119
+        }
+      },
+      "S7": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": -0.005221165545757299,
+        "informational_only": false,
+        "reading": "no measurable effect",
+        "stats": {
+          "arm": "S7",
+          "max_memory_reserved_gib_median": 1.978515625,
+          "peak_vram_mib_median": 2881.0,
+          "runs_valid": 3,
+          "spread": 0.006744245964209326,
+          "status": "measured",
+          "tok_per_s_median": 61.988098769318306
+        }
+      },
+      "S8": {
+        "S1_spread_pct": 0.7487204259411132,
+        "change_pct_vs_S1": -0.0064317927298015816,
+        "informational_only": true,
+        "reading": "no measurable effect",
+        "stats": {
+          "arm": "S8",
+          "max_memory_reserved_gib_median": 2.017578125,
+          "peak_vram_mib_median": 2921.0,
+          "runs_valid": 3,
+          "spread": 0.0020041312334101967,
+          "status": "measured",
+          "tok_per_s_median": 61.98734828535972
+        }
+      }
+    }
+  },
+  "clock": {
+    "flagged_valid_runs": [],
+    "session_median_mhz": 1980.0
+  },
+  "runs_loaded": 45
+}

@@ -9,8 +9,9 @@ Composes with v0.26.0 Trace-to-Preference: the emitted records share the
 same prompt/output/signal vocabulary so the existing pair-builder works
 unchanged after a thin shim.
 
-``--source langfuse --pull`` (#204) fetches from the Langfuse API instead of
-reading an export; ``utils/ingest_pull.py`` is imported only on that path.
+``--source langfuse --pull`` and ``--source langsmith --pull`` (#204) fetch
+from the vendor's API instead of reading an export; ``utils/ingest_pull.py`` and
+``utils/ingest_pull_langsmith.py`` are imported only on that path.
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
+from soup_cli.commands._common import refuse_output_over_input
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils import ingest_sources as _ingest_sources
 from soup_cli.utils.ingest_sources import (
@@ -33,12 +36,22 @@ from soup_cli.utils.ingest_sources import (
     resolve_auth_env,
     validate_source_name,
 )
-from soup_cli.utils.paths import atomic_write_lines, ensure_distinct_paths, is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.paths import atomic_write_lines, is_under_cwd
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
 _DEFAULT_SINCE = "7d"
+
+
+# The typed --source and --output, a bad --since, the Langfuse host and the text
+# of a refused or failed pull come from outside the program, so every line that
+# carries them is printed as ``Text``: shown as typed, never read as markup or
+# ``:name:`` emoji, control characters removed (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
 
 
 class _LogsUnreadableError(Exception):
@@ -69,9 +82,11 @@ def ingest(
         False,
         "--pull",
         help=(
-            "Fetch generations live from the Langfuse API instead of reading "
-            "--logs (--source langfuse only). Reads LANGFUSE_PUBLIC_KEY and "
+            "Fetch live from the vendor's API instead of reading --logs "
+            "(--source langfuse or langsmith). Langfuse: LANGFUSE_PUBLIC_KEY and "
             "LANGFUSE_SECRET_KEY, plus LANGFUSE_HOST for another region or a "
+            "self-hosted instance. LangSmith: LANGSMITH_API_KEY and "
+            "LANGSMITH_PROJECT, plus LANGSMITH_ENDPOINT for another region or a "
             "self-hosted instance."
         ),
     ),
@@ -87,15 +102,15 @@ def ingest(
         max=10_000,
         help=(
             "With --pull: stop with an error, writing nothing, if results are still "
-            "pending after this many pages of 100 generations (default 100)."
+            "pending after this many pages of 100 generations or LLM runs (default 100)."
         ),
     ),
     allow_private_host: bool = typer.Option(
         False,
         "--allow-private-host",
         help=(
-            "With --pull: allow LANGFUSE_HOST to be a private or loopback address "
-            "(self-hosted Langfuse). HTTPS is still required."
+            "With --pull: allow LANGFUSE_HOST or LANGSMITH_ENDPOINT to be a private "
+            "or loopback address (self-hosted). HTTPS is still required."
         ),
     ),
     slack_url: Optional[str] = typer.Option(
@@ -112,12 +127,13 @@ def ingest(
     Reads an offline JSONL export and writes a normalised trace stream,
     making no network calls — operators export from their SaaS dashboard or
     via that vendor's official API, then point ``soup ingest`` at the file.
-    ``--source langfuse --pull`` fetches from the Langfuse API instead (#204).
+    ``--source langfuse --pull`` and ``--source langsmith --pull`` fetch from the
+    vendor's API instead (#204).
     """
     try:
         canonical = validate_source_name(source)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     slack_url, discord_url = validate_webhook_flags(
@@ -150,37 +166,40 @@ def ingest(
         console.print(f"[red]{', '.join(pull_only)}: only meaningful with --pull[/]")
         raise typer.Exit(2)
     if logs is None:
-        console.print("[red]Pass --logs <export.jsonl>, or --pull to fetch from Langfuse.[/]")
+        console.print(
+            "[red]Pass --logs <export.jsonl>, or --pull to fetch from Langfuse or LangSmith.[/]"
+        )
         raise typer.Exit(2)
 
     if not is_under_cwd(logs):
-        console.print(f"[red]--logs '{escape(logs)}' is outside cwd — refusing[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is outside cwd — refusing", style="red")
+        )
         raise typer.Exit(1)
     logs_path = Path(logs)
     if not logs_path.exists():
-        console.print(f"[red]--logs not found: {escape(logs)}[/]")
+        console.print(Text(f"--logs not found: {strip_control(logs)}", style="red"))
         raise typer.Exit(1)
     if logs_path.is_dir():
-        console.print(f"[red]--logs '{escape(logs)}' is a directory, not an export file[/]")
+        console.print(
+            Text(f"--logs '{strip_control(logs)}' is a directory, not an export file", style="red")
+        )
         raise typer.Exit(1)
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
         console.print(
-            f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
+            Text(f"--output '{strip_control(output_path)}' is outside cwd — refusing", style="red")
         )
         raise typer.Exit(1)
 
     # Refuse before anything is opened for writing: the default --output
     # (traces.jsonl) is also a plausible --logs, and the write would empty it.
-    try:
-        ensure_distinct_paths(
-            [("--logs", str(logs_path))],
-            [("--output", str(output_path))],
-        )
-    except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(1) from exc
+    refuse_output_over_input(
+        [("--logs", str(logs_path))],
+        [("--output", str(output_path))],
+        console=console,
+    )
 
     _print_pii_reminder(canonical)
 
@@ -212,12 +231,14 @@ def ingest(
     try:
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except _LogsUnreadableError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(1) from exc
 
     console.print(
-        f"[green]Wrote {count} traces from {escape(canonical)} -> "
-        f"{escape(output_path.name)}[/]"
+        Text(
+            f"Wrote {count} traces from {canonical} -> {strip_control(output_path.name)}",
+            style="green",
+        )
     )
 
     emit_webhooks(
@@ -244,7 +265,7 @@ def _pull(
     slack_url: Optional[str],
     discord_url: Optional[str],
 ) -> None:
-    """``--pull``: fetch GENERATION observations from Langfuse and write them parsed (#204)."""
+    """``--pull``: fetch from the vendor's API and write the rows parsed (#204)."""
     from soup_cli.utils.paths import atomic_write_lines, enforce_under_cwd_and_no_symlink
 
     if logs is not None:
@@ -252,10 +273,10 @@ def _pull(
             "[red]--pull and --logs are mutually exclusive: fetch live or read an export.[/]"
         )
         raise typer.Exit(2)
-    if canonical != "langfuse":
+    if canonical not in ("langfuse", "langsmith"):
         console.print(
-            f"[red]--pull is only available for --source langfuse so far; export "
-            f"{escape(canonical)} traces to JSONL and pass --logs instead.[/]"
+            f"[red]--pull is only available for --source langfuse and langsmith so far; "
+            f"export {escape(canonical)} traces to JSONL and pass --logs instead.[/]"
         )
         raise typer.Exit(2)
 
@@ -263,7 +284,7 @@ def _pull(
     try:
         enforce_under_cwd_and_no_symlink(str(output_path), "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from exc
 
     from soup_cli.utils import ingest_pull
@@ -272,23 +293,39 @@ def _pull(
     try:
         window = ingest_pull.parse_since(since_text)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
+    pages = max_pages if max_pages is not None else ingest_pull.DEFAULT_MAX_PAGES
+    if canonical == "langsmith":
+        _pull_langsmith(
+            window,
+            since_text=since_text,
+            max_pages=pages,
+            output_path=output_path,
+            allow_private_host=allow_private_host,
+            slack_url=slack_url,
+            discord_url=discord_url,
+        )
+        return
+
     try:
         credentials = ingest_pull.load_langfuse_credentials(
             os.environ, allow_private_host=allow_private_host
         )
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from None
     except ValueError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from None
 
     _print_pii_reminder(canonical)
     console.print(
-        f"[dim]Pulling GENERATION observations from {escape(credentials.host)} "
-        f"for the last {escape(since_text)}...[/]"
+        terminal_text(
+            f"Pulling GENERATION observations from {credentials.host} "
+            f"for the last {since_text}...",
+            "dim",
+        )
     )
 
     stats = ingest_pull.PullStats()
@@ -299,7 +336,7 @@ def _pull(
         generations = ingest_pull.pull_langfuse_generations(
             credentials,
             since=window,
-            max_pages=max_pages if max_pages is not None else ingest_pull.DEFAULT_MAX_PAGES,
+            max_pages=pages,
             stats=stats,
         )
         for record in _ingest_sources.parse_langfuse(generations):
@@ -310,13 +347,16 @@ def _pull(
         # Streams to a staging file; the target only appears once the pull finished.
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
-        console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
+        _refuse(exc)
+        _refuse(f"Nothing was written to {output_path.name}.")
         raise typer.Exit(1) from None
 
     console.print(
-        f"[green]Wrote {written} traces from langfuse ({stats.generations} generations "
-        f"pulled) -> {escape(output_path.name)}[/]"
+        terminal_text(
+            f"Wrote {written} traces from langfuse ({stats.generations} generations "
+            f"pulled) -> {output_path.name}",
+            "green",
+        )
     )
     if stats.generations > written:
         console.print(
@@ -343,6 +383,88 @@ def _pull(
     )
 
 
+def _pull_langsmith(
+    window,
+    *,
+    since_text: str,
+    max_pages: int,
+    output_path: Path,
+    allow_private_host: bool,
+    slack_url: Optional[str],
+    discord_url: Optional[str],
+) -> None:
+    """``--source langsmith --pull``: fetch the project's LLM runs and write them parsed."""
+    from soup_cli.utils import ingest_pull_langsmith
+    from soup_cli.utils.ingest_pull import PullError
+
+    try:
+        settings = ingest_pull_langsmith.load_langsmith_settings(
+            os.environ, allow_private_host=allow_private_host
+        )
+    except PullError as exc:
+        console.print(terminal_text(str(exc), "red"))
+        raise typer.Exit(1) from None
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from None
+
+    _print_pii_reminder("langsmith")
+    console.print(
+        Text(
+            f"Pulling LLM runs of project {strip_control(settings.project)!r} from "
+            f"{strip_control(settings.host)} for the last {strip_control(since_text)}...",
+            style="dim",
+        )
+    )
+
+    stats = ingest_pull_langsmith.LangSmithPullStats()
+    written = 0
+
+    def _lines():
+        nonlocal written
+        runs = ingest_pull_langsmith.pull_langsmith_runs(
+            settings, since=window, max_pages=max_pages, stats=stats
+        )
+        for record in _ingest_sources.parse_langsmith(runs):
+            written += 1
+            yield json.dumps(record.to_dict(), ensure_ascii=False) + "\n"
+
+    try:
+        # Streams to a staging file; the target only appears once the pull finished.
+        atomic_write_lines(_lines(), str(output_path), field="--output")
+    except PullError as exc:
+        console.print(terminal_text(str(exc), "red"))
+        console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
+        raise typer.Exit(1) from None
+
+    console.print(
+        f"[green]Wrote {written} traces from langsmith ({stats.llm_runs} LLM runs "
+        f"pulled) -> {escape(output_path.name)}[/]"
+    )
+    if stats.llm_runs > written:
+        console.print(
+            f"[yellow]{stats.llm_runs - written} LLM run(s) had no input or no output "
+            "and were skipped.[/]"
+        )
+    if stats.skipped_not_llm:
+        console.print(
+            f"[yellow]{stats.skipped_not_llm} run(s) were not LLM runs and were skipped.[/]"
+        )
+
+    emit_webhooks(
+        slack_url,
+        discord_url,
+        payload={
+            "command": "ingest",
+            "source": "langsmith",
+            "traces_written": written,
+            "auth_env_set": True,
+            "llm_runs_pulled": stats.llm_runs,
+        },
+        console=console,
+    )
+
+
 def _print_pii_reminder(canonical: str) -> None:
     """PII reminder — matches v0.26.0 Part C policy."""
     console.print(
@@ -364,7 +486,11 @@ def _env_label(source: str) -> str:
     drift hazard of duplicating the table here (code-review MEDIUM fix
     v0.63.0).
     """
-    return " + ".join(_ingest_sources._AUTH_ENV.get(source, ("(unset)",)))
+    label = " + ".join(_ingest_sources._AUTH_ENV.get(source, ("(unset)",)))
+    settings = _ingest_sources._PULL_SETTINGS_ENV.get(source)
+    if settings:
+        label += f" (--pull also reads {', '.join(settings)})"
+    return label
 
 
 __all__ = ["ingest", "SUPPORTED_INGEST_SOURCES"]

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from soup_cli.eval.generation import iter_outputs
 from soup_cli.utils.final_answer import answers_match, parse_completion, parse_reference
@@ -44,6 +45,9 @@ class EvalResult:
     output: str
     score: float
     matched: bool
+    #: True when the generation for this task raised (or returned no text) and the row was
+    #: scored as wrong without an answer. An empty answer is NOT a failure.
+    failed: bool = False
 
 
 @dataclass
@@ -79,11 +83,20 @@ class EvalResults:
             }
 
 
-def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
+def load_eval_tasks(
+    path: "Path | str", *, require_expected: bool = True,
+) -> list[EvalTask]:
     """Load eval tasks from a JSONL file with schema validation.
 
-    Each line must be a JSON object with at least a 'prompt' field.
-    Optional: 'expected', 'category', 'scoring'.
+    Each line must be a JSON object with a 'prompt' field and, by default, an
+    'expected' that is not missing, null, empty or whitespace-only (#3240). Before,
+    a missing or empty 'expected' scored 1.0 for every output under 'contains' and
+    'regex', and a whitespace-only one did under 'contains'. Optional: 'category',
+    'scoring'. ``require_expected=False`` is for ``soup ship --task-mode
+    judge_score``, ``pairwise`` and ``reward``, which accept a prompt-only file:
+    the judge modes take their reference from ``--judge-reference``, validated on
+    its own, and the reward function receives 'expected' as ``answer`` (``""`` when
+    the row has none).
     """
     path = Path(path)
     if not path.exists():
@@ -92,61 +105,90 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
     if not path.suffix.lower() == ".jsonl":
         raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
 
-    tasks: list[EvalTask] = []
     with open(path, encoding="utf-8") as fh:
-        for line_num, line in enumerate(fh, 1):
-            line = line.strip()
-            if not line:
-                continue
+        return parse_eval_task_lines(fh, path, require_expected=require_expected)
 
-            if len(tasks) >= MAX_EVAL_TASKS:
-                raise ValueError(
-                    f"Eval file exceeds maximum of {MAX_EVAL_TASKS} tasks "
-                    f"(stopped at line {line_num})"
-                )
 
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON on line {line_num}: {exc}"
-                ) from exc
+def parse_eval_task_lines(
+    lines: Iterable[str], source: object, *, require_expected: bool = True,
+) -> list[EvalTask]:
+    """Parse the JSONL lines of an eval file (``source`` only names it in messages).
 
-            if not isinstance(row, dict):
-                raise ValueError(
-                    f"Line {line_num}: expected JSON object, got {type(row).__name__}"
-                )
+    ``load_eval_tasks`` feeds it the open file; a caller that already holds the bytes
+    (it hashed them) parses those same bytes instead of opening the path a second time.
+    ``require_expected`` is as in :func:`load_eval_tasks`.
+    """
+    tasks: list[EvalTask] = []
+    for line_num, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
 
-            if "prompt" not in row:
-                raise ValueError(
-                    f"Line {line_num}: missing required field 'prompt'"
-                )
+        if len(tasks) >= MAX_EVAL_TASKS:
+            raise ValueError(
+                f"Eval file exceeds maximum of {MAX_EVAL_TASKS} tasks "
+                f"(stopped at line {line_num})"
+            )
 
-            scoring = row.get("scoring", "exact")
-            if not isinstance(scoring, str) or scoring not in VALID_SCORING:
-                raise ValueError(
-                    f"Line {line_num}: invalid scoring '{scoring}', "
-                    f"must be one of: {', '.join(sorted(VALID_SCORING))}"
-                )
-            expected = str(row.get("expected", ""))
-            if scoring == "answer":
-                require_single_answer(expected, f"Line {line_num}")
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid JSON on line {line_num}: {exc}"
+            ) from exc
 
-            tasks.append(EvalTask(
-                prompt=str(row["prompt"]),
-                expected=expected,
-                category=str(row.get("category", "default")),
-                scoring=scoring,
-                metadata={
-                    k: v for k, v in row.items()
-                    if k not in ("prompt", "expected", "category", "scoring")
-                },
-            ))
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"Line {line_num}: expected JSON object, got {type(row).__name__}"
+            )
+
+        if "prompt" not in row:
+            raise ValueError(
+                f"Line {line_num}: missing required field 'prompt'"
+            )
+
+        scoring = row.get("scoring", "exact")
+        if not isinstance(scoring, str) or scoring not in VALID_SCORING:
+            raise ValueError(
+                f"Line {line_num}: invalid scoring '{scoring}', "
+                f"must be one of: {', '.join(sorted(VALID_SCORING))}"
+            )
+        if require_expected:
+            _require_expected(row, line_num)
+        expected = str(row.get("expected", ""))
+        if scoring == "answer":
+            require_single_answer(expected, f"Line {line_num}")
+
+        tasks.append(EvalTask(
+            prompt=str(row["prompt"]),
+            expected=expected,
+            category=str(row.get("category", "default")),
+            scoring=scoring,
+            metadata={
+                k: v for k, v in row.items()
+                if k not in ("prompt", "expected", "category", "scoring")
+            },
+        ))
 
     if not tasks:
-        raise ValueError(f"No eval tasks found in {path}")
+        raise ValueError(f"No eval tasks found in {source}")
 
     return tasks
+
+
+def _require_expected(row: dict, line_num: int) -> None:
+    """Refuse a row whose ``expected`` is missing, null, empty or whitespace-only (#3240).
+
+    A presence, ``None`` and ``str.strip()`` test, not a truthiness one: ``0``,
+    ``false`` and ``"0"`` are answers and keep loading as ``str()`` of the value.
+    """
+    if "expected" not in row:
+        raise ValueError(f"Line {line_num}: field 'expected' is missing")
+    expected = row["expected"]
+    if expected is None:
+        raise ValueError(f"Line {line_num}: field 'expected' is null")
+    if isinstance(expected, str) and not expected.strip():
+        raise ValueError(f"Line {line_num}: field 'expected' is empty or whitespace-only")
 
 
 def require_single_answer(expected: str, where: str) -> None:
@@ -204,14 +246,76 @@ def score_regex(output: str, expected: str) -> bool:
         return False
 
 
-def score_semantic(output: str, expected: str) -> float:
-    """Compute similarity via Jaccard token overlap (bag-of-words).
+def _is_edge(char: str) -> bool:
+    """Whether ``char`` is removed at the edge of a word: punctuation, a symbol or a space.
 
-    This is a lexical metric, not embedding-based semantic similarity.
-    Returns a float 0-1. Considered a match if similarity >= 0.5.
+    A letter, a digit, the underscore and a combining mark (a vowel sign, a niqqud
+    point, an accent written as its own character) are part of the word.
     """
-    out_tokens = set(output.strip().lower().split())
-    exp_tokens = set(expected.strip().lower().split())
+    return not (char.isalnum() or char == "_" or unicodedata.category(char).startswith("M"))
+
+
+# A minus sign kept in front of a number: ``-4`` and ``4`` are different answers.
+_NUMBER_SIGNS = frozenset({"-", "\u2212"})
+
+
+def _starts_a_number(word: str, index: int, end: int) -> bool:
+    """Whether a number starts at ``word[index]``, so its leading edge is kept.
+
+    That is a digit, a ``.`` and then a digit (``.5``), or a minus sign before
+    either (``-4``, ``-.5``): ``.5``, ``-.5`` and ``5`` are different answers.
+    """
+    if word[index] in _NUMBER_SIGNS:
+        index += 1
+    if index < end and word[index] == ".":
+        index += 1
+    return index < end and word[index].isdigit()
+
+
+def _strip_edges(word: str) -> str:
+    start, end = 0, len(word)
+    while start < end and _is_edge(word[start]) and not _starts_a_number(word, start, end):
+        start += 1
+    while end > start and _is_edge(word[end - 1]):
+        end -= 1
+    return word[start:end]
+
+
+def _semantic_words(text: str) -> set[str]:
+    """The lowercased words of ``text`` with leading and trailing punctuation removed.
+
+    ``h2o.``, ``(h2o)`` and ``"h2o",`` are the word ``h2o``; a word that is only
+    punctuation (``—``, ``...``) is dropped. Punctuation inside a word stays, so
+    ``3.14``, ``don't`` and ``e-mail`` are one word each and do not match ``14``,
+    ``don`` or ``mail``. A combining mark at the edge of a word is kept (see
+    ``_is_edge``), so two words that differ only in a final vowel sign or accent
+    stay two words; a word that is only combining marks once its edges are removed
+    (a symbol followed by the variation selector U+FE0F) is dropped. A minus sign
+    (``-`` or U+2212) right before a digit stays, so ``(-4).`` is ``-4``, not ``4``,
+    and so does a ``.`` right before a digit, also after a kept sign: ``(.5).`` is
+    ``.5`` and ``-.5`` is ``-.5``, not ``5``.
+    """
+    words = (_strip_edges(word) for word in text.lower().split())
+    return {word for word in words if word and not _only_combining_marks(word)}
+
+
+def _only_combining_marks(word: str) -> bool:
+    return all(unicodedata.category(char).startswith("M") for char in word)
+
+
+def score_semantic(output: str, expected: str) -> float:
+    """Compute similarity via Jaccard overlap of the two sides' words (bag-of-words).
+
+    This is a lexical metric, not embedding-based semantic similarity. A word is
+    a whitespace-separated piece, lowercased, with its leading and trailing
+    punctuation and symbols removed (see ``_semantic_words``). Returns a float 0-1;
+    a row is a match if the similarity is >= 0.5. Every word of the output
+    counts in the union, so a short expected answer inside a long sentence
+    scores low: ``H2O`` against ``The chemical symbol for water is H2O.`` is
+    1/7. For such answers use the ``contains`` or ``answer`` scorer.
+    """
+    out_tokens = _semantic_words(output)
+    exp_tokens = _semantic_words(expected)
     if not out_tokens or not exp_tokens:
         return 0.0
     intersection = out_tokens & exp_tokens
@@ -406,7 +510,12 @@ def score_task(task: EvalTask, output: str) -> EvalResult:
 
     if task.scoring == "tool_call_args_subset":
         similarity = tool_call_args_subset(output, task.expected)
-        matched = similarity >= 0.5
+        # Matched only at full credit (#2811): the name and the arguments are
+        # worth 0.5 each, so a 0.5 threshold counted a call with every argument
+        # wrong, or to the wrong tool, as Correct. `score` keeps the partial
+        # credit, which the eval gate, quant_check, deploy_measure and
+        # cmaes_merge average.
+        matched = similarity >= 1.0
         return EvalResult(
             task=task, output=output, score=similarity, matched=matched,
         )
@@ -442,7 +551,7 @@ def run_eval(
     for task, output in track(zip(tasks, outputs), len(tasks)):
         result = (
             score_task(task, output) if output is not None
-            else EvalResult(task=task, output="", score=0.0, matched=False)
+            else EvalResult(task=task, output="", score=0.0, matched=False, failed=True)
         )
         results.append(result)
 

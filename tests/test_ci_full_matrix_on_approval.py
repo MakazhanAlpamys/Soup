@@ -248,9 +248,9 @@ def _gated_pythons() -> list[str]:
 
 # --- A small evaluator for the GitHub expressions these tests need -----------
 #
-# It covers exactly what ci.yml's concurrency key and the plan decision use:
-# string literals, true/false/null, property paths (with one `*` object
-# filter), parentheses, ! == != && || and the functions format(), contains()
+# It covers exactly what ci.yml's concurrency key, the plan decision and the time limits of
+# the `test` job use: string and number literals, true/false/null, property paths (with one
+# `*` object filter), parentheses, ! == != && || and the functions format(), contains()
 # and startsWith(). The semantics are GitHub's: && and || return an OPERAND,
 # not a boolean; ! binds tighter than == and !=, which bind tighter than &&,
 # then ||; strings compare case-insensitively; a missing property is null.
@@ -258,6 +258,7 @@ def _gated_pythons() -> list[str]:
 
 _TOKEN = re.compile(
     r"(?P<string>'(?:[^']|'')*')"
+    r"|(?P<number>\d+(?:\.\d+)?)"
     r"|(?P<op>==|!=|&&|\|\||!|\(|\)|,)"
     r"|(?P<name>[A-Za-z_][\w-]*(?:\.(?:\*|[A-Za-z_][\w-]*))*)"
 )
@@ -392,6 +393,8 @@ class _Expression:
         self._position += 1
         if kind == "string":
             return text[1:-1].replace("''", "'")
+        if kind == "number":
+            return float(text) if "." in text else int(text)
         if (kind, text) == ("op", "("):
             result = self._either()
             assert self._take(")"), "unbalanced parenthesis"
@@ -432,9 +435,12 @@ def _push(
     }
 
 
-def _on_event(event_name: str, *, run_id: str = "800") -> dict[str, Any]:
-    """A ``schedule`` or ``workflow_dispatch`` context: both run on main's tip."""
-    return {
+def _on_event(
+    event_name: str, *, run_id: str = "800", inputs: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """A ``schedule`` or ``workflow_dispatch`` context: both run on main's tip. A dispatch that
+    names an input has an ``inputs`` context (GitHub fills the declared default for the rest)."""
+    context: dict[str, Any] = {
         "github": {
             "workflow": "CI",
             "event_name": event_name,
@@ -444,6 +450,9 @@ def _on_event(event_name: str, *, run_id: str = "800") -> dict[str, Any]:
             "event": {},
         }
     }
+    if inputs is not None:
+        context["inputs"] = inputs
+    return context
 
 
 def _pull_request(
@@ -491,10 +500,27 @@ def _release_for(context: dict[str, Any]) -> str:
     return _render(_decide_step()["env"]["RELEASE"], context)
 
 
+def _live_label_from_payload(context: dict[str, Any]) -> dict[str, Any]:
+    """*context* with the `labels` step's answer filled in from the event's own payload.
+
+    Since 2026-11-23 the decision reads `steps.labels.outputs.ci_full`, the pull request's labels
+    as the API reports them when `plan` runs (tests/test_ci_plan_live_labels.py). A test that
+    names no answer means that the API agrees with the payload, which is the case for every
+    row of ``EVENTS``; one that wants them to differ passes its own `steps` and keeps it.
+    """
+    if "steps" in context:
+        return context
+    event = context["github"].get("event", {})
+    labels = (event.get("pull_request") or {}).get("labels", [])
+    present = any(str(item.get("name", "")).lower() == LABEL for item in labels)
+    answer = "true" if present else "false"
+    return {**context, "steps": {"labels": {"outputs": {"ci_full": answer}}}}
+
+
 def _approval_for(context: dict[str, Any]) -> str:
     expression = _decide_step()["env"].get("APPROVAL")
     assert isinstance(expression, str), "the decide step must compute APPROVAL in its env"
-    return _render(expression, context)
+    return _render(expression, _live_label_from_payload(context))
 
 
 def _runs(job: str, context: dict[str, Any]) -> bool:
@@ -1484,7 +1510,7 @@ class TestEveryWorkflow:
     def test_the_extras_the_pinned_jobs_install(self):
         """What `tests/test_ci_pinned_upstream.py` checks the pins against. A job that starts
         installing another extra adds its bounds to that check; update this with it."""
-        assert pinned_job_extras() == {"dev", "qat", "mlx", "train"}
+        assert pinned_job_extras() == {"dev", "qat", "mlx", "train", "serve"}
 
 
 class TestADraftRunsNothing:

@@ -42,7 +42,7 @@ def test_streaming_sse_strips_reasoning():
     raw_reply = "<think>internal reasoning steps</think>Hello world!"
     with patch(
         "soup_cli.commands.serve._generate_response",
-        return_value=(raw_reply, 4, 10),
+        return_value=(raw_reply, 4, 10, "stop"),
     ):
         response = client.post(
             "/v1/chat/completions",
@@ -74,7 +74,7 @@ def test_streaming_forwards_logits_processors():
         ),
         patch(
             "soup_cli.commands.serve._generate_response",
-            return_value=("output", 2, 5),
+            return_value=("output", 2, 5, "stop"),
         ) as mock_generate,
     ):
         response = client.post(
@@ -116,7 +116,7 @@ def test_streaming_matches_non_streaming(parser, raw, visible):
 
     def fake_generate(model, tokenizer, messages, **kwargs):
         seen.append((kwargs.get("logits_processor"), kwargs.get("ngram_config")))
-        return (raw, 3, 2)
+        return (raw, 3, 2, "stop")
 
     def fake_build(constraint, tokenizer):
         built_for.append(constraint)

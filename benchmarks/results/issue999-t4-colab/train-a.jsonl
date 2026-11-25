@@ -1,0 +1,32 @@
+{"messages": [{"role": "user", "content": "Question 0: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 0: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 0: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 0: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 1: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 1: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 1: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 1: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 2: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 2: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 2: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 2: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 3: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 3: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 3: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 3: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 4: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 4: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 4: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 4: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 5: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 5: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 5: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 5: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 6: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 6: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 6: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 6: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}
+{"messages": [{"role": "user", "content": "Question 7: tell me about streaming."}, {"role": "assistant", "content": "Only a couple of decoder layers are resident at any moment."}]}
+{"messages": [{"role": "user", "content": "Question 7: tell me about NF4."}, {"role": "assistant", "content": "Four-bit weights make the host-side store about four times smaller."}]}
+{"messages": [{"role": "user", "content": "Question 7: tell me about LoRA."}, {"role": "assistant", "content": "The base is frozen, so it is read and never written."}]}
+{"messages": [{"role": "user", "content": "Question 7: tell me about VRAM."}, {"role": "assistant", "content": "Peak memory is bounded by one layer instead of by the model."}]}

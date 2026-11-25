@@ -173,6 +173,7 @@ def child(monkeypatch) -> _Child:
     platform the suite runs on.
     """
     from soup_cli.trainer import rewards
+    from soup_cli.utils import process_tree
 
     state = _Child(unshare_error=PermissionError(errno.EPERM, "Operation not permitted"))
 
@@ -195,6 +196,8 @@ def child(monkeypatch) -> _Child:
             raise state.unshare_error
 
     class _Popen:
+        pid = 12345
+
         def __init__(self, argv, *, preexec_fn=None, **_kwargs) -> None:
             if preexec_fn is not None:
                 # The hook must never reach the real limits or namespaces of
@@ -218,11 +221,17 @@ def child(monkeypatch) -> _Child:
         def kill(self) -> None:
             pass
 
+    def _group_absent(group_id: int, _sig: int) -> None:
+        assert group_id == _Popen.pid
+        raise ProcessLookupError
+
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
     monkeypatch.setattr(os, "unshare", _unshare, raising=False)
     monkeypatch.setattr(
         rewards, "sys", types.SimpleNamespace(platform="linux", executable=sys.executable)
     )
+    # The stand-in child has no real group. Keep the probe inside the fixture.
+    monkeypatch.setattr(process_tree, "os", types.SimpleNamespace(killpg=_group_absent))
     monkeypatch.setattr(
         rewards,
         "subprocess",
@@ -266,8 +275,9 @@ def test_python_tool_runs_when_the_namespaces_are_created(child):
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"stdout": "ran", "stderr": "", "exit_code": 0, "timed_out": False}
     assert child.unshare_flags == [_namespace_flags()]
-    assert len(child.started) == 1
-    assert child.started[0].endswith("\nprint(1)")
+    # The caller's code is the child's last argument, compiled there under "<code>"
+    # (tests/test_serve_code_tool_replies.py).
+    assert child.started == ["print(1)"]
     assert child.rlimits, "the resource limits are still set before the code starts"
 
 

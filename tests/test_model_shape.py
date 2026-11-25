@@ -315,3 +315,172 @@ def test_reading_a_shape_and_estimating_never_imports_torch(local_model):
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False", out.stdout + out.stderr
+
+
+class TestMixtureOfExperts:
+    """``ModelShape.moe`` marks a model outside what the estimate was fitted on."""
+
+    def _moe(self, config: dict) -> bool:
+        shape = model_shape.shape_from_config(config, params=1_000_000_000, params_source="x")
+        assert shape is not None
+        return shape.moe
+
+    def test_a_dense_config_is_not_moe(self):
+        assert self._moe(dict(_CONFIG)) is False
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"num_local_experts": 8},
+            {"num_experts": 128},
+            {"n_routed_experts": 256},
+            {"moe_num_experts": 16},
+            {"model_type": "mixtral"},
+            {"model_type": "qwen3_moe"},
+        ],
+    )
+    def test_an_expert_count_or_a_moe_model_type_marks_it(self, extra):
+        assert self._moe({**_CONFIG, **extra}) is True
+
+    def test_the_text_section_of_a_multimodal_config_is_read(self):
+        nested = {**_CONFIG, "num_local_experts": 16}
+        assert self._moe({"model_type": "llama4", "text_config": nested}) is True
+
+    @pytest.mark.parametrize("count", [0, 1, True, "8", None, -4])
+    def test_one_expert_or_a_non_count_is_dense(self, count):
+        assert self._moe({**_CONFIG, "num_local_experts": count}) is False
+
+    def test_a_guessed_shape_is_not_marked(self):
+        assert guessed_shape(46.7).moe is False
+
+
+class TestHubRequestNotice:
+    """``on_hub_request`` fires once, just before the first request that would reach the Hub."""
+
+    @pytest.fixture
+    def hub(self, monkeypatch):
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+        events: list[str] = []
+        monkeypatch.setattr(model_shape, "_config_cached", lambda repo: False)
+        monkeypatch.setattr(
+            model_shape,
+            "_hub_lookup",
+            lambda repo, **kw: events.append("config") or (dict(_CONFIG), None),
+        )
+        monkeypatch.setattr(
+            model_shape, "_hub_param_count", lambda repo, **kw: events.append("count") or 99
+        )
+        return events
+
+    def test_it_fires_once_before_the_first_request(self, hub):
+        read_model_shape("someone/x", on_hub_request=lambda: hub.append("notice"))
+        assert hub == ["notice", "config", "count"]
+
+    def test_a_cached_config_still_fires_for_the_size_request(self, hub, monkeypatch):
+        monkeypatch.setattr(model_shape, "_config_cached", lambda repo: True)
+        read_model_shape("someone/x", on_hub_request=lambda: hub.append("notice"))
+        assert hub == ["config", "notice", "count"]
+
+    def test_a_cached_snapshot_with_weights_never_fires(self, hub, monkeypatch, local_model):
+        model, _ = local_model
+        monkeypatch.setattr(model_shape, "_config_cached", lambda repo: True)
+        monkeypatch.setattr(
+            model_shape,
+            "_hub_lookup",
+            lambda repo, **kw: hub.append("config") or (dict(_CONFIG), str(model)),
+        )
+        read_model_shape("someone/x", on_hub_request=lambda: hub.append("notice"))
+        assert hub == ["config"]
+
+    def test_it_never_fires_without_network(self, hub):
+        read_model_shape("someone/x", allow_network=False, on_hub_request=lambda: hub.append("n"))
+        assert "n" not in hub
+
+    @pytest.mark.parametrize("variable", ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"])
+    def test_it_never_fires_offline(self, hub, monkeypatch, variable):
+        monkeypatch.setenv(variable, "1")
+        read_model_shape("someone/x", on_hub_request=lambda: hub.append("n"))
+        assert "n" not in hub
+
+    def test_it_never_fires_for_a_local_directory(self, hub, local_model):
+        model, _ = local_model
+        read_model_shape(str(model), on_hub_request=lambda: hub.append("n"))
+        assert hub == []
+
+    @pytest.mark.parametrize("base", ["../escape", "a b", ""])
+    def test_it_never_fires_for_a_name_that_is_not_a_repo_id(self, hub, base):
+        read_model_shape(base, on_hub_request=lambda: hub.append("n"))
+        assert hub == []
+
+
+class TestMixtureOfExpertsParameterCount:
+    """A config.json-only count prices every expert, not one MLP per layer."""
+
+    # Mixtral-8x7B: 46.7B parameters.
+    MIXTRAL = {
+        "model_type": "mixtral",
+        "hidden_size": 4096,
+        "num_hidden_layers": 32,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "intermediate_size": 14336,
+        "vocab_size": 32000,
+        "num_local_experts": 8,
+        "tie_word_embeddings": False,
+    }
+    # Qwen3-30B-A3B: 30.5B parameters; its experts are narrower than the dense MLP.
+    QWEN3_MOE = {
+        "model_type": "qwen3_moe",
+        "hidden_size": 2048,
+        "num_hidden_layers": 48,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 4,
+        "head_dim": 128,
+        "intermediate_size": 6144,
+        "moe_intermediate_size": 768,
+        "num_experts": 128,
+        "vocab_size": 151936,
+        "tie_word_embeddings": False,
+    }
+
+    def test_mixtral_is_close_to_its_published_size(self):
+        assert params_from_config(self.MIXTRAL) == pytest.approx(46.7e9, rel=0.02)
+
+    def test_the_expert_width_is_used_when_the_config_names_one(self):
+        assert params_from_config(self.QWEN3_MOE) == pytest.approx(30.5e9, rel=0.02)
+
+    def test_a_shared_expert_is_counted_on_top(self):
+        shared = {**self.MIXTRAL, "n_shared_experts": 1}
+        extra = 3 * 4096 * 14336 * 32
+        assert params_from_config(shared) - params_from_config(self.MIXTRAL) == extra
+
+    @pytest.mark.parametrize("count", [0, 1, True, None, "8"])
+    def test_one_expert_or_no_count_is_a_dense_model(self, count):
+        dense = {**self.MIXTRAL, "num_local_experts": count}
+        assert params_from_config(dense) == params_from_config(
+            {k: v for k, v in dense.items() if k != "num_local_experts"}
+        )
+
+    def test_an_expert_count_beyond_any_model_is_no_config(self):
+        assert params_from_config({**self.MIXTRAL, "num_local_experts": 2**17}) is None
+        shape = model_shape.shape_from_config(
+            {**self.MIXTRAL, "num_local_experts": 10**400}, params=None, params_source="x"
+        )
+        assert shape is None
+
+    def test_the_shape_of_a_config_only_moe_model_says_what_the_count_is(self):
+        from soup_cli.utils.vram_estimate import RunSpec, estimate_vram
+
+        shape = model_shape.shape_from_config(self.MIXTRAL, params=None, params_source="x")
+        assert shape.moe
+        notes = " ".join(estimate_vram(shape, RunSpec(seq_len=512, batch_size=1)).notes)
+        assert "mixture-of-experts" in notes
+        assert "approximate" in notes
+
+    def test_a_dense_config_only_note_does_not_mention_experts(self):
+        from soup_cli.utils.vram_estimate import RunSpec, estimate_vram
+
+        shape = model_shape.shape_from_config(dict(_CONFIG), params=None, params_source="x")
+        notes = " ".join(estimate_vram(shape, RunSpec(seq_len=512, batch_size=1)).notes)
+        assert "mixture-of-experts" not in notes

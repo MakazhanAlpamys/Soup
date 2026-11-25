@@ -11,8 +11,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -440,24 +441,35 @@ def _read_asr_rows(path: Path) -> list[dict]:
     rows: list[dict] = []
     dropped = 0
     capped = False
-    with open(path, encoding="utf-8") as f:
-        for raw_line in f:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                dropped += 1
-                continue
-            audio = obj.get("audio") if isinstance(obj, dict) else None
-            if not isinstance(audio, str) or not audio.strip():
-                dropped += 1
-                continue
-            rows.append(obj)
-            if len(rows) >= _MAX_ASR_ROWS:
-                capped = True
-                break
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    dropped += 1
+                    continue
+                audio = obj.get("audio") if isinstance(obj, dict) else None
+                if not isinstance(audio, str) or not audio.strip():
+                    dropped += 1
+                    continue
+                rows.append(obj)
+                if len(rows) >= _MAX_ASR_ROWS:
+                    capped = True
+                    break
+    except UnicodeDecodeError:
+        # e.g. a UTF-16 manifest written by PowerShell 5.1's ``>`` redirect.
+        # Name the file and the required encoding instead of a raw codec error.
+        console.print(Text.assemble(
+            "Error: cannot read ",
+            terminal_text(str(path)),
+            " as UTF-8. Save the ASR manifest as UTF-8 and retry.",
+            style="red",
+        ))
+        raise typer.Exit(1)
     if dropped:
         console.print(
             f"[yellow]Skipped {dropped} row(s) with no 'audio' path.[/]"
@@ -634,7 +646,7 @@ def _infer_asr(
     try:
         enforce_under_cwd_and_no_symlink(output_file, "--output")
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from exc
 
     # Audio containment base: --audio-dir (must be under cwd) or the input's dir.
@@ -660,10 +672,10 @@ def _infer_asr(
                 asr_language=asr_language, asr_task=asr_task,
             )
         except ImportError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(1) from exc
         except ValueError as exc:  # arch guard / bad base
-            console.print(f"[red]{exc}[/]")
+            console.print(terminal_text(exc, "red"))
             raise typer.Exit(2) from exc
 
     refs: list[str] = []
@@ -677,14 +689,10 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Quote the dataset-derived filename first, then escape and
-            # control-strip it (repr() after the escape would double the
-            # escape's backslash and make a tag live again); the exception,
-            # whose message embeds that filename, is escaped too.
-            name = for_terminal(repr(Path(str(audio)).name))
-            console.print(
-                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
-            )
+            name = repr(Path(str(audio)).name)
+            console.print(Text.assemble(
+                "Skipped ", terminal_text(name), ": ", terminal_text(exc), style="yellow",
+            ))
             continue
         rec = {"audio": audio, "transcription": hyp}
         ref = row.get("text")
@@ -697,11 +705,11 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(repr(Path(str(audio)).name))
-                console.print(
-                    f"[yellow]Metric skipped for {name}: "
-                    f"{for_terminal(str(exc))}[/]"
-                )
+                name = repr(Path(str(audio)).name)
+                console.print(Text.assemble(
+                    "Metric skipped for ", terminal_text(name), ": ", terminal_text(exc),
+                    style="yellow",
+                ))
             else:
                 rec["reference"] = ref
                 rec["wer"] = row_wer
@@ -721,18 +729,20 @@ def _infer_asr(
 
     atomic_write_text("\n".join(out_lines) + "\n", output_file, field="--output")
 
-    summary = f"Transcribed [bold]{len(out_lines)}[/] clip(s) -> {output_file}"
+    summary = Text.assemble(
+        "Transcribed ", (str(len(out_lines)), "bold"), " clip(s) -> ", terminal_text(output_file),
+    )
     if skipped:
-        summary += f"  ([yellow]{skipped} skipped[/])"
+        summary.append("  (").append(f"{skipped} skipped", style="yellow").append(")")
     if refs:
-        summary += f"\nCorpus WER: [bold]{corpus_wer(refs, hyps):.3f}[/]"
+        summary.append("\nCorpus WER: ").append(f"{corpus_wer(refs, hyps):.3f}", style="bold")
     console.print(Panel(summary, title="[bold green]ASR Complete![/]"))
 
 
 def _read_prompts(path: Path) -> list[str]:
     """Read prompts from a JSONL or plain text file."""
     prompts = []
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         for raw_line in f:
             line = raw_line.strip()
             if not line:
@@ -814,7 +824,7 @@ def _load_model(
             base_model,
             trust_remote_code=trc,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
@@ -822,7 +832,7 @@ def _load_model(
             model_path,
             trust_remote_code=trc,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
 
     model_obj.eval()

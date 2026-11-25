@@ -23,6 +23,7 @@ Security:
 
 from __future__ import annotations
 
+import inspect
 import re
 
 # v0.53.3 #129 — case-insensitive name allowlist for VLM bases.
@@ -212,3 +213,26 @@ def compute_prm_loss(predictions, labels, *, mask=None):
     masked = diff * mask
     denom = mask.sum().clamp(min=1.0)
     return masked.sum() / denom
+
+
+def forward_takes_logits_to_keep(model) -> bool:
+    """Whether ``model.forward`` names a ``logits_to_keep`` parameter (#2368).
+
+    A PRM forward reads only ``hidden_states[-1]``, so where the causal-LM forward
+    takes ``logits_to_keep`` the trainer and the scorer pass 1 and the LM head runs
+    on the last position alone; ``hidden_states`` does not change. A forward without
+    the parameter, or one that only takes ``**kwargs`` (some remote-code models),
+    keeps today's call. ``inspect.signature`` follows the ``__wrapped__`` chain, so
+    the forward Accelerate wraps for mixed precision reports its own parameters.
+    """
+    forward = getattr(model, "forward", None)
+    if forward is None:
+        return False
+    try:
+        param = inspect.signature(forward).parameters.get("logits_to_keep")
+    except (TypeError, ValueError):
+        return False
+    return param is not None and param.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )

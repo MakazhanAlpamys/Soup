@@ -101,6 +101,38 @@ class TestEvalSuiteLoading:
         with pytest.raises(ValueError):
             load_suite(str(suite_path))
 
+    def test_load_rejects_empty_task_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            yaml.safe_dump({
+                "suite": "bad",
+                "tasks": [{"type": "custom", "name": "",
+                            "tasks": "evals/math.jsonl", "threshold": 0.8}],
+            }),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="null-free"):
+            load_suite(str(suite_path))
+
+    def test_load_rejects_null_byte_task_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            "suite: bad\ntasks:\n"
+            "  - type: custom\n"
+            '    name: "draft\\0task"\n'
+            "    tasks: evals/math.jsonl\n"
+            "    threshold: 0.8\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="null-free"):
+            load_suite(str(suite_path))
+
     def test_load_rejects_path_traversal(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.eval.gate import load_suite
@@ -511,6 +543,61 @@ class TestJudgeModelValidation:
                 judge_model="http://localhost.attacker.com/model",
             )
 
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            (
+                "http://judge.example.com/m",
+                "judge_model 'http://judge.example.com/m' uses http to a host that is not "
+                "loopback; http is accepted for a loopback host only (127.0.0.1, ::1, "
+                "localhost). Use https://, ollama:// or a loopback http:// URL instead",
+            ),
+            (
+                "ftp://judge.example.com/m",
+                "judge_model 'ftp://judge.example.com/m' uses unsupported scheme 'ftp'; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+            (
+                "HTTP://judge.example.com/m",
+                "judge_model 'HTTP://judge.example.com/m' uses http to a host that is not "
+                "loopback; http is accepted for a loopback host only (127.0.0.1, ::1, "
+                "localhost). Use https://, ollama:// or a loopback http:// URL instead",
+            ),
+            (
+                "judge.example.com/m",
+                "judge_model 'judge.example.com/m' uses unsupported scheme ''; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+            (
+                "localhost:8000/m",
+                "judge_model 'localhost:8000/m' uses unsupported scheme 'localhost'; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+        ],
+    )
+    def test_refusal_says_why_and_what_to_use(self, url, message):
+        """#2190 — a remote http URL is told http is loopback-only; another scheme
+        is told which ones are accepted."""
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        assert strip_ansi(str(caught.value)) == message
+
+    @pytest.mark.parametrize(
+        ("url", "parsed"),
+        [
+            ("http://localhost:8000/m", ("server", "m", "http://localhost:8000")),
+            ("https://judge.example.com/m", ("server", "m", "https://judge.example.com")),
+            ("ollama://llama3.1", ("ollama", "llama3.1", None)),
+        ],
+    )
+    def test_accepted_urls_parse_as_before(self, url, parsed):
+        from soup_cli.eval.gate import _parse_judge_url
+
+        assert _parse_judge_url(url) == parsed
+
 
 # ---------------------------------------------------------------------------
 # Judge task score normalization
@@ -643,3 +730,75 @@ class TestJudgeTaskNormalization:
         assert task_res.score == pytest.approx(1.0)
         assert task_res.passed is True
         assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# #3122: empty / NUL task names refused at suite load (CLI, exit 3)
+# ---------------------------------------------------------------------------
+
+BAD_NAMES = ["", "draft\x00task"]
+
+
+def _name_suite(tmp_path, name: str) -> str:
+    import json
+    tasks_path = tmp_path / "tasks.jsonl"
+    tasks_path.write_text(
+        '{"prompt": "0", "expected": "gold"}\n', encoding="utf-8",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        "suite: names\n"
+        "tasks:\n"
+        "  - type: custom\n"
+        f"    name: {json.dumps(name)}\n"
+        "    tasks: tasks.jsonl\n"
+        "    scorer: exact\n"
+        "    threshold: 0.0\n",
+        encoding="utf-8",
+    )
+    return str(suite_path)
+
+
+@pytest.mark.parametrize("name", BAD_NAMES)
+def test_cli_bad_task_name_refusal_never_mints_baseline(
+    tmp_path, monkeypatch, name,
+):
+    monkeypatch.chdir(tmp_path)
+    from rich.console import Console
+
+    from soup_cli.commands import eval as eval_command
+    from soup_cli.eval import quant_check
+    from tests.conftest import strip_ansi
+
+    factory_calls = []
+
+    def factory(model):
+        factory_calls.append(model)
+        return lambda prompt: "gold"
+
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    baseline = tmp_path / "baseline.json"
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", _name_suite(tmp_path, name),
+        "--model", "synthetic-base", "--write-baseline", str(baseline),
+    ])
+    output = " ".join(strip_ansi(result.output).split())
+    suite_path = str(tmp_path / "suite.yaml")
+    assert result.exit_code == 3
+    assert (
+        f"Cannot load suite: eval-gate suite '{suite_path}': "
+        "tasks[0].name: task name must be non-empty and null-free" in output
+    )
+    assert "GATE PASSED" not in output
+    assert factory_calls == []
+    assert not baseline.exists()
+
+
+@pytest.mark.parametrize("name", ["math", "  math  "])
+def test_cli_accepted_task_names_load_unchanged(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.eval import gate
+
+    suite = gate.load_suite(_name_suite(tmp_path, name))
+    assert suite.tasks[0].name == name

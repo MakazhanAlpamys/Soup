@@ -446,7 +446,7 @@ class TestEveryGenerationPathEncodesLikeTraining:
         tok = _tokenizer(_REJECTS_SYSTEM_TEMPLATE)
         model = _RecordingModel()
 
-        _, prompt_tokens, _ = _generate_response(
+        _, prompt_tokens, _, _ = _generate_response(
             model, tok, [_SYSTEM, _USER], max_tokens=1, temperature=0.0
         )
 
@@ -461,7 +461,7 @@ class TestEveryGenerationPathEncodesLikeTraining:
         tok = _tokenizer(_BOS_TEMPLATE)
         model = _RecordingModel()
 
-        _, prompt_tokens, _ = _generate_response(
+        _, prompt_tokens, _, _ = _generate_response(
             model, tok, [_SYSTEM, _USER], max_tokens=1, temperature=0.0
         )
 

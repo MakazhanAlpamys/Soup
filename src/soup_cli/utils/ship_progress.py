@@ -84,7 +84,7 @@ def track(items: Iterable[T], total: int) -> Iterator[T]:
         state = None
     for item in items:
         yield item
-        if state is not None:
+        if state is not None and state.done is not None:
             state.done += 1
             state.emit("progress")
 
@@ -141,7 +141,20 @@ def jsonl_command(function: Callable[..., Any]) -> Callable[..., Any]:
                             raise
             except typer.Exit:
                 raise
-            except (Exception, KeyboardInterrupt):
+            except KeyboardInterrupt:
+                raise typer.Exit(code=130) from None
+            except Exception as exc:
+                from rich.console import Console
+                from rich.text import Text
+
+                from soup_cli.utils.terminal import strip_control
+
+                Console().print(
+                    Text.assemble(
+                        ("Error:", "bold red"),
+                        f" {strip_control(type(exc).__name__)}: {strip_control(exc)}",
+                    )
+                )
                 raise typer.Exit(code=1) from None
         if completed_exit is not None:
             raise typer.Exit(code=completed_exit)

@@ -26,16 +26,17 @@ from __future__ import annotations
 import ast
 import builtins
 import json
+import sys
 import types
 from pathlib import Path
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 
@@ -70,9 +71,11 @@ def _narrow(monkeypatch, module_path: str) -> None:
     monkeypatch.setattr(module_path, Console(width=80))
 
 
-def _fake_import(real_import):
+def _fake_import(real_import, *, noisy_libraries=()):
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
         if name in _FAKE_LIBS and not fromlist:
+            if name in noisy_libraries:
+                sys.stdout.write(f"{name} import diagnostic\n")
             mod = types.ModuleType(name)
             mod.__version__ = _FAKE_LIBS[name]
             return mod
@@ -89,11 +92,25 @@ def test_version_json_full_is_one_line_at_any_width(monkeypatch):
     result = runner.invoke(app, ["version", "--json", "--full"])
 
     assert result.exit_code == 0, result.output
-    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1, lines
     info = json.loads(lines[0])
     assert info["torch"] == _FAKE_LIBS["torch"]
     assert info["wandb"] == _FAKE_LIBS["wandb"]
+
+
+def test_version_json_full_sends_import_diagnostics_to_stderr(monkeypatch):
+    noisy_import = _fake_import(builtins.__import__, noisy_libraries=("torch", "deepspeed"))
+    monkeypatch.setattr(builtins, "__import__", noisy_import)
+
+    result = runner.invoke(app, ["version", "--json", "--full"])
+
+    assert result.exit_code == 0, result.output
+    info = json.loads(result.stdout)
+    assert info["torch"] == _FAKE_LIBS["torch"]
+    assert info["deepspeed"] == _FAKE_LIBS["deepspeed"]
+    assert "torch import diagnostic" in result.stderr
+    assert "deepspeed import diagnostic" in result.stderr
 
 
 @pytest.mark.parametrize("markup", [_MARKUP, _SILENT_MARKUP])
@@ -126,7 +143,7 @@ def test_cost_json_keeps_bracketed_value(monkeypatch, tmp_path, markup):
     result = runner.invoke(app, ["cost", "--json", "--config", str(cfg)])
 
     assert result.exit_code == 0, result.output
-    results = json.loads(result.output)
+    results = json.loads(result.stdout)
     assert results[0]["gpu"] == gpu
 
 
@@ -158,7 +175,7 @@ def test_eval_against_json_only_keeps_bracketed_run_id(monkeypatch, tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1, lines
     verdict = json.loads(lines[0])
     assert verdict["baseline_run_id"] == baseline

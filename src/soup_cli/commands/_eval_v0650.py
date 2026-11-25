@@ -23,6 +23,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.run_provenance import warn_stopped_inputs
 
 # v0.56.0 evidence-loader policy (review M6 fix).
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024  # 16 MiB
@@ -183,6 +184,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 run_behavior_live,
             )
 
+            warn_stopped_inputs(base_model, adapter)
             try:
                 report = run_behavior_live(
                     run_id=run_id,
@@ -319,6 +321,7 @@ def register(app: typer.Typer, console: Console) -> None:
             task_list = (
                 [t.strip() for t in tasks.split(",") if t.strip()] if tasks else None
             )
+            warn_stopped_inputs(model)
             try:
                 payload = run_capability_suite(
                     run_id=run_id,

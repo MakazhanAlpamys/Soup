@@ -25,7 +25,9 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
@@ -37,6 +39,7 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ def make_prm_trainer_class(base_cls: type) -> type:
     The factory pattern (with ``lru_cache``) lets us subclass whichever
     HF Trainer the caller supplies without an import-time dependency.
     """
-    from soup_cli.utils.prm import compute_prm_loss
+    from soup_cli.utils.prm import compute_prm_loss, forward_takes_logits_to_keep
 
     class _PRMTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for PRM stepwise reward training."""
@@ -82,10 +85,19 @@ def make_prm_trainer_class(base_cls: type) -> type:
             step_positions = inputs["step_positions"]
             labels = inputs["labels"].float()
 
+            # #2368: only ``hidden_states[-1]`` is read, so the LM head runs on the
+            # last position alone where the forward takes ``logits_to_keep``
+            # (checked once on the unwrapped model). The call stays on the
+            # top-level forward, the one Accelerate autocasts (#1235 below).
+            keep_last = getattr(self, "_prm_logits_to_keep", None)
+            if keep_last is None:
+                keep_last = forward_takes_logits_to_keep(self.model)
+                self._prm_logits_to_keep = keep_last
             outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_hidden_states=True,
+                **({"logits_to_keep": 1} if keep_last else {}),
             )
             last_hidden = outputs.hidden_states[-1]  # [B, T, H]
             # Gather hidden states at step_positions.
@@ -292,7 +304,7 @@ class PRMTrainerWrapper:
             # RMSNorm weight at 1.0 never moves), cannot go through the fp16
             # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
             # on MPS (#564).
-            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
+            dtype=resolve_base_load_dtype(self.device, full_finetune=True),
             **base_revision_kwargs(cfg.base),
         )
         hidden_size = base_model.config.hidden_size
@@ -323,9 +335,7 @@ class PRMTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         train_rows = _prepare_prm_dataset(
@@ -375,8 +385,7 @@ class PRMTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=use_bf16,
             fp16=use_fp16,
             report_to=self.report_to,
@@ -419,7 +428,8 @@ class PRMTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        with manual_save_context(self.trainer):
+            result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         self.trainer.save_model(str(output_dir))
         # v0.71.30 — save the tokenizer alongside the model so the PRM
         # checkpoint is loadable standalone (soup shrink / PRMScorer /

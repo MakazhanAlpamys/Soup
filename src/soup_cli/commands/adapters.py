@@ -455,6 +455,14 @@ def merge(
             )
             raise typer.Exit(2)
 
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths([("adapter", path) for path in adapters], [("--output", output)])
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
     # v0.71.2 #192 — backdoor-scan gate. Refuse to merge any input whose
     # spectral scan returns FAIL (or that cannot be scanned at all) unless the
     # operator passes --allow-unscanned. WARN is advisory-only. Runs BEFORE the
@@ -765,8 +773,8 @@ def arithmetic(
         read_adapter_lora_scaling,
     )
     from soup_cli.utils.adapter_diff import load_adapter_weights
-    from soup_cli.utils.adapter_merge import write_merged_adapter
-    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.adapter_merge import fold_lora_scaling, write_merged_adapter
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, ensure_distinct_paths
 
     # 1. Parse the --adapter name=path map.
     name_re = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -810,6 +818,16 @@ def arithmetic(
 
     referenced = [t.name for t in terms]
     ref_paths = [mapping[n] for n in referenced]
+
+    # Refuse writing over a referenced adapter before any adapter is read (#2358).
+    try:
+        ensure_distinct_paths(
+            [(f"adapter {n}", path) for n, path in zip(referenced, ref_paths)],
+            [("--output", output)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]Output path refused: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
 
     from soup_cli.utils.adapter_diff import (
         WRITE_ADAPTER_DEPS,
@@ -903,8 +921,8 @@ def arithmetic(
     config_overrides: Optional[dict[str, object]] = None
 
     if use_concat:
-        # Bake each adapter's own decode-time scaling (lora_alpha/r) into its A
-        # block so a single-scaling output reproduces Σ cᵢ·(effective ΔWᵢ). Use
+        # Bake each adapter's decode-time scaling (alpha/r, or alpha/sqrt(r) for
+        # rsLoRA) into its A block so unit-scaled output reproduces Σ cᵢ·(effective ΔWᵢ). Use
         # an explicit `is None` fallback so a valid scaling of 0.0 (lora_alpha=0,
         # r>0 — an intentionally zeroed task vector) is NOT silently promoted to
         # 1.0 by `or`.
@@ -925,19 +943,23 @@ def arithmetic(
                 "nothing to merge.[/]"
             )
             raise typer.Exit(1)
-        # Output is a single-scaling adapter: r == lora_alpha == new_rank. Clear
-        # any per-module rank_pattern/alpha_pattern (v0.39.0) carried over from
-        # the template source — the concat output is uniform-rank, so stale
-        # per-module overrides would mis-scale it.
+        # Input scalings are baked in: ordinary LoRA with r == lora_alpha gives
+        # unit output scaling. Clear rsLoRA and per-module rank/alpha overrides
+        # inherited from the template so they cannot scale the result again.
         config_overrides = {
             "r": new_rank,
             "lora_alpha": new_rank,
+            "use_rslora": False,
             "rank_pattern": {},
             "alpha_pattern": {},
         }
     else:
+        # The output keeps the first referenced adapter's config, so each other
+        # input's lora_B is rescaled to decode at that adapter's LoRA scaling.
         try:
-            merged, skipped = merge_task_arithmetic(weights_list, coeffs)
+            merged, skipped = merge_task_arithmetic(
+                fold_lora_scaling(weights_list, ref_paths), coeffs
+            )
         except ValueError as exc:
             console.print(f"[red]Merge failed: {escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
@@ -1619,6 +1641,157 @@ def adapter_pr(
     )
 
 
+def _closes_at_word_end(command: str, index: int) -> bool:
+    """Whether the ``'`` at ``index``, inside a word, opens a single-quoted group.
+
+    It does when the next ``'`` of the command ends a word (whitespace or the end
+    of the command follows it): ``--opt='a b'`` is ``--opt=a b``. Otherwise it is
+    a literal character, as an apostrophe is: ``don't``, ``a'b c``, ``O'Brien``,
+    an unclosed ``--opt='a b``, and ``don't stop 'x'`` (the next ``'`` opens a
+    word, it does not end one) keep it. So does a ``'`` followed by a ``"`` that
+    opens a double-quoted group before the next ``'``: in ``don't "James' file"``
+    the ``'`` of ``James'`` is inside that group, and ``don't`` stays one word.
+    A ``"`` after an odd number of backslashes is a literal character, as in
+    :func:`_split_windows_command`, and opens no group.
+    """
+    length = len(command)
+    position = index + 1
+    while position < length:
+        char = command[position]
+        if char == "\\":
+            run_end = position
+            while run_end < length and command[run_end] == "\\":
+                run_end += 1
+            if run_end < length and command[run_end] == '"' and (run_end - position) % 2:
+                position = run_end + 1
+            else:
+                position = run_end
+            continue
+        if char == '"':
+            return False
+        if char == "'":
+            return position + 1 == length or command[position + 1] in " \t"
+        position += 1
+    return False
+
+
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line according to Microsoft C runtime rules,
+    with single-quote grouping support for cross-platform compatibility.
+
+    A ``'`` that starts a word groups to the next ``'``. A ``'`` inside a word
+    groups only as :func:`_closes_at_word_end` says, so ``--opt='a b'`` groups as
+    ``--opt="a b"`` does. A ``'`` that ends a word (whitespace or the end of the
+    command follows it, as in ``dogs' and cats'``) never opens a group, and
+    neither does a ``'`` inside double quotes or after a backslash: each is a
+    literal character.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_dquote = False
+    in_squote = False
+    has_token = False
+
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+
+        if not in_dquote and not in_squote and char in (" ", "\t"):
+            if has_token:
+                args.append("".join(current))
+                current = []
+                has_token = False
+            index += 1
+            continue
+
+        if not in_dquote:
+            if in_squote:
+                if char == "'":
+                    in_squote = False
+                    index += 1
+                    continue
+                current.append(char)
+                index += 1
+                continue
+            elif char == "'" and (
+                not has_token
+                or (
+                    # A ' that ends a word (dogs') stays a literal character.
+                    index + 1 < length
+                    and command[index + 1] not in " \t"
+                    and _closes_at_word_end(command, index)
+                )
+            ):
+                in_squote = True
+                has_token = True
+                index += 1
+                continue
+
+        has_token = True
+
+        if char == "\\":
+            num_bs = 0
+            while index < length and command[index] == "\\":
+                num_bs += 1
+                index += 1
+
+            if index < length and command[index] == '"':
+                current.append("\\" * (num_bs // 2))
+                if num_bs % 2 != 0:
+                    current.append('"')
+                    index += 1
+                else:
+                    if in_dquote and index + 1 < length and command[index + 1] == '"':
+                        current.append('"')
+                        index += 2
+                    else:
+                        in_dquote = not in_dquote
+                        index += 1
+            else:
+                current.append("\\" * num_bs)
+                if index < length and command[index] == "'":
+                    # A backslash before ``'`` keeps it a literal character.
+                    current.append("'")
+                    index += 1
+            continue
+
+        if char == '"':
+            if in_dquote and index + 1 < length and command[index + 1] == '"':
+                current.append('"')
+                index += 2
+            else:
+                in_dquote = not in_dquote
+                index += 1
+            continue
+
+        current.append(char)
+        index += 1
+
+    if has_token:
+        args.append("".join(current))
+
+    if in_dquote or in_squote:
+        raise ValueError("No closing quotation")
+
+    return args
+
+
+def _split_bisect_eval_command(command: str, *, windows: Optional[bool] = None) -> list[str]:
+    """Split the template before substitution, preserving native path spelling."""
+    import shlex
+
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        argv = _split_windows_command(command)
+    else:
+        argv = shlex.split(command, posix=True)
+    if not argv or not argv[0]:
+        raise ValueError("--eval-command must name a program")
+    return argv
+
+
 @app.command(name="bisect")
 def adapter_bisect(
     history: list[str] = typer.Argument(
@@ -1632,8 +1805,11 @@ def adapter_bisect(
         ...,
         "--eval-command",
         help=(
-            "Shell command template; '{ckpt}' is replaced with each "
+            "Command template (no shell); '{ckpt}' is replaced with each "
             "checkpoint id. Exit code 0 means PASS, non-zero means FAIL. "
+            "Quotes group words on every platform. On Windows a single quote groups "
+            "when it starts a word ('a b') or when its closing quote ends the word "
+            "(--opt='a b'); any other ' (don't) is a literal character. "
             "Example: 'soup eval custom --model {ckpt} --tasks tasks.jsonl'"
         ),
     ),
@@ -1681,22 +1857,29 @@ def adapter_bisect(
         return
 
     # Execute via subprocess; exit 0 means OK.
-    import shlex
+    import errno
     import subprocess  # noqa: S404 — argv list mode, no shell
 
     from soup_cli.utils.tool_paths import find_tool
 
     try:
-        program = shlex.split(eval_command)[0]
+        template = _split_bisect_eval_command(eval_command)
     except ValueError as exc:
         console.print(f"[red]Invalid --eval-command: {for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
-    # A bare program name runs from the absolute PATH directory it is found
-    # in; a program given with its path runs as given. The name is resolved
-    # for each probe, after `{ckpt}` is filled in, so a name the checkpoint id
-    # completes is found the same way; a fixed name is also checked up front.
+    program = template[0]
+    # Resolve fixed programs up front; only a program containing the checkpoint
+    # placeholder needs resolving for each probe.
     def _program_path(name: str) -> Optional[str]:
         if os.path.dirname(name):
+            if not os.path.isfile(name):
+                if (os.name == "nt" and not os.path.splitext(name)[1]
+                        and os.path.isfile(name + ".exe")):
+                    name += ".exe"
+                else:
+                    raise FileNotFoundError(errno.ENOENT, "not a regular file", name)
+            if not os.access(name, os.X_OK):
+                raise PermissionError(errno.EACCES, "not executable", name)
             return name
         try:
             return find_tool(name)
@@ -1709,29 +1892,43 @@ def adapter_bisect(
             "install it, put it on PATH, or give its path"
         )
 
-    if "{ckpt}" not in program and _program_path(program) is None:
-        console.print(f"[red]{_not_on_path(program)}[/]")
-        raise typer.Exit(2)
+    def _refuse_launch(name: str, exc: OSError) -> None:
+        console.print(
+            f"[red]--eval-command program {for_terminal(repr(name))} could not start: "
+            f"{for_terminal(exc)}[/]"
+        )
+        raise typer.Exit(2) from exc
+
+    fixed_program = None
+    if "{ckpt}" not in program:
+        try:
+            fixed_program = _program_path(program)
+        except OSError as exc:
+            _refuse_launch(program, exc)
+        if fixed_program is None:
+            console.print(f"[red]{_not_on_path(program)}[/]")
+            raise typer.Exit(2)
 
     def _eval_fn(ckpt: str) -> bool:
-        cmd_str = eval_command.replace("{ckpt}", shlex.quote(ckpt))
-        # Safer: split via shlex and use argv mode (no shell interpolation).
-        argv = shlex.split(cmd_str)
-        resolved = _program_path(argv[0])
-        if resolved is None:
-            console.print(f"[yellow]Eval failed for {escape(ckpt)}: {_not_on_path(argv[0])}[/]")
-            return False
-        argv[0] = resolved
+        # Each checkpoint stays in its existing argument, including spaces and quotes.
+        argv = [argument.replace("{ckpt}", ckpt) for argument in template]
         try:
+            resolved = fixed_program or _program_path(argv[0])
+            if resolved is None:
+                console.print(f"[red]{_not_on_path(argv[0])}[/]")
+                raise typer.Exit(2)
+            argv[0] = resolved
             result = subprocess.run(  # noqa: S603
                 argv, capture_output=True, timeout=3600, check=False
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        except subprocess.TimeoutExpired as exc:
             console.print(
-                f"[yellow]Eval failed for {escape(ckpt)}: "
-                f"{escape(str(exc))}[/]"
+                f"[yellow]Eval failed for {for_terminal(ckpt)}: "
+                f"{for_terminal(exc)}[/]"
             )
             return False
+        except OSError as exc:
+            _refuse_launch(argv[0], exc)
         return result.returncode == 0
 
     try:
@@ -1752,7 +1949,7 @@ def adapter_bisect(
         console.print(
             Panel(
                 f"Verdict:      [red]BROKEN_AT[/]\n"
-                f"First broken: [bold]{escape(result.first_broken or '?')}[/]\n"
+                f"First broken: [bold]{for_terminal(result.first_broken or '?')}[/]\n"
                 f"Probes:       {result.probes}",
                 title="Adapter bisect",
             )

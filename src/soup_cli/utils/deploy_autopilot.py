@@ -314,6 +314,21 @@ def _reject_symlink_target(path: str, label: str) -> None:
         )
 
 
+def validate_output_path(path: str, label: str) -> None:
+    """Validate an autopilot output path before any file is written (#2827)."""
+    if not isinstance(path, str):
+        raise TypeError(f"{label} must be a string")
+    if not path or "\x00" in path:
+        raise ValueError(f"{label} must be non-empty NUL-free string")
+    if len(path) > _MAX_OUTPUT_PATH_LEN:
+        raise ValueError(f"{label} exceeds {_MAX_OUTPUT_PATH_LEN} chars")
+    if not is_under_cwd(path):
+        raise ValueError(
+            f"{label} must stay under cwd: {os.path.basename(path)}"
+        )
+    _reject_symlink_target(path, label)
+
+
 def write_recipe(
     profile: DeployProfile,
     base: str,
@@ -321,17 +336,7 @@ def write_recipe(
     recipe_path: str,
 ) -> str:
     """Write the recipe YAML under cwd; returns the realpath written."""
-    if not isinstance(recipe_path, str):
-        raise TypeError("recipe_path must be a string")
-    if not recipe_path or "\x00" in recipe_path:
-        raise ValueError("recipe_path must be non-empty NUL-free string")
-    if len(recipe_path) > _MAX_OUTPUT_PATH_LEN:
-        raise ValueError(f"recipe_path exceeds {_MAX_OUTPUT_PATH_LEN} chars")
-    if not is_under_cwd(recipe_path):
-        raise ValueError(
-            f"recipe_path must stay under cwd: {os.path.basename(recipe_path)}"
-        )
-    _reject_symlink_target(recipe_path, "recipe_path")
+    validate_output_path(recipe_path, "recipe_path")
     text = render_recipe_yaml(profile, base=base, output_dir=output_dir)
     real = os.path.realpath(recipe_path)
     os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
@@ -344,17 +349,7 @@ def write_deploy_script(
     profile: DeployProfile, model_path: str, script_path: str
 ) -> str:
     """Write the deploy bash script under cwd; returns the realpath written."""
-    if not isinstance(script_path, str):
-        raise TypeError("script_path must be a string")
-    if not script_path or "\x00" in script_path:
-        raise ValueError("script_path must be non-empty NUL-free string")
-    if len(script_path) > _MAX_OUTPUT_PATH_LEN:
-        raise ValueError(f"script_path exceeds {_MAX_OUTPUT_PATH_LEN} chars")
-    if not is_under_cwd(script_path):
-        raise ValueError(
-            f"script_path must stay under cwd: {os.path.basename(script_path)}"
-        )
-    _reject_symlink_target(script_path, "script_path")
+    validate_output_path(script_path, "script_path")
     text = render_deploy_script(profile, model_path=model_path)
     real = os.path.realpath(script_path)
     os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
@@ -394,5 +389,6 @@ __all__ = [
     "render_deploy_script",
     "write_recipe",
     "write_deploy_script",
+    "validate_output_path",
     "autopilot_artifacts",
 ]

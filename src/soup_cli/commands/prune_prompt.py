@@ -13,9 +13,11 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.prune_prompt import prune_traces, validate_min_frequency
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -74,7 +76,7 @@ def prune_prompt_cmd(
             tokenizer=tokenizer,
         )
     except FileNotFoundError:
-        console.print(f"[red]Input not found: {escape(input_path)}[/]")
+        console.print(Text(f"Input not found: {strip_control(input_path)}", style="red"))
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -103,9 +105,17 @@ def prune_prompt_cmd(
     snippet = report.prefix if len(report.prefix) <= 200 else report.prefix[:200] + "..."
     console.print(
         Panel(
-            f"[green]Stripped prefix ({report.prefix_chars} chars) from "
-            f"{report.rows_pruned}/{report.rows_total} rows.[/]\n\n"
-            f"[dim]Prefix:[/] {escape(snippet)}",
+            Text.assemble(
+                (
+                    f"Stripped prefix ({report.prefix_chars} chars) from "
+                    f"{report.rows_pruned}/{report.rows_total} rows.",
+                    "green",
+                ),
+                "\n\n",
+                ("Prefix:", "dim"),
+                " ",
+                strip_control(snippet),
+            ),
             title="prune-prompt",
             border_style="green",
         )

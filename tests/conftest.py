@@ -5,11 +5,19 @@ import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
 
 from tests import _source_scan
+
+# MLX runs float32 matmuls at TF32 precision by default (``MLX_ENABLE_TF32``,
+# ml-explore/mlx#3860). On an Apple M6 GPU that puts a float32 matmul about 1e-2
+# off, so the native MLX tests' float32 oracles fail there (#2385). MLX reads the
+# variable once, at its first matmul, so it is set here, before any test runs one;
+# an explicit MLX_ENABLE_TF32=1 is left alone.
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
 
 #: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
@@ -95,6 +103,24 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 def strip_ansi(text: "str | None") -> str:
     """Return ``text`` with SGR escape sequences removed."""
     return _ANSI_ESCAPE.sub("", text or "")
+
+
+class InlineThread(threading.Thread):
+    """A ``threading.Thread`` whose ``start()`` runs its target on the calling thread.
+
+    For a test that has to see a side effect of a background thread (``soup ui`` opening the
+    browser) without waiting for one: ``patch("threading.Thread", InlineThread)``.
+
+    It subclasses the real class on purpose. While the patch is live, anything else that builds
+    a thread reaches ``Thread.__init__`` through that name: ``threading.Timer.__init__`` does,
+    and a leftover background timer from an earlier test (a canary buffer retrying a failed
+    flush) builds one on its own thread. A ``MagicMock`` standing there has its ``side_effect``
+    cleared by that call from Python 3.13 on (``unittest.mock`` stopped reading the properties
+    of the spec, so the call no longer raises), and the test's own thread then never runs.
+    """
+
+    def start(self) -> None:
+        self.run()
 
 
 #: Why a ``requires_symlink`` test was skipped. It names the account's missing capability, not
@@ -196,6 +222,54 @@ def _no_hub_model_shape(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(model_shape, "_hub_lookup", lambda repo, **_kw: (None, None))
     monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **_kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_loop_vram_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``quantization: auto`` off the GPU: no CUDA device is visible.
+
+    The sft recipe's ``auto`` measures free VRAM when the train stage renders its config
+    (``utils/loop_quantization.py``). Left alone it would answer differently on a machine
+    with a card, and create a CUDA context on it. A test of the rule patches
+    ``free_vram_bytes`` itself.
+    """
+    from soup_cli.utils import loop_quantization
+
+    monkeypatch.setattr(loop_quantization, "free_vram_bytes", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_loop_tokenizer_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the loop's ``data.max_length`` measurement from starting a tokenizer child.
+
+    The sft / dpo / kto train stage measures the longest row of the dataset it built with the
+    base model's tokenizer, in a short-lived child that imports transformers (and torch) and
+    may reach the Hub (``utils/loop_max_length.py``). Left alone every test that renders the
+    recipe would pay seconds for it and depend on the network. The measurement answers "could
+    not measure" here, which leaves the schema default in the recipe; a test of the
+    measurement patches ``_measure_in_child`` itself.
+    """
+    from soup_cli.utils import loop_max_length
+
+    def refuse(base: str, data_path: str, method: str):
+        raise loop_max_length.MeasureFailedError("no tokenizer is loaded in a test")
+
+    monkeypatch.setattr(loop_max_length, "_measure_in_child", refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_windows_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep layer streaming's Windows commit pre-flight off this machine's real counters.
+
+    ``utils.windows_commit.read_commit_info`` reads the system commit total and limit,
+    and the staging pre-flight falls back to pageable staging when they are tight. A
+    test that drives the setup path with a simulated CUDA device would otherwise get a
+    different ``pin=`` on a Windows box with little commit left than on one with plenty.
+    A test of the check patches the reader (and ``_on_windows``) itself.
+    """
+    from soup_cli.utils import windows_commit
+
+    monkeypatch.setattr(windows_commit, "read_commit_info", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -321,3 +395,22 @@ output: {tmp_path / 'output'}
         encoding="utf-8",
     )
     return config_path
+
+
+def make_cli_runner(**extra_kwargs):
+    """Return a CliRunner that keeps stderr separated from stdout on Click 8.1 and 8.2+ (#1551).
+
+    On Click 8.1, CliRunner interleaves stderr into result.output unless created with
+    mix_stderr=False. On Click 8.2+, mix_stderr was removed from CliRunner.__init__ and
+    result.stdout is separated by default while result.output contains interleaved streams.
+    Inspect Typer's runner rather than Click's version because Typer can vendor Click.
+    The signature allows both versions to produce a clean result.stdout.
+    """
+    import inspect
+
+    from typer.testing import CliRunner
+
+    kwargs = dict(extra_kwargs)
+    if "mix_stderr" in inspect.signature(CliRunner).parameters and "mix_stderr" not in kwargs:
+        kwargs["mix_stderr"] = False
+    return CliRunner(**kwargs)

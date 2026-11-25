@@ -175,6 +175,45 @@ def _check_short_run(metrics: List[dict]) -> Optional[Finding]:
     return None
 
 
+def _check_no_training_signal(metrics: List[dict]) -> Optional[Finding]:
+    """Rows exist but none carries a loss, learning rate or gradient norm.
+
+    Every loss-based check below would find nothing and the run would read "no anomalies
+    detected": a verdict about a loss curve that was never recorded. A PPO run is the case
+    (TRL logs its loss and lr under other keys, so its rows hold a reward only), as is a
+    run whose only row is the final throughput summary. That is neither ``no_metrics`` (rows
+    exist) nor healthy, so it gets its own info finding, saying what was recorded.
+    """
+    if not metrics or any(
+        row.get(key) is not None for row in metrics for key in ("loss", "lr", "grad_norm")
+    ):
+        return None
+    count = len(metrics)
+    noun = "row" if count == 1 else "rows"
+    if any(_is_finite(row.get("reward")) for row in metrics):
+        message = (
+            f"{count} metric {noun} logged, none with a loss, learning rate or gradient "
+            "norm: only a reward was recorded."
+        )
+        suggestion = (
+            "Loss-based checks (plateau, divergence, gradient norm) need a loss, so none "
+            "ran. Read the reward curve instead (`metrics.reward`, "
+            "`ExperimentTracker.get_metric_series(run_id, \"reward\")`)."
+        )
+    else:
+        message = (
+            f"{count} metric {noun} logged, none with a loss, learning rate or gradient norm."
+        )
+        suggestion = (
+            "Loss-based checks (plateau, divergence, gradient norm) need a loss, so none "
+            "ran. The run may have stopped before its first training log; check "
+            "`soup runs show` for status."
+        )
+    return Finding(
+        category="no_loss_metrics", severity="info", message=message, suggestion=suggestion,
+    )
+
+
 _CHECKS_LOSS = (_check_nan, _check_explosion, _check_plateau, _check_grad_norm)
 
 
@@ -184,6 +223,9 @@ def diagnose(metrics: List[dict], config: Optional[dict] = None) -> List[Finding
     short = _check_short_run(metrics)
     if short is not None and short.category == "no_metrics":
         return [short]
+    no_signal = _check_no_training_signal(metrics)
+    if no_signal is not None:
+        return [no_signal]
 
     for check in _CHECKS_LOSS:
         result = check(metrics)

@@ -8,11 +8,11 @@ from typing import Callable
 
 import pytest
 from rich.console import Console
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands import eval as eval_command
 from soup_cli.eval import quant_check
+from tests.conftest import make_cli_runner
 
 from .conftest import strip_ansi
 
@@ -82,11 +82,11 @@ def test_count_boundaries_through_core_and_cli(
         quant_check, "make_model_generator", lambda path: generators[Path(path).name],
     )
     monkeypatch.setattr(eval_command, "console", Console(width=200))
-    result = CliRunner().invoke(app, [
+    result = make_cli_runner().invoke(app, [
         "eval", "quant-check", "--before", "before", "--after", "after",
         "--tasks", "tasks.jsonl", "--format", "json",
     ])
-    cli_row = json.loads(strip_ansi(result.output))["rows"][0]
+    cli_row = json.loads(strip_ansi(result.stdout))["rows"][0]
     assert core_row.before == cli_row["before"] == before / total
     assert core_row.after == cli_row["after"] == after / total
     assert core_row.delta == cli_row["delta"] == after / total - before / total

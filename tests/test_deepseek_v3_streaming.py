@@ -173,14 +173,18 @@ def test_num_hidden_layers_is_validated(tmp_path, bad):
         )
 
 
-def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path):
+def test_router_correction_bias_stays_fp32_under_a_bf16_stream(tmp_path, monkeypatch):
     """transformers keeps ``e_score_correction_bias`` in fp32 on load; a bf16
     shard would route with rounded values the resident model never sees."""
     import torch
     from safetensors.torch import load_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
 
     from soup_cli.utils.layer_shard import shard_checkpoint
 
+    monkeypatch.setattr(
+        DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", {"e_score_correction_bias"}
+    )
     weights = _write_layer_checkpoint(tmp_path / "w", n_layers=2, n_experts=4)
     index = shard_checkpoint(
         weights, str(tmp_path / "s"), dtype="bfloat16", arch="deepseek_v3", num_hidden_layers=2

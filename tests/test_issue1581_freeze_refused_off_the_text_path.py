@@ -20,7 +20,6 @@ import pytest
 import yaml
 
 from soup_cli.config.loader import load_config_from_string
-from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
 from soup_cli.trainer.sft import SFTTrainerWrapper
 
 _ONE_FIELD = [("freeze_layers", 2), ("freeze_ratio", 0.5)]
@@ -46,7 +45,8 @@ def _refusal(text):
 # settings the message names, the change it asks for).
 _CASES = {
     "sft-mlx": (
-        "sft", {"backend": "mlx"}, {}, "backend='mlx'", "backend: transformers",
+        "sft", {"backend": "mlx"}, {}, "backend='mlx'",
+        "backend: transformers, or lora.r: 0 with quantization: none",
     ),
     "sft-vision": (
         "sft", {"modality": "vision"}, {}, "modality='vision'", "modality: text",
@@ -81,6 +81,8 @@ class TestRefusedOffTheTextPath:
         assert "frozen only on the text path with backend: transformers" in message
         assert "would train every layer" in message
         assert f"Use {change}, or remove the key." in message
+        # #3086 T-2: only native MLX text SFT has the full fine-tune route.
+        assert ("in native MLX text SFT with lora.r: 0" in message) == (case == "sft-mlx")
 
     @pytest.mark.parametrize("case", list(_CASES))
     def test_without_the_fields_the_config_still_loads(self, case):
@@ -130,6 +132,8 @@ class TestRefusedOffTheTextPath:
 
         assert f"with {settings}:" in message, message
         assert f"Use {change}, or remove the key." in message
+        # #3086 T-2: MLX vision has no full fine-tune route, so none is named.
+        assert "lora.r: 0" not in message
 
     def test_the_issue_reproduction_is_refused(self):
         """The issue's vision config."""
@@ -273,11 +277,16 @@ class TestTheRefusalFollowsTheSetups:
             "from the #1581 refusal in _validate_freeze_is_applied"
         )
 
-    def test_the_mlx_trainer_does_not_read_them(self):
-        assert not _reads_the_freeze_fields(inspect.getsource(MLXSFTTrainerWrapper)), (
-            "MLXSFTTrainerWrapper now reads freeze_layers / freeze_ratio: drop "
-            "backend='mlx' from the #1581 refusal in _validate_freeze_is_applied"
-        )
+    def test_mlx_freezing_is_scoped_to_dense_text_sft(self):
+        cfg = load_config_from_string(_yaml(
+            "sft", {"backend": "mlx"}, freeze_layers=1,
+            quantization="none", lora={"r": 0},
+        ))
+        assert cfg.training.freeze_layers == 1
+        message = _refusal(_yaml("sft", {"backend": "mlx"}, freeze_layers=1))
+        assert "backend='mlx'" in message
+        # #3086 T-2: the refusal names the route that loaded above.
+        assert "Use backend: transformers, or lora.r: 0 with quantization: none" in message
 
     def test_the_message_follows_the_dispatch_order(self):
         """The refusal names settings in the order ``setup`` checks them (MLX is

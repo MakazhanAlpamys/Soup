@@ -68,10 +68,15 @@ def resolve_trainer(cfg, trainer_kwargs: dict | None = None):
 
     Returns ``(trainer_cls, kwargs)`` — ``trainer_cls`` is the MLX trainer
     class when ``cfg.backend == "mlx"`` (raising ValueError for unsupported
-    tasks), or ``None`` so the caller falls through to the transformers task
-    chain. ``trainer_kwargs`` are forwarded unchanged in both cases.
+    tasks, resolving scalar preference aliases), or ``None`` so the caller
+    falls through to the transformers task chain. ``trainer_kwargs`` are
+    forwarded unchanged in both cases.
     """
     kwargs = dict(trainer_kwargs or {})
     if getattr(cfg, "backend", None) == "mlx":
-        return get_mlx_trainer(cfg.task), kwargs
+        from soup_cli.config.schema import resolve_mlx_task
+
+        loss = getattr(getattr(cfg, "training", None), "preference_loss", None)
+        task = resolve_mlx_task(cfg.task, loss)
+        return get_mlx_trainer(task), kwargs
     return None, kwargs

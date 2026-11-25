@@ -9,7 +9,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
+from rich.text import Text
 
 from soup_cli.utils.attest import (
     AttestationStatement,
@@ -19,7 +19,7 @@ from soup_cli.utils.attest import (
     verify_sigstore_attestation,
     write_attestation,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -91,7 +91,7 @@ def emit_cmd(
             created_at=datetime.now(tz=timezone.utc).isoformat(),
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Invalid attestation: {escape(str(exc))}[/]")
+        console.print(Text(f"Invalid attestation: {strip_control(exc)}", style="red"))
         raise typer.Exit(2)
 
     # Validate every local argument/path before a Sigstore request can create
@@ -124,7 +124,7 @@ def emit_cmd(
                         "signature sidecar path must name a file, not a directory"
                     )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid output: {for_terminal(exc)}[/]")
+            console.print(Text(f"Invalid output: {strip_control(exc)}", style="red"))
             raise typer.Exit(_EXIT_USAGE) from exc
 
     text = render_attestation(st)
@@ -137,20 +137,21 @@ def emit_cmd(
             sigstore_interactive=interactive_oidc,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]Sign failed: {for_terminal(exc)}[/]")
+        console.print(Text(f"Sign failed: {strip_control(exc)}", style="red"))
         raise typer.Exit(2)
     except RuntimeError as exc:
         # Explicit signing requests must never degrade to unsigned.
-        console.print(f"[red]Sign failed: {for_terminal(exc)}[/]")
+        console.print(Text(f"Sign failed: {strip_control(exc)}", style="red"))
         raise typer.Exit(1)
 
     if output is None:
         # Verbatim: Rich would parse `[...]` in the invocation as markup and fold
         # long lines, so the JSON on stdout no longer parsed (#1569 review; #1470).
         typer.echo(text)
-        console.print(f"[dim]signature backend: {escape(sig['backend'])}[/]")
+        console.print(Text(f"signature backend: {strip_control(sig['backend'])}", style="dim"))
         if sig.get("signature"):
-            console.print(f"[dim]signature: {escape(sig['signature'][:32])}...[/]")
+            signature = strip_control(sig["signature"][:32])
+            console.print(Text(f"signature: {signature}...", style="dim"))
         return
 
     try:
@@ -161,11 +162,14 @@ def emit_cmd(
         ):
             written_paths.append(_write_sig_sidecar(output, sig))
     except (TypeError, ValueError, OSError) as exc:
-        console.print(f"[red]Write failed: {for_terminal(exc)}[/]")
+        console.print(Text(f"Write failed: {strip_control(exc)}", style="red"))
         raise typer.Exit(2)
     console.print(
-        f"[green]Wrote attestation[/] -> {escape(written)} "
-        f"[dim](signature: {escape(sig['backend'])})[/]"
+        Text.assemble(
+            ("Wrote attestation", "green"),
+            f" -> {strip_control(written)} ",
+            (f"(signature: {strip_control(sig['backend'])})", "dim"),
+        )
     )
     if attach_to_registry is not None:
         _attach_attestation(attach_to_registry, written_paths)
@@ -181,19 +185,29 @@ def _attach_attestation(registry_id: str, paths: list[str]) -> None:
         from soup_cli.registry.attach import attach_artifact
     except ImportError as exc:
         console.print(
-            f"[red]Error:[/] could not import registry attach helper: {escape(str(exc))}"
+            Text.assemble(
+                ("Error:", "red"),
+                f" could not import registry attach helper: {strip_control(exc)}",
+            )
         )
         raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
     for path in paths:
         try:
             attach_artifact(registry_id, path=path, kind="attestation")
         except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Error:[/] could not attach to registry: {escape(str(exc))}")
+            console.print(
+                Text.assemble(
+                    ("Error:", "red"), f" could not attach to registry: {strip_control(exc)}"
+                )
+            )
             raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
         else:
             console.print(
-                f"[green]Attached[/] attestation to registry entry "
-                f"[bold]{escape(registry_id)}[/]"
+                Text.assemble(
+                    ("Attached", "green"),
+                    " attestation to registry entry ",
+                    (strip_control(registry_id), "bold"),
+                )
             )
 
 
@@ -221,6 +235,13 @@ def _write_sig_sidecar(output: str, sig: dict) -> str:
         output + _SIGNATURE_SUFFIX,
         prefix=".attest-sig.",
         suffix=".json.tmp",
+    )
+
+
+def _valid_receipt(label: str, statement: str) -> Text:
+    """``<label> (<statement file name>)``, the name shown as typed."""
+    return Text.assemble(
+        (label, "green"), " ", (f"({strip_control(os.path.basename(statement))})", "dim")
     )
 
 
@@ -261,7 +282,7 @@ def verify_cmd(
                 f"signature exceeds {_MAX_SIGNATURE_SIDECAR_BYTES} bytes"
             )
     except (OSError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(2)
 
     try:
@@ -270,7 +291,7 @@ def verify_cmd(
         with open(signature, encoding="utf-8-sig") as fh:
             sig_doc = json.load(fh)
     except (OSError, ValueError) as exc:
-        console.print(f"[red]Could not read inputs: {escape(str(exc))}[/]")
+        console.print(Text(f"Could not read inputs: {strip_control(exc)}", style="red"))
         raise typer.Exit(2)
 
     # `emit` signs the canonical in-toto JSON (json.dumps sort_keys, indent=2).
@@ -321,18 +342,15 @@ def verify_cmd(
             )
         except RuntimeError as exc:
             console.print(
-                f"[red]Sigstore verification unavailable: {for_terminal(exc)}[/]"
+                Text(f"Sigstore verification unavailable: {strip_control(exc)}", style="red")
             )
             raise typer.Exit(1)
         except ValueError as exc:
             console.print(
-                f"[red]Sigstore attestation INVALID: {for_terminal(exc)}[/]"
+                Text(f"Sigstore attestation INVALID: {strip_control(exc)}", style="red")
             )
             raise typer.Exit(3)
-        console.print(
-            f"[green]Attestation Sigstore signature valid[/] "
-            f"[dim]({escape(os.path.basename(statement))})[/]"
-        )
+        console.print(_valid_receipt("Attestation Sigstore signature valid", statement))
         console.print(
             "[dim]Note: the subject digest is asserted by the signer, not "
             "re-verified against an artifact.[/]"
@@ -345,8 +363,11 @@ def verify_cmd(
 
     if backend != "ed25519" or not sig_hex:
         console.print(
-            f"[yellow]Signature backend {for_terminal(repr(backend or 'unsigned'))} "
-            "is not cryptographically verifiable.[/]"
+            Text(
+                f"Signature backend {strip_control(repr(backend or 'unsigned'))} "
+                "is not cryptographically verifiable.",
+                style="yellow",
+            )
         )
         raise typer.Exit(3)
 
@@ -365,7 +386,9 @@ def verify_cmd(
         try:
             trusted = read_public_key_file(public_key)
         except (OSError, ValueError) as exc:
-            console.print(f"[red]Could not read --public-key: {escape(str(exc))}[/]")
+            console.print(
+                Text(f"Could not read --public-key: {strip_control(exc)}", style="red")
+            )
             raise typer.Exit(2)
         if "".join(trusted.split()) != "".join(pub.split()):
             console.print(
@@ -376,10 +399,7 @@ def verify_cmd(
         pub = trusted
 
     if verify_attestation(payload, sig_hex, pub):
-        console.print(
-            f"[green]Attestation signature valid[/] "
-            f"[dim]({escape(os.path.basename(statement))})[/]"
-        )
+        console.print(_valid_receipt("Attestation signature valid", statement))
         # Make the trust boundary explicit: a valid signature proves the
         # signer asserted this statement — it does NOT re-verify the subject
         # digest against any on-disk artifact.

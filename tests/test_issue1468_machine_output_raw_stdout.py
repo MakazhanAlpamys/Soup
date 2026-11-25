@@ -23,11 +23,11 @@ import io
 import json
 
 from rich.console import Console
-from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import make_cli_runner
 
-runner = CliRunner()
+runner = make_cli_runner()
 
 # A token that Rich would treat as a (broken) closing markup tag, and enough
 # padding to push every record well past 80 columns.
@@ -56,7 +56,7 @@ def test_audit_log_tail_json_is_raw_jsonl(monkeypatch, tmp_path):
     result = runner.invoke(app, ["audit-log", "tail", "--json", "--path", str(log)])
 
     assert result.exit_code == 0, result.output
-    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     # One JSONL record on exactly one line, round-tripping to the original.
     assert len(lines) == 1, lines
     assert json.loads(lines[0]) == record
@@ -87,7 +87,7 @@ def test_bom_emit_stdout_is_valid_json_with_markup_preserved(monkeypatch):
     assert result.exit_code == 0, result.output
     # Not folded / not markup-mangled: still a single parseable JSON document
     # that carries the bracketed name verbatim.
-    doc = json.loads(result.output)
+    doc = json.loads(result.stdout)
     assert isinstance(doc, dict)
     assert name in result.output
 
@@ -111,12 +111,12 @@ def test_eval_leaderboard_json_and_csv_are_raw(monkeypatch):
 
     json_res = runner.invoke(app, ["eval", "leaderboard", "--format", "json"])
     assert json_res.exit_code == 0, json_res.output
-    data = json.loads(json_res.output)
+    data = json.loads(json_res.stdout)
     assert data[0]["model"] == model
 
     csv_res = runner.invoke(app, ["eval", "leaderboard", "--format", "csv"])
     assert csv_res.exit_code == 0, csv_res.output
-    rows = list(csv.reader(io.StringIO(csv_res.output)))
+    rows = list(csv.reader(io.StringIO(csv_res.stdout)))
     body = [r for r in rows if r and r[0] == model]
     # The long model path stays in one field on one row (not folded into
     # several short rows), header + this row share the same column count.
@@ -143,5 +143,5 @@ def test_profile_json_keeps_long_model_name(monkeypatch, tmp_path):
     result = runner.invoke(app, ["profile", "--json", "--config", str(cfg)])
 
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["model_name"] == base

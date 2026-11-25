@@ -13,6 +13,7 @@ acceptance criterion of the issue and an in-memory transport cannot show it.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 
 import pytest
@@ -42,12 +43,14 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _build(transport="sse", *, auth_token=TOKEN, host="127.0.0.1", port=8765):
+def _build(
+    transport="sse", *, auth_token=TOKEN, host="127.0.0.1", port=8765, allow_mutating=False,
+):
     from soup_cli.mcp_server.server import build_asgi_app
 
     return build_asgi_app(
         transport=transport,
-        allow_mutating=False,
+        allow_mutating=allow_mutating,
         allow_execute=False,
         auth_token=auth_token,
         host=host,
@@ -332,6 +335,66 @@ async def _sse_session(port, token):
             tools = await session.list_tools()
             result = await session.call_tool("recipes_search", {"query": "qwen"})
             return tools, result
+
+
+async def _describe_session(read_stream, write_stream):
+    from mcp import ClientSession
+
+    async with ClientSession(read_stream, write_stream) as client:
+        await client.initialize()
+        description = await client.call_tool("engine_describe")
+        bad = await client.call_tool("engine_describe", {"sensitive-key": "sensitive-value"})
+        listing = await client.list_tools()
+    return description, bad, listing
+
+
+async def _describe_over_network(transport, port):
+    from mcp.client import streamable_http
+    from mcp.client.sse import sse_client
+
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    if transport == "sse":
+        async with sse_client(f"{base}/sse", headers=headers) as streams:
+            return await _describe_session(*streams)
+
+    endpoint = f"{base}/mcp"
+    if hasattr(streamable_http, "streamable_http_client"):
+        async with streamable_http.create_mcp_http_client(headers=headers) as http_client:
+            async with streamable_http.streamable_http_client(
+                endpoint, http_client=http_client,
+            ) as (read_stream, write_stream, *_):
+                return await _describe_session(read_stream, write_stream)
+
+    async with streamable_http.streamablehttp_client(
+        endpoint, headers=headers,
+    ) as (read_stream, write_stream, *_):
+        return await _describe_session(read_stream, write_stream)
+
+
+@pytest.mark.parametrize("transport", ["sse", "http"])
+@pytest.mark.parametrize("allow_mutating", [False, True])
+def test_describe_reports_network_transport_and_effective_gates(transport, allow_mutating):
+    from tests.mcp_roundtrip import is_error
+
+    port = _free_port()
+    app = _build(transport, port=port, allow_mutating=allow_mutating)
+    with _UvicornThread(app, port):
+        report, bad, listing = _run(
+            asyncio.wait_for(_describe_over_network(transport, port), timeout=15)
+        )
+
+    assert not is_error(report)
+    description = json.loads(report.content[0].text)
+    assert description["transport"] == transport
+    assert description["gates"] == {"mutating": allow_mutating, "execute": False}
+    enabled = {entry["name"] for entry in description["tools"]}
+    assert ("train_start" in enabled) is allow_mutating
+    assert "train_execute" not in enabled
+    assert "train_execute" in {tool.name for tool in listing.tools}
+    assert is_error(bad)
+    assert bad.content[0].text.startswith("soup.engine.invalid_arguments")
+    assert "sensitive-" not in bad.content[0].text
 
 
 class TestSseEndToEnd:

@@ -157,10 +157,11 @@ class TestKbitPrepThreadsCheckpointingFlag:
 
 
 class TestAllKbitCallSitesPassCheckpointingFlag:
-    """Structural sweep: every prepare_model_for_kbit_training(...) call in
-    every trainer must pass use_gradient_checkpointing explicitly, so a
-    future call site cannot silently regress back to peft's own True
-    default. AST-based (not regex) so a multi-line call is still matched.
+    """Structural sweep: every prepare_kbit_model(...) call in every trainer
+    (the one place Soup calls peft's prepare_model_for_kbit_training, #2609)
+    must pass use_gradient_checkpointing explicitly, so a future call site
+    cannot silently regress back to peft's own True default. AST-based (not
+    regex) so a multi-line call is still matched.
     """
 
     @pytest.mark.parametrize("filename", _KBIT_TRAINER_FILES)
@@ -173,15 +174,15 @@ class TestAllKbitCallSitesPassCheckpointingFlag:
                 return False
             func = node.func
             name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-            return name == "prepare_model_for_kbit_training"
+            return name == "prepare_kbit_model"
 
         call_sites = [node for node in ast.walk(tree) if _is_kbit_prep_call(node)]
-        assert call_sites, f"{filename} no longer calls prepare_model_for_kbit_training at all"
+        assert call_sites, f"{filename} no longer calls prepare_kbit_model at all"
 
         for call in call_sites:
             kwarg_names = [kw.arg for kw in call.keywords]
             assert "use_gradient_checkpointing" in kwarg_names, (
-                f"{filename}:{call.lineno} calls prepare_model_for_kbit_training "
+                f"{filename}:{call.lineno} calls prepare_kbit_model "
                 "without use_gradient_checkpointing, so peft's own True default "
                 "applies regardless of training.gradient_checkpointing"
             )
@@ -192,10 +193,10 @@ class TestAllKbitCallSitesPassCheckpointingFlag:
         # the parametrized test above silently never running on it.
         found = set()
         for path in _TRAINER_DIR.glob("*.py"):
-            if "prepare_model_for_kbit_training" in path.read_text(encoding="utf-8"):
+            if "prepare_kbit_model(" in path.read_text(encoding="utf-8"):
                 found.add(path.name)
         assert found == set(_KBIT_TRAINER_FILES), (
-            f"trainer files calling prepare_model_for_kbit_training changed: "
+            f"trainer files calling prepare_kbit_model changed: "
             f"{found - set(_KBIT_TRAINER_FILES)} added, "
             f"{set(_KBIT_TRAINER_FILES) - found} removed: update _KBIT_TRAINER_FILES"
         )

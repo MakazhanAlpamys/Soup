@@ -1,0 +1,53 @@
+{
+  "files": {
+    "ds_compare_rows_a.jsonl": {
+      "max_length": 256,
+      "rows": 64,
+      "sha256": "f886b68766234799224135f2aae74f5405bf1e9b3dbc3cfcc33029666c897625",
+      "shape": "A",
+      "target_tokens": 32,
+      "token_len": {
+        "max": 32,
+        "mean": 32.0,
+        "min": 32
+      }
+    },
+    "ds_compare_rows_b.jsonl": {
+      "max_length": 512,
+      "rows": 64,
+      "sha256": "fe00eb5e51b097c6ffeb72b23f40e39b8a961baa0b7b6514818fefe9eb96117c",
+      "shape": "B",
+      "target_tokens": 512,
+      "token_len": {
+        "max": 512,
+        "mean": 512.0,
+        "min": 512
+      }
+    },
+    "ds_compare_rows_c.jsonl": {
+      "max_length": 2048,
+      "rows": 64,
+      "sha256": "6bd4949e3206f7faedbd4b3c7a91a1f5b66251e79af1eabf44c179b5f0bd1f06",
+      "shape": "C",
+      "target_tokens": 2048,
+      "token_len": {
+        "max": 2048,
+        "mean": 2048.0,
+        "min": 2048
+      }
+    }
+  },
+  "generator": "benchmarks/harness/ds_compare/make_rows.py",
+  "measured": true,
+  "model": {
+    "id": "NousResearch/Meta-Llama-3.1-8B-Instruct",
+    "revision": "d10aef7999a2b5ba950ab3974312feeedbfe0b77"
+  },
+  "seed": 42,
+  "tokenizer": {
+    "chat_template_sha256": "b48c47f6443892716176eb200bf4ef108f64e06ca26ed0fa8ebc0a4b3992fcb2",
+    "source": "model directory",
+    "tokenizer_json_sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+    "vocab_size": 128256
+  }
+}

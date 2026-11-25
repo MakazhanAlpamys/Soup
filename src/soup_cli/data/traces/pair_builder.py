@@ -44,10 +44,16 @@ def _pair_thumbs(traces: Iterable[Trace]) -> Iterator[PreferencePair]:
         downs = [t for t in entries if t.signal == "thumbs_down"]
         if not ups or not downs:
             continue
-        yield PreferencePair(
-            prompt=prompt, chosen=ups[0].output,
-            rejected=downs[0].output, source="thumbs_up",
-        )
+        chosen = ups[0].output
+        rejected = next((trace.output for trace in downs if trace.output != chosen), None)
+        if rejected is None:
+            # All downvotes match the first upvote. A later upvote can still pair.
+            rejected = downs[0].output
+            chosen = next((trace.output for trace in ups if trace.output != rejected), None)
+        if chosen is not None:
+            yield PreferencePair(
+                prompt=prompt, chosen=chosen, rejected=rejected, source="thumbs_up",
+            )
 
 
 def _pair_regenerations(traces: Iterable[Trace]) -> Iterator[PreferencePair]:

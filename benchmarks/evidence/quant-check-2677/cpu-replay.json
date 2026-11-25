@@ -1,0 +1,77 @@
+{
+  "rows": [
+    {
+      "task": "default",
+      "before": 0.0,
+      "after": 0.0,
+      "delta": 0.0,
+      "verdict": "OK"
+    }
+  ],
+  "performance": {
+    "before": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "latency_ms": 4.874380615850289,
+      "tokens_per_second": 615.4628118790592,
+      "generated_tokens": 9,
+      "peak_gpu_memory_bytes": null,
+      "repeat_latency_ms": [
+        4.976407624781132,
+        4.842355847358704,
+        4.804378375411034
+      ],
+      "latency_samples_ms": [
+        [
+          4.976407624781132,
+          4.842355847358704,
+          4.804378375411034
+        ]
+      ],
+      "generated_token_samples": [
+        [
+          3,
+          3,
+          3
+        ]
+      ]
+    },
+    "after": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "latency_ms": 4.836701788008213,
+      "tokens_per_second": 620.2573843684129,
+      "generated_tokens": 9,
+      "peak_gpu_memory_bytes": null,
+      "repeat_latency_ms": [
+        4.79673407971859,
+        4.890418611466885,
+        4.822952672839165
+      ],
+      "latency_samples_ms": [
+        [
+          4.79673407971859,
+          4.890418611466885,
+          4.822952672839165
+        ]
+      ],
+      "generated_token_samples": [
+        [
+          3,
+          3,
+          3
+        ]
+      ]
+    },
+    "latency_change_pct": -0.7729972443997091,
+    "tokens_per_second_change_pct": 0.7790190401131492,
+    "peak_gpu_memory_change_pct": null,
+    "latency_ranges_overlap": true,
+    "warmup": 1,
+    "repeats": 3,
+    "max_new_tokens": 256,
+    "timing_scope": "synchronized prompt generation including tokenize/copy/decode; excludes load",
+    "quality_samples": "first measured answer per task; warmups and other repeats are unscored",
+    "memory_scope": "CUDA allocated peak after warmup, resident weights included; CPU/MPS null"
+  }
+}

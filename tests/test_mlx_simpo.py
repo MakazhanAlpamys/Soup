@@ -744,14 +744,14 @@ class TestConfig:
         with pytest.raises(Exception, match=match):
             self._load(top, training)
 
-    def test_the_preference_alias_is_refused_naming_task_simpo(self):
+    def test_the_preference_alias_selects_native_simpo(self):
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.trainer.mlx_simpo import MLXSimPOTrainerWrapper
 
         alias = (_SIMPO_YAML.replace("task: simpo", "task: preference")
                  .replace("  simpo_gamma: 0.5\n", "  preference_loss: simpo\n"))
-        with pytest.raises(Exception, match="task='preference' has no trainer") as info:
-            load_config_from_string(alias)
-        assert "Use task: simpo for the native MLX trainer." in str(info.value)
+        assert isinstance(build_trainer(load_config_from_string(alias)), MLXSimPOTrainerWrapper)
 
     def test_other_tasks_name_simpo_among_the_mlx_ones(self):
         from soup_cli.config.loader import load_config_from_string

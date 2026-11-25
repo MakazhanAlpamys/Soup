@@ -432,3 +432,35 @@ class TestTheBudgetReachesTheGenerator:
         from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
 
         assert BEHAVIOURAL_MAX_NEW_TOKENS >= 128, BEHAVIOURAL_MAX_NEW_TOKENS
+
+
+# --- #3066: U+0085, U+2028 and U+2029 inside a JSON string do not end the row ---
+
+_SEPARATORS_3066 = {"U+0085": chr(0x85), "U+2028": chr(0x2028), "U+2029": chr(0x2029)}
+
+
+def _rows_3066(char: str) -> str:
+    """Two JSONL rows; the first holds ``char`` raw inside a JSON string."""
+    import json as _json
+
+    first = _json.dumps({"prompt": f"a{char}b"}, ensure_ascii=False)
+    assert char in first
+    return f"{first}\n" + _json.dumps({"prompt": "next"}) + "\n"
+
+
+@pytest.mark.parametrize("char", _SEPARATORS_3066.values(), ids=_SEPARATORS_3066.keys())
+def test_gate_fixture_keeps_a_row_holding_the_character_3066(tmp_path, monkeypatch, char):
+    """Through a temporary resource standing in for a bundled gate fixture."""
+    import importlib.resources
+
+    from soup_cli.eval import gate_suites
+
+    fixture = tmp_path / "data" / "_fixtures" / "gate" / "issue3066.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes(_rows_3066(char).encode("utf-8"))
+    monkeypatch.setattr(importlib.resources, "files", lambda package: tmp_path)
+    monkeypatch.setattr(gate_suites, "_fixture_cache", {})
+
+    rows = gate_suites._load_gate_fixture("issue3066.jsonl")
+
+    assert rows == ({"prompt": f"a{char}b"}, {"prompt": "next"})

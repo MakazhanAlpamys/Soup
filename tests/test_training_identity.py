@@ -195,6 +195,7 @@ def test_produced_digest_survives_copy_and_registry_override(tmp_path):
     tracker = ExperimentTracker(tmp_path / "runs.db")
     try:
         run_id = tracker.start_run(config.model_dump(), "cpu", "CPU", {})
+        tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
         tracker.record_training_data_hash(run_id, digest)
         metadata = BaseRevision(config.base).metadata(run_id)
         metadata["training_data_sha256"] = tracker.get_run(run_id)["training_data_sha256"]
@@ -270,12 +271,18 @@ def test_path_versus_descriptor_identity_still_refuses(tmp_path, monkeypatch, fi
 def test_descriptor_ctime_change_during_the_read_is_unknown(tmp_path, monkeypatch):
     source, _ = _source(tmp_path)
     real_fstat = identity.os.fstat
+    target = source.stat()
     calls = 0
 
     def fd_stat(fd):
         nonlocal calls
-        calls += 1
         info = real_fstat(fd)
+        if (info.st_dev, info.st_ino) != (target.st_dev, target.st_ino):
+            # ``identity.os`` is the os module itself: only the source's
+            # descriptor is counted, so pytest's own fstat calls cannot move
+            # the count.
+            return info
+        calls += 1
         return _with(info, st_ctime_ns=info.st_ctime_ns + 1_000_000) if calls == 2 else info
 
     monkeypatch.setattr(identity.os, "fstat", fd_stat)

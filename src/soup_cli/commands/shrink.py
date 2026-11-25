@@ -24,6 +24,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.adapter_fuse import fuse_adapter_into as _fuse_adapter
 from soup_cli.utils.adapter_fuse import release_cuda as _release_cuda
@@ -41,7 +42,7 @@ from soup_cli.utils.shrink import (
     shrink_arch_of,
     shrink_verdict_to_dict,
 )
-from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.terminal import for_terminal, strip_control, terminal_text
 
 console = Console()
 
@@ -278,7 +279,7 @@ def shrink(
     except typer.Exit:
         raise
     except (typer.BadParameter, ValueError, RuntimeError, OSError, ImportError) as exc:
-        console.print(f"[red]Error:[/] {escape(str(exc))}")
+        console.print(f"[red]Error:[/] {for_terminal(exc)}", emoji=False)
         raise typer.Exit(1) from exc
 
 
@@ -439,7 +440,13 @@ def _attach_to_registry(registry_id: str, report_path: str) -> None:
             f"[green]Attached[/] shrink_report to registry entry [bold]{escape(registry_id)}[/]"
         )
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]Warning:[/] could not attach to registry: {escape(str(exc))}")
+        console.print(
+            Text.assemble(
+                ("Warning:", "yellow"),
+                " could not attach to registry: ",
+                terminal_text(exc),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +564,9 @@ def _run_heal(
     try:
         load_config_from_string(yaml_text)  # validate before spending a subprocess
     except ValueError as exc:
-        console.print(f"[red]Invalid rendered heal config:[/] {for_terminal(exc)}")
+        console.print(
+            Text.assemble(("Invalid rendered heal config:", "red"), " ", terminal_text(exc))
+        )
         raise typer.Exit(code=1) from exc
     config_path = Path(pruned_dir).parent / "heal_config.yaml"
     atomic_write_text(yaml_text, str(config_path), field="heal config")
