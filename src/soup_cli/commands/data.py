@@ -5003,20 +5003,40 @@ def leakage(
     evaluation: str = typer.Option(..., "--eval", help="Evaluation JSONL under cwd."),
     samples: int = typer.Option(5, "--samples", min=0, max=20, help="Maximum example pairs."),
     as_json: bool = typer.Option(False, "--json", help="Print a machine-readable JSON report."),
+    near_duplicates: bool = typer.Option(
+        False, "--near-duplicates", help="Also look for lexical near-duplicates (requires [data]).",
+    ),
+    threshold: Optional[str] = typer.Option(
+        None, "--threshold", metavar="FLOAT",
+        help="Minimum Jaccard score, greater than 0 and at most 1 (default 0.8).",
+    ),
+    permutations: Optional[str] = typer.Option(
+        None, "--permutations", metavar="INT",
+        help="MinHash permutations, 16 to 256 (default 128).",
+    ),
+    seed: Optional[str] = typer.Option(
+        None, "--seed", metavar="INT", help="MinHash seed, 0 to 4294967295 (default 1).",
+    ),
 ):
     """Check input-text overlap without writing datasets.
 
     Exit 0 when clean, 2 on overlap and 3 on unusable input.
     """
-    from soup_cli.utils.data_leakage import check_leakage
+    from soup_cli.utils.data_leakage import NearDuplicateOptions, check_leakage, load_near_rows
     from soup_cli.utils.data_score import load_jsonl_rows
 
     try:
-        report = check_leakage(
-            load_jsonl_rows(train, strict=True),
-            load_jsonl_rows(evaluation, strict=True),
-            samples=samples,
-        )
+        if near_duplicates:
+            near = NearDuplicateOptions.from_cli(threshold, permutations, seed)
+            train_rows = load_near_rows(train, "--train")
+            eval_rows = load_near_rows(evaluation, "--eval")
+        else:
+            if any(value is not None for value in (threshold, permutations, seed)):
+                raise ValueError("--threshold, --permutations and --seed require --near-duplicates")
+            near = None
+            train_rows = load_jsonl_rows(train, strict=True)
+            eval_rows = load_jsonl_rows(evaluation, strict=True)
+        report = check_leakage(train_rows, eval_rows, samples=samples, near=near)
     except (TypeError, ValueError, OSError) as error:
         console.print(f"[red]Leakage input error: {for_terminal(error)}[/]", emoji=False)
         raise typer.Exit(EXIT_USAGE_ERROR) from error
@@ -5031,10 +5051,13 @@ def leakage(
         table.add_row("Eval records", str(report["eval_rows"]))
         table.add_row("Matched eval records", str(report["overlap_eval_rows"]))
         table.add_row("Overlap", f"{report['overlap_percent']:.2f}%")
+        if near is not None:
+            table.add_row("Matching", f"Exact + lexical, Jaccard ≥ {near.threshold:g}")
         console.print(table)
         for pair in report["samples"]:
+            match = f" ({pair['method']}, score {pair['score']:.3f})" if near is not None else ""
             console.print(
-                f"Train record {pair['train_row']} / eval record {pair['eval_row']}: "
+                f"Train record {pair['train_row']} / eval record {pair['eval_row']}{match}: "
                 f"{for_terminal(pair['prompt_preview'])}", emoji=False,
             )
     if report["overlap_eval_rows"]:

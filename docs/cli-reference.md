@@ -1396,6 +1396,10 @@ Usage: `soup data leakage [OPTIONS]`
 | `--eval` | text |  | yes | Evaluation JSONL under cwd. |
 | `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
 | `--json` | flag | off |  | Print a machine-readable JSON report. |
+| `--near-duplicates` | flag | off |  | Also look for lexical near-duplicates (requires \[data]). |
+| `--threshold` | text |  |  | Minimum Jaccard score, greater than 0 and at most 1 (default 0.8). |
+| `--permutations` | text |  |  | MinHash permutations, 16 to 256 (default 128). |
+| `--seed` | text |  |  | MinHash seed, 0 to 4294967295 (default 1). |
 
 ### `soup data lint`
 

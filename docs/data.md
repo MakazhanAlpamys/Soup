@@ -1784,4 +1784,38 @@ The JSON report includes counts, percentage and up to `--samples` example pairs
 matching train records. Record numbers are one-based logical JSONL records,
 excluding blank lines. Examples use the first matching train record and follow
 eval order. Exit codes: **0** clean, **2** any overlap, **3** unusable input/options.
+
+### Lexical near-duplicates
+
+Install the optional data dependencies and use `--near-duplicates` to include
+similar inputs in the leakage check.
+
+```bash
+pip install "soup-cli[data]"
+soup data leakage --train train.jsonl --eval eval.jsonl --near-duplicates --json
+```
+
+Exact text matches take priority. For other eval rows, MinHash/LSH looks up
+candidates using sets of overlapping three-word shingles. It lowercases text
+and splits on whitespace. A shorter input contributes one shingle with all its
+words. The index **may miss** some near matches. For each candidate the tool
+computes exact Jaccard similarity, the number of shared shingles divided by
+the number of distinct shingles across both inputs.
+
+With `--near-duplicates`, `--threshold` sets the minimum Jaccard score (default
+0.8, greater than 0 and at most 1), `--permutations` sets the size of the MinHash
+signature (default 128, 16–256), and `--seed` fixes the candidate search (default
+1, 0–4294967295). Each eval record counts once. For a near match the sample uses
+the highest-scoring candidate and then the earliest train record to break ties.
+Its `train_matches` counts the candidate train records that passed the threshold.
+JSON samples in this mode add `method` (`exact` or `near`) and `score` (1 for an
+exact match). Empty or unusable input still exits 3.
+
+The lexical mode accepts up to 10,000 records and 16 MiB per JSONL file. It
+retains the parsed rows, the train shingles and up to one LSH table per
+permutation. Hashing work scales with the distinct shingles per row times
+the permutation count. The candidate scoring budget across the run is
+50,000,000 shingle comparisons, charged by the smaller shingle set in each
+candidate pair. Above any of these limits, the command exits 3. Use a smaller
+split or run the exact check.
 There is no automatic training hook or dataset filtering.
