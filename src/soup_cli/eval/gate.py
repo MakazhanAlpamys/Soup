@@ -127,7 +127,7 @@ class GateTask(BaseModel):
         # validator itself to call the shared refusal.)
         from soup_cli.utils.net_guard import refuse_private_ip_literal
 
-        parsed = urlparse(value)
+        parsed = parse_url_with_safe_error(value, label="judge_model URL")
         if parsed.scheme == "https":
             refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
         return _check_judge_model_url(value)
