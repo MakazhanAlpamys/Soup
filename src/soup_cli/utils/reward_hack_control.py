@@ -46,12 +46,13 @@ import statistics
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from soup_cli.monitoring.trace_logger import redact_value
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import strip_control
 
 logger = logging.getLogger(__name__)
 
@@ -893,6 +894,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         self._action_history: list[str] = []
         self._last_drift = False
         self._warned_error = False
+        self._collective_enabled = False
 
     def _record_action(self, reason: str) -> None:
         """Append an action reason, capping the in-memory history (LOW #9)."""
@@ -1123,29 +1125,12 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         telemetry["escalation"] = f"rollback to step {target} (restored={restored})"
         return control
 
-    def _run_pid(
-        self,
-        telemetry: dict[str, Any],
-        signals: Mapping[str, float],
-        model: Any,
-        optimizer: Any,
-        control: Any,
-    ) -> Any:
-        """pid_lagrangian: PID β update + rollback escalation ladder.
-
-        The ONLY mode with a rollback rung (#371). Its HACK streak counts the
-        same combined vote that drives the PID (``classify_hack_signal``'s HACK
-        band), so within this mode the β control and the ladder agree on the
-        signal and its reset rule.
-        """
+    def _advance_pid(self, vote: float, telemetry: dict[str, Any]) -> None:
+        """Advance the authoritative controller; restoration is a separate phase."""
         policy = self.pid
-        if policy is None:
-            return control
         self._seed_coefficient(policy.beta_floor)
-        vote = self._compute_vote(signals)
         new_state, action = pid_step(policy, self._state, signal=vote)
         self._state = new_state
-        self._apply_coefficient(action.new_beta)
         self._record_action(action.reason)
         telemetry["vote"] = vote
         telemetry["new_beta"] = action.new_beta
@@ -1159,8 +1144,116 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
             saved = getattr(self.rl_checkpoint_cb, "_saved", None)
             if saved:
                 self._last_good_step = max(saved)
+
+    def _run_pid(
+        self, telemetry: dict[str, Any], signals: Mapping[str, float],
+        model: Any, optimizer: Any, control: Any,
+    ) -> Any:
+        """pid_lagrangian is the only mode with the rollback rung (#371)."""
+        if self.pid is None:
+            return control
+        self._seed_coefficient(self.pid.beta_floor)
+        self._advance_pid(self._compute_vote(signals), telemetry)
+        self._apply_coefficient(self._state.beta)
         if self.rollback and self._hack_streak >= self.rollback_patience:
             control = self._escalate(model, optimizer, control, telemetry)
+        return control
+
+    def _collective_step(self, distributed, state, control, model, optimizer):
+        from soup_cli.utils.rl_distributed import exchange, first_error
+
+        step, telemetry, preparation = -1, {}, {}
+        try:
+            step = int(state.global_step)
+            if self.buffer is None or self.log_writer is None or self.pid is None:
+                raise ValueError("missing PID callback inputs")
+            telemetry, signals = self._observe(self.buffer.snapshot(), step)
+            for name in self.signals:
+                if name not in signals:
+                    raise ValueError(f"missing vote signal {name}")
+                _check_finite_float(signals[name], "vote signal")
+            vote = _check_finite_float(self._compute_vote(signals), "vote")
+            if not 0 <= vote <= 1:
+                raise ValueError("vote must be between 0 and 1")
+            preparation = {"vote": vote, "stop": bool(control.should_training_stop)}
+        except Exception as exc:  # noqa: BLE001 — no local return before the exchange
+            telemetry = {}
+            preparation = {"error": f"PID preparation failed: {type(exc).__name__}: {exc}"}
+        prepared = exchange(distributed, step, "pid.prepare", preparation)
+        decision = {}
+        if distributed.get_rank() == 0:
+            decision_telemetry = {}
+            error = first_error(prepared)
+            target, stop = None, bool(error) or any(entry.get("stop") for entry in prepared)
+            try:
+                if not stop:
+                    self._advance_pid(max(entry["vote"] for entry in prepared), decision_telemetry)
+                    saved = getattr(self.rl_checkpoint_cb, "_saved", ())
+                    if self._last_good_step not in saved:
+                        self._last_good_step = None
+                    if self.rollback and self._hack_streak >= self.rollback_patience:
+                        if self._last_good_step is None or self.rl_checkpoint_cb is None:
+                            decision_telemetry["escalation"] = "no rollback target available yet"
+                            self._hack_streak = 0
+                        elif self._state.recovery_attempts >= self.max_recovery_attempts:
+                            decision_telemetry["escalation"] = "early_stop"
+                            stop = True
+                        else:
+                            target = self._last_good_step
+                            self._state = replace(
+                                self._state, recovery_attempts=self._state.recovery_attempts + 1
+                            )
+                            self._hack_streak = 0
+            except Exception as exc:  # noqa: BLE001 — publish a failed decision
+                error, stop = f"PID decision failed: {type(exc).__name__}", True
+            decision = {
+                "state": asdict(self._state), "target": target, "stop": stop, "error": error,
+                "last_good": self._last_good_step, "streak": self._hack_streak,
+                "action": decision_telemetry.get("action"), "telemetry": decision_telemetry,
+            }
+        agreed = exchange(distributed, step, "pid.decision", decision)[0]
+        outcome = {}
+        try:
+            self._state = ControllerState(**agreed["state"])
+            self._last_good_step = agreed["last_good"]
+            self._hack_streak = agreed["streak"]
+            if distributed.get_rank() != 0 and agreed["action"] is not None:
+                self._record_action(agreed["action"])
+            if self._state.beta > 0:
+                self._apply_coefficient(self._state.beta)
+                if self._current_coefficient() != self._state.beta or (
+                    self.task == "grpo" and self._trainer.args.beta != self._state.beta
+                ):
+                    raise ValueError("PID coefficient was not applied to the local trainer")
+            if not agreed["stop"]:
+                if agreed["target"] is not None:
+                    outcome = self.rl_checkpoint_cb._restore_components(
+                        step=agreed["target"], model=model, optimizer=optimizer
+                    )
+                    if not outcome["adapter"] or (outcome["required"] and not outcome["optimizer"]):
+                        raise ValueError("required checkpoint components were not restored")
+        except Exception as exc:  # noqa: BLE001 — peers must learn about partial application
+            outcome["error"] = f"PID application failed: {type(exc).__name__}: {exc}"
+        applied = exchange(distributed, step, "pid.apply", outcome)
+        error = agreed.get("error") or first_error(applied)
+        if not error and agreed["target"] is not None:
+            if any(entry["required"] != applied[0]["required"] for entry in applied):
+                error = "checkpoint optimizer requirement differs across ranks"
+        if agreed["stop"] or error:
+            control.should_training_stop = True
+            if error:
+                logger.error("RL collective PID stopped: %s",
+                             strip_control(error, single_line=True))
+        telemetry.update(agreed["telemetry"])
+        if agreed["target"] is not None:
+            telemetry["escalation"] = (
+                f"rollback to step {agreed['target']} (restored={not bool(error)})"
+            )
+        try:
+            if self.log_writer is not None:
+                self.log_writer.record(step=step, snapshot=telemetry)
+        except Exception:  # noqa: BLE001 — logging follows the completed collective protocol
+            logger.warning("RL collective PID telemetry could not be written")
         return control
 
     def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
@@ -1169,6 +1262,13 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         Instrumentation must NEVER crash training: a broad except returns the
         unmodified control on any error.
         """
+        from soup_cli.utils.rl_distributed import active_group
+
+        distributed = active_group(self._collective_enabled and self.mode == "pid_lagrangian")
+        if distributed is not None:
+            return self._collective_step(
+                distributed, state, control, kwargs.get("model"), kwargs.get("optimizer")
+            )
         if self.buffer is None or self.log_writer is None:
             return control
         try:
