@@ -161,9 +161,11 @@ class TestDiagnoseHelp:
         text = self._help()
         assert "the 6 probes" not in text
         assert (
-            "format, memorization and citation need --dataset, and citation "
-            "only RAFT-shaped rows" in text
+            "format, mode_collapse, memorization and citation need --dataset, "
+            "and citation only RAFT-shaped rows" in text
         )
+        # mode_collapse runs only on dataset rows too (live.py, under `if pairs:`).
+        assert "live format / mode_collapse / memorization / citation probes" in text
 
 
 class TestMcpTool:
