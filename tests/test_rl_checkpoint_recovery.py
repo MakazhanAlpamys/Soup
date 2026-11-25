@@ -335,6 +335,39 @@ def test_controller_never_counts_incomplete_or_failed_outcome_as_success(
     assert record["recovery"]["error"]
 
 
+@pytest.mark.parametrize("returned_error", ["boom", None])
+def test_collective_publishes_original_application_error_or_required_state_failure(
+    tmp_path, monkeypatch, caplog, returned_error,
+):
+    from soup_cli.utils import rl_distributed
+
+    model, optimizer, trainer, checkpoint, controller, _saved = _case(tmp_path, monkeypatch)
+    outcome = {"adapter": False, "optimizer": False, "required": True}
+    if returned_error is not None:
+        outcome["error"] = returned_error
+    monkeypatch.setattr(checkpoint, "_restore_components", lambda **kwargs: dict(outcome))
+    controller._collective_enabled = True
+    group = SimpleNamespace(get_rank=lambda: 0)
+    monkeypatch.setattr(rl_distributed, "active_group", lambda enabled: group if enabled else None)
+    published = {}
+
+    def exchange(distributed, step, tag, payload):
+        assert distributed is group and step == 2
+        published[tag] = copy.deepcopy(payload)
+        return [dict(payload), dict(payload)]
+
+    monkeypatch.setattr(rl_distributed, "exchange", exchange)
+    control, record = _run(model, optimizer, trainer, controller)
+    expected = returned_error or "required checkpoint components were not restored"
+    assert expected in published["pid.apply"]["error"]
+    assert expected in caplog.text
+    assert "RL collective PID stopped: rank 0:" in caplog.text
+    assert control.should_training_stop
+    assert record["escalation"] == "rollback to step 1 (restored=False)"
+    assert published["pid.apply"]["adapter"] is False
+    assert published["pid.apply"]["optimizer"] is False
+
+
 def test_real_trainer_stops_before_a_second_update_after_required_recovery_failure(
     tmp_path, monkeypatch,
 ):

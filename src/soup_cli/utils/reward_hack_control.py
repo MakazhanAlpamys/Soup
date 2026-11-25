@@ -1238,7 +1238,9 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
                     outcome = self.rl_checkpoint_cb._restore_components(
                         step=agreed["target"], model=model, optimizer=optimizer
                     )
-                    if not outcome["adapter"] or (outcome["required"] and not outcome["optimizer"]):
+                    if not outcome.get("error") and (
+                        not outcome["adapter"] or (outcome["required"] and not outcome["optimizer"])
+                    ):
                         raise ValueError("required checkpoint components were not restored")
         except Exception as exc:  # noqa: BLE001 — peers must learn about partial application
             outcome["error"] = f"PID application failed: {type(exc).__name__}: {exc}"
