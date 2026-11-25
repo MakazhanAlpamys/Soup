@@ -691,7 +691,8 @@ cells and the smoke jobs. Later pushes run the quick subset. When the new head
 is ready, a maintainer removes and re-adds `ci:full` to request the full matrix
 again. A label left over from an earlier head is informational. The CI run
 summary shows which mode ran, and all eight required checks must succeed on
-the current head before merge.
+the current head before merge. Adding `ci:full` to a draft pull request
+starts no CI jobs, so reapply it after marking the pull request ready.
 
 After the merge, `main` gets the quick set on each CI-triggering commit and
 the full matrix once a night. A push to a `release/**` branch runs every
