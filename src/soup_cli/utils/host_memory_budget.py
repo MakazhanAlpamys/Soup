@@ -1,4 +1,4 @@
-"""Proposed C3/A4 allocation contract; accounting, not an OS/process memory limit.
+"""Shared host-memory allocation contract; accounting, not an OS/process memory limit.
 
 A consumer reserves before allocating and releases only after asynchronous users
 finish and owned storage is dropped. Fixed reservations cover untracked consumers.

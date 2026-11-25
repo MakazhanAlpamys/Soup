@@ -1,7 +1,7 @@
-"""C3/A4 shared allocation bridge for uncompressed L2L activations.
+"""Shared allocation bridge for uncompressed L2L activations.
 
 An explicit shared allocator wraps the existing resident/spill store. Construct
-activations before optional C3 residency to preserve A4's priority. This is not
+activations before any optional weight residency so the activations keep priority. This is not
 a process-RSS limit. The public L2L path uses a separately reserved RAM partition.
 """
 
@@ -20,9 +20,9 @@ from soup_cli.utils.l2l_activations import (
 def activation_allocation_bytes(
     *, n_layers: int, k: int, chunk_bytes: int, spill_layers: int, ring: int, pin: bool
 ) -> int:
-    """A4 uncompressed layout: resident chunks plus TWO aligned staging rings.
+    """Uncompressed layout: resident chunks plus TWO aligned staging rings.
 
-    Matches StoreLayout.host_bytes at A4 commit d6f7f733 (floor bytes = 0).
+    Matches the store's own host-byte count (floor bytes = 0).
     Charge alignment slack before rounding each actual pinned allocation.
     """
     from soup_cli.utils.layer_stream_runtime import _next_power_of_two

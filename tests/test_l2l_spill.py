@@ -1460,7 +1460,7 @@ SWITCH = 512 * MIB * 10 // 3
     (4 * GIB, int(4 * GIB * 0.7), "70% of"),
     (SWITCH + MIB, int((SWITCH + MIB) * 0.7), "70% of"),  # above it: the 70% side
     (SWITCH - MIB, SWITCH - MIB - 512 * MIB, "reserve"),  # below it: the reserve side
-    (840 * MIB, 328 * MIB, "reserve"),  # A3's calibrated limit for 16 of Mistral's 32 layers
+    (840 * MIB, 328 * MIB, "reserve"),  # the calibrated limit for 16 of a 7B model's 32 layers
     (512 * MIB, 0, "reserve"),
     (100 * MIB, 0, "floored at 0"),
 ])
@@ -1498,7 +1498,7 @@ def test_the_refusal_threshold_is_the_reserve_plus_every_layer_spilled(tmp_path,
 
 
 def test_session_1s_check_child_is_refused_instead_of_spilling(tmp_path, monkeypatch):
-    """A3 stage 2 session 1: 0.43 GB available at the plan point. The 0.7 share planned 18
+    """0.43 GB available at the plan point. The 0.7 share planned 18
     of 32 layers and the child was OOM-killed in its first step; now the run stops."""
     from soup_cli.utils.l2l_spill import SpillRefusedError, plan_spill
 
