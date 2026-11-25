@@ -77,6 +77,8 @@ MAX_LINE_BYTES = 1024 * 1024
 #: Bytes read from one log file; the rest of a larger file is ignored.
 MAX_FILE_BYTES = 256 * 1024 * 1024
 _MAX_ID_LEN = 256
+#: An ``id`` or ``response_id`` of the contract: a UUID in canonical lowercase form.
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: The longest ``conversation_id`` ``soup serve`` accepts and logs.
 _MAX_CONVERSATION_ID_LEN = 512
 #: At most this many rated answers of ONE conversation id count per side in the canary's
@@ -201,6 +203,13 @@ def _clean_id(value: object, max_len: int = _MAX_ID_LEN) -> Optional[str]:
     return None
 
 
+def _clean_uuid(value: object) -> Optional[str]:
+    """``value`` when it is a UUID in canonical lowercase form (an ``id``, a ``response_id``)."""
+    if isinstance(value, str) and _UUID.fullmatch(value):
+        return value
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Feedback records
 # ---------------------------------------------------------------------------
@@ -266,7 +275,7 @@ def read_feedback(path: Optional[str]) -> FeedbackLog:
     now = time.time()
     for seq, obj in enumerate(_iter_objects(path, log.stats)):
         version = obj.get("schema_version", SCHEMA_VERSION)  # no feedback version 0 exists
-        response_id = _clean_id(obj.get("response_id"))
+        response_id = _clean_uuid(obj.get("response_id"))
         kind = obj.get("kind")
         if not (_is_int(version) and version == SCHEMA_VERSION):
             log.stats.skipped += 1
@@ -353,7 +362,7 @@ def _messages(value: object) -> "Optional[list[dict]]":
 
 
 def _conversation(obj: dict) -> Optional[Conversation]:
-    answer_id = _clean_id(obj.get("id"))
+    answer_id = _clean_uuid(obj.get("id"))
     messages = _messages(obj.get("messages"))
     response = obj.get("response")
     if answer_id is None or messages is None or not isinstance(response, str):

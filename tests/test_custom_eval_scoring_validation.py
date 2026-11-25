@@ -55,7 +55,7 @@ def test_valid_labels_defaults_and_blank_lines_are_preserved(tmp_path: Path) -> 
         "exact", "contains", "answer", "regex", "semantic",
         "tool_call_match", "tool_call_name_match", "tool_call_args_subset",
     ]
-    rows = [{"prompt": "default"}] + [
+    rows = [{"prompt": "default", "expected": "42"}] + [
         {"prompt": label, "expected": "42", "scoring": label, "source": "fixture"}
         for label in labels
     ]
@@ -65,7 +65,7 @@ def test_valid_labels_defaults_and_blank_lines_are_preserved(tmp_path: Path) -> 
     tasks = custom.load_eval_tasks(path)
 
     assert len(tasks) == 9
-    assert tasks[0] == custom.EvalTask(prompt="default")
+    assert tasks[0] == custom.EvalTask(prompt="default", expected="42")
     assert [task.scoring for task in tasks[1:]] == labels
     assert [task.prompt for task in tasks[1:]] == labels
     assert all(task.expected == "42" for task in tasks[1:])

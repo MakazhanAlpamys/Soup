@@ -53,6 +53,7 @@ from soup_cli.trainer.mlx_dpo import (
     resolve_head_split,
 )
 from soup_cli.trainer.mlx_sft import _clipping_optimizer
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -902,7 +903,9 @@ class MLXGRPOTrainerWrapper(MLXDPOTrainerWrapper):
         group, step_size, accum = units.num_generations, units.completions_per_step, units.accum
         beta = float(tcfg.grpo_beta)
         max_new = int(cfg.data.max_length)
-        output_dir = Path(cfg.output)
+        output_dir = Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        ))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         hf = self._template()

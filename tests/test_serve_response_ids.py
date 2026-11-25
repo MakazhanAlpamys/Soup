@@ -962,19 +962,19 @@ class TestAdapterAndBucket:
 
         assert _trace(cwd)[0]["adapter"] is None
 
-    def test_the_effective_adapter_rule_matches_the_adapter_scope_rule(self):
+    def test_the_applied_identity_is_captured_inside_the_generation_scope(self):
         names = {"a", "b"}
         model = _AdapterModel()
-        for requested, active in [
-            (None, None), (None, "a"), ("b", None), ("b", "a"), ("", "a"),
-            ("zzz", "a"), (None, "zzz"),
-        ]:
-            with serve._adapter_scope(model, threading.Lock(), names, requested, active):
-                ran = model.current
-            assert serve._effective_adapter(model, names, requested, active) == ran, (
-                requested, active,
+        for requested, active in [(None, None), (None, "a"), ("b", None), ("b", "a"), ("", "a")]:
+            reservation = serve._AdapterReservation(
+                active if requested is None else requested,
+                threading.Lock(), {}, {"a": "unused", "b": "unused"}, names,
             )
-        assert serve._effective_adapter(model, set(), "a", "a") is None
+            with serve._adapter_scope(
+                model, threading.Lock(), names, requested, active, reservation=reservation,
+            ):
+                assert reservation.applied == model.current
+            assert reservation._state == "released"
 
 
 class TestCanaryBucket:
@@ -1007,6 +1007,90 @@ class TestCanaryBucket:
             canary_stats_path=str(cwd / ".soup" / "canary-stats.json"),
         )
         return client, CanaryPolicy(stable=stable, canary="candidate", traffic_pct=50.0)
+
+    @pytest.mark.parametrize(
+        "mode", ["chat", "tokens", "buffered", "messages", "messages-tokens", "messages-buffered"]
+    )
+    @pytest.mark.parametrize("failure", ["map-unavailable", "names-unavailable", "generation"])
+    def test_adapter_unavailability_has_its_own_refusal_and_no_canary_vote(
+        self, cwd, monkeypatch, mode, failure
+    ):
+        observed = []
+        client, policy = self._canary_client(cwd, monkeypatch, observed)
+        counters = MagicMock()
+        monkeypatch.setattr(client.app.state.canary_outcomes, "record", counters)
+        key = next(
+            f"key-{index}" for index in range(100)
+            if route(policy, f"key-{index}").bucket == "canary"
+        )
+        if failure.endswith("unavailable"):
+            original = serve._AdapterReservation.validate
+
+            def disappear(reservation):
+                if failure == "map-unavailable":
+                    reservation._adapter_map.pop("candidate")
+                else:
+                    reservation._names.discard("candidate")
+                original(reservation)
+
+            monkeypatch.setattr(serve._AdapterReservation, "validate", disappear)
+        else:
+            def fail(*args, **kwargs):
+                raise RuntimeError("controlled decode failure")
+
+            monkeypatch.setattr(serve, "_generate_response", fail)
+        if "tokens" in mode:
+            serve._reply_streamer_class()
+            monkeypatch.setattr(serve, "_can_stream", lambda model: True)
+        elif "buffered" in mode:
+            monkeypatch.setattr(serve, "_can_stream", lambda model: False)
+        if mode.startswith("messages"):
+            response = client.post("/v1/messages", json={
+                "model": MODEL_NAME, "max_tokens": 8,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": mode != "messages",
+            }, headers={"X-Conversation-Id": key})
+        else:
+            response = _chat(client, conversation_id=key, stream=mode != "chat")
+        message = (
+            "Selected adapter is no longer available; retry with a loaded adapter"
+            if failure.endswith("unavailable") else "Internal server error"
+        )
+        if mode in {"chat", "messages"}:
+            assert response.status_code == (409 if failure.endswith("unavailable") else 500)
+            assert response.json() == {"detail": message}
+        elif mode.startswith("messages"):
+            assert response.status_code == 200
+            error = (
+                'event: error\ndata: {"type": "error", "error": {"type": "api_error", '
+                f'"message": "{message}"}}}}\n\n'
+            )
+            assert response.text.endswith(error)
+            assert "event: message_start" in response.text
+            assert "message_stop" not in response.text
+            assert "content_block_delta" not in response.text
+        else:
+            assert response.status_code == 200
+            assert response.text == f'data: {{"error": "{message}"}}\n\n'
+        assert observed == []
+        assert _trace(cwd) == []
+        if failure.endswith("unavailable"):
+            counters.assert_not_called()
+        else:
+            counters.assert_called_once()
+            assert counters.call_args.args[1:] == ("canary", False)
+        client.app.state.canary_outcomes.close()
+
+    @pytest.mark.parametrize("frames", [serve._OpenAIStreamFrames, serve._AnthropicStreamFrames])
+    def test_other_error_callers_keep_the_existing_frame_bytes(self, frames):
+        frame = frames("test")
+        if frames is serve._OpenAIStreamFrames:
+            assert frame.error() == 'data: {"error": "Internal server error"}\n\n'
+        else:
+            assert frame.error() == (
+                'event: error\ndata: {"type": "error", "error": {"type": "api_error", '
+                '"message": "Internal server error"}}\n\n'
+            )
 
     def test_the_bucket_and_adapter_each_answer_was_routed_to_are_recorded(
         self, cwd, monkeypatch

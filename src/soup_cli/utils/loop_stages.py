@@ -65,6 +65,7 @@ from soup_cli.utils.loop_holdout import (
     read_ledger,
     waiting_note,
 )
+from soup_cli.utils.loop_quantization import NOTE_PREFIX as QUANTIZATION_NOTE_PREFIX
 from soup_cli.utils.loop_quantization import resolve_sft_quantization
 from soup_cli.utils.loop_retry import hold_reason, train_inputs_fingerprint
 from soup_cli.utils.loop_spawn import child_popen_kwargs, describe_exit, python_child_argv
@@ -873,8 +874,9 @@ def train_dpo_from_pairs(
     one), ``kto`` or ``sft``; ``_render_train_yaml`` writes the matching config. Returns
     ``{run_id, skipped, adapter_path}``, plus a ``notes`` entry when an sft recipe's
     ``quantization: auto`` was resolved (``sft quantization auto: none (need 3.0 GB, free
-    7.1 GB)``) and, before training starts, a ``paraphrases: 12 new for 6 edits, 3 dropped
-    (...)`` entry (see ``_paraphrase_step``). Skips (no run) when the
+    7.1 GB)``; the same text is ``quantization_note``) and, before training starts, a
+    ``paraphrases: 12 new for 6 edits, 3 dropped (...)`` entry (see ``_paraphrase_step``).
+    Skips (no run) when the
     harvest produced no rows, or not enough is NEW since the data cursor (see
     ``harvest_from_traces``): fewer new rows than ``state.min_new_pairs``, or, for an sft loop
     whose harvest reports the ``edits_or_rated`` rule (it has a feedback log), fewer than
@@ -943,8 +945,13 @@ def train_dpo_from_pairs(
         rendered = _render_train_yaml(state, str(pairs_path), output_dir, notes=train_notes)
     except ValueError as exc:
         return {**skip, "notes": f"base_model_unknown: {exc}; training skipped"}
+    # The quantization choice also goes on the train stage's progress line (the daemon's
+    # ``_emit_train_end``), so a person watching sees it, not only the iteration record.
+    quantization = [n for n in train_notes if n.startswith(QUANTIZATION_NOTE_PREFIX)]
     train_notes.extend(_paraphrase_step(state, ctx))
-    decided = {"notes": "; ".join(train_notes)} if train_notes else {}
+    decided: dict = {"notes": "; ".join(train_notes)} if train_notes else {}
+    if quantization:
+        decided["quantization_note"] = quantization[0]
     yaml_dir = Path(_ADAPTERS_DIR)
     yaml_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
@@ -1198,34 +1205,93 @@ def _iteration_lines_of(name: str) -> "list[dict]":
     return list(latest.values())
 
 
+def _matches_adapter_root(path: str, root: str) -> bool:
+    if path == root:
+        return True
+    try:
+        return os.path.samefile(path, root)
+    except FileNotFoundError:
+        # Preserve lookup by path for a removed adapter tree on Windows.
+        return (
+            os.path.normcase(path) == os.path.normcase(root)
+            and not os.path.lexists(path)
+            and not os.path.lexists(root)
+        )
+    except OSError:
+        return False
+
+
+def _is_direct_checkpoint(path: str) -> bool:
+    name = os.path.basename(path)
+    canonical = name.lower()
+    if re.fullmatch(r"checkpoint-[0-9]+", canonical) is None or not os.path.isdir(path):
+        return False
+    if name == canonical:
+        return True
+    try:
+        return os.path.samefile(path, os.path.join(os.path.dirname(path), canonical))
+    except OSError:
+        return False
+
+
 def _adapter_dir_entry_name(argument: str) -> Optional[str]:
-    """The adapter name of ``argument`` when it is a path to an entry of ``.soup-loops/adapters``.
+    """The adapter name for an adapter directory or its direct checkpoint directory.
 
     The path is resolved first (``realpath``: ``..``, ``.``, a trailing separator, a symlink or a
-    junction, the case Windows keeps on disk). It must then be inside the loop's adapter
-    directory (``commonpath`` compares whole components, so ``adapters-old/<name>`` is not) and
-    directly in it (``adapters/x/<name>`` is not). Anything else, or a name that is not an
-    adapter name, is ``None``: that path names some other adapter, which the loop knows nothing
-    about.
+    junction). A case-folded ``commonpath`` rules out unrelated paths without assuming that
+    the filesystem folds case. The adapter root and a differently cased checkpoint are then
+    checked by directory identity.
+    Only a direct adapter entry or an existing ``checkpoint-N`` directory immediately under it
+    is recognised.
     """
     try:
         entry = os.path.realpath(argument)
-        adapters = os.path.normcase(os.path.realpath(_ADAPTERS_DIR))
-        inside = os.path.commonpath([os.path.normcase(entry), adapters])
+        adapters = os.path.realpath(_ADAPTERS_DIR)
+        inside = os.path.commonpath([entry.casefold(), adapters.casefold()])
     except (OSError, ValueError):  # a NUL byte, or another drive (commonpath refuses to compare)
         return None
-    if inside != adapters or os.path.normcase(os.path.dirname(entry)) != adapters:
+    if inside != adapters.casefold():
         return None
+    parent = os.path.dirname(entry)
+    if not _matches_adapter_root(parent, adapters):
+        if (
+            not _matches_adapter_root(os.path.dirname(parent), adapters)
+            or not _is_direct_checkpoint(entry)
+        ):
+            return None
+        entry = parent
     name = os.path.basename(entry)
     return name if _ADAPTER_NAME_RE.fullmatch(name) is not None else None
+
+
+def _adapter_name_on_disk(name: str) -> str:
+    """Use the actual spelling only when the filesystem resolves both names to the same entry."""
+    path = os.path.join(_ADAPTERS_DIR, name)
+    if not os.path.isdir(path):
+        return name
+    try:
+        entries = os.listdir(_ADAPTERS_DIR)
+        if name in entries:
+            return name
+        for entry in entries:
+            if (
+                _ADAPTER_NAME_RE.fullmatch(entry)
+                and entry.lower() == name.lower()
+                and os.path.samefile(path, os.path.join(_ADAPTERS_DIR, entry))
+            ):
+                return entry
+    except OSError:
+        pass
+    return name
 
 
 def known_dont_ship(name: str) -> Optional[str]:
     """Why the loop knows adapter ``name`` must not be canaried, or ``None``.
 
-    ``name`` is an adapter name or a path to the adapter's directory directly inside
-    ``.soup-loops/adapters`` (any spelling of it: relative, absolute, with ``..``, through a
-    link); a path anywhere else is some other adapter and reads nothing.
+    ``name`` is an adapter name, a path to its directory directly inside ``.soup-loops/adapters``,
+    or a path to its immediate checkpoint directory. Bare names follow the filesystem's case
+    rules. Both verdict sources use the same name after that lookup. A path anywhere else is
+    some other adapter and reads nothing.
 
     The newest iteration that trained the adapter decides: a verdict of DON'T SHIP on an
     iteration that ended ``skipped`` (the loop did not deploy it) is a "no". An iteration that
@@ -1241,6 +1307,7 @@ def known_dont_ship(name: str) -> Optional[str]:
         name = _adapter_dir_entry_name(name)
         if name is None:
             return None
+    name = _adapter_name_on_disk(name)
     lines = _iteration_lines_of(name)
     if lines:
         newest = lines[-1]
