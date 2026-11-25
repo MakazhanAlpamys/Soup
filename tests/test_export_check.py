@@ -40,6 +40,10 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+def _clean_output(text: str) -> str:
+    return " ".join(_strip_ansi(text).split())
+
+
 runner = CliRunner()
 
 
@@ -164,7 +168,7 @@ class TestLoadPromptsFile:
     def test_load_malformed_json_raises(self, tmp_path):
         p_file = tmp_path / "bad.jsonl"
         p_file.write_text("{bad json\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="invalid JSON"):
+        with pytest.raises(ValueError, match=r"bad\.jsonl:1:.*invalid JSON"):
             load_prompts_file(str(p_file))
 
 
@@ -294,6 +298,26 @@ class TestRunExportCheck:
         assert result.passed is False
         assert result.verdict == "DELTA_LOST"
 
+    @pytest.mark.parametrize("failing", ["base", "ref", "exp"])
+    def test_a_failing_nll_is_raised_not_dropped(self, failing):
+        def boom(_texts):
+            raise RuntimeError("nll boom")
+
+        def make_eval(label: str):
+            out = "base response" if label == "base" else "adapted response"
+            return FunctionModelEvaluator(
+                lambda _p, o=out: o,
+                nll_fn=boom if label == failing else (lambda _texts: 0.5),
+            )
+
+        with pytest.raises(RuntimeError, match="nll boom"):
+            run_export_check(
+                base_gen=make_eval("base"),
+                ref_gen=make_eval("ref"),
+                exported_gen=make_eval("exp"),
+                prompts=["prompt 1"],
+            )
+
 
 class TestJSONTerminalSafety:
     def test_json_render_sanitizes_prompt_and_outputs_without_mutating_result(self):
@@ -352,8 +376,7 @@ class TestExportCheckCLI:
             "--exported", str(exported_dir),
         ])
         assert result.exit_code == EXIT_USAGE_ERROR
-        stripped = _strip_ansi(result.output)
-        assert "give --prompts" in stripped
+        assert "give --prompts" in _clean_output(result.output)
 
     def test_cli_path_outside_cwd_exits_usage_error(self, tmp_path, monkeypatch):
         sub = tmp_path / "sub"
@@ -369,6 +392,7 @@ class TestExportCheckCLI:
             "--exported", str(sub),
         ])
         assert result.exit_code == EXIT_USAGE_ERROR
+        assert "outside the current working directory" in _clean_output(result.output)
 
     def test_cli_prompts_outside_cwd_exits_usage_error(self, tmp_path, monkeypatch):
         sub = tmp_path / "sub"
@@ -385,6 +409,7 @@ class TestExportCheckCLI:
             "--prompts", str(prompts),
         ])
         assert result.exit_code == EXIT_USAGE_ERROR
+        assert "outside the current working directory" in _clean_output(result.output)
 
     def test_cli_unsupported_format_exits_usage_error(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -406,7 +431,7 @@ class TestExportCheckCLI:
             "--prompts", str(prompts),
         ])
         assert result.exit_code == EXIT_USAGE_ERROR
-        assert "standalone GGUF" in _strip_ansi(result.output)
+        assert "standalone GGUF" in _clean_output(result.output)
 
     def test_cli_unsupported_format_path_with_markup_is_safe(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -442,7 +467,7 @@ class TestExportCheckCLI:
             "--prompts", str(prompts),
         ])
         assert result.exit_code == EXIT_RUNTIME_ERROR
-        assert "Failed to load models" in _strip_ansi(result.output)
+        assert "Failed to load models" in _clean_output(result.output)
 
     def test_cli_allow_stub_fails_gate_with_code_2(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -544,6 +569,37 @@ class TestExportCheckCLI:
             assert data["passed"] is False
             assert data["verdict"] == "NO_EVIDENCE"
             assert data["active_prompt_count"] == 0
+
+    @pytest.mark.parametrize("failing", ["base", "ref", "exp"])
+    def test_cli_failing_nll_exits_runtime_error(self, tmp_path, monkeypatch, failing):
+        monkeypatch.chdir(tmp_path)
+        adapter_dir, exported_dir = self._setup_dirs(tmp_path)
+        prompts = tmp_path / "prompts.txt"
+        prompts.write_text("prompt 1\n", encoding="utf-8")
+
+        def boom(_texts):
+            raise RuntimeError("nll boom")
+
+        def make_eval(label: str):
+            out = "base response" if label == "base" else "adapted response"
+            return FunctionModelEvaluator(
+                lambda _p, o=out: o,
+                nll_fn=boom if label == failing else (lambda _texts: 0.5),
+            )
+
+        with patch("soup_cli.eval.export_check.make_hf_evaluator") as mock_hf_eval, \
+             patch("soup_cli.eval.export_check.make_hf_adapter_evaluator") as mock_ref_eval:
+            mock_hf_eval.side_effect = [make_eval("base"), make_eval("exp")]
+            mock_ref_eval.return_value = make_eval("ref")
+
+            result = runner.invoke(app, [
+                "eval", "export-check",
+                "--adapter", str(adapter_dir),
+                "--exported", str(exported_dir),
+                "--prompts", str(prompts),
+            ])
+            assert result.exit_code == EXIT_RUNTIME_ERROR
+            assert "nll boom" in _clean_output(result.output)
 
 
 # ---------------------------------------------------------------------------
@@ -749,3 +805,25 @@ class TestSequentialLoading:
         # At the end of execution, all three evaluators must be completely dereferenced
         for label, ref in evaluator_refs:
             assert ref() is None, f"{label} evaluator was not released at end"
+
+    @pytest.mark.parametrize("failing", ["base", "ref", "exp"])
+    def test_a_failing_nll_is_raised_not_dropped(self, failing):
+        def boom(_texts):
+            raise RuntimeError("nll boom")
+
+        def make_factory(label: str):
+            def factory():
+                out = "base response" if label == "base" else "adapted response"
+                return FunctionModelEvaluator(
+                    lambda _p, o=out: o,
+                    nll_fn=boom if label == failing else (lambda _texts: 0.5),
+                )
+            return factory
+
+        with pytest.raises(RuntimeError, match="nll boom"):
+            run_export_check_from_factories(
+                base_factory=make_factory("base"),
+                ref_factory=make_factory("ref"),
+                exported_factory=make_factory("exp"),
+                prompts=["prompt 1"],
+            )

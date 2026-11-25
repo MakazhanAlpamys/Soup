@@ -1897,8 +1897,8 @@ The table, JSON and markdown all include this additional result only when
 
 ### Export Behavior Check
 
-After merging a LoRA adapter, check that the merged Hugging Face model still carries the
-adapter's behavior rather than silently reverting to the base model:
+After merging a LoRA adapter, verify that the merged Hugging Face model still preserves the
+adapter's behavioral delta rather than reverting toward the base model:
 
 ```bash
 soup eval export-check \
@@ -1907,23 +1907,8 @@ soup eval export-check \
   --prompts ./evals/adapter-probes.jsonl
 ```
 
-The checker greedily generates from the base model, base plus adapter, and exported model
-on identical prompts. A prompt contributes evidence only when the adapter changes the base
-output. For each such prompt, an export that is closer to the base than to the adapter is
-reported as `DELTA_LOST`; this fails with exit code 2. The report also includes exported-
-to-reference agreement, exact-match rate, and the first divergent character.
-
-`--min-agreement` defaults to `0.80`: it tolerates small wording differences from a merge,
-while the independent closer-to-base check still rejects a reverted adapter delta. If no
-prompt changes with the adapter, the command fails with exit code 2 rather than claiming a
-pass; provide held-out prompts that exercise the adapter's intended behavior. Input paths
-must stay under the current working directory. JSONL prompt rows use a `prompt` string;
-plain-text files use one prompt per line.
-
-This first implementation supports merged Hugging Face directories with `.safetensors` or
-`.bin` weights. Standalone GGUF files and MLX-fused directories are refused clearly; their
-live inference backends are not yet integrated. `--allow-stub` is only for exercising the
-command in environments without model dependencies and always fails the gate.
+See [Export Behavior Verification (`soup eval export-check`)](#export-behavior-verification-soup-eval-export-check)
+below for the full comparison methodology, NLL rule, supported prompt/artifact formats, and exit-code table.
 
 ### Custom Eval Format
 
@@ -2160,7 +2145,7 @@ soup eval irt-subset per_item_correctness.jsonl --size small --model 2pl
 
 ## Export Behavior Verification (`soup eval export-check`)
 
-Verifies that an exported model artifact (such as a merged safetensors directory produced by `soup merge`) still preserves the behavioral delta of the LoRA adapter it was created from.
+*(Quick example in [Export Behavior Check](#export-behavior-check) above.)* Verifies that an exported model artifact (such as a merged safetensors directory produced by `soup merge`) still preserves the behavioral delta of the LoRA adapter it was created from.
 
 ```bash
 soup eval export-check \
@@ -2175,7 +2160,7 @@ soup eval export-check \
 
 When fine-tuned adapters are merged into base weights or converted for deployment, subtle numerical loss, incorrect merge weights, or format corruption can cause the exported model to quietly revert to the unmodified base model.
 
-`soup eval export-check` compares three models under deterministic greedy decoding on the same prompt set:
+`soup eval export-check` loads and evaluates three models sequentially (one in memory at a time) under deterministic greedy decoding on the same prompt set:
 1. **Base model**: The unmodified base foundation model (`--base` or auto-detected from `adapter_config.json`).
 2. **Reference model**: Base + LoRA adapter loaded dynamically via PEFT.
 3. **Exported model**: The merged safetensors directory under test (`--exported`).
@@ -2183,16 +2168,18 @@ When fine-tuned adapters are merged into base weights or converted for deploymen
 ### Comparison Methodology
 
 - **Active Prompts**: Prompts where the adapter produces a different output or token stream from the base model ($Y_{\text{base}} \neq Y_{\text{ref}}$). Inactive prompts (where the adapter produced no behavioral shift) are reported as `INACTIVE` and excluded from fidelity scoring.
-- **Fidelity Agreement**: Average character bigram overlap between the exported artifact and the reference model across all active prompts.
-- **Delta Loss Detection**: Even if character overlap meets `--min-agreement`, if the exported artifact is strictly closer to the base model than to the adapter reference on active prompts, the delta was lost and the check fails (`DELTA_LOST`).
+- **Fidelity Agreement**: Average character bigram overlap between the exported artifact and the reference model across all active prompts. `--min-agreement` defaults to `0.80`: it tolerates minor wording drift from merging while the independent closer-to-base checks still catch a reverted adapter delta.
+- **Delta Loss Detection**: The check fails with `DELTA_LOST` if **either** (a) on any active prompt, the exported generation is closer to the base output than to the adapter reference (`agree_export_base > agree_export_ref`), **or** (b) the exported NLL is strictly closer to the base NLL than to the adapter reference NLL (`|exported_nll - base_nll| < |exported_nll - ref_nll|`).
 - **Token Divergence**: Reports the 0-based index of the first divergent generated token ID between the exported model and adapter reference.
-- **Held-Out Causal NLL**: Computes negative log-likelihood over evaluation texts using masked next-token loss:
+- **NLL over the `--prompts` texts**: Computes masked causal next-token negative log-likelihood over the prompt texts supplied via `--prompts` (not completions or a training eval split, so pass prompts the adapter was not trained on):
   $$\text{shift\_logits} = \text{logits}[:, :-1, :], \quad \text{shift\_labels} = \text{input\_ids}[:, 1:]$$
-  Masked out padding tokens are excluded, and token-weighted mean NLL is evaluated across base, reference, and exported models.
+  Padding tokens are masked out so mean NLL is weighted by real tokens across the base, reference, and exported models.
+
+  The NLL closer-to-base check (`|exported_nll - base_nll| < |exported_nll - ref_nll|`) applies only when `|base_nll - ref_nll| > 1e-4`. Requiring an adapter NLL shift above `1e-4` prevents floating-point rounding noise on near-identical NLLs from causing false `DELTA_LOST` failures when the adapter had no measurable effect on prompt likelihood. `--allow-stub` skips NLL computation and always fails the gate (stubs exercise CLI rendering only and do not verify real model fidelity).
 
 ### Prompts File Format
 
-`--prompts` is required (omitting it exits `3` with `give --prompts`). Supported formats:
+`--prompts` is required (omitting it exits `3` with `give --prompts`). All input paths (`--adapter`, `--exported`, `--prompts`) must reside under the current working directory. Supported formats:
 - Plain text: One prompt per non-empty line.
 - JSONL with `"prompt"` key: `{"prompt": "Summarize this article..."}`
 - Alpaca format: `{"instruction": "...", "input": "..."}`
@@ -2201,10 +2188,13 @@ When fine-tuned adapters are merged into base weights or converted for deploymen
 
 ### Supported Formats & Refusals
 
-Only Hugging Face safetensors directories are supported for direct live inference. Standalone GGUF files, ONNX files, and MLX-fused directories are cleanly refused with exit code `3` and diagnostic instructions pointing to `soup llama cli` or `mlx_lm.generate`. Passing an adapter directory (with `adapter_config.json`) to `--exported` is also rejected with exit code `3`.
+Only Hugging Face safetensors (`.safetensors` or `.bin`) directories are supported for direct live inference. Standalone GGUF files, ONNX files, and MLX-fused directories are cleanly refused with exit code `3` and diagnostic instructions pointing to `soup llama cli` or `mlx_lm.generate`. Passing an adapter directory (with `adapter_config.json`) to `--exported` is also rejected with exit code `3`.
 
 ### Exit Codes
 
-- `0`: PASS — Adapter delta is preserved across active prompts and agreement meets `--min-agreement`.
-- `2`: GATE FAILED — `DELTA_LOST` (model reverted to base), `LOW_AGREEMENT` (agreement fell below threshold), or `NO_EVIDENCE` (no active adapter prompts found).
-- `3`: USAGE ERROR — Missing `--prompts`, path outside current working directory, unsupported artifact format, or invalid arguments.
+| Code | Status | Meaning |
+|---|---|---|
+| `0` | `PASS` | Adapter delta is preserved across active prompts and NLL (when `|base_nll - ref_nll| > 1e-4`), and agreement meets `--min-agreement`. |
+| `1` | Runtime error | Model loading or evaluation failed (unless `--allow-stub` is supplied). |
+| `2` | Gate failed | `DELTA_LOST` (generation or NLL reverted closer to base), `LOW_AGREEMENT` (agreement fell below `--min-agreement`), `NO_EVIDENCE` (no active adapter prompts found), or `--allow-stub`. |
+| `3` | Usage error | Missing `--prompts`, path outside current working directory, unsupported artifact format, malformed prompt row, or invalid arguments. |

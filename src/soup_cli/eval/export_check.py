@@ -606,7 +606,8 @@ def run_export_check_from_factories(
     min_agreement:
         Minimum required average ``agree_export_ref`` score across active prompts.
     compute_nll:
-        Whether to calculate held-out causal next-token NLL across prompts.
+        Whether to calculate causal next-token NLL over the ``--prompts`` texts
+        (prefer prompts the adapter was not trained on).
     stub:
         True when synthetic stubs are used instead of live models.
 
@@ -688,7 +689,8 @@ def run_export_check(
         allows minor wording drift while the closer-to-base check still
         rejects an export that has reverted to base behavior.
     compute_nll:
-        Whether to calculate held-out causal next-token NLL across prompts.
+        Whether to calculate causal next-token NLL over the ``--prompts`` texts
+        (prefer prompts the adapter was not trained on).
     stub:
         True when synthetic stubs are used instead of live models.
 
@@ -708,7 +710,7 @@ def run_export_check(
     ref_outputs = [ref_eval.generate(p) for p in effective_prompts]
     exp_outputs = [exp_eval.generate(p) for p in effective_prompts]
 
-    # Held-out NLL computation (all three evaluators are still in scope here)
+    # NLL over the --prompts texts (all three evaluators are still in scope here)
     base_nll_val: Optional[float] = None
     ref_nll_val: Optional[float] = None
     exp_nll_val: Optional[float] = None
