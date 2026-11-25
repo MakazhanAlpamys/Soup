@@ -1885,9 +1885,97 @@ def _load_runtime_adapter(model_obj, path: str, name: str):
     return model_obj
 
 
+_ADAPTER_UNAVAILABLE = "Selected adapter is no longer available; retry with a loaded adapter"
+
+
+class _AdapterUnavailableError(RuntimeError):
+    """The captured selection cannot be applied; this is not a canary outcome."""
+
+
+class _StreamDisconnectedError(Exception):
+    """Wake a blocked token iterator without waiting for its generation worker."""
+
+
+class _AdapterReservation:
+    """One admitted choice, owned by the response until generation claims it."""
+
+    def __init__(self, name, lock, counts, adapter_map, names, *, pinned=False):
+        self.name = name
+        self.applied = None
+        self.started = False
+        self._lock = lock
+        self._counts = counts
+        self._adapter_map = adapter_map
+        self._names = names
+        self._pinned = pinned
+        self._state = "pending"
+        self.stop_event = threading.Event()
+        self._disconnected = False
+        self._wakeup = None
+        if pinned:
+            counts[name] = counts.get(name, 0) + 1
+
+    def _release(self):
+        if self._pinned:
+            remaining = self._counts[self.name] - 1
+            if remaining:
+                self._counts[self.name] = remaining
+            else:
+                del self._counts[self.name]
+        self._state = "released"
+
+    def cancel_pending(self):
+        with self._lock:
+            if self._state == "pending":
+                self._release()
+
+    def disconnect(self):
+        with self._lock:
+            self._disconnected = True
+            if self._state == "pending":
+                self._release()
+            wakeup = self._wakeup
+        self.stop_event.set()
+        if wakeup is not None:
+            wakeup()
+
+    def set_wakeup(self, wakeup):
+        with self._lock:
+            self._wakeup = wakeup
+            disconnected = self._disconnected
+        if disconnected and wakeup is not None:
+            wakeup()
+
+    @contextlib.contextmanager
+    def generation(self):
+        with self._lock:
+            if self._state != "pending":
+                raise _AdapterUnavailableError(_ADAPTER_UNAVAILABLE)
+            self._state = "generation"
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._release()
+
+    def validate(self):
+        with self._lock:
+            if self.name and (
+                self.name not in self._adapter_map or self.name not in self._names
+            ):
+                raise _AdapterUnavailableError(_ADAPTER_UNAVAILABLE)
+
+    def start_generation(self):
+        with self._lock:
+            if self._disconnected:
+                raise _AdapterUnavailableError(_ADAPTER_UNAVAILABLE)
+            self.started = True
+
+
 @contextlib.contextmanager
 def _adapter_scope(
-    model, lock, names, requested, active, *, always_lock=False, model_getter=None
+    model, lock, names, requested, active, *, always_lock=False, model_getter=None,
+    reservation=None,
 ):
     """Select the LoRA adapter for one generation, serialized by ``lock``.
 
@@ -1911,38 +1999,30 @@ def _adapter_scope(
     on its worker thread, so the lock is held for exactly the length of the
     generation and released by the thread that took it, however the client leaves.
     """
-    if lock is None or (not names and not always_lock):
-        yield model
-        return
-    # An explicit empty string is the internal sentinel for the unadapted base.
-    # Test identity rather than truthiness so it overrides a manual full cutover.
-    name = active if requested is None else requested
-    with lock:
-        if model_getter is not None:
-            model = model_getter()
-        if name and name in names and hasattr(model, "set_adapter"):
-            model.set_adapter(name)
+    ownership = reservation.generation() if reservation else contextlib.nullcontext()
+    with ownership:
+        if lock is None or (
+            not names and not always_lock and (reservation is None or not reservation.name)
+        ):
             yield model
-        elif hasattr(model, "disable_adapter"):
-            # No (or unknown) adapter selected → base model for this request.
-            with model.disable_adapter():
+            return
+        # A reservation freezes admission's choice, including the explicit base sentinel.
+        name = reservation.name if reservation else (active if requested is None else requested)
+        with lock:
+            if model_getter is not None:
+                model = model_getter()
+            if reservation is not None:
+                reservation.validate()
+            if name and name in names and hasattr(model, "set_adapter"):
+                model.set_adapter(name)
+                if reservation is not None:
+                    reservation.applied = name
                 yield model
-        else:
-            yield model
-
-
-def _effective_adapter(model, names, requested, active) -> Optional[str]:
-    """The adapter :func:`_adapter_scope` runs a generation with, or ``None`` for the base.
-
-    Mirrors its selection (same arguments, same rule) so the trace record names what
-    produced the answer. ``None`` also when no named adapters were loaded.
-    """
-    if not names:
-        return None
-    name = active if requested is None else requested
-    if name and name in names and hasattr(model, "set_adapter"):
-        return name
-    return None
+            elif hasattr(model, "disable_adapter"):
+                with model.disable_adapter():
+                    yield model
+            else:
+                yield model
 
 
 def _write_conversation_record(
@@ -2561,6 +2641,40 @@ def _create_app(
     _adapter_root = os.path.realpath(adapter_dir) if adapter_dir else None
     _runtime_adapters: List[str] = []
     _adapter_load_lock = threading.Lock()
+    _reservation_lock = threading.Lock()
+    _adapter_reservations: Dict[str, int] = {}
+
+    class _ReservedStreamingResponse(StreamingResponse):
+        def __init__(self, content, *, reservation, **kwargs):
+            super().__init__(content, **kwargs)
+            self.reservation = reservation
+            self._reply_iterator = content
+
+        async def __call__(self, scope, receive, send):
+            import anyio
+
+            try:
+                # Always watch receive, including ASGI 2.4. Cancellation must wake
+                # a shielded next() before the task group can wait for it to exit.
+                async with anyio.create_task_group() as group:
+                    async def stream():
+                        try:
+                            await self.stream_response(send)
+                        finally:
+                            group.cancel_scope.cancel()
+
+                    try:
+                        group.start_soon(stream)
+                        await self.listen_for_disconnect(receive)
+                    finally:
+                        self.reservation.disconnect()
+                        group.cancel_scope.cancel()
+            finally:
+                # Close the sync body explicitly, including send failures after a yield.
+                with anyio.CancelScope(shield=True):
+                    await anyio.to_thread.run_sync(self._reply_iterator.close)
+            if self.background is not None:
+                await self.background()
 
     # --- Endpoints ---
 
@@ -2610,6 +2724,31 @@ def _create_app(
         # selection makes _adapter_scope disable adapters even if a manual
         # full-cutover adapter is active.
         return "", (policy, decision.bucket, state.canary_rollout_id)
+
+    def _reserve_adapter(requested, conversation_id, internal):
+        with _reservation_lock:
+            if requested and requested not in _adapter_map and requested not in _peft_adapter_names:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Unknown adapter. Use GET /v1/adapters to list available adapters."
+                        if _adapter_map else "No adapters loaded."
+                    ),
+                )
+            tracking = None
+            if requested is None and not internal:
+                routed, tracking = _canary_adapter(conversation_id)
+                if tracking is not None:
+                    requested = routed
+            active = _active_snapshot()
+            name = active if requested is None else requested
+            if name and (name not in _adapter_map or name not in _peft_adapter_names):
+                raise HTTPException(status_code=409, detail=_ADAPTER_UNAVAILABLE)
+            reservation = _AdapterReservation(
+                name, _reservation_lock, _adapter_reservations, _adapter_map, _peft_adapter_names,
+                pinned=name in _runtime_adapters,
+            )
+            return reservation, tracking, active
 
     def _record_canary_outcome(tracking, ok: bool) -> None:
         if tracking is None:
@@ -2663,17 +2802,18 @@ def _create_app(
         # Before the 404s: an unauthenticated caller must not learn which
         # adapter names are loaded by reading "unknown adapter" off a probe.
         _check_tool_auth(authorization)
-        if not _adapter_map:
-            raise HTTPException(
-                status_code=404, detail="No adapters loaded."
-            )
-        if name not in _adapter_map:
-            raise HTTPException(
-                status_code=404,
-                detail="Unknown adapter. Use GET /v1/adapters to list available adapters.",
-            )
-        with active_lock:
-            active_state["active"] = name
+        with _reservation_lock:
+            if not _adapter_map:
+                raise HTTPException(
+                    status_code=404, detail="No adapters loaded."
+                )
+            if name not in _adapter_map:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Unknown adapter. Use GET /v1/adapters to list available adapters.",
+                )
+            with active_lock:
+                active_state["active"] = name
         return {"active": name, "status": "ok"}
 
     @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
@@ -2701,13 +2841,23 @@ def _create_app(
                 state.canary_active, state.production_name, state.previous_production_name,
             })
         for candidate in _runtime_adapters:
-            if candidate not in protected:
+            if candidate not in protected and not _adapter_reservations.get(candidate):
                 return candidate
         return None
 
-    def _evict_runtime_adapter(victim: str) -> None:
-        """Unload ``victim`` (the caller holds ``_adapter_load_lock``)."""
-        with _generation_lock:
+    def _evict_runtime_adapter() -> None:
+        """Choose and unload under load → generation → reservation locks."""
+        with _reservation_lock:
+            victim = _evictable_runtime_adapter()
+            if victim is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS}); every "
+                        "loaded adapter is reserved by queued/running requests, active, "
+                        "production, its rollback target or the canary"
+                    ),
+                )
             try:
                 model_obj.delete_adapter(victim)
             except Exception:
@@ -2747,22 +2897,11 @@ def _create_app(
                         status_code=409,
                         detail=f"runtime adapter loading is not supported with {feature}",
                     )
-            if len(_runtime_adapters) >= _MAX_RUNTIME_ADAPTERS:
-                # At the cap the OLDEST runtime adapter that is not in use is unloaded to make
-                # room (never the active one, production, its rollback target or the canary).
-                victim = _evictable_runtime_adapter()
-                if victim is None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"runtime adapter limit reached ({_MAX_RUNTIME_ADAPTERS}); every "
-                            "loaded adapter is the active one, production, its rollback target "
-                            "or the canary"
-                        ),
-                    )
-                _evict_runtime_adapter(victim)
-            # The model is process-global: the load takes the lock a generation holds.
+            # Check the victim only after taking the generation lock: admission and
+            # activation may have changed its protection while this load was queued.
             with _generation_lock:
+                if len(_runtime_adapters) >= _MAX_RUNTIME_ADAPTERS:
+                    _evict_runtime_adapter()
                 try:
                     loaded = _load_runtime_adapter(model_obj, resolved, name)
                 except Exception:
@@ -2774,13 +2913,12 @@ def _create_app(
                     raise HTTPException(
                         status_code=400, detail="adapter could not be loaded"
                     ) from None
-                # Only now does anything change. The model first (a wrapped base is a new
-                # object every handler must use from here on), the map last: it is what
-                # makes the adapter selectable.
-                model_obj = loaded
-                _peft_adapter_names.add(name)
-                _adapter_map[name] = resolved
-                _runtime_adapters.append(name)
+                # Publish together only after load succeeds; a wrapped base is a new object.
+                with _reservation_lock:
+                    model_obj = loaded
+                    _peft_adapter_names.add(name)
+                    _adapter_map[name] = resolved
+                    _runtime_adapters.append(name)
         return {"name": name, "status": "loaded"}
 
     @app.post("/v1/adapters/load", dependencies=[Depends(_check_local_request)])
@@ -2881,40 +3019,6 @@ def _create_app(
         except StopStringError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-        # Check adapter selection (from request body)
-        # Treat an empty public request value like an omitted adapter. The
-        # empty string is reserved internally as the explicit base-model
-        # sentinel used by keyed stable canary traffic.
-        requested_adapter = request.adapter or None
-        if requested_adapter and _adapter_map:
-            if requested_adapter not in _adapter_map:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Unknown adapter. Use GET /v1/adapters to list available adapters.",
-                )
-        elif requested_adapter and not _adapter_map:
-            raise HTTPException(
-                status_code=404,
-                detail="No adapters loaded.",
-            )
-        conversation_id = request.conversation_id or x_conversation_id
-        canary_tracking = None
-        if requested_adapter is None and not internal:
-            routed_adapter, canary_tracking = _canary_adapter(conversation_id)
-            if canary_tracking is not None:
-                requested_adapter = routed_adapter
-        # What the trace record says produced the answer: the same selection
-        # `_adapter_scope` makes, from the same inputs (MoLE blends, it has no one adapter).
-        active_adapter = _active_snapshot()
-        used_adapter = (
-            None
-            if _mole_runtime is not None
-            else _effective_adapter(
-                model_obj, _peft_adapter_names, requested_adapter, active_adapter
-            )
-        )
-        canary_bucket = canary_tracking[1] if canary_tracking is not None else None
-
         # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
         # request. set_active_user(None) (or an unknown id) self-clears, so
         # a request without the X-User-Id header never inherits the previous
@@ -2925,57 +3029,71 @@ def _create_app(
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         max_tokens = request.max_tokens or max_tokens_default
 
+        # Public empty values mean omitted; the router's empty sentinel means base.
+        requested_adapter = request.adapter or None
+        conversation_id = request.conversation_id or x_conversation_id
+        reservation, canary_tracking, active_adapter = _reserve_adapter(
+            requested_adapter, conversation_id, internal
+        )
+        canary_bucket = canary_tracking[1] if canary_tracking is not None else None
         if request.stream:
-            if not internal:
-                issued_response_ids.add(response_id)
-            stream_started = time.perf_counter()
-            from soup_cli.utils.structured_output import (
-                build_logits_processors,
-            )
-            processors = build_logits_processors(
-                output_constraint, tokenizer,
-            )
-            return StreamingResponse(
-                _stream_response(
-                    model_obj, tokenizer, messages,
-                    max_tokens=max_tokens,
-                    temperature=request.temperature,
-                    top_p=request.top_p,
-                    model_name=model_name,
-                    assistant_model=draft_model,
-                    assistant_tokenizer=draft_tokenizer,
-                    num_assistant_tokens=num_speculative_tokens,
-                    trace_log_writer=record_writer,
-                    started=stream_started,
-                    kv_cache_generate_kwargs=kv_cache_generate_kwargs,
-                    mole_runtime=_mole_runtime,
-                    loaded_bank=_loaded_bank,
-                    x_user_id=x_user_id,
-                    adapter_lock=_generation_lock,
-                    adapter_names=_peft_adapter_names,
-                    always_lock=_adapter_root is not None,
-                    model_getter=lambda: model_obj,
-                    requested_adapter=requested_adapter,
-                    active_adapter=active_adapter,
-                    canary_outcome=(
-                        lambda ok: _record_canary_outcome(canary_tracking, ok)
+            try:
+                if not internal:
+                    issued_response_ids.add(response_id)
+                stream_started = time.perf_counter()
+                from soup_cli.utils.structured_output import (
+                    build_logits_processors,
+                )
+                processors = build_logits_processors(
+                    output_constraint, tokenizer,
+                )
+                reply = _ReservedStreamingResponse(
+                    _stream_response(
+                        model_obj, tokenizer, messages,
+                        max_tokens=max_tokens,
+                        temperature=request.temperature,
+                        top_p=request.top_p,
+                        model_name=model_name,
+                        assistant_model=draft_model,
+                        assistant_tokenizer=draft_tokenizer,
+                        num_assistant_tokens=num_speculative_tokens,
+                        trace_log_writer=record_writer,
+                        started=stream_started,
+                        kv_cache_generate_kwargs=kv_cache_generate_kwargs,
+                        mole_runtime=_mole_runtime,
+                        loaded_bank=_loaded_bank,
+                        x_user_id=x_user_id,
+                        adapter_lock=_generation_lock,
+                        adapter_names=_peft_adapter_names,
+                        always_lock=_adapter_root is not None,
+                        model_getter=lambda: model_obj,
+                        requested_adapter=requested_adapter,
+                        active_adapter=active_adapter,
+                        canary_outcome=(
+                            lambda ok: _record_canary_outcome(canary_tracking, ok)
+                        ),
+                        logits_processor=processors or None,
+                        ngram_config=ngram_config,
+                        reasoning_parser=reasoning_parser,
+                        response_id=response_id,
+                        conversation_id=conversation_id,
+                        reservation=reservation,
+                        canary_bucket=canary_bucket,
+                        stop=stops,
+                        frames=frames_factory(response_id) if frames_factory else None,
                     ),
-                    logits_processor=processors or None,
-                    ngram_config=ngram_config,
-                    reasoning_parser=reasoning_parser,
-                    response_id=response_id,
-                    conversation_id=conversation_id,
-                    trace_adapter=used_adapter,
-                    canary_bucket=canary_bucket,
-                    stop=stops,
-                    frames=frames_factory(response_id) if frames_factory else None,
-                ),
-                media_type="text/event-stream",
-                headers={
-                    _RESPONSE_ID_HEADER: response_id,
-                    **({_INTERNAL_HEADER: _INTERNAL_LOOP_CHECK} if internal else {}),
-                },
-            ), response_id
+                    reservation=reservation,
+                    media_type="text/event-stream",
+                    headers={
+                        _RESPONSE_ID_HEADER: response_id,
+                        **({_INTERNAL_HEADER: _INTERNAL_LOOP_CHECK} if internal else {}),
+                    },
+                )
+                return reply, response_id
+
+            except BaseException:
+                reservation.cancel_pending()
+                raise
 
         import contextlib as _contextlib
 
@@ -2984,6 +3102,7 @@ def _create_app(
         # Use ExitStack so tracer span + track_request both get correct
         # exception propagation (__exit__ sees exc info, span marked error).
         with _contextlib.ExitStack() as stack:
+            stack.callback(reservation.cancel_pending)
             stack.enter_context(metrics.track_request())
             if tracer is not None:
                 stack.enter_context(tracer.start_as_current_span("chat.completion"))
@@ -3020,7 +3139,9 @@ def _create_app(
                             requested_adapter, active_adapter,
                             always_lock=_adapter_root is not None,
                             model_getter=lambda: model_obj,
+                            reservation=reservation,
                         ) as selected_model:
+                            reservation.start_generation()
                             (
                                 response_text,
                                 prompt_tokens,
@@ -3041,6 +3162,8 @@ def _create_app(
                                 # stop string is looked for after that, not mid-generation.
                                 stop_strings=stops if reasoning_parser is None else (),
                             )
+                except _AdapterUnavailableError:
+                    raise HTTPException(status_code=409, detail=_ADAPTER_UNAVAILABLE) from None
                 except _ClientInputError as exc:
                     # The client's input, not a server fault: no canary failure is recorded.
                     logger.info("request refused: %s", exc)
@@ -3088,7 +3211,7 @@ def _create_app(
                     started=started,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
-                    adapter=used_adapter,
+                    adapter=reservation.applied,
                     canary_bucket=canary_bucket,
                 )
 
@@ -3592,8 +3715,8 @@ class _OpenAIStreamFrames:
     def text(self, text: str) -> str:
         return self._chunk({"content": text}, None)
 
-    def error(self) -> str:
-        return 'data: {"error": "Internal server error"}\n\n'
+    def error(self, message="Internal server error") -> str:
+        return f"data: {json.dumps({'error': message})}\n\n"
 
     def end(
         self, finish_reason: Optional[str], completion_tokens: int, stop_sequence: Optional[str]
@@ -3658,12 +3781,12 @@ class _AnthropicStreamFrames:
             },
         )
 
-    def error(self) -> str:
+    def error(self, message="Internal server error") -> str:
         return self._frame(
             "error",
             {
                 "type": "error",
-                "error": {"type": "api_error", "message": "Internal server error"},
+                "error": {"type": "api_error", "message": message},
             },
         )
 
@@ -3781,7 +3904,7 @@ class _StripEmitter:
         return body
 
 
-def _iter_generated_text(tokenizer, generate, outcome: dict, stop_event=None):
+def _iter_generated_text(tokenizer, generate, outcome: dict, stop_event=None, reservation=None):
     """Run ``generate`` on a worker thread and yield its text as it is produced.
 
     ``generate(streamer=..., stop_event=...)`` is called on a new thread, in a copy
@@ -3825,10 +3948,15 @@ def _iter_generated_text(tokenizer, generate, outcome: dict, stop_event=None):
         # A generate() that never returns must not keep the interpreter from exiting.
         daemon=True,
     )
-    thread.start()
+    disconnected = object()
+    if reservation is not None:
+        reservation.set_wakeup(lambda: streamer.text_queue.put(disconnected))
     try:
+        thread.start()
         while True:
             piece = streamer.text_queue.get()
+            if piece is disconnected:
+                raise _StreamDisconnectedError
             if piece is streamer.stop_signal:
                 break
             yield piece
@@ -3839,6 +3967,9 @@ def _iter_generated_text(tokenizer, generate, outcome: dict, stop_event=None):
         # lock on its own thread.
         stop_event.set()
         raise
+    finally:
+        if reservation is not None:
+            reservation.set_wakeup(None)
     stop_event.set()
     thread.join(_STREAM_JOIN_SECONDS)
     if thread.is_alive():
@@ -3873,6 +4004,7 @@ def _stream_response(
     stop=(),
     frames=None,
     model_getter=None,
+    reservation=None,
 ):
     """Generator that yields SSE chunks for streaming responses.
 
@@ -3953,7 +4085,10 @@ def _stream_response(
                     requested_adapter, active_adapter,
                     always_lock=always_lock,
                     model_getter=model_getter,
+                    reservation=reservation,
                 ) as selected_model:
+                    if reservation is not None:
+                        reservation.start_generation()
                     return _generate_response(
                         selected_model, tokenizer, messages,
                         max_tokens=max_tokens,
@@ -3975,8 +4110,10 @@ def _stream_response(
                 and _can_stream(model)
             ):
                 outcome: dict = {}
-                stop_event = threading.Event()
-                pieces = _iter_generated_text(tokenizer, generate, outcome, stop_event)
+                stop_event = reservation.stop_event if reservation else threading.Event()
+                pieces = _iter_generated_text(
+                    tokenizer, generate, outcome, stop_event, reservation=reservation,
+                )
                 emitter = _StripEmitter()
                 try:
                     for piece in pieces:
@@ -3988,11 +4125,11 @@ def _stream_response(
                             yield frames.text(text)
                         if stopper.matched is not None:
                             stop_event.set()
-                except GeneratorExit:
+                except (GeneratorExit, _StreamDisconnectedError) as exc:
                     # Client gone mid-stream: stop generate() first, then leave the record
                     # its response_id refers to, holding the text it was actually sent.
                     pieces.close()
-                    if started is not None:
+                    if started is not None and (reservation is None or reservation.started):
                         _write_conversation_record(
                             trace_log_writer,
                             response_id=response_id,
@@ -4004,10 +4141,14 @@ def _stream_response(
                             started=started,
                             prompt_tokens=None,
                             completion_tokens=None,
-                            adapter=trace_adapter,
+                            adapter=(
+                                reservation.applied if reservation is not None else trace_adapter
+                            ),
                             canary_bucket=canary_bucket,
                         )
-                    raise
+                    if isinstance(exc, GeneratorExit):
+                        raise
+                    return
                 finally:
                     # Client gone (GeneratorExit): close the text iterator now, which
                     # sets the stop event for generate(). It does not wait for the worker.
@@ -4019,6 +4160,9 @@ def _stream_response(
                 (
                     response_text, prompt_tokens_for_log, completion_tokens_for_log, finish_reason,
                 ) = generate()
+    except _AdapterUnavailableError:
+        yield frames.error(_ADAPTER_UNAVAILABLE)
+        return
     except _ClientInputError as exc:
         # The client's input, not a server fault: the stream ends in an error frame, and no
         # canary failure is recorded.
@@ -4070,7 +4214,7 @@ def _stream_response(
             started=started,
             prompt_tokens=prompt_tokens_for_log,
             completion_tokens=completion_tokens_for_log,
-            adapter=trace_adapter,
+            adapter=reservation.applied if reservation is not None else trace_adapter,
             canary_bucket=canary_bucket,
         )
 
