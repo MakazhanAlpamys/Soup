@@ -219,7 +219,7 @@ def test_an_rnd_style_index_loads_through_the_same_reader(tmp_path):
     _assert_cache_reads_back(expected, out, index)
 
 
-@pytest.mark.parametrize("version", [2, 0, True, "1"])
+@pytest.mark.parametrize("version", [2, 0, True, 1.0, "1"])
 def test_an_unknown_expert_layout_version_is_refused(tmp_path, version):
     from soup_cli.utils.layer_shard import read_shard_index
 
