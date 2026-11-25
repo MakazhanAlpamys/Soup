@@ -1765,8 +1765,8 @@ Usage: `soup diagnose [OPTIONS] RUN_ID`
 | `--output`, `-o` | text |  |  | Write the report JSON to this path. |
 | `--badge` | text |  |  | Write an SVG badge to this path. |
 | `--attach-to-registry` | text |  |  | Attach the --output report to a registry entry id (needs --output). Exits 1 when the attach fails. |
-| `--base-model` | text |  |  | Base model id to LOAD for a live diagnose run (e.g. HuggingFaceTB/SmolLM2-135M). When set, the report's probes run live against the model instead of emitting neutral scores; format, memorization and citation need --dataset, and citation only RAFT-shaped rows. |
-| `--dataset` | text |  |  | Training JSONL for live format / memorization / citation probes (must stay under cwd). |
+| `--base-model` | text |  |  | Base model id to LOAD for a live diagnose run (e.g. HuggingFaceTB/SmolLM2-135M). When set, the report's probes run live against the model instead of emitting neutral scores; format, mode_collapse, memorization and citation need --dataset, and citation only RAFT-shaped rows. |
+| `--dataset` | text |  |  | Training JSONL for live format / mode_collapse / memorization / citation probes (must stay under cwd). |
 | `--holdout` | text |  |  | Held-out evaluation JSONL for the live forgetting probe (must stay under cwd; falls back to built-in general prompts if unset). |
 | `--tokenizer` | text |  |  | Tokenizer id/path for a sub-word memorization probe (live). |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
