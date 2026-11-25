@@ -81,6 +81,8 @@ def _exec_controller(
     terminations: list[tuple] | None = None,
     lookups: list[tuple] | None = None,
     termination_checks: list[str] | None = None,
+    request_timeouts: list[tuple[str, str, float]] | None = None,
+    clock_out: list[float] | None = None,
 ) -> tuple[int, list, list]:
     namespace: dict[str, object] = {"__name__": "controller"}
     exec(stub, namespace)
@@ -97,11 +99,12 @@ def _exec_controller(
     def fake_sleep(seconds: float) -> None:
         clock["now"] += seconds
 
-    namespace["_request_json"] = (
-        lambda api_key, path, *, method="GET", payload=None, timeout=60: (
-            fake_request_fn(api_key, path, method=method, payload=payload)
-        )
-    )
+    def fake_request_json(api_key, path, *, method="GET", payload=None, timeout=60):
+        if request_timeouts is not None:
+            request_timeouts.append((path, method, timeout))
+        return fake_request_fn(api_key, path, method=method, payload=payload)
+
+    namespace["_request_json"] = fake_request_json
     namespace["_wait_for_ip"] = lambda *_: "192.0.2.1"
     namespace["_wait_for_termination"] = lambda _api_key, instance_id: (
         termination_checks.append(instance_id)
@@ -122,6 +125,8 @@ def _exec_controller(
     )
 
     rc = namespace["main"]()
+    if clock_out is not None:
+        clock_out.append(clock["now"])
     return rc, terminations, lookups
 
 
@@ -662,6 +667,82 @@ class TestTransientLookupRetries:
         assert any(
             f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p
             for p in prints
+        )
+
+    def test_repeated_transient_errors_pin_the_window_caps(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Every lookup timeout is capped by the remaining budget and the fake
+        clock never passes the 60-second deadline (#3304 review, point 2)."""
+        stub, _ = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        launch_payloads: list[dict] = []
+        lookups: list[tuple] = []
+        timeouts: list[tuple[str, str, float]] = []
+        clock_end: list[float] = []
+
+        def fake_request(api_key, path, *, method="GET", payload=None, **_):
+            if path.endswith("/launch"):
+                launch_payloads.append(payload)
+                raise RuntimeError("simulated response lost")
+            if path == "/instances":
+                lookups.append((api_key, path))
+                raise urllib.error.URLError("network down")
+            return {"data": {}}
+
+        rc, _, _ = _exec_controller(
+            stub, _make_fake_run(), fake_request, captured_prints=prints,
+            lookups=lookups, request_timeouts=timeouts, clock_out=clock_end,
+        )
+
+        assert rc == 1
+        lookup_timeouts = [t for path, method, t in timeouts if path == "/instances"]
+        assert len(lookup_timeouts) == 12
+        # Each attempt asks for at most the remaining budget: the fake clock
+        # advances 5s per loop, so the caps walk 60, 55, ... 5.
+        assert lookup_timeouts == [60.0 - 5.0 * i for i in range(12)]
+        assert all(0 < t <= 60.0 for t in lookup_timeouts)
+        # The deadline itself is never passed: the final bounded sleep ends
+        # exactly at the 60-second mark.
+        assert clock_end == [60.0]
+
+    def test_success_then_transients_to_deadline_stay_unconfirmed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A first successful empty lookup followed by transient failures until
+        the deadline reports CRITICAL, not the no-match message: the last
+        lookups before the deadline failed, so the tail of the window is
+        unobserved (#3304 review, point 1)."""
+        stub, _ = _setup_env(tmp_path, monkeypatch)
+        prints: list[str] = []
+        launch_payloads: list[dict] = []
+        lookups: list[tuple] = []
+
+        def fake_request(api_key, path, *, method="GET", payload=None, **_):
+            if path.endswith("/launch"):
+                launch_payloads.append(payload)
+                raise RuntimeError("simulated response lost")
+            if path == "/instances":
+                lookups.append((api_key, path))
+                if len(lookups) == 1:
+                    return {"data": []}
+                raise urllib.error.URLError("network down")
+            return {"data": {}}
+
+        rc, _, _ = _exec_controller(
+            stub, _make_fake_run(), fake_request, captured_prints=prints,
+            lookups=lookups,
+        )
+
+        assert rc == 1
+        assert len(lookups) == 12
+        name = launch_payloads[0]["name"]
+        assert any(
+            f"CRITICAL: Lambda cleanup unconfirmed; check the console for {name}" in p
+            for p in prints
+        )
+        assert not any(
+            f"Lambda lookup observed no instance named {name}" in p for p in prints
         )
 
     def test_unrelated_instance_only_is_not_terminated(
