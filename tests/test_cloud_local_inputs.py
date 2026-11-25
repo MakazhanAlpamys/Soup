@@ -342,23 +342,45 @@ def test_invalid_generated_remote_input_path_is_rejected(tmp_path, backend, monk
             namespace["_upload_local_train_inputs"]()
 
 
-def test_scratch_directory_loads_config_and_uploaded_train_input(tmp_path, monkeypatch):
+def test_scratch_directory_loads_config_and_uploaded_train_input(
+    tmp_path, monkeypatch
+):
+    import yaml
+
+    from soup_cli.cloud._local_inputs import prepare_local_train_inputs
+
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_file = source_dir / "data.jsonl"
+    source_file.write_text('{"text": "hello"}\n', encoding="utf-8")
+
+    source_config = source_dir / "soup.yaml"
+    source_config.write_text(
+        "base: x\ndata:\n  train: ./data.jsonl\n  format: auto\n  val_split: 0.0\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(source_dir)
+    cfg = load_config("soup.yaml")
+    manifest = prepare_local_train_inputs(cfg, cwd=str(source_dir))
+
+    assert len(manifest) == 1
+    assert cfg.data.train == manifest[0].remote_path
+
     run_dir = tmp_path / "run"
-    inputs_dir = run_dir / "inputs"
-    inputs_dir.mkdir(parents=True)
+    run_dir.mkdir()
 
     (run_dir / "soup.yaml").write_text(
-        "base: x\ndata:\n  train: inputs/train-0.jsonl\n  format: auto\n  val_split: 0.0\n",
+        yaml.safe_dump(cfg.model_dump(mode="json")),
         encoding="utf-8",
     )
-    (inputs_dir / "train-0.jsonl").write_text(
-        '{"text": "hello"}\n',
-        encoding="utf-8",
-    )
+
+    uploaded_input = run_dir / manifest[0].remote_path
+    uploaded_input.parent.mkdir(parents=True, exist_ok=True)
+    uploaded_input.write_bytes(source_file.read_bytes())
 
     monkeypatch.chdir(run_dir)
-
-    cfg = load_config("soup.yaml")
-    dataset = load_dataset(cfg.data)
+    loaded_cfg = load_config("soup.yaml")
+    dataset = load_dataset(loaded_cfg.data)
 
     assert dataset["train"] == [{"text": "hello"}]

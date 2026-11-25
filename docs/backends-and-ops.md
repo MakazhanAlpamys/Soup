@@ -820,7 +820,7 @@ Cloud training exits 2 before writing a stub for `--push-as`, `--gate`, `--resum
 Use the local `soup train` command for those options. `--dry-run` is accepted for
 plan-only cloud runs. Combining it with `--cloud-submit` exits 2 before a submission.
 
-Local `data.train` files are uploaded automatically for Lambda Labs and Modal cloud training. This support addresses [issue #1704](https://github.com/LAION-AI/Soup/issues/1704).
+Local `data.train` files are uploaded automatically for Lambda Labs and Modal cloud training. This support addresses [issue #1704](https://github.com/MakazhanAlpamys/Soup/issues/1704).
 Files must be regular files inside the project directory, without symlinked path components, dotfiles, or dot-directories. The combined upload size must not exceed 256 MiB. Local `data.train` directories are refused.
 For Lambda, the controller uploads the files to the instance and creates an `inputs-ready` marker after the upload completes. Cloud-init waits up to 20 minutes for this marker before starting training.
 For Modal, the generated app obtains the `soup-outputs` volume using `modal.Volume.from_name(..., create_if_missing=True)`. Its local entrypoint uploads each input using `modal volume put --force` to `/<run-name>/inputs/` on that volume. Uploaded input files are not downloaded back into the local output directory when training finishes. The Modal CLI and Python SDK were not installed in the development environment, so the CLI version and a live `modal volume put` execution were not verified.
