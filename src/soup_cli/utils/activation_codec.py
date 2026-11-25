@@ -1,6 +1,6 @@
-"""Per-token activation codecs shared by production storage and the G4 study.
+"""Per-token activation codecs shared by the activation store and its benchmarks.
 
-The numerical operations come from G4's original codec, including their order.
+The numerical operations and their order are those of the original codec.
 The float32 scale is the row absmax, not an absmax/levels step. Dividing by absmax
 before multiplying by levels preserves finite bf16 extremes and denormals.
 Torch stays lazy so the byte arithmetic is usable by memory planners.
@@ -138,12 +138,32 @@ def encode(x: Any, codec: str, *, check_finite: bool = True) -> Tuple[Any, Optio
 
 
 def decode(payload: Any, scale: Optional[Any], codec: str, dtype: Any, hidden: int) -> Any:
-    """Restore in ``dtype`` on the payload device, retaining G4's operation order."""
+    """Restore in ``dtype`` on the payload device, in the order ``encode`` inverts.
+
+    Raises ``ValueError`` naming the field when ``hidden``, ``scale`` or the payload shape do
+    not fit the codec, before anything is allocated.
+    """
     import torch
 
     spec = codec_of(codec)
     if spec.identity:
         return payload
+    if isinstance(hidden, bool) or not isinstance(hidden, int) or hidden <= 0:
+        raise ValueError(f"hidden must be a positive integer; got {hidden!r}")
+    if scale is None:
+        raise ValueError(f"scale is required to decode the lossy codec {codec}; got None")
+    width = int(payload.shape[-1]) if len(payload.shape) else 0
+    expected = (hidden + 1) // 2 if spec.packed else hidden
+    if width != expected:
+        raise ValueError(
+            f"hidden={hidden} needs a payload width of {expected} for {codec}; "
+            f"payload shape is {tuple(payload.shape)}"
+        )
+    if tuple(scale.shape) != tuple(payload.shape[:-1]):
+        raise ValueError(
+            f"scale shape {tuple(scale.shape)} does not match the payload rows "
+            f"{tuple(payload.shape[:-1])}"
+        )
     with torch.no_grad():
         if spec.packed:
             levels = _unpack_nibbles(payload, hidden)

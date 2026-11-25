@@ -148,7 +148,7 @@ def _torch():
 
 
 def _reference_fp8(tensor):
-    """G4's original operation order, independent of the shared codec entry points."""
+    """The original operation order, independent of the shared codec entry points."""
     torch = _torch()
     values = tensor.float()
     absmax = values.abs().amax(dim=-1, keepdim=True)
@@ -200,3 +200,53 @@ def test_shared_fp8_refuses_nonfinite_values(bad):
     tensor[1, 2, 4] = bad
     with pytest.raises(NonFiniteActivationError, match="1 of 6 rows"):
         encode(tensor, FP8)
+
+
+# --------------------------------------------------------------------------
+# decode refuses what does not fit, before it allocates
+# --------------------------------------------------------------------------
+def _encoded(name, hidden=10):
+    x = torch.randn(2, 3, hidden).to(torch.bfloat16)
+    payload, scale = activation_codec.encode(x, name)
+    return x, payload, scale
+
+
+@pytest.mark.parametrize("name", ["int8", "fp8_e4m3", "int4"])
+def test_decode_without_a_scale_names_the_scale(name):
+    _x, payload, _scale = _encoded(name)
+    with pytest.raises(ValueError, match="scale is required"):
+        activation_codec.decode(payload, None, name, torch.bfloat16, 10)
+
+
+@pytest.mark.parametrize("name", ["int8", "fp8_e4m3", "int4"])
+def test_decode_with_a_hidden_wider_than_the_payload_is_refused(name):
+    _x, payload, scale = _encoded(name)
+    with pytest.raises(ValueError, match="hidden=40 needs a payload width"):
+        activation_codec.decode(payload, scale, name, torch.bfloat16, 40)
+
+
+@pytest.mark.parametrize("name", ["int8", "fp8_e4m3"])
+def test_decode_with_a_hidden_narrower_than_an_unpacked_payload_is_refused(name):
+    _x, payload, scale = _encoded(name)
+    with pytest.raises(ValueError, match="hidden=4 needs a payload width of 4"):
+        activation_codec.decode(payload, scale, name, torch.bfloat16, 4)
+
+
+def test_decode_int4_accepts_an_odd_hidden_and_refuses_a_mismatched_one():
+    x, payload, scale = _encoded("int4", hidden=9)
+    assert activation_codec.decode(payload, scale, "int4", torch.bfloat16, 9).shape == x.shape
+    with pytest.raises(ValueError, match="hidden=7 needs a payload width of 4"):
+        activation_codec.decode(payload, scale, "int4", torch.bfloat16, 7)
+
+
+@pytest.mark.parametrize("bad", [0, -3, True, 2.5])
+def test_decode_refuses_a_hidden_that_is_not_a_positive_integer(bad):
+    _x, payload, scale = _encoded("int8")
+    with pytest.raises(ValueError, match="hidden must be a positive integer"):
+        activation_codec.decode(payload, scale, "int8", torch.bfloat16, bad)
+
+
+def test_decode_with_a_scale_of_the_wrong_shape_is_refused():
+    _x, payload, scale = _encoded("int8")
+    with pytest.raises(ValueError, match="scale shape"):
+        activation_codec.decode(payload, scale[:, :2], "int8", torch.bfloat16, 10)
