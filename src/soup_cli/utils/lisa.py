@@ -15,9 +15,8 @@ groups. This callback then toggles ``requires_grad`` — frozen parameters produ
 re-freeze — so peak optimizer memory ≈ (embed + head + ``num_layers`` active)
 rather than the whole model.
 
-No top-level torch/transformers — torch is never imported (pure
-``requires_grad`` toggling + optimizer ``.state`` dict operations), and the HF
-``TrainerCallback`` and ``ExportableState`` bases are resolved lazily
+No top-level torch/transformers. Torch is only imported to identify a compiler
+wrapper when present. The HF ``TrainerCallback`` and ``ExportableState`` bases are resolved lazily
 (mirrors ``monitoring/curriculum_callback.py``) so the module stays import-cheap
 while ``LisaCallback`` still inherits the no-op defaults for every Trainer event
 (HF dispatches every event with ``getattr(cb, event)`` and no ``hasattr`` guard,
@@ -95,6 +94,16 @@ class LisaPolicy:
             raise TypeError("LisaPolicy.train_embeddings must be bool")
 
 
+def _try_import_callback_base():
+    """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent)."""
+    try:
+        from transformers import TrainerCallback  # noqa: PLC0415
+
+        return TrainerCallback
+    except Exception:  # noqa: BLE001 — transformers optional in slim test envs.
+        return object
+
+
 def _try_import_callback_bases():
     """Return the HF callback bases, or ``object`` in a slim environment.
 
@@ -122,6 +131,16 @@ def locate_decoder_layer_indices(model: Any) -> list[int]:
         if m:
             seen.add(int(m.group(1)))
     return sorted(seen)
+
+
+def _lisa_named_parameters(model: Any) -> dict[str, Any]:
+    """Keep checkpoint names stable when Trainer replaces the model with a compiled wrapper."""
+    if hasattr(model, "_orig_mod"):
+        from torch._dynamo.eval_frame import OptimizedModule
+
+        if isinstance(model, OptimizedModule):
+            model = model._orig_mod
+    return dict(model.named_parameters())
 
 
 def _parameter_layout(parameters: dict[str, Any]) -> str:
@@ -210,7 +229,7 @@ class _LisaCallback_body:  # type: ignore[misc]  # noqa: N801
 
     def prepare_checkpoint(self, model: Any, checkpoint_dir: str | None) -> None:
         """Capture the logical layout and validate a resume before Trainer runs."""
-        parameters = dict(model.named_parameters())
+        parameters = _lisa_named_parameters(model)
         self._layout = _parameter_layout(parameters)
         self._resume_checkpoint = None
         if checkpoint_dir is None:
@@ -299,7 +318,7 @@ class _LisaCallback_body:  # type: ignore[misc]  # noqa: N801
         model = kwargs.get("model")
         if model is None:
             return control
-        parameters = dict(model.named_parameters())
+        parameters = _lisa_named_parameters(model)
         if self._layout is None:
             self._layout = _parameter_layout(parameters)
         step = getattr(state, "global_step", 0)
@@ -365,7 +384,7 @@ class _LisaCallback_body:  # type: ignore[misc]  # noqa: N801
         chosen = set(self._rng.sample(indices, k))
 
         prev_active = self._active_decoder_params
-        parameters = dict(model.named_parameters())
+        parameters = _lisa_named_parameters(model)
         active, skipped_non_float = _decoder_mask(parameters, chosen)
         self._active_layers = chosen
         self._apply_mask(parameters, active)

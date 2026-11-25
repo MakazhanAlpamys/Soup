@@ -2,9 +2,12 @@
 
 import json
 import random
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
+
+from tests.conftest import strip_ansi
 
 
 @pytest.fixture
@@ -193,16 +196,28 @@ def test_cli_legacy_checkpoint_reports_the_lisa_error_without_a_crash_bundle(
     tmp_path, monkeypatch, torch_cpu
 ):
     import yaml
+    from rich.console import Console
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+    from soup_cli.commands import train as train_command
+    from soup_cli.experiment.tracker import ExperimentTracker
     from tests.test_issue341_seed_and_fullft import _ROWS, _tiny_llama_dir
 
     pytest.importorskip("datasets")
     pytest.importorskip("peft")
     pytest.importorskip("trl")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("SOUP_DB_PATH", str(db_path))
+    colored_console = Console(
+        width=80,
+        force_terminal=True,
+        color_system="standard",
+        legacy_windows=False,
+        no_color=False,
+    )
+    monkeypatch.setattr(train_command, "console", colored_console)
     dataset = tmp_path / "train.jsonl"
     rows = [
         {"messages": [{"role": "user", "content": user},
@@ -229,13 +244,19 @@ def test_cli_legacy_checkpoint_reports_the_lisa_error_without_a_crash_bundle(
     result = CliRunner().invoke(app, [
         "train", "--config", str(config), "--name", "local-check",
         "--resume", str(checkpoint), "--yes",
-    ])
+    ], color=True)
     assert result.exit_code == 1
-    output = " ".join(result.output.split())
-    assert "LISA resume: checkpoint has no saved LISA state" in output
-    assert "Use its model weights to start a fresh run in a new output directory." in output
+    output = " ".join(strip_ansi(result.output).split())
+    diagnostic = "LISA resume: checkpoint has no saved LISA state"
+    migration = "Use its model weights to start a fresh run in a new output directory."
+    assert diagnostic in output
+    assert migration in output
     assert "Crash bundle written" not in output
     assert not (tmp_path / ".soup-crashes").exists()
+    with closing(ExperimentTracker(db_path)) as tracker:
+        (run,) = tracker.list_runs()
+    assert run["status"] == "failed"
+    assert run["error_message"] == f"LisaResumeError: {diagnostic}. {migration}"
 
 
 def _model(torch, width=2):
@@ -257,6 +278,34 @@ def _checkpoint(callback, model, folder):
     path = folder / "trainer_state.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
+
+
+def test_compiled_lisa_checkpoint_uses_unwrapped_parameter_names(tmp_path, torch_cpu):
+    from torch._dynamo import is_dynamo_supported
+
+    from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+
+    if not is_dynamo_supported():
+        pytest.skip("torch.compile is unavailable on this platform")
+
+    policy = LisaPolicy(1, 2)
+    reference = _model(torch_cpu)
+    saved = LisaCallback(policy)
+    saved.prepare_checkpoint(reference, None)
+    wrapped = torch_cpu.compile(reference, backend="eager")
+    assert all(name.startswith("_orig_mod.") for name, _ in wrapped.named_parameters())
+    _checkpoint(saved, wrapped, tmp_path)
+
+    fresh = _model(torch_cpu)
+    resumed = LisaCallback(policy)
+    resumed.prepare_checkpoint(fresh, str(tmp_path))
+    wrapped_fresh = torch_cpu.compile(fresh, backend="eager")
+    resumed.on_train_begin(None, SimpleNamespace(global_step=5), model=wrapped_fresh)
+
+    assert resumed.state() == saved.state()
+    assert [name for name, param in fresh.named_parameters() if param.requires_grad] == [
+        name for name, param in reference.named_parameters() if param.requires_grad
+    ]
 
 
 @pytest.mark.parametrize("reset_optimizer", [True, False])
