@@ -156,6 +156,19 @@ class TestTheMachine:
         assert "one GPU only" in only_problem(result) and "WORLD_SIZE is 2" in only_problem(
             result)
 
+    def test_the_several_process_message_in_full(self):
+        result = run_preflight(soup(), model_config(), machine(world_size=2))
+        assert only_problem(result) == (
+            "training.packed_lora supports one GPU only; WORLD_SIZE is 2. FSDP, DeepSpeed and "
+            "DDP are not supported.")
+
+    @pytest.mark.parametrize("label", ["--fsdp full_shard", "--deepspeed"])
+    def test_a_sharded_run_message_in_full(self, label):
+        result = run_preflight(soup(), model_config(), machine(), sharding=label)
+        assert only_problem(result) == (
+            f"training.packed_lora supports one GPU only; {label} is set. FSDP, DeepSpeed and "
+            f"DDP are not supported.")
+
     def test_a_sharded_single_process_run(self):
         result = run_preflight(soup(), model_config(), machine(), sharding="--fsdp full_shard")
         assert "one GPU only; --fsdp full_shard is set" in only_problem(result)

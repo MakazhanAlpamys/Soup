@@ -29,7 +29,8 @@ def _problem(*, packed=None, task="sft", backend="transformers", modality="text"
     lora = {"dropout": 0.0, **training.pop("lora", {})}
     config = SimpleNamespace(
         backend=backend, modality=modality, task=task,
-        data=SimpleNamespace(format=(data or {}).get("format", "alpaca")),
+        data=SimpleNamespace(format=(data or {}).get("format", "alpaca"),
+                             streaming=(data or {}).get("streaming", False)),
         training=TrainingConfig(
             **{"quantization": "4bit", "batch_size": 2, "lora": lora, **training}))
     block = PackedLoraConfig(**({"enabled": True} if packed is None else packed))
@@ -232,11 +233,33 @@ class TestWhatItRefuses:
         ("use_liger", True), ("use_cut_ce", True), ("fast_lora", True), ("use_flash_attn", True),
         ("packing", True), ("multipack", True), ("neftune_alpha", 5.0), ("stream_layers", True),
         ("activation_offloading", "cpu"), ("use_galore", True), ("use_lorafa", True),
-        ("lisa_enabled", True), ("prefix_tree", True),
+        ("lisa_enabled", True),
     ])
     def test_training_switches_that_clash(self, field, value):
         assert _problem(**{field: value}).startswith(
             f"training.packed_lora cannot be combined with training.{field}")
+
+    @pytest.mark.parametrize("overrides,message", [
+        ({"prefix_tree": True},
+         "training.packed_lora cannot be combined with training.prefix_tree: prefix-tree "
+         "batches own the dataloader and the attention mask the kernels replace."),
+        ({"loraplus_lr_ratio": 16.0},
+         "training.packed_lora cannot be combined with training.loraplus_lr_ratio: LoRA+ "
+         "builds its own optimizer parameter groups around the adapters the kernels run."),
+        ({"lora": {"rank_pattern": {"q_proj": 8}}},
+         "training.packed_lora cannot be combined with lora.rank_pattern: the kernels are "
+         "validated with one rank on every projection."),
+        ({"lora": {"alpha_pattern": {"q_proj": 8}}},
+         "training.packed_lora cannot be combined with lora.alpha_pattern: the kernels need "
+         "one LoRA scaling on q, k and v, which a per-module alpha breaks."),
+    ])
+    def test_the_refusal_names_the_field_and_the_reason(self, overrides, message):
+        assert _problem(**overrides) == message
+
+    def test_a_streamed_dataset_is_refused_with_the_reason(self):
+        assert _problem(data={"streaming": True}) == (
+            "training.packed_lora cannot be combined with data.streaming: a streamed dataset "
+            "is not tested with the packed step.")
 
     @pytest.mark.parametrize("training,name", [
         ({"unfrozen_parameters": ["^model.layers.0"]}, "training.unfrozen_parameters"),
