@@ -1693,6 +1693,9 @@ Listed by first contribution. PR numbers link the work.
 - **Marouane Achbari** ([@ma7bor](https://github.com/ma7bor))
   - Explained why judge URLs are refused and which forms are accepted, preserving the existing URL policy and carrying over #2253. Reported by @MakazhanAlpamys in #2190. ([#3295](https://github.com/MakazhanAlpamys/Soup/pull/3295))
 
+- **Jay** ([@jay23606](https://github.com/jay23606))
+  - Preserved the quant-check generation error when a generator lacks a cleanup method. ([#3191](https://github.com/MakazhanAlpamys/Soup/pull/3191))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
