@@ -1688,6 +1688,7 @@ Listed by first contribution. PR numbers link the work.
   - Fixed #3026 by validating the list and numeric entries of `data.interleave.probs` before `soup data mix --apply` renders a recipe snippet. Added CLI cases for malformed and valid weights. ([#3118](https://github.com/MakazhanAlpamys/Soup/pull/3118))
   - Added charts for recorded mean training scores and spread in `soup runs show`, with documentation and CLI coverage. ([#3151](https://github.com/MakazhanAlpamys/Soup/pull/3151))
   - Added opt-in local-history duration and cost estimates for comparable single-GPU SFT runs, with launch eligibility, an additive SQLite migration and CPU tests. ([#3152](https://github.com/MakazhanAlpamys/Soup/pull/3152))
+  - Added custom ZeroGPU Space template guidance before deploy confirmation. ([#3319](https://github.com/MakazhanAlpamys/Soup/pull/3319))
 
 - **MOHD OWAIS** ([@codewithchotu](https://github.com/codewithchotu))
   - Validated judge JSONL categories before generation, with helper, gate-result, and CLI regression coverage and migration guidance. ([#3174](https://github.com/MakazhanAlpamys/Soup/pull/3174))
