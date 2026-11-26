@@ -58,6 +58,39 @@ def test_shipped_l2l_step_equals_gradient_accumulation(harness, streamed, k):  #
     assert harness.losses_equal(ga_losses, l2l_losses)
 
 
+@pytest.mark.parametrize("k", [1, 2])
+def test_l2l_scales_gradients_and_returns_unscaled_losses(harness, streamed, k):  # noqa: F811
+    import torch
+
+    from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
+
+    model, runtime = streamed
+    harness.make_non_vacuous(model)
+    micro_batches = _micro_batches(k)
+    harness.zero_grads(model)
+    expected_losses = harness.ga_step(model, micro_batches)
+    expected_grads = harness.collect_grads(model)
+
+    class Scaler:
+        calls = 0
+
+        def scale(self, loss):
+            self.calls += 1
+            return loss * 1024.0
+
+    scaler = Scaler()
+    step = L2LStep(model, runtime, capture_layer_call(model, micro_batches[0]))
+    harness.zero_grads(model)
+    losses = step.run(micro_batches, _store(k), scaler=scaler)
+    grads = harness.collect_grads(model)
+
+    assert scaler.calls == k
+    assert harness.losses_equal(expected_losses, losses)
+    assert grads.keys() == expected_grads.keys()
+    for name, grad in expected_grads.items():
+        assert torch.equal(grads[name], grad * 1024.0), name
+
+
 # --------------------------------------------------------------------------
 # layer loads, read from the runtime counters
 # --------------------------------------------------------------------------
@@ -305,21 +338,37 @@ def test_model_parts_still_names_an_unknown_architecture(monkeypatch):
 
 
 @pytest.mark.parametrize("layout", ["fused", "per_expert"])
-def test_the_trainer_refuses_a_moe_model_before_it_checks_the_layout(layout):
+@pytest.mark.parametrize("fp16", [False, True])
+def test_the_trainer_refuses_a_moe_model_before_it_checks_the_layout(layout, fp16):
     from soup_cli.trainer.l2l_trainer import refuse_unsupported_l2l
 
     config = type("Config", (), {"model_type": "deepseek_v3"})()
     with pytest.raises(ValueError) as caught:
-        refuse_unsupported_l2l(config, n_gpu=1, expert_layout=layout)
+        refuse_unsupported_l2l(config, n_gpu=1, expert_layout=layout, fp16=fp16)
     assert str(caught.value) == MOE_REFUSAL
 
 
-def test_the_trainer_still_admits_a_dense_model():
+def test_the_trainer_refuses_fp16_even_if_per_expert_moe_is_enabled(monkeypatch):
+    from soup_cli.trainer.l2l_trainer import refuse_unsupported_l2l
+    from soup_cli.utils import l2l_step
+
+    monkeypatch.setattr(l2l_step, "MOE_L2L_ENABLED", True)
+    config = type("Config", (), {"model_type": "deepseek_v3"})()
+    with pytest.raises(ValueError) as caught:
+        refuse_unsupported_l2l(config, n_gpu=1, expert_layout="per_expert", fp16=True)
+    assert str(caught.value) == (
+        "training.l2l does not support fp16 for model_type 'deepseek_v3': the per-expert "
+        "path is not validated under the fp16 loss scale. Use bf16 or fp32."
+    )
+
+
+@pytest.mark.parametrize("arch", ["llama", "mistral", "qwen3_5", "qwen3_5_text"])
+@pytest.mark.parametrize("fp16", [False, True])
+def test_the_trainer_admits_dense_models(arch, fp16):
     from soup_cli.trainer.l2l_trainer import refuse_unsupported_l2l
 
-    for arch in ("llama", "mistral"):
-        config = type("Config", (), {"model_type": arch})()
-        refuse_unsupported_l2l(config, n_gpu=1)
+    config = type("Config", (), {"model_type": arch})()
+    refuse_unsupported_l2l(config, n_gpu=1, fp16=fp16)
 
 
 # --------------------------------------------------------------------------

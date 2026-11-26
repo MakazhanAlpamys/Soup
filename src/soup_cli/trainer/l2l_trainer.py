@@ -121,9 +121,11 @@ MAX_CACHED_SHAPES = 64
 def refuse_unsupported_l2l(
     model_config: Any, *, n_gpu: int, fp16: bool = False, expert_layout: str = "fused"
 ) -> None:
-    """Refuse at launch what the schema cannot see: the model, the GPU count, fp16.
+    """Refuse unsupported models, expert layouts and GPU counts at launch.
 
     ``expert_layout`` is ``training.stream_expert_layout``; DeepSeek-V3 needs ``per_expert``.
+    Dense models can use fp16 with Accelerate's GradScaler. The per-expert
+    path still refuses fp16 because it has not been validated under loss scaling.
     """
     arch = str(getattr(model_config, "model_type", ""))
     refuse_moe_l2l(arch)
@@ -133,6 +135,11 @@ def refuse_unsupported_l2l(
                 f"training.l2l with model_type {arch!r} requires "
                 f"training.stream_expert_layout={EXPERT_LAYOUT_PER_EXPERT!r}; "
                 f"got {expert_layout!r}."
+            )
+        if fp16:
+            raise ValueError(
+                f"training.l2l does not support fp16 for model_type {arch!r}: the per-expert "
+                "path is not validated under the fp16 loss scale. Use bf16 or fp32."
             )
     elif arch not in PUBLIC_ARCHS:
         raise ValueError(
@@ -144,11 +151,6 @@ def refuse_unsupported_l2l(
         raise ValueError(
             f"training.l2l is single-GPU, but {n_gpu} GPUs are visible. Re-run with "
             f"one card visible, e.g. CUDA_VISIBLE_DEVICES=0."
-        )
-    if fp16:
-        raise ValueError(
-            "training.l2l does not support fp16: the L2L step runs backward itself, "
-            "so the fp16 grad scaler would never scale the loss. Use bf16 or fp32."
         )
 
 
@@ -713,11 +715,14 @@ def run_window(
     label_list: Any,
     n_items: Optional[int],
     device: Any,
+    *,
+    scaler: Any = None,
 ) -> Tuple[List[Any], Any]:
     """One L2L step over the window; returns the losses and the step's load counters.
 
     ``label_list`` is what the state's strategy read from the window besides the ids;
     ``n_items`` is HF's ``num_items_in_batch``, ``None`` for the preference trainers.
+    ``scaler`` is Accelerate's GradScaler for fp16, or ``None``.
     """
     strategy = state.loss
     divisor = strategy.divisor(len(ids_list), n_items)
@@ -740,6 +745,7 @@ def run_window(
         calls=calls,
         head=head,
         reference=reference,
+        scaler=scaler,
         **routing,
         route_preserving_mbr=state.route_preserving_mbr,
         mbr_group_size=state.mbr_group_size,
@@ -826,6 +832,7 @@ def make_l2l_trainer_class(base_cls: type) -> type:
                     label_list,
                     None if num_items_in_batch is None else int(num_items_in_batch),
                     device,
+                    scaler=getattr(self.accelerator, "scaler", None),
                 )
             state.steps += 1
             state.totals.add(counters)

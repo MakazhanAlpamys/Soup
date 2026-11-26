@@ -1190,6 +1190,7 @@ class L2LStep:
         calls: Optional[Sequence[LayerCall]] = None,
         head: Optional[LossHead] = None,
         reference: Union[ReferencePass, Sequence[ReferencePass], None] = None,
+        scaler: Any = None,
         routing_budget: Optional[Tuple[int, int]] = None,
         route_preserving_mbr: bool = False,
         mbr_group_size: Optional[int] = None,
@@ -1205,6 +1206,10 @@ class L2LStep:
 
         ``head`` replaces the SFT head and loss (see :data:`LossHead`); it owns its labels
         and its scale, so it excludes ``labels`` and ``n_items``.
+
+        ``scaler`` optionally scales each head loss before backward. The scale propagates
+        through the recomputed layers, and Accelerate handles unscaling and skipped
+        optimizer steps. The returned losses are unscaled.
 
         ``reference`` adds the gradient-free passes (one :class:`ReferencePass` or a sequence
         of them). It refuses a model whose layers draw dropout: accumulation's extra forwards
@@ -1268,6 +1273,7 @@ class L2LStep:
                         None,
                         head,
                         reference,
+                        scaler=scaler,
                         route_preserving_mbr=True,
                         mbr_group_size=mbr_group_size,
                         collect_phase_stats=collect_phase_stats,
@@ -1291,6 +1297,7 @@ class L2LStep:
                             guard,
                             head,
                             reference,
+                            scaler=scaler,
                             collect_phase_stats=collect_phase_stats,
                         )
         finally:
@@ -1310,6 +1317,7 @@ class L2LStep:
         head: Optional[LossHead],
         reference: Union[ReferencePass, Sequence[ReferencePass], None] = None,
         *,
+        scaler: Any = None,
         route_preserving_mbr: bool = False,
         mbr_group_size: Optional[int] = None,
         collect_phase_stats: bool = False,
@@ -1502,7 +1510,7 @@ class L2LStep:
             ):
                 loss = head(self.causal, self.owner, last, mb)
             with self._backward_context(micro_batches[mb]):
-                loss.backward()
+                (loss if scaler is None else scaler.scale(loss)).backward()
             losses.append(loss.detach())
             grads.append(last.grad)
 

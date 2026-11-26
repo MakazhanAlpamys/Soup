@@ -1,0 +1,1 @@
+- Support fp16 for dense L2L training by scaling the head loss with Accelerate's GradScaler (by @nurseit14)

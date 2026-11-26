@@ -124,6 +124,38 @@ def _assert_same_run(ga, l2l, windows):
     assert l2l.logs[0]["l2l_layer_loads"] > 0
 
 
+@pytest.mark.parametrize("use_scaler", [False, True])
+def test_training_step_passes_accelerators_scaler_to_the_window(
+    monkeypatch, streamed, tmp_path, use_scaler  # noqa: F811
+):
+    import torch
+    from transformers import Trainer
+
+    from soup_cli.trainer import l2l_trainer
+
+    scaler = torch.amp.GradScaler("cpu", init_scale=1024.0) if use_scaler else None
+
+    class TrainerWithScaler(Trainer):
+        def create_accelerator_and_postprocess(self):
+            super().create_accelerator_and_postprocess()
+            self.accelerator.scaler = scaler
+
+    seen = []
+    real_run_window = l2l_trainer.run_window
+
+    def spy(*args, **kwargs):
+        assert kwargs["scaler"] is scaler
+        seen.append(scaler)
+        return real_run_window(*args, **kwargs)
+
+    monkeypatch.setattr(l2l_trainer, "run_window", spy)
+    model, runtime = streamed
+    data = _MaskedRows([SEQ, SEQ], [[], [(0, 1)]])
+    result = _train(TrainerWithScaler, model, runtime, tmp_path, data, l2l=True, k=2)
+
+    assert seen == [result.trainer.accelerator.scaler]
+
+
 @pytest.mark.parametrize(
     "rows,k,windows", [(7, 3, 3), (8, 3, 3), (5, 4, 2), (3, 4, 1)]
 )
