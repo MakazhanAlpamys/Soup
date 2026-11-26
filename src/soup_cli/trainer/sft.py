@@ -995,6 +995,10 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                     f"{ckpt_plan.description}"
                 )
 
+        if tcfg.lisa_enabled and training_kwargs.get("gradient_checkpointing"):
+            # LISA freezes decoder parameters after DDP registers them.
+            training_kwargs["ddp_find_unused_parameters"] = True
+
         # NEFTune — noisy embeddings for better fine-tuning quality
         if tcfg.neftune_alpha is not None:
             training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
@@ -2631,6 +2635,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
+            prepare_lisa_checkpoint,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, self.config.training)
@@ -2639,6 +2644,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         attach_relora_callback(self.trainer, self.config.training)
         # LISA layerwise importance sampling (v0.71.34 #267).
         attach_lisa_callback(self.trainer, self.config.training)
+        prepare_lisa_checkpoint(self.trainer, self.config.training, resume_from_checkpoint)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(
             self.trainer, self.config.training, self._output_dir, console

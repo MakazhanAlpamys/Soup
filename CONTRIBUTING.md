@@ -89,6 +89,28 @@ With `[dev]` installed, run the full suite:
 python -m pytest tests/ -v --tb=short
 ```
 
+For a focused local check, run `python scripts/select_tests.py` from the repository
+root and copy the pytest command it prints. It considers staged, unstaged, and
+non-ignored untracked changes against `HEAD`. Use `--base <commit>` to include
+committed changes, or pass specific repository-relative files to choose the input.
+The selector follows static imports and string references to Soup modules. It
+uses test names when the import graph finds no tests, with a stop list for
+generic stems. If transitive links select more than 300 files, the selector uses
+the complete set of direct imports and their test-helper links. The status reports
+which scope ran.
+Shared files (including a changed `conftest.py`), deletions, and uncertain or still
+too-large selections request the full suite. Focused commands use `--no-cov`
+because coverage is measured on the full suite.
+
+Both modes exit 0 and print only the command on stdout. On stderr,
+`SOUP_TEST_SELECTION ` prefixes one JSON object with `mode` (`focused` or `full`),
+`reason` (null for focused), `scope` (`transitive` or `direct` for focused,
+null for full), and `unknown_dynamic_imports` (the number of unresolved calls
+seen while scanning, or zero if planning stopped before scanning). Unresolved
+`import_module` and `__import__` calls do not supply links. Invalid arguments exit
+2 without a command. Run the full suite before merging to cover dynamic dispatch
+and subprocesses. Use `--shell posix` in Git Bash on Windows.
+
 Run the linter in either environment:
 
 ```bash
@@ -684,23 +706,20 @@ GitHub Actions runs on every push and PR:
   `pull_request` run from a fork an OIDC token, so the upload could not
   authenticate. It is not a required check and blocks nothing.
 
-**Pull requests run a quick subset first.** A push to a pull request runs `lint`
-and the tests on Ubuntu / Python 3.12 only. The required cells (Ubuntu on Python
-3.11 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
-maintainer adds the `ci:full` label at approval, and on every later push while
-the label stays. Until then the other `test (...)` checks show as *Expected* and
-the smoke jobs as *skipped*; neither is a failure on your side. The plan job reads
-the current pull request labels when it runs. If the read succeeds, the surviving
-run sees `ci:full` even when it was added just after the push. If the read fails,
-the job warns and falls back to the labels in its triggering event. If the required
-cells are still missing after that fallback, a maintainer removes and re-adds
-`ci:full`. A PR is merged
-only when those checks are green on its current head. After the merge, `main`
-runs the same quick set on every commit and the full matrix (every Python from
-3.11 to 3.13, with 3.11 on Ubuntu only) once a night; a push to a `release/**`
-branch runs every cell. Python 3.13 runs in the nightly and release runs only, not
-on a pull request, so a failure that exists only there shows on `main` in the
-next nightly run.
+**Pull requests run a quick subset first.** A push to a pull request runs
+`lint` and the tests on Ubuntu / Python 3.12. A maintainer adds `ci:full`
+when the current head is ready. That label event runs the four required test
+cells and the smoke jobs. Later pushes run the quick subset. When the new head
+is ready, a maintainer removes and re-adds `ci:full` to request the full matrix
+again. A label left over from an earlier head is informational. The CI run
+summary shows which mode ran, and all eight required checks must succeed on
+the current head before merge. Adding `ci:full` to a draft pull request
+starts no CI jobs, so reapply it after marking the pull request ready.
+
+After the merge, `main` gets the quick set on each CI-triggering commit and
+the full matrix once a night. A push to a `release/**` branch runs every
+cell. Python 3.13 runs in nightly and release CI only, so a failure that
+exists only there can first surface after merge.
 
 **Coverage is measured on `main`, not on a pull request.** Every `test (...)`
 cell of a pull-request run, `test (ubuntu-latest, 3.11)` at approval included,

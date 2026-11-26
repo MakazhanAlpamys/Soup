@@ -316,6 +316,10 @@ forward this setting to their TRL/HF training arguments: `false` disables it
 and `true` enables it, including unquantized runs (`quantization: none`). These
 wrappers use full checkpointing for any enabled tier.
 
+When LISA uses native Transformers gradient checkpointing in SFT or pretraining,
+Soup enables DDP unused-parameter detection so each reduction can complete
+while inactive decoder layers are frozen.
+
 Distillation (`task: distill`), the classifier wrapper (`classifier`,
 `reranker`, `cross_encoder`) and Whisper ASR (`asr`) forward it to their HF
 training arguments the same way, and unlearning (`task: unlearn`), which trains

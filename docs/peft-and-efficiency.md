@@ -910,6 +910,15 @@ see capability regressions a task benchmark would. Full measurement record:
 
 Implementation note: the model is left fully trainable at trainer-setup time so HF's optimizer (built before the first callback fires) contains every decoder parameter; the LISA callback then toggles `requires_grad` per interval — frozen parameters produce no gradient and the optimizer skips them.
 
+LISA checkpoints for Transformers SFT and pretrain store the active decoder
+parameters and sampling state in `trainer_state.json`. Resume restores the
+saved selection before the first forward. The checkpoint must match the
+current LISA settings and model parameter names, shapes, and order.
+
+Older checkpoints without LISA state, including v0.78.0 checkpoints, could
+resume with a restarted layer schedule. They now raise a LISA resume error.
+Use the checkpoint's model weights as `base` and start a fresh run in a new
+output directory to restart the optimizer and layer schedule.
 
 ## Loss Watchdog
 
