@@ -1,7 +1,7 @@
-"""B1.1 storage codec, adapted from Soup d500ae0d's expert_stream.py.
+"""Per-expert shard storage for MoE expert streaming.
 
 Only storage and independent reads are exposed here. Expert scheduling,
-autograd and a public training flag belong to B1.2/B1.3, not this module.
+autograd and a public training flag live elsewhere, not in this module.
 One experts_NNN.safetensors holds independently addressed expert matrices;
 the ordinary layer file holds attention, norms, router and shared experts.
 """
