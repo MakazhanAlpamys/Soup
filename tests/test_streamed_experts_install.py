@@ -9,7 +9,7 @@ always was. The model-level bit-equality of the levers is in ``test_streamed_exp
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -100,11 +100,11 @@ def test_a_pool_that_cannot_be_built_closes_the_readers_it_opened(
 
     weights, _ = _tiny_deepseek_v3(tmp_path)
     index = _shard(tmp_path, weights, expert_layout="per_expert")
-    closed: Dict[str, int] = {"count": 0}
+    closed: set = set()
     original = expert_shard.ExpertShardReader.close
 
     def counting_close(self: Any) -> None:
-        closed["count"] += 1
+        closed.add(id(self))  # close() may run more than once per reader
         original(self)
 
     monkeypatch.setattr(expert_shard.ExpertShardReader, "close", counting_close)
@@ -112,7 +112,7 @@ def test_a_pool_that_cannot_be_built_closes_the_readers_it_opened(
     # opened for it must still be closed.
     with pytest.raises(ValueError, match="packed transfer needs NF4 in every expert matrix"):
         _build(tmp_path, index, weights, expert_pool=True, expert_transfer="packed")
-    assert closed["count"] == 2  # one per MoE layer
+    assert len(closed) == 2  # every reader opened, one per MoE layer
 
 
 @pytest.mark.parametrize("lever", ["two_read_experts", "grouped_expert_routes", "expert_pool"])
