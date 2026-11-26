@@ -49,6 +49,12 @@ def _drive(tmp_path, monkeypatch, *, requested, quantization="4bit", **overrides
     from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
 
     shard_calls: list = []
+    # The harness fakes ``transformers`` without BitsAndBytesConfig; the NF4 config the
+    # skeleton and the sharder share is replaced by a record of the value it was given.
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.build_nf4_config",
+        lambda dtype, *, double_quant=True: types.SimpleNamespace(double_quant=double_quant),
+    )
     model_cfg = types.SimpleNamespace(
         model_type="deepseek_v3", hidden_size=4, num_hidden_layers=1, vocab_size=8,
         intermediate_size=8, quantization_config=DEEPSEEK_FP8,
