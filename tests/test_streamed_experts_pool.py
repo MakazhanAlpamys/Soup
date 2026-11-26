@@ -552,7 +552,7 @@ def test_a_reader_the_pool_was_not_built_for_is_refused_at_construction(tmp_path
 
     path = str(other_dir / "experts.safetensors")
     info = write_expert_shard(
-        path, iter([(torch.ones(2 * INTER + 2, HIDDEN), torch.ones(HIDDEN, INTER))]),
+        path, iter([(torch.ones(2 * (INTER + 1), HIDDEN), torch.ones(HIDDEN, INTER + 1))]),
         quantise=False,
     )
     stranger = ExpertShardReader(

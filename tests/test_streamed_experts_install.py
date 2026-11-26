@@ -108,7 +108,9 @@ def test_a_pool_that_cannot_be_built_closes_the_readers_it_opened(
         original(self)
 
     monkeypatch.setattr(expert_shard.ExpertShardReader, "close", counting_close)
-    with pytest.raises(ValueError, match="packed expert transfer requires CUDA"):
+    # The plan refuses packed transfer on dense experts before the pool is built; the readers
+    # opened for it must still be closed.
+    with pytest.raises(ValueError, match="packed transfer needs NF4 in every expert matrix"):
         _build(tmp_path, index, weights, expert_pool=True, expert_transfer="packed")
     assert closed["count"] == 2  # one per MoE layer
 
