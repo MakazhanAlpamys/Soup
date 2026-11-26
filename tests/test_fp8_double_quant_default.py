@@ -49,8 +49,20 @@ def _drive(tmp_path, monkeypatch, *, requested, quantization="4bit", **overrides
     from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
 
     shard_calls: list = []
-    # The harness fakes ``transformers`` without BitsAndBytesConfig; the NF4 config the
-    # skeleton and the sharder share is replaced by a record of the value it was given.
+    # The harness fakes ``transformers``: no meta skeleton and no BitsAndBytesConfig. Probe
+    # and NF4 config are replaced as the serialized-source setup tests do.
+    monkeypatch.setattr(
+        "soup_cli.trainer.stream_setup.StreamingSetupMixin._stream_meta_skeleton",
+        classmethod(lambda cls, base, *, dtype, quant: types.SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.quantised_layer_suffixes",
+        lambda _model: frozenset({"self_attn.q_proj.weight"}),
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.moe.resolve_moe_lora_targets",
+        lambda _probe, _tcfg, targets, **_kwargs: targets,
+    )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.build_nf4_config",
         lambda dtype, *, double_quant=True: types.SimpleNamespace(double_quant=double_quant),
