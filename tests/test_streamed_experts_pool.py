@@ -196,17 +196,29 @@ def test_grouped_routes_yield_the_default_experts_and_rows_in_the_same_order(
         assert torch.equal(got_pos, want_pos) and torch.equal(got_token, want_token)
 
 
-def test_grouped_routes_refuse_a_mask_that_is_not_binary() -> None:
+def _hand_mask(entries: dict, experts: int = 2) -> Any:
+    mask = torch.zeros(experts, 1, 2, dtype=torch.int64)
+    for (expert, slot, token), value in entries.items():
+        mask[expert, slot, token] = value
+    return mask
+
+
+@pytest.mark.parametrize(
+    ("entries", "message"),
+    [
+        # a count above the coordinates the mask has: 2 against one nonzero entry
+        ({(0, 0, 0): 2}, "grouped expert routes require a binary one-hot mask"),
+        # a negative count: -1 against one nonzero entry
+        ({(0, 0, 0): -1}, "grouped expert routes require a binary one-hot mask"),
+        # counts that sum below the coordinates: one expert holds 2 and -1 (count 1, 2 entries)
+        ({(0, 0, 0): 2, (0, 0, 1): -1}, "grouped expert routes omitted nonzero coordinates"),
+    ],
+)
+def test_grouped_routes_refuse_a_mask_that_is_not_binary(entries: dict, message: str) -> None:
     from soup_cli.utils.expert_stream import _grouped_expert_routes
 
-    mask = _mask(_inputs()[1]).clone()
-    mask[0, 0, 0] = 2
-    with pytest.raises(ValueError, match="grouped expert routes omitted nonzero coordinates"):
-        list(_grouped_expert_routes(mask))
-    negative = _mask(_inputs()[1]).clone()
-    negative[0, 0, 0] = -1
-    with pytest.raises(ValueError, match="grouped expert routes require a binary one-hot mask"):
-        list(_grouped_expert_routes(negative))
+    with pytest.raises(ValueError, match=message):
+        list(_grouped_expert_routes(_hand_mask(entries)))
 
 
 def test_the_grouped_lever_is_off_by_default_and_takes_only_a_bool(tmp_path: Path) -> None:
@@ -571,7 +583,34 @@ def test_last_trace_has_one_row_per_visited_expert_and_replaces_itself(tmp_path:
         assert all(row["logical_bytes_read"] > 0 for row in streamed.last_trace)
         with torch.no_grad():
             streamed(*_inputs(tokens=2, top_k=1)[:3])
-        assert len(streamed.last_trace) <= 2
+        assert [row["expert"] for row in streamed.last_trace] == [0, 5]
+    finally:
+        reader.close()
+        pool.close()
+
+
+@pytest.mark.parametrize("two_reads", [False, True], ids=["default", "two-reads"])
+def test_the_backward_validates_the_activation_again_before_leasing_an_expert(
+    tmp_path: Path, two_reads: bool
+) -> None:
+    module = _experts()
+    reader, pool = _store(tmp_path, module)
+    try:
+        hidden, index, weights, grad_out = _inputs(tokens=12)
+        hidden.requires_grad_(True)
+        streamed = _streamed(module, reader, pool, two_reads=two_reads)
+        out = streamed(hidden, index, weights)
+        reads = pool.fetches
+        assert reads == len(_hit(index))
+        handle = streamed.act_fn.register_forward_hook(lambda *_: None)
+        try:
+            with pytest.raises(
+                ValueError, match="expert backward requires an unmodified stateless SiLU activation"
+            ):
+                out.backward(grad_out)
+        finally:
+            handle.remove()
+        assert pool.fetches == reads
     finally:
         reader.close()
         pool.close()
@@ -669,6 +708,11 @@ def test_install_refuses_a_reader_outside_the_layers_and_a_non_bool_lever(tmp_pa
                 install_expert_streaming([layer], {bad_index: reader}, pool)
         with pytest.raises(ValueError, match="grouped_expert_routes must be a bool"):
             install_expert_streaming([layer], {0: reader}, pool, grouped_expert_routes=1)
+        # No layer and no reader: only the install-level check can see the bad value.
+        for bad in (1, 0, "true", None):
+            with pytest.raises(ValueError, match="grouped_expert_routes must be a bool"):
+                install_expert_streaming([], {}, pool, grouped_expert_routes=bad)
+        assert install_expert_streaming([], {}, pool, grouped_expert_routes=True) == 0
     finally:
         reader.close()
         pool.close()
@@ -683,6 +727,22 @@ def test_install_refuses_two_layers_that_share_one_experts_module(tmp_path: Path
         layer = _layer(_experts())
         with pytest.raises(ValueError, match="aliased modules cannot take two replacements"):
             install_expert_streaming([layer, layer], {0: reader, 1: reader}, pool)
+    finally:
+        reader.close()
+        pool.close()
+
+
+def test_install_refuses_two_parents_that_share_one_experts_module(tmp_path: Path) -> None:
+    from soup_cli.utils.expert_stream import install_expert_streaming
+
+    module = _experts()
+    reader, pool = _store(tmp_path, module)
+    try:
+        shared = _experts()
+        first, second = _layer(shared), _layer(shared)
+        with pytest.raises(ValueError, match="aliased modules cannot take two replacements"):
+            install_expert_streaming([first, second], {0: reader, 1: reader}, pool)
+        assert first.mlp.experts is shared and second.mlp.experts is shared
     finally:
         reader.close()
         pool.close()

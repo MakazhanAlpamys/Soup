@@ -1552,6 +1552,7 @@ def install_expert_streaming(
     pooled = isinstance(source, ExpertBufferPool)
     cls = streamed_experts_class()
     replacements = []
+    experts_modules = []
     for idx, layer in enumerate(layers):
         reader = readers.get(idx)
         found = find_experts_module(layer)
@@ -1610,11 +1611,12 @@ def install_expert_streaming(
                 f"decoder layer {idx}: two reads replay the router's top-k decisions, but "
                 f"the MoE block has no router module at `.gate`"
             )
-        if any(parent is other and attr == name for other, name, _, _ in replacements):
+        if any(module is other for other in experts_modules):
             raise ValueError(
                 f"decoder layer {idx}: its routed-experts module is also the one of an "
                 f"earlier layer; aliased modules cannot take two replacements"
             )
+        experts_modules.append(module)
         replacements.append((
             parent, attr,
             cls(

@@ -122,3 +122,14 @@ def test_every_lever_needs_a_per_expert_cache_instead_of_being_ignored(
     assert index.expert_layout != "per_expert"
     with pytest.raises(ValueError, match=f"{lever} needs a cache sharded with"):
         _build(tmp_path, index, weights, **{lever: True})
+
+
+@pytest.mark.parametrize("name", ["expert_pool", "expert_prefetch"])
+@pytest.mark.parametrize("bad", [1, 0, "no", None])
+def test_the_pool_switches_take_only_a_bool(name: str, bad: Any) -> None:
+    from soup_cli.utils.layer_stream_runtime import _install_expert_streaming
+
+    with pytest.raises(ValueError, match=f"{name} must be a bool"):
+        _install_expert_streaming(
+            [], "unused", object(), device="cpu", codes=None, **{name: bad}
+        )

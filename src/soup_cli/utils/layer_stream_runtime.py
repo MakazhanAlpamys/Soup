@@ -3974,6 +3974,9 @@ def _install_expert_streaming(
     )
     from soup_cli.utils.layer_shard import expert_paths
 
+    for name, value in (("expert_pool", expert_pool), ("expert_prefetch", expert_prefetch)):
+        if type(value) is not bool:
+            raise ValueError(f"{name} must be a bool")
     pool_options = (
         ("expert_transfer", expert_transfer != "sync"),
         ("expert_host_cache_bytes", bool(expert_host_cache_bytes)),

@@ -1,9 +1,10 @@
 """``ExpertBufferPool``: one bounded expert slot, leased one expert at a time.
 
 Seam: ``plan_expert_buffer`` + ``expert_allocation_budget`` + ``ExpertBufferPool`` over an
-``ExpertShardReader``. The pool is not wired into ``StreamedExperts`` yet, so every test drives
-``lease`` directly and compares the leased weights with the stored ones (dense), or with what
-``ExpertFetcher`` dequantises from the same file (NF4). The packed-transfer H2D copy needs a
+``ExpertShardReader``. ``StreamedExperts`` over a pool is covered in
+``test_streamed_experts_pool.py``; every test here drives ``lease`` directly and compares the
+leased weights with the stored ones (dense), or with what ``ExpertFetcher`` dequantises from the
+same file (NF4). The packed-transfer H2D copy needs a
 card; its tests carry the ``gpu`` marker and skip on CPU.
 """
 
