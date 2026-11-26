@@ -30,5 +30,11 @@
   "in_training_eval_seconds": 112.8,
   "training_seconds": 104.3,
   "system_in_user": true,
-  "code": "main 83d4e9dc (prefix-tree code of ab9715d9)"
+  "code": "main 83d4e9dc (prefix-tree code of ab9715d9)",
+  "held_out_loss_per_epoch": [
+    0.5458
+  ],
+  "in_training_eval_runtimes": [
+    112.8
+  ]
 }

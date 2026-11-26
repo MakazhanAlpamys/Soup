@@ -28,10 +28,10 @@ section 7.
 **Status: MEASURED on one laptop (RTX 3050 Laptop 4 GB), a 7B and a 0.5B model, three
 datasets.** Through the shipped trainer, layer-streamed NF4:
 
-| | data | examples/s, one per step -> prefix tree | held-out loss, same wall time |
+| | data | examples/s, one per step -> prefix tree | held-out loss, no more training time (epoch evaluations excluded) |
 |---|---|---|---|
-| Mistral-7B | tool calling, one 4-function schema | 0.400 -> 1.404 (3.5x) | 0.1488 -> **0.1340** in 66 % of the time |
-| Mistral-7B | the same, rows of 1024 / 2048 tokens | 0.392 -> 3.109 (7.9x) / 0.375 -> 3.768 (10.0x) | 0.1488 -> **0.1329** / **0.1361** in 92 % / 90 % of the time |
+| Mistral-7B | tool calling, one 4-function schema | 0.400 -> 1.404 (3.5x) | 0.1488 -> **0.1340** in 66 % of the training time (end to end 0.85x) |
+| Mistral-7B | the same, rows of 1024 / 2048 tokens | 0.392 -> 3.109 (7.9x) / 0.375 -> 3.768 (10.0x) | 0.1488 -> **0.1329** / **0.1361** in 92 % / 90 % of the training time (end to end 1.60x / 1.80x) |
 | Mistral-7B | tool calling as published | 0.479 -> 1.130 (2.4x) | not run |
 | Mistral-7B | plain instructions (dolly) | 0.563 -> 1.235 (2.2x) | not run |
 | Qwen2.5-0.5B | tool calling, one 4-function schema | 2.42 -> 10.72 (4.4x) | 0.2556 -> **0.2126** |
@@ -121,31 +121,35 @@ rows; the timed part is the first 30 groups on the 0.5B model (3 rounds) and the
 `prefix_tree_ab.py --train` calls `wrapper.train()`; 100 held-out rows (the next rows of the
 same file) are scored before and after. Three runs per model and dataset on the same training
 rows: **A** ordinary, one epoch; **B** prefix tree, one epoch (the same examples, fewer
-optimizer steps); **C** prefix tree for as many epochs as fit in about A's time. "Training" is
-`train_runtime` minus the end-of-epoch evaluations the trainer runs inside it.
+optimizer steps); **C** prefix tree for as many epochs as fit in about A's training time.
+"Training" is `train_runtime` minus the end-of-epoch evaluations the trainer runs inside it
+(about 113 s each on the 7B model, 12 to 13 s on the 0.5B model): A and B run one, C one per
+epoch. "End to end" is the whole `wrapper.train()` call (`wall_seconds`): training, those
+evaluations and the held-out scoring at the end. Every percentage of A's time below is of the
+training time, so it excludes the epoch evaluations.
 
-| model, data | | epochs | optimizer steps | training | held-out loss |
-|---|---|---|---|---|---|
-| Mistral-7B, glaive one schema (300 rows) | before | | | | 2.8378 |
-| | A ordinary | 1 | 300 | 794.5 s | 0.1488 |
-| | B prefix tree, 512-token rows | 1 | 86 | **263.0 s** | 0.1833 |
-| | C prefix tree, 512-token rows | 2 | 172 | 524.7 s | **0.1340** |
-| | B prefix tree, 1024-token rows | 1 | 21 | **104.3 s** | 0.5458 |
-| | C prefix tree, 1024-token rows | 7 | 147 | 732.8 s | **0.1329** |
-| | B prefix tree, 2048-token rows | 1 | 8 | **79.7 s** | 1.6190 |
-| | C prefix tree, 2048-token rows | 9 | 72 | 713.7 s | **0.1361** |
-| Qwen2.5-0.5B, glaive one schema (600 rows) | before | | | | 1.9687 |
-| | A ordinary | 1 | 600 | 245.2 s | 0.2556 |
-| | B prefix tree | 1 | 125 | **57.7 s** | 0.3555 |
-| | C prefix tree | 4 | 500 | 229.2 s | **0.2126** |
-| Qwen2.5-0.5B, glaive as published (600 rows) | before | | | | 1.4274 |
-| | A ordinary | 1 | 600 | 254.9 s | 0.2078 |
-| | B prefix tree | 1 | 242 | **117.6 s** | 0.2408 |
-| | C prefix tree | 2 | 484 | 234.7 s | **0.1950** |
-| Qwen2.5-0.5B, dolly (600 rows) | before | | | | 2.1400 |
-| | A ordinary | 1 | 600 | 258.2 s | **1.4806** |
-| | B prefix tree | 1 | 215 | 154.9 s | 1.5006 |
-| | C prefix tree | 2 | 430 | 306.7 s | 1.4848 |
+| model, data | | epochs | optimizer steps | training | end to end | held-out loss |
+|---|---|---|---|---|---|---|
+| Mistral-7B, glaive one schema (300 rows) | before | | | | | 2.8378 |
+| | A ordinary | 1 | 300 | 794.5 s | 1023.2 s | 0.1488 |
+| | B prefix tree, 512-token rows | 1 | 86 | **263.0 s** | 495.8 s | 0.1833 |
+| | C prefix tree, 512-token rows | 2 | 172 | 524.7 s | 867.1 s | **0.1340** |
+| | B prefix tree, 1024-token rows | 1 | 21 | **104.3 s** | 330.9 s | 0.5458 |
+| | C prefix tree, 1024-token rows | 7 | 147 | 732.8 s | 1638.8 s | **0.1329** |
+| | B prefix tree, 2048-token rows | 1 | 8 | **79.7 s** | 306.7 s | 1.6190 |
+| | C prefix tree, 2048-token rows | 9 | 72 | 713.7 s | 1844.2 s | **0.1361** |
+| Qwen2.5-0.5B, glaive one schema (600 rows) | before | | | | | 1.9687 |
+| | A ordinary | 1 | 600 | 245.2 s | 272.1 s | 0.2556 |
+| | B prefix tree | 1 | 125 | **57.7 s** | 84.3 s | 0.3555 |
+| | C prefix tree | 4 | 500 | 229.2 s | 295.3 s | **0.2126** |
+| Qwen2.5-0.5B, glaive as published (600 rows) | before | | | | | 1.4274 |
+| | A ordinary | 1 | 600 | 254.9 s | 283.4 s | 0.2078 |
+| | B prefix tree | 1 | 242 | **117.6 s** | 142.6 s | 0.2408 |
+| | C prefix tree | 2 | 484 | 234.7 s | 271.8 s | **0.1950** |
+| Qwen2.5-0.5B, dolly (600 rows) | before | | | | | 2.1400 |
+| | A ordinary | 1 | 600 | 258.2 s | 283.1 s | **1.4806** |
+| | B prefix tree | 1 | 215 | 154.9 s | 180.0 s | 1.5006 |
+| | C prefix tree | 2 | 430 | 306.7 s | 344.8 s | 1.4848 |
 
 - **One epoch is faster and ends slightly worse.** A prefix-tree step holds several examples,
   so an epoch is a quarter to a half of the optimizer steps: 3.0x, 4.3x, 2.2x and 1.7x less
@@ -153,15 +157,20 @@ optimizer steps); **C** prefix tree for as many epochs as fit in about A's time.
 - **With longer rows one epoch is far from trained.** At 1024 and 2048 tokens a row holds about
   14 and 38 of the 300 examples, so an epoch is 21 and 8 optimizer steps: 7.6x and 10.0x less
   training time than A, and a held-out loss of 0.5458 and 1.6190.
-- **The same time ends better on the tool-calling data**: on all five such runs, C reaches a
-  lower held-out loss than A in no more time (the 7B runs in 66 %, 92 % and 90 % of it).
+- **The same training time ends better on the tool-calling data**: on all five such runs, C
+  reaches a lower held-out loss than A in no more training time (the 7B runs in 66 %, 92 % and
+  90 % of it, epoch evaluations excluded). End to end, with C's evaluation after every epoch,
+  the 7B runs took 0.85x, 1.60x and 1.80x of A's time and the 0.5B runs 1.09x and 0.96x.
 - **The 1024 and 2048 runs** were made on the merged code (2026-11-25), with the same 300
-  training and 100 held-out rows as A. C's epochs are the most whose time fits in A's 794.5 s.
-  Held-out loss after each epoch, from the evaluation the trainer runs: at 1024 tokens 0.2966,
+  training and 100 held-out rows as A. C's epochs are the most whose training time fits in A's
+  794.5 s. Held-out loss after each epoch, from the evaluation the trainer runs (in the raw
+  files as `held_out_loss_per_epoch`, four significant digits as the trainer printed them;
+  `in_training_eval_runtimes` holds each evaluation's seconds): at 1024 tokens 0.2966,
   0.1654, 0.1355, 0.1449, 0.1292, 0.1331, 0.1329; at 2048 tokens 1.216, 0.3736, 0.2207, 0.1728,
   0.151, 0.1435, 0.137, 0.1361, 0.1361. Every epoch from the third on at 1024 tokens and from
   the sixth on at 2048 is below A's 0.1488.
-- **On dolly it does not**: C took longer than A and ended 0.004 higher. See section 4.
+- **On dolly it does not**: C took longer than A (training and end to end) and ended 0.004
+  higher. See section 4.
 - Single runs, one seed, held-out LOSS on the next 100 rows of the same file. Nothing here
   measures generated tool calls or answers.
 

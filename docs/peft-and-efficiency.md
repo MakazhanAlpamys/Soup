@@ -276,7 +276,8 @@ dropout 0, examples per second, one example per step against prefix-tree rows:
 Peak VRAM stays near batch 1's (1.19 GB against 1.14 GB on the 7B model at 512 tokens), which
 is what leaves room for the longer rows. Loss on 100 held-out rows after about the same
 training time, ordinary against prefix tree: 0.1488 against 0.1340, 0.1329 and 0.1361
-(Mistral-7B with 512-, 1024- and 2048-token rows, in 66 %, 92 % and 90 % of the time), 0.2556
+(Mistral-7B with 512-, 1024- and 2048-token rows, in 66 %, 92 % and 90 % of the training time;
+the evaluation after each epoch excluded, which end to end makes 0.85x, 1.60x and 1.80x), 0.2556
 against 0.2126 and 0.2078 against 0.1950 (Qwen2.5-0.5B, tool calling), 1.4806 against 1.4848
 (Qwen2.5-0.5B, dolly: no gain). One epoch of 512-token prefix-tree rows is 1.7x to 4.3x shorter
 and ends 0.02 to 0.10 higher in held-out loss at the same learning rate; with longer rows an
