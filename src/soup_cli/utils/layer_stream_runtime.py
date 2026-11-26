@@ -3984,6 +3984,10 @@ class StreamRuntime:
             # number there would be an invented one.
             "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
+            "ram_cache_allocated_bytes": getattr(self.source, "_cache_stats", {}).get(
+                "allocated_bytes", 0
+            ),
+            "ram_cache_indices": list(getattr(self.source, "_cache_stats", {}).get("indices", [])),
             "drive_count": len(getattr(self.source, "direct_io_roots", {})),
             "direct_io_drives": sum(
                 getattr(self.source, "direct_io_roots", {}).values()

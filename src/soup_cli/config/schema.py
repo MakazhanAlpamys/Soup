@@ -4288,13 +4288,14 @@ class TrainingConfig(BaseModel):
             "and selects the layers that fit a conservative VRAM budget (the "
             "smaller of 85% of the card and free + reserved VRAM, or "
             "stream_vram_override, minus the measured peak, a setup reserve and an "
-            "estimated optimizer state). CUDA and the RAM tier only, dense "
-            "decoders only; 'auto' falls back to ordinary streaming where it "
-            "cannot measure, a positive count refuses instead. The host store is "
-            "retained. Setup probes preserve RNG and do not update adapters. No "
-            "speed guarantee. task='sft' with an AdamW optimizer only, and "
-            "refused beside activation_offloading and a non-default "
-            "stream_recompute."
+            "estimated optimizer state). CUDA with the RAM tier or the async SSD "
+            "source, dense decoders only. A GPU-resident layer skips its SSD reads "
+            "and is excluded from the stream_ram_cache_mb hotset. 'auto' falls back "
+            "to ordinary streaming where it cannot measure, a positive count refuses "
+            "instead. The RAM-tier host store is retained. Setup probes preserve RNG "
+            "and do not update adapters. No speed guarantee. task='sft' with an AdamW "
+            "optimizer only, and refused beside activation_offloading and a "
+            "non-default stream_recompute."
         ),
     )
 
@@ -4310,6 +4311,23 @@ class TrainingConfig(BaseModel):
                 f"got {type(v).__name__} {v!r}"
             )
         return v
+
+    stream_ram_cache_mb: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Optional allocation ceiling in MiB for a persistent RAM hotset on the "
+            "SSD streaming tier: the layers most re-read are loaded once and served "
+            "from host RAM instead of the disk. 0 (the default) disables it. The "
+            "layer count is selected automatically from the real allocation "
+            "(arena rounding included), the current cgroup limits, 30% available-RAM "
+            "slack and a 512 MiB runtime reserve, never above this ceiling. Does not "
+            "change weights or GPU buffers. Refused with stream_source='ram', which "
+            "already holds the complete store; on the 'auto' tier it applies only "
+            "when the store spills to the disk tier."
+        ),
+    )
 
     stream_expert_layout: Literal["fused", "per_expert"] = Field(
         default="fused",
@@ -8048,6 +8066,7 @@ class SoupConfig(BaseModel):
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
                     ("stream_resident_layers", tcfg.stream_resident_layers != 0),
+                    ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
@@ -8102,6 +8121,13 @@ class SoupConfig(BaseModel):
                 "belongs to the NVMe disk tier, and 'ram' never falls back to "
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
+            )
+        if tcfg.stream_source == "ram" and tcfg.stream_ram_cache_mb != 0:
+            raise ValueError(
+                f"training.stream_ram_cache_mb={tcfg.stream_ram_cache_mb} has no effect "
+                "with training.stream_source='ram': the RAM tier already holds the "
+                "complete store. Set stream_source='auto' or 'disk', or drop "
+                "stream_ram_cache_mb."
             )
         # DPO/IPO use a frozen reference adapter on the streamed base.
         # KTO/BCO use the same base with adapters disabled for the reference pass.
@@ -8196,13 +8222,6 @@ class SoupConfig(BaseModel):
                     f"decide what stays in spare VRAM and their combined budget is "
                     f"not measured. Set stream_recompute to 'on' or remove "
                     f"training.stream_resident_layers."
-                )
-            if tcfg.stream_source == "disk" and tcfg.stream_resident_layers != "auto":
-                raise ValueError(
-                    "training.stream_resident_layers requires the RAM tier: "
-                    "training.stream_source='disk' forces the disk tier. Use "
-                    "stream_source='ram' or 'auto', or stream_resident_layers='auto', "
-                    "which keeps ordinary streaming there."
                 )
             if tcfg.optimizer not in _STREAM_RESIDENCY_OPTIMIZERS:
                 raise ValueError(

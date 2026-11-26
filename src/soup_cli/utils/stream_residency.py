@@ -205,7 +205,7 @@ def configure_stream_residency(
     reserve_bytes: int = RESIDENCY_RESERVE_BYTES,
     optimizer_reserve_bytes: Optional[int] = None,
 ) -> ResidencyPlan:
-    """Install and measure an opt-in RAM-tier resident set before training.
+    """Install and measure a resident set on the RAM tier or a coordinated SSD source.
 
     ``auto`` safely keeps the ordinary pool when capacity cannot be established.
     Explicit positive counts refuse an unsupported or non-fitting configuration.
@@ -242,8 +242,13 @@ def configure_stream_residency(
         return result(reason)
 
     pool = runtime.pool
-    if getattr(runtime, "tier", None) != "ram":
-        return refuse("ordinary streaming kept: residency currently supports the RAM tier only")
+    tier = getattr(runtime, "tier", None)
+    coordinate = (
+        getattr(getattr(runtime, "source", None), "set_resident_layers", None)
+        if tier == "disk" else None
+    )
+    if tier != "ram" and not (tier == "disk" and callable(coordinate)):
+        return refuse("ordinary streaming kept: requires the RAM tier or a coordinated SSD source")
     if not getattr(pool, "is_cuda", False):
         return refuse("ordinary streaming kept: no CUDA pool to measure")
     if min(rows, seq_len, vocab_size) < 1:
@@ -283,6 +288,8 @@ def configure_stream_residency(
         # views otherwise keep the allocation alive after the pool shrinks.
         memory.synchronize()
         clear_stream_substitution_cache(model)
+        if callable(coordinate):
+            coordinate(())
         pool.clear_resident_layers()
         memory.release()
 
@@ -323,6 +330,8 @@ def configure_stream_residency(
         clear_stream_substitution_cache(model)
         pool.reserve_layers(indices, runtime.source, getattr(runtime.prefetcher, "stream", None))
         memory.synchronize()
+        if callable(coordinate):
+            coordinate(indices)
         state["preload_seconds"] = time.perf_counter() - preload_started
         candidate = probe()
         if candidate is None:

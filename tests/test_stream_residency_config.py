@@ -53,13 +53,15 @@ def test_residency_refuses_unmeasured_tasks(task):
         SoupConfig.model_validate(payload)
 
 
-def test_manual_disk_refuses_but_auto_can_report_fallback():
-    payload = _payload(2)
+@pytest.mark.parametrize("mode", [2, "auto"])
+def test_disk_accepts_residency_with_or_without_ram_hotset(mode):
+    payload = _payload(mode)
     payload["training"]["stream_source"] = "disk"
-    with pytest.raises(ValidationError, match="RAM tier"):
-        SoupConfig.model_validate(payload)
-    payload["training"]["stream_resident_layers"] = "auto"
     assert SoupConfig.model_validate(payload).training.stream_source == "disk"
+    payload["training"]["stream_ram_cache_mb"] = 4096
+    config = SoupConfig.model_validate(payload)
+    assert config.training.stream_resident_layers == mode
+    assert config.training.stream_ram_cache_mb == 4096
 
 
 @pytest.mark.parametrize("mode", [2, "auto"])
@@ -127,14 +129,6 @@ def test_residency_task_refusal_names_the_task(task):
         f"training.stream_resident_layers supports task='sft' only; got task='{task}'"
         in _text(excinfo)
     )
-
-
-def test_residency_disk_refusal_names_the_tier():
-    payload = _payload(2)
-    payload["training"]["stream_source"] = "disk"
-    with pytest.raises(ValidationError) as excinfo:
-        SoupConfig.model_validate(payload)
-    assert "training.stream_resident_layers requires the RAM tier" in _text(excinfo)
 
 
 @pytest.mark.parametrize("backend", ["unsloth", "mlx"])

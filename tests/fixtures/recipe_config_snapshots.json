@@ -281,6 +281,7 @@
     "training.stream_nf4_scale_cache": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
+    "training.stream_ram_cache_mb": 0,
     "training.stream_read_ahead": 2,
     "training.stream_recompute": "on",
     "training.stream_resident_layers": 0,

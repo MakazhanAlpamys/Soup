@@ -88,11 +88,17 @@ def _stream_source_line(stats: dict) -> str:
     media = "an NVMe volume"
     if drive_count > 1:
         media = f"{drive_count} NVMe volumes, direct I/O {direct_io}/{drive_count}"
+    cache = ""
+    if stats.get("ram_cache_allocated_bytes", 0):
+        cache = (
+            f", {stats['ram_cache_allocated_bytes'] / 1e9:.2f} GB RAM cache "
+            f"({len(stats['ram_cache_indices'])} layers)"
+        )
     return (
         f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on {media}) "
         f"by an async reader, read_ahead={stats['read_ahead']}, "
         f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
-    ) + _page_locked_note(stats)
+    ) + cache + _page_locked_note(stats)
 
 
 def _page_locked_note(stats: dict) -> str:
@@ -1479,6 +1485,12 @@ class StreamingSetupMixin:
                 "proceeding and letting the allocation fail loudly if it must[/]"
             )
             free_ram = (layer_bytes * index.n_layers + large_store_bytes + embed_bytes) * 10
+        if getattr(tcfg, "stream_ram_cache_mb", 0):
+            from soup_cli.utils.stream_ram_cache import available_memory
+
+            # A large host may give this process only a small cgroup. Do not
+            # select a whole-model RAM store using physical-host availability.
+            free_ram = available_memory(host_available=free_ram)["available_bytes"]
 
         store_total = layer_store_bytes + large_store_bytes
         ngram_source = "disk"
@@ -1789,6 +1801,20 @@ class StreamingSetupMixin:
             except BaseException:
                 self._close_stream_runtime()
                 raise
+        # training.stream_ram_cache_mb -- after residency, so the hotset is sized
+        # without the layers the GPU already holds. Off by default.
+        cache_mb = getattr(tcfg, "stream_ram_cache_mb", 0)
+        if cache_mb:
+            if tier == TIER_DISK:
+                try:
+                    runtime.source.configure_ram_cache(cache_mb * 2**20)
+                except BaseException:
+                    self._close_stream_runtime()
+                    raise
+            else:
+                console.print(
+                    "[dim]RAM cache is unnecessary: the complete streamed store fits in RAM.[/]"
+                )
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
