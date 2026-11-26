@@ -178,6 +178,7 @@ function navigate(page) {
   else if (page === 'data') { /* loaded on demand */ }
   else if (page === 'chat') loadChatPage();
   else if (page === 'tools') loadToolOutputs();
+  else if (page === 'export') loadExportPage();
   // v0.53.10 #155 — pause Tool Outputs polling when navigating away so we
   // don't keep firing fetch() against /api/tool-outputs from background tabs.
   if (page !== 'tools') stopToolOutputsPolling();
@@ -1098,6 +1099,122 @@ function updateProgressBar(step, total, elapsed, eta) {
   if (etaEl) etaEl.textContent = 'ETA: ' + formatDuration(eta);
 }
 
+// --- Export to Ollama ---
+async function loadExportPage() {
+  const statusEl = document.getElementById('export-ollama-status');
+  if (!statusEl) return;
+  statusEl.textContent = 'Checking Ollama...';
+  statusEl.style.color = 'var(--text-dim)';
+  statusEl.style.borderColor = 'var(--border)';
+
+  try {
+    const res = await authFetch('/api/export/ollama/status');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.available) {
+        statusEl.textContent = 'Ollama v' + (data.version || '') + ' Ready';
+        statusEl.style.color = '#10b981';
+        statusEl.style.borderColor = '#10b981';
+      } else {
+        statusEl.textContent = 'Ollama Not Detected';
+        statusEl.style.color = 'var(--danger)';
+        statusEl.style.borderColor = 'var(--danger)';
+      }
+    }
+  } catch (err) {
+    statusEl.textContent = 'Status Check Failed';
+    statusEl.style.color = 'var(--danger)';
+  }
+}
+
+async function deployToOllama() {
+  const modelPathEl = document.getElementById('export-model-path');
+  const deployNameEl = document.getElementById('export-deploy-name');
+  const quantEl = document.getElementById('export-quant');
+  const testPromptEl = document.getElementById('export-test-prompt');
+
+  const errorBox = document.getElementById('export-error-box');
+  const errorMsg = document.getElementById('export-error-msg');
+  const successBox = document.getElementById('export-success-box');
+  const deployBtn = document.getElementById('export-deploy-btn');
+  const spinner = document.getElementById('export-spinner');
+
+  if (errorBox) errorBox.style.display = 'none';
+  if (successBox) successBox.style.display = 'none';
+
+  const modelPath = modelPathEl ? modelPathEl.value.trim() : '';
+  const deployName = deployNameEl ? deployNameEl.value.trim() : '';
+  const quant = quantEl ? quantEl.value : 'q4_k_m';
+  const testPrompt = testPromptEl ? testPromptEl.value.trim() : 'Hello! Who are you?';
+
+  if (!modelPath) {
+    if (errorMsg) errorMsg.textContent = 'Please specify a valid model or adapter directory path.';
+    if (errorBox) errorBox.style.display = 'block';
+    return;
+  }
+
+  if (deployBtn) deployBtn.disabled = true;
+  if (spinner) spinner.style.display = 'inline-block';
+
+  try {
+    const res = await authFetch('/api/export/ollama', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model_path: modelPath,
+        deploy_name: deployName || undefined,
+        quant: quant,
+        test_prompt: testPrompt,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    // If export or deployment fails, the UI MUST show the error instead of reporting success!
+    if (!res.ok || !data.success) {
+      if (errorMsg) errorMsg.textContent = data.error || ('Deployment failed with HTTP ' + res.status);
+      if (errorBox) errorBox.style.display = 'block';
+      if (successBox) successBox.style.display = 'none';
+      return;
+    }
+
+    // Verified success with first reply
+    const modelSuccessEl = document.getElementById('export-success-model');
+    if (modelSuccessEl) modelSuccessEl.textContent = data.model;
+
+    const replyElem = document.getElementById('export-success-reply');
+    const replyWrapper = document.getElementById('export-reply-wrapper');
+    if (data.first_reply) {
+      if (replyElem) replyElem.textContent = data.first_reply;
+      if (replyWrapper) replyWrapper.style.display = 'block';
+    } else {
+      if (replyWrapper) replyWrapper.style.display = 'none';
+    }
+
+    const cmdElem = document.getElementById('export-run-cmd');
+    if (cmdElem) cmdElem.textContent = 'ollama run ' + data.model;
+
+    if (successBox) successBox.style.display = 'block';
+    if (errorBox) errorBox.style.display = 'none';
+  } catch (err) {
+    if (errorMsg) errorMsg.textContent = 'Connection error: ' + err.message;
+    if (errorBox) errorBox.style.display = 'block';
+    if (successBox) successBox.style.display = 'none';
+  } finally {
+    if (deployBtn) deployBtn.disabled = false;
+    if (spinner) spinner.style.display = 'none';
+  }
+}
+
+function copyExportCmd() {
+  const cmdElem = document.getElementById('export-run-cmd');
+  if (!cmdElem) return;
+  const cmd = cmdElem.textContent;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(cmd);
+  }
+}
+
 // --- Event delegation: markup carries data-* names, never inline handlers ---
 // Closed map: an attribute naming anything not listed here does nothing.
 const ACTIONS = Object.freeze({
@@ -1118,6 +1235,8 @@ const ACTIONS = Object.freeze({
   clearChat: () => clearChat(),
   loadToolOutputs: () => loadToolOutputs(),
   handleChatKey: (arg, event) => handleChatKey(event),
+  deployToOllama: () => deployToOllama(),
+  copyExportCmd: () => copyExportCmd(),
 });
 
 // Runs only the nearest element's action, so a button inside a clickable row
