@@ -80,12 +80,22 @@ def _projection_compute_dtype(
     return fallback if dtype is None else dtype
 
 
-def _scaled_lora_add(out: Any, hidden: Any, lora_b: Any, scaling: float) -> Any:
-    """Add a LoRA update with PEFT's promote, add, then cast semantics."""
+def _scaled_lora_add(
+    out: Any, hidden: Any, lora_b: Any, scaling: float, *, peft_order: bool = False
+) -> Any:
+    """Add a LoRA update with PEFT's promote, add, then cast semantics.
+
+    ``peft_order`` multiplies the finished update by the scaling before the
+    addition, as PEFT does under autocast, instead of folding it into ``add``'s
+    ``alpha``. The two differ in the last rounding bit for low-precision dtypes.
+    """
     import torch
 
     lora_term = torch.matmul(hidden, lora_b.t())
     promoted = torch.promote_types(out.dtype, lora_term.dtype)
+    if peft_order:
+        lora_term = lora_term * float(scaling)
+        return (out.to(promoted) + lora_term.to(promoted)).to(out.dtype)
     return torch.add(
         out.to(promoted), lora_term.to(promoted), alpha=float(scaling)
     ).to(out.dtype)
@@ -101,6 +111,101 @@ def _flatten(tensor: Any) -> Any:
     against a silent shape assumption.
     """
     return tensor.reshape(-1, tensor.shape[-1])
+
+
+def _projection_autocast_dtype(x: Any) -> Any:
+    """Return the autocast GEMM dtype in force for ``x``, else ``None``.
+
+    Recorded in the forward so the manual backward can run its GEMMs in the
+    dtype the forward ones used: an ``autograd.Function`` backward executes
+    outside the autocast region.
+    """
+    import torch
+
+    if (
+        x.device.type != "meta"
+        and x.dtype != torch.float64
+        and torch.is_autocast_enabled(x.device.type)
+    ):
+        return torch.get_autocast_dtype(x.device.type)
+    return None
+
+
+def _amp_input_accumulation_dtype(x: Any, adapters: Any, dtype: Any) -> Any:
+    """Dtype in which the input-gradient branches meet under autocast.
+
+    Autocast reuses the cast of an eligible FP32 leaf across its GEMMs, so those
+    branches meet before the single cast backward. Non-leaves, views, a disabled
+    cast cache and low-precision adapters have separate cast backwards, so they
+    accumulate in the input dtype instead.
+    """
+    import torch
+
+    if (
+        dtype is not None and x.dtype == torch.float32 and x.requires_grad
+        and x.is_leaf and not x._is_view() and torch.is_autocast_cache_enabled()
+        and all(a.dtype == torch.float32 for a in adapters if a.numel())
+    ):
+        return dtype
+    return x.dtype
+
+
+def _nf4_autocast_requires_fallback(x: Any, states: Any) -> bool:
+    """True when an NF4 projection under autocast must run PEFT's own graph.
+
+    The manual autocast backward models an input already in the autocast dtype
+    and a base compute dtype equal to it, which is how streamed Llama runs. Any
+    other pairing adds cast and accumulation boundaries it does not reproduce.
+    """
+    if x.device.type == "meta" or not any(state.qmeta is not None for state in states):
+        return False
+    import torch
+
+    if not torch.is_autocast_enabled(x.device.type):
+        return False
+    return any(
+        state.qmeta is not None and (
+            x.dtype != torch.get_autocast_dtype(x.device.type)
+            or state.compute_dtype not in (None, x.dtype)
+        )
+        for state in states
+    )
+
+
+def _amp_adapter_backward(
+    x: Any, a: Any, b: Any, hidden: Any, grad: Any, scaling: float,
+    dtype: Any, needs_input_grad: bool,
+) -> tuple[Any, Any, Any]:
+    """Differentiate the autocast adapter GEMMs, including their cast edges.
+
+    The FP32 master adapter weights are narrowed for the forward GEMMs, so their
+    backward GEMMs also run in the narrow dtype and cast back to the master
+    dtype. Computing dH/dA in FP32 would change the optimizer update.
+    """
+    import torch
+
+    with torch.autocast(x.device.type, enabled=False):
+        scaled = _as_dtype(grad, dtype) * scaling
+        grad_b = _flatten(scaled).t() @ _flatten(_as_dtype(hidden, dtype))
+        grad_h = torch.matmul(scaled, _as_dtype(b, dtype))
+        grad_a = _flatten(grad_h).t() @ _as_dtype(_flatten(x), dtype)
+        grad_x = torch.matmul(grad_h, _as_dtype(a, dtype)) if needs_input_grad else None
+    return (
+        grad_a.to(a.dtype), grad_b.to(b.dtype),
+        None if grad_x is None else grad_x.to(x.dtype),
+    )
+
+
+def _amp_base_backward(
+    x: Any, weight: Any, grad: Any, dtype: Any,
+    qmeta: dict[str, Any] | None = None, qparts: Any = (),
+) -> Any:
+    """Frozen-base ``dX`` for an autocast forward, dequantising NF4 on demand."""
+    import torch
+
+    with torch.autocast(x.device.type, enabled=False):
+        dense = _dense_weight(weight, qmeta, qparts, dtype)
+        return torch.matmul(_as_dtype(grad, dtype), dense).to(x.dtype)
 
 
 def _dropout_mask(x: Any, p: float) -> tuple[Any, Any]:
@@ -389,6 +494,13 @@ def _single_projection_function() -> Any:
             x_lora = x
             if dropout_p > 0.0 and dropout_training:
                 keep, x_lora = _dropout_mask(x, dropout_p)
+            # The opt-in dropout path keeps its own backward; only the plain
+            # adapter has a cast-preserving autocast backward.
+            ctx.amp_dtype = None if keep is not None else _projection_autocast_dtype(x)
+            ctx.amp_input_dtype = (
+                x.dtype if quant_state is not None
+                else _amp_input_accumulation_dtype(x, (lora_a,), ctx.amp_dtype)
+            )
             h = functional.linear(_as_dtype(x_lora, lora_a.dtype), lora_a)  # [N, r]
             if quant_state is None:
                 out = functional.linear(x, weight, bias)
@@ -434,7 +546,9 @@ def _single_projection_function() -> Any:
             # this sum. matmul + add keeps one code path that also covers the
             # ``[B, S, H]`` inputs transformers hands to real projections, and
             # the add's ``alpha`` still folds the scaling into the term.
-            out = _scaled_lora_add(out, h, lora_b, ctx.scaling)
+            out = _scaled_lora_add(
+                out, h, lora_b, ctx.scaling, peft_order=ctx.amp_dtype is not None
+            )
             return out
 
         @staticmethod
@@ -446,6 +560,21 @@ def _single_projection_function() -> Any:
             saved = ctx.saved_tensors
             x, weight, lora_a, lora_b, h = saved[:5]
             keep = saved[5] if ctx.dropout_active else None
+
+            if ctx.amp_dtype is not None:
+                grad_a, grad_b, grad_x = _amp_adapter_backward(
+                    x, lora_a, lora_b, h, grad_out, scaling,
+                    ctx.amp_dtype, ctx.needs_input_grad[0],
+                )
+                if ctx.needs_input_grad[0]:
+                    base_dx = _amp_base_backward(
+                        x, weight, grad_out, ctx.amp_dtype, ctx.qmeta, list(saved[ctx.qstart :])
+                    )
+                    grad_x = (
+                        grad_x.to(ctx.amp_input_dtype) + base_dx.to(ctx.amp_input_dtype)
+                    ).to(x.dtype)
+                return grad_x, None, None, grad_a, grad_b, None, None, None, None
+
             # dA contracts against the DROPPED input; it is rebuilt from the
             # saved mask rather than retaining peft's full-precision copy.
             x_lora = x if keep is None else x * keep / (1.0 - ctx.dropout_p)
@@ -509,6 +638,8 @@ def _make_patched_forward(original_forward: Any, *, allow_dropout: bool = False)
             return original_forward(x, *args, **kwargs)
         state = _projection_state(self, x, allow_dropout=allow_dropout)
         if state is None:
+            return original_forward(x)
+        if _nf4_autocast_requires_fallback(x, (state,)):
             return original_forward(x)
 
         quant_state = (
