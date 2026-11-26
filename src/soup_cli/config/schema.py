@@ -3220,6 +3220,16 @@ class TrainingConfig(BaseModel):
             )
         return v
 
+    @field_validator("frozen_prefix_cache", mode="before")
+    @classmethod
+    def _validate_frozen_prefix_cache_is_bool(cls, v):
+        """A boolean switch: an int or a string is a typo, not a setting."""
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"training.frozen_prefix_cache must be bool, got {type(v).__name__}"
+            )
+        return v
+
     @field_validator("distill_checkpoint", mode="before")
     @classmethod
     def _validate_distill_checkpoint(cls, v):
@@ -3932,6 +3942,18 @@ class TrainingConfig(BaseModel):
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
             "Applied by tasks sft and tts on the text path with backend "
             "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
+        ),
+    )
+    frozen_prefix_cache: bool = Field(
+        default=False,
+        description=(
+            "Cache the output of the frozen bottom layers on disk and reuse it in "
+            "later epochs instead of running those layers again. Needs "
+            "training.freeze_layers or training.freeze_ratio with LoRA on the layers "
+            "above them, and task sft + backend transformers on a resident text "
+            "model (no layer streaming); Mistral and OLMoE decoders only. The "
+            "entries are written under the output directory and take disk space "
+            "in proportion to the training set."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -10360,6 +10382,69 @@ class SoupConfig(BaseModel):
                 "the vision and audio setup paths load through transformers and "
                 f"do not use Unsloth; got modality={self.modality!r}. "
                 "Use backend: transformers for multimodal SFT."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_frozen_prefix_cache(self) -> "SoupConfig":
+        """``training.frozen_prefix_cache`` runs only where its frozen prefix is real.
+
+        The cache holds the output of the bottom layers, so it needs a freeze
+        plan to say where they end, a LoRA adapter (not full fine-tuning) to keep
+        them frozen, and a forward pass that nothing else rewrites.
+        """
+        tcfg = self.training
+        if not tcfg.frozen_prefix_cache:
+            return self
+        if self.task != "sft":
+            raise ValueError(
+                "training.frozen_prefix_cache requires task='sft'; "
+                f"got task={self.task!r}."
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                "training.frozen_prefix_cache requires backend='transformers'; "
+                f"got backend={self.backend!r}."
+            )
+        if self.modality != "text":
+            raise ValueError(
+                "training.frozen_prefix_cache requires modality='text'; "
+                f"got modality={self.modality!r}."
+            )
+        if tcfg.freeze_layers is None and tcfg.freeze_ratio is None:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.freeze_layers or "
+                "training.freeze_ratio: the cache holds the output of the frozen "
+                "bottom layers, so it needs to know where they end."
+            )
+        if tcfg.lora.r < 1:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.lora.r >= 1: full "
+                "fine-tuning (r=0) trains the embeddings and every layer, so no "
+                "prefix stays frozen."
+            )
+        if tcfg.stream_layers:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.stream_layers; "
+                "set stream_layers=false."
+            )
+        if tcfg.packing or tcfg.multipack:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.packing or "
+                "training.multipack: a packed batch differs every epoch."
+            )
+        if tcfg.gradient_checkpointing is not False:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.gradient_checkpointing=false."
+            )
+        if tcfg.lora.use_vera:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.lora.use_vera."
+            )
+        if tcfg.lora.target_parameters is not None:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support "
+                "training.lora.target_parameters."
             )
         return self
 

@@ -816,6 +816,40 @@ Known limitation: a `target_modules` entry spelled as a full module path, such a
 accepts an exact module name before it reads `layers_to_transform`. Use module-name suffixes such
 as `q_proj` with `freeze_layers` / `freeze_ratio`.
 
+### Frozen-prefix activation cache
+
+With `freeze_layers` / `freeze_ratio` and LoRA, the embeddings and the frozen bottom layers give the
+same output for the same batch in every epoch. `training.frozen_prefix_cache: true` stores that
+output on disk during the first epoch and reads it back in later ones, so the frozen layers run
+once per distinct batch instead of once per epoch. Off by default.
+
+```yaml
+training:
+  freeze_ratio: 0.75
+  frozen_prefix_cache: true
+  lora:
+    r: 16
+```
+
+An entry is reused only when the frozen weights, the model configuration (RoPE settings
+included), the input ids, the attention mask and the position ids are all identical; any
+difference is a miss and the layers run as usual. If a frozen weight changes during the run the
+run stops with an error instead of serving stale entries. A batch the data loader composes
+differently from one epoch to the next is a different batch, so shuffled epochs hit only for
+batches that repeat; with a fixed order every later epoch hits.
+
+Entries are written under `<output>/_frozen_prefix_cache/` and grow with the training set (one
+hidden-state tensor per batch), so check the free space on the output drive. The folder is not
+removed when the run ends.
+
+Config loading refuses it outside `task: sft` with `backend: transformers` and a text model, without
+a freeze plan, with `training.lora.r: 0` (full fine-tuning), with `stream_layers`, `packing`,
+`multipack`, `gradient_checkpointing`, `training.lora.use_vera` or `training.lora.target_parameters`.
+It supports Mistral and OLMoE decoders on a single device; any other decoder, a run on more than one
+visible GPU through `torch.nn.DataParallel`, `output_router_logits` and `output_attentions` refuse
+when training starts. For an OLMoE model set `training.moe_aux_loss_coeff: 0`, because the cached
+prefix has no router logits.
+
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
 LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout by default (set `lisa_train_embeddings: false` to freeze that group too — see [the memory trade-off](#reclaiming-the-always-on-overhead-lisa_train_embeddings) below).
