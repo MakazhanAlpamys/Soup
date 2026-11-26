@@ -35,7 +35,7 @@ class _FakeResponse:
         }
 
 
-def _run_generate(tmp_path, monkeypatch, *extra_args):
+def _run_generate(tmp_path, monkeypatch, *extra_args, provider="openai"):
     """Invoke `soup data generate` with a stubbed HTTP client, capturing calls."""
     calls = []
 
@@ -57,7 +57,7 @@ def _run_generate(tmp_path, monkeypatch, *extra_args):
             "--batch-size",
             "1",
             "--provider",
-            "openai",
+            provider,
             "--model",
             "test-model",
             "--api-base",
@@ -132,6 +132,43 @@ def test_without_option_still_reads_openai_key(tmp_path, monkeypatch):
 def test_missing_named_variable_names_it(tmp_path, monkeypatch):
     """A missing named variable gives the same kind of message as today's key."""
     monkeypatch.delenv(CUSTOM_VAR, raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result, _ = _run_generate(tmp_path, monkeypatch, "--api-key-env", CUSTOM_VAR)
+
+    assert result.exit_code == 1
+    output = strip_ansi(result.output)
+    assert f"Set {CUSTOM_VAR} env var" in output
+
+
+@pytest.mark.parametrize(
+    "other_provider", ["local", "server", "ollama", "anthropic", "vllm"]
+)
+def test_api_key_env_refused_for_non_openai_provider(
+    tmp_path, monkeypatch, other_provider
+):
+    """--api-key-env only applies to the openai provider; others refuse it."""
+    monkeypatch.setenv(CUSTOM_VAR, "sk-custom")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result, calls = _run_generate(
+        tmp_path,
+        monkeypatch,
+        "--api-key-env",
+        CUSTOM_VAR,
+        provider=other_provider,
+    )
+
+    assert result.exit_code == 1
+    assert calls == []
+    output = strip_ansi(result.output)
+    assert "--api-key-env" in output
+    assert "only applies to the openai provider" in output
+
+
+def test_empty_named_variable_treated_as_missing(tmp_path, monkeypatch):
+    """A named variable that is set but empty is treated as missing."""
+    monkeypatch.setenv(CUSTOM_VAR, "")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     result, _ = _run_generate(tmp_path, monkeypatch, "--api-key-env", CUSTOM_VAR)

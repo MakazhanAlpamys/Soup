@@ -215,6 +215,13 @@ def generate(
         )
         raise typer.Exit(1)
 
+    if api_key_env is not None and provider != "openai":
+        console.print(
+            "[red]--api-key-env only applies to the openai provider "
+            f"(got provider: {provider}).[/]"
+        )
+        raise typer.Exit(1)
+
     # Validate template
     if template and template not in VALID_TEMPLATES:
         console.print(
