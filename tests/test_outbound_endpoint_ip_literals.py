@@ -252,6 +252,14 @@ class TestNonPublicLiteralsAreRefused:
 
 
 class TestPublicAndLoopbackStillPass:
+    def test_judge_keeps_the_accepted_api_base_value(self, sent):
+        from soup_cli.eval.judge import JudgeEvaluator
+
+        api_base = "https://fixture-user:fixture-password@judge.example.com/v1"
+        evaluator = JudgeEvaluator(provider="server", api_base=api_base)
+        assert evaluator.api_base == api_base
+        assert sent == []
+
     @pytest.mark.parametrize("host", _ALLOWED_HOSTS)
     @pytest.mark.parametrize("validator", _VALIDATORS)
     def test_allowed(self, validator, host, sent):
@@ -568,6 +576,53 @@ class TestCliEntryPoints:
         )
         assert res.exit_code == 1, (res.output, repr(res.exception))
         assert f"judge URL: {_REFUSED}" in _plain(res.output)
+        assert sent == []
+
+    @pytest.mark.parametrize(
+        ("api_base", "diagnostic"),
+        [
+            pytest.param(
+                "https://fixture-user:fixture-password@judge.example.com\uff1a443/v1",
+                "--api-base is not a valid URL", id="malformed-authority",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password\uff20judge.example.com/v1",
+                "--api-base is not a valid URL", id="fullwidth-at",
+            ),
+            pytest.param(
+                "ht\x1btps://fixture-user:fixture-password@judge.example.com/v1",
+                "Invalid scheme in --api-base. Only http:// and https:// are allowed.",
+                id="escape-control",
+            ),
+            pytest.param(
+                "fixture-user:fixture-password@judge.example.com/v1",
+                "Invalid scheme in --api-base. Only http:// and https:// are allowed.",
+                id="schemeless",
+            ),
+            pytest.param(
+                "ftp://fixture-user:fixture-password@judge.example.com/v1",
+                "Invalid scheme in --api-base. Only http:// and https:// are allowed.",
+                id="unsupported-scheme",
+            ),
+        ],
+    )
+    def test_eval_judge_refuses_api_base_without_echoing_input(
+        self, sent, tmp_path, monkeypatch, api_base, diagnostic,
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app, ["eval", "judge", "--target", "unused.jsonl", "--api-base", api_base],
+        )
+        assert res.exit_code == 1, (res.output, repr(res.exception))
+        output = _plain(res.output)
+        assert diagnostic in output
+        assert api_base not in output
+        assert "fixture-user" not in output
+        assert "fixture-password" not in output
         assert sent == []
 
 
