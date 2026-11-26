@@ -4,12 +4,18 @@ Despite the issue's original filename, this change uses matrix-vector products,
 not blocked matrix-matrix products: raw audit scores must remain unchanged.
 """
 
+import json
+import os
 import statistics
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+import soup_cli
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 
 
@@ -100,22 +106,53 @@ def test_exact_report_at_tolerance_boundary(gap: float) -> None:
     assert_identical(vectors, 0.8)
 
 
-def test_buffer_avoids_repeated_copy_cost() -> None:
-    """Same-process medians; restores-to-main mutation must fail this guard."""
+def timing_samples() -> dict[str, list[float]]:
+    """CPU seconds for both loops, alternating order, after one warmup call each."""
     rng = np.random.default_rng(3250)
     vectors = rng.standard_normal((5000, 384)).astype(np.float32)
     vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
     expected = reference(vectors, 0.9)
     assert len(expected.kept) == len(vectors)
     assert greedy_semdedup(vectors, threshold=0.9) == expected
-    durations = {"reference": [], "candidate": []}
+    seconds: dict[str, list[float]] = {"reference": [], "candidate": []}
     calls = {"reference": reference, "candidate": greedy_semdedup}
     for repeat in range(5):
         order = ("reference", "candidate") if repeat % 2 == 0 else ("candidate", "reference")
         for name in order:
-            start = time.perf_counter()
+            start = time.thread_time()
             report = calls[name](vectors, threshold=0.9)
-            durations[name].append(time.perf_counter() - start)
+            seconds[name].append(time.thread_time() - start)
             assert report == expected
-    ratio = statistics.median(durations["candidate"]) / statistics.median(durations["reference"])
-    assert ratio < 0.5, f"candidate/reference={ratio:.3f}; seconds={durations}"
+    return seconds
+
+
+def test_buffer_avoids_repeated_copy_cost() -> None:
+    """Restoring the loop on main must fail this guard.
+
+    Both loops run in one child process with a single BLAS thread, timed in CPU
+    time of that thread. With the default thread count under parallel tests, BLAS
+    workers wait on each other for CPU: wall time of the buffered loop varied by
+    several times and the ratio crossed the bound. One thread does all the work
+    on the timed thread, and time spent preempted is not counted.
+    """
+    child_env = dict(os.environ)
+    for name in (
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        child_env[name] = "1"  # read when NumPy loads, hence the child process
+    # Import the same soup_cli, and this module, in the child.
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(soup_cli.__file__).parents[1]), str(Path(__file__).parent)]
+    )
+    code = f"import json, {__name__.rpartition('.')[2]} as t; print(json.dumps(t.timing_samples()))"
+    run = subprocess.run(
+        [sys.executable, "-c", code],
+        env=child_env, capture_output=True, text=True, timeout=480,
+    )
+    assert run.returncode == 0, run.stderr[-4000:]
+    seconds = json.loads(run.stdout.strip().splitlines()[-1])
+    ratio = statistics.median(seconds["candidate"]) / statistics.median(seconds["reference"])
+    assert ratio < 0.5, f"candidate/reference={ratio:.3f}; cpu_seconds={seconds}"
