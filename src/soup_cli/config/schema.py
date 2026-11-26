@@ -3932,7 +3932,7 @@ class TrainingConfig(BaseModel):
             + " are refused permanently); backend transformers, modality text; "
             "quantization none or 4bit (NF4); a concrete batch_size (not 'auto'), "
             "gradient accumulation is allowed. Slower than resident training, but these "
-            "models did not run on the card at all."
+            "models did not run on the card at all. "
             "task: preference streams with a single preference_loss of dpo, orpo, simpo, "
             "bco or ipo, and weighted preference_loss_weights do not."
         ),

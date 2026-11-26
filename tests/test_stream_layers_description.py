@@ -24,6 +24,12 @@ def test_stream_layers_description_scope():
     assert "batch_size 1" not in desc
     assert "no gradient accumulation" not in desc
 
+    # Ensure no duplicate description text and preference sentence is spaced properly
+    assert desc.count("BETA") == 1
+    assert "layer-by-layer" not in desc
+    assert "task: preference streams with a single preference_loss" in desc
+    assert "all.task" not in desc
+
 
 def test_stream_arch_of_runtime_message():
     with pytest.raises(ValueError) as excinfo:
