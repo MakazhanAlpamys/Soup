@@ -3854,6 +3854,32 @@ class TrainingConfig(BaseModel):
             "on every other task, whose trainers pick their own precision."
         ),
     )
+    # fp16 GradScaler starting scale (rnd PR #67, ported). Refused outside
+    # task='sft' + backend='transformers' by SoupConfig._validate_fp16_init_scale_task.
+    fp16_init_scale: Optional[int] = Field(
+        default=None,
+        description=(
+            "Starting loss scale of the fp16 GradScaler: a power of two from 1 to 65536 "
+            "(unset keeps torch's 65536). The scaler halves on every step whose gradients "
+            "overflow and skips that step, so a model that overflows well below the default "
+            "skips its first optimizer steps; a lower start trains from the first step. "
+            "task='sft' with the transformers backend only; ignored (with a note) when the "
+            "run has no plain fp16 GradScaler (a bf16 run, or fp16 under DeepSpeed or FSDP)."
+        ),
+    )
+
+    @field_validator("fp16_init_scale")
+    @classmethod
+    def _validate_fp16_init_scale(cls, value: Optional[int]) -> Optional[int]:
+        """Power of two in [1, 65536]; bool is refused earlier by the wildcard guard."""
+        if value is None:
+            return value
+        if value < 1 or value > 65536 or value & (value - 1):
+            raise ValueError(
+                f"training.fp16_init_scale must be a power of two from 1 to 65536, got {value}"
+            )
+        return value
+
     # Live grad-accum monitoring (v0.32.0 Part B)
     grad_accum_auto_tune: bool = Field(
         default=False,
@@ -6969,6 +6995,22 @@ class SoupConfig(BaseModel):
                 "combined on task='grpo': the GRPO trainer never reads "
                 "auto_mixed_precision, so grpo_fp16 is the only way to pick "
                 "the dtype there. Remove auto_mixed_precision."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_fp16_init_scale_task(self) -> "SoupConfig":
+        """rnd PR #67 (ported) — ``training.fp16_init_scale`` is applied by the transformers
+        SFT wrapper's ``_finish_setup`` only; elsewhere it would be accepted and never reach
+        the scaler. Refused on every other task and backend, naming both gates.
+        """
+        if self.training.fp16_init_scale is None:
+            return self
+        if self.task != "sft" or self.backend != "transformers":
+            raise ValueError(
+                "training.fp16_init_scale is applied only with task='sft' and "
+                f"backend='transformers' (got task={self.task!r}, "
+                f"backend={self.backend!r}); remove it here."
             )
         return self
 
