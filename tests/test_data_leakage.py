@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -266,7 +267,7 @@ def test_exact_output_matches_the_pre_lexical_release_bytes(tmp_path, monkeypatc
             "Train record 1 / eval record 1: same input\n"
         )
     assert result.exit_code == 2
-    assert result.stdout_bytes == expected.encode("utf-8")
+    assert result.stdout_bytes == expected.replace("\n", os.linesep).encode("utf-8")
     assert result.stderr_bytes == b""
 
 
@@ -399,7 +400,7 @@ def test_lexical_byte_limit(tmp_path, monkeypatch, over_limit):
 
     pytest.importorskip("datasketch")
     row = {"text": "q", "unused": ""}
-    limit = len(json.dumps(row).encode("utf-8")) + 1
+    limit = len((json.dumps(row) + os.linesep).encode("utf-8"))
     monkeypatch.setattr(data_leakage, "NEAR_MAX_FILE_BYTES", limit)
     result = _cli(
         tmp_path, monkeypatch, [{"text": "q"}], [{**row, "unused": "x" * over_limit}],
