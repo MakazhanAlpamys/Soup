@@ -403,14 +403,23 @@ def test_a_foreign_file_put_at_the_spill_path_is_refused_by_reopen_and_kept_by_c
     spill = _buffered(tmp_path)
     path = spill.path
     spill.close(remove=False)
-    os.remove(path)
-    with open(path, "wb") as handle:
-        handle.write(b"not ours")
-    with pytest.raises(OSError, match="is not the file this run created") as caught:
-        spill._open_owned("rb")
-    assert path in str(caught.value) and "it was not opened" in str(caught.value)
-    with caplog.at_level(logging.WARNING):
-        spill.close(remove=True)
+    # A run keeps its spill file open, so on POSIX a replacement can never be given the
+    # original inode number. Model that here: with nothing holding it, ext4 and tmpfs hand
+    # the freed number to the next file created, and (st_dev, st_ino) would match.
+    # Windows cannot remove an open file, and NTFS does not reuse a file index at once.
+    original = open(path, "rb") if os.name != "nt" else None
+    try:
+        os.remove(path)
+        with open(path, "wb") as handle:
+            handle.write(b"not ours")
+        with pytest.raises(OSError, match="is not the file this run created") as caught:
+            spill._open_owned("rb")
+        assert path in str(caught.value) and "it was not opened" in str(caught.value)
+        with caplog.at_level(logging.WARNING):
+            spill.close(remove=True)
+    finally:
+        if original is not None:
+            original.close()
     assert open(path, "rb").read() == b"not ours"
     assert f"the spill file {path} is not the file this run created; it was left in place" in (
         caplog.text)
