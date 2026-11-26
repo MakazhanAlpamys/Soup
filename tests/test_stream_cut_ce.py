@@ -444,12 +444,12 @@ def test_a_trainable_parameter_on_the_streamed_head_is_refused(streamed, fake_cc
     assert head.pool is not None  # a real streamed head; its named_modules yield `inner` only
     head.inner.register_parameter("lora_probe", torch.nn.Parameter(torch.zeros(1)))
     try:
-        assert "inner.lora_probe" in dict(head.named_parameters())  # the premise
+        assert "lora_probe" in dict(head.named_parameters())  # the premise
         with pytest.raises(ValueError) as caught:
             ChunkedHeadLoss(causal, None, "cce")
     finally:
         del head.inner._parameters["lora_probe"]
-    assert str(caught.value) == _HEAD_ADAPTER_MESSAGE.format(names="inner.lora_probe")
+    assert str(caught.value) == _HEAD_ADAPTER_MESSAGE.format(names="lora_probe")
 
 
 def test_setup_refuses_an_lm_head_lora_target_under_cce(tmp_path, monkeypatch, fake_cce):
