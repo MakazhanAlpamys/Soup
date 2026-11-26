@@ -158,7 +158,7 @@ def _reference_fp8(tensor):
 
 
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_shared_fp8_matches_the_original_g4_operation_order(dtype):
+def test_shared_fp8_matches_the_original_operation_order(dtype):
     torch = _torch()
     from soup_cli.utils import activation_codec as codec
 
@@ -171,7 +171,7 @@ def test_shared_fp8_matches_the_original_g4_operation_order(dtype):
 
 
 @pytest.mark.parametrize("name", ["int8", "fp8_e4m3", "int4"])
-def test_shared_g4_codecs_keep_zero_denormal_and_extreme_absmax_exact(name):
+def test_shared_fp8_codecs_keep_zero_denormal_and_extreme_absmax_exact(name):
     torch = _torch()
     from soup_cli.utils import activation_codec as codec
 

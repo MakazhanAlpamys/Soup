@@ -48,7 +48,7 @@ def test_activation_budget_failure_preserves_existing_weight_reservation(monkeyp
     from soup_cli.utils.budgeted_activations import BudgetedActivationStore
 
     budget = HostMemoryBudget(100)
-    lease = budget.reserve("c3.weights", 90)
+    lease = budget.reserve("l2l.weights", 90)
     allocated = []
     real_empty = torch.empty
 
@@ -74,7 +74,7 @@ def test_activation_budget_failure_preserves_existing_weight_reservation(monkeyp
     lease.close()
 
 
-def test_published_a4_allocation_contract():
+def test_published_activation_allocation_contract():
     from soup_cli.utils.budgeted_activations import activation_allocation_bytes
 
     fixture = json.loads(

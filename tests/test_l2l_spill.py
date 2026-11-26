@@ -383,6 +383,78 @@ def test_a_file_this_attempt_created_is_removed_even_when_the_constructor_could_
     assert not os.path.exists(path)
 
 
+def _buffered(tmp_path):
+    from soup_cli.utils.l2l_activations import BufferedSpillFile
+    from soup_cli.utils.l2l_spill import spill_file_name
+
+    return BufferedSpillFile(str(tmp_path / spill_file_name()), 2 * 4096)
+
+
+def test_a_file_this_attempt_created_is_removed_on_close(tmp_path):
+    spill = _buffered(tmp_path)
+    assert os.path.isfile(spill.path)
+    spill.close(remove=True)
+    assert not os.path.exists(spill.path)
+    assert spill.left_behind is None
+
+
+def test_a_foreign_file_put_at_the_spill_path_is_refused_by_reopen_and_kept_by_cleanup(
+        tmp_path, caplog):
+    spill = _buffered(tmp_path)
+    path = spill.path
+    spill.close(remove=False)
+    os.remove(path)
+    with open(path, "wb") as handle:
+        handle.write(b"not ours")
+    with pytest.raises(OSError, match="is not the file this run created") as caught:
+        spill._open_owned("rb")
+    assert path in str(caught.value) and "it was not opened" in str(caught.value)
+    with caplog.at_level(logging.WARNING):
+        spill.close(remove=True)
+    assert open(path, "rb").read() == b"not ours"
+    assert f"the spill file {path} is not the file this run created; it was left in place" in (
+        caplog.text)
+    assert spill.left_behind is None
+
+
+@pytest.mark.requires_symlink
+def test_a_symlink_at_the_spill_path_is_neither_followed_nor_unlinked(tmp_path):
+    spill = _buffered(tmp_path)
+    path = spill.path
+    spill.close(remove=False)
+    os.remove(path)
+    victim = tmp_path / "victim.bin"
+    victim.write_bytes(b"victim")
+    os.symlink(str(victim), path)
+    with pytest.raises(OSError, match="is not the file this run created"):
+        spill._open_owned("r+b")
+    spill.close(remove=True)
+    assert os.path.islink(path)
+    assert victim.read_bytes() == b"victim"
+
+
+def test_a_file_swapped_in_during_the_unbuffered_reopen_is_kept_by_the_failed_attempt(
+        tmp_path, monkeypatch):
+    import io
+
+    from soup_cli.utils import l2l_activations
+    from soup_cli.utils.l2l_spill import open_spill_file, spill_file_name
+
+    path = str(tmp_path / spill_file_name())
+
+    def swap_then_open(target):
+        # the original is removed and a different file takes its name before the open
+        os.remove(target)
+        with open(target, "wb") as handle:
+            handle.write(b"not ours" * 1024)
+        return io.FileIO(target, "r+b")
+
+    monkeypatch.setattr(l2l_activations, "_open_unbuffered", swap_then_open)
+    with pytest.raises(OSError, match="is not the file this run created"):
+        open_spill_file(path, 2 * 4096)
+    assert open(path, "rb").read() == b"not ours" * 1024
+
+
 def test_a_full_drive_in_the_writer_thread_removes_the_file(tmp_path, monkeypatch):
     import time
 
@@ -1100,15 +1172,13 @@ def test_a_dir_inside_the_allowed_root_is_accepted(monkeypatch, direct_dir):
     assert _prepare(target) == os.path.realpath(target)
 
 
+@pytest.mark.requires_symlink
 def test_a_symlink_out_of_the_allowed_roots_is_refused(roots):
     from soup_cli.utils.l2l_spill import SpillRefusedError
 
     allowed, outside = roots
     link = allowed / "link"
-    try:
-        os.symlink(outside, link, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks are not available")
+    os.symlink(outside, link, target_is_directory=True)
     with pytest.raises(SpillRefusedError, match=r"outside \$HOME, \$CWD and \$TMPDIR"):
         _prepare(link / "spill")
     assert not (outside / "spill").exists()

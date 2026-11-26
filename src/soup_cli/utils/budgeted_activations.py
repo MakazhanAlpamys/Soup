@@ -77,7 +77,7 @@ class BudgetedActivationStore(ActivationStore):
             raise ValueError("spill_layers > 0 needs a spill_factory")
         self._budget_closed = False
         self._budget_closing = False
-        self._budget_lease = host_budget.reserve("a4.activations", allocation)
+        self._budget_lease = host_budget.reserve("l2l.activations", allocation)
         try:
             super().__init__(
                 n_layers=n_layers,

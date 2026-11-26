@@ -970,16 +970,18 @@ def open_spill_file(path: str, size: int) -> Any:
     kept while the file is open: kill -9, an OOM kill or a power loss leave it for the
     next run's sweep, which is the documented contract.
     """
-    from soup_cli.utils.l2l_activations import DirectSpillFile
+    from soup_cli.utils.l2l_activations import DirectSpillFile, spill_entry_is_owned
 
     try:
         return DirectSpillFile(path, size)
     except OSError as exc:
         full = is_disk_full(exc)
         left = None
-        # Remove only a file this attempt created: a pre-existing entry (FileExistsError
-        # from the exclusive create) belongs to someone else and is never touched.
-        if getattr(exc, "spill_file_created", False) and os.path.exists(path):
+        # Remove only the file this attempt created: a pre-existing entry (FileExistsError
+        # from the exclusive create), or one swapped in since, belongs to someone else.
+        if getattr(exc, "spill_file_created", False) and spill_entry_is_owned(
+            path, getattr(exc, "spill_file_identity", None)
+        ):
             try:
                 os.remove(path)
             except OSError:

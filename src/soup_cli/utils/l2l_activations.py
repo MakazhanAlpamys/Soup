@@ -24,15 +24,20 @@ Top level imports the standard library only; torch is imported inside functions.
 
 from __future__ import annotations
 
+import errno
 import io
+import logging
 import math
 import os
 import queue
+import stat
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+
+_log = logging.getLogger(__name__)
 
 SECTOR_BYTES = 4096
 DEFAULT_RING = 8
@@ -88,16 +93,59 @@ def _read_all(handle: io.FileIO, offset: int, buf: Any) -> None:
         done += got
 
 
+class SpillFileIdentityError(OSError):
+    """The entry at a spill path is not the file this attempt created."""
+
+
+def file_identity(info: os.stat_result) -> Tuple[int, int]:
+    """``(st_dev, st_ino)``; on Windows ``st_ino`` is the NTFS file index."""
+    return (info.st_dev, info.st_ino)
+
+
+def spill_entry_is_owned(path: str, identity: Optional[Tuple[int, int]]) -> bool:
+    """True when ``path`` is a plain file whose identity is the one recorded at creation.
+
+    A symlink, a non-regular entry, a missing entry and a different file all answer False.
+    """
+    if identity is None:
+        return False
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and file_identity(info) == identity
+
+
+def _refuse_foreign_entry(path: str) -> SpillFileIdentityError:
+    return SpillFileIdentityError(
+        errno.EPERM,
+        f"the spill file {path} is not the file this run created (it was replaced, or it is a "
+        "symlink or not a regular file); it was not opened",
+        path,
+    )
+
+
 class SpillBackend:
     """Positional writes and reads of whole chunks on one file."""
 
     direct = False
     path = ""
     left_behind: Optional[str] = None
+    identity: Optional[Tuple[int, int]] = None
 
     def _remove(self) -> None:
-        """Best effort: an indexer or scanner holding the file must not crash the arm."""
-        if not os.path.exists(self.path):
+        """Best effort: an indexer or scanner holding the file must not crash the arm.
+
+        Only the file this attempt created is removed; an entry that is not (it was swapped
+        out, or it is a symlink) is left in place.
+        """
+        if not os.path.lexists(self.path):
+            return
+        if not spill_entry_is_owned(self.path, self.identity):
+            _log.warning(
+                "the spill file %s is not the file this run created; it was left in place",
+                self.path,
+            )
             return
         try:
             os.remove(self.path)
@@ -120,9 +168,26 @@ class BufferedSpillFile(SpillBackend):
     def __init__(self, path: str, size: int):
         self.path = str(path)
         with create_exclusive(self.path) as handle:
+            self.identity = file_identity(os.fstat(handle.fileno()))
             handle.truncate(size)
-        self._writer: Optional[io.FileIO] = io.FileIO(self.path, "r+b")
-        self._reader: Optional[io.FileIO] = io.FileIO(self.path, "rb")
+        self._writer: Optional[io.FileIO] = None
+        self._reader: Optional[io.FileIO] = None
+        try:
+            self._writer = self._open_owned("r+b")
+            self._reader = self._open_owned("rb")
+        except BaseException:
+            self.close(remove=True)
+            raise
+
+    def _open_owned(self, mode: str) -> io.FileIO:
+        """Reopen by path only while the entry is still the file this attempt created."""
+        if not spill_entry_is_owned(self.path, self.identity):
+            raise _refuse_foreign_entry(self.path)
+        handle = io.FileIO(self.path, mode)
+        if file_identity(os.fstat(handle.fileno())) != self.identity:
+            handle.close()
+            raise _refuse_foreign_entry(self.path)
+        return handle
 
     def write(self, offset: int, buf: Any) -> None:
         _write_all(self._writer, offset, buf)
@@ -147,10 +212,11 @@ def create_exclusive(path: str) -> io.FileIO:
     planted entry is never opened or written through; ``O_NOFOLLOW`` and ``O_BINARY`` are added
     where the platform has them. The mode keeps the file private to its owner.
     """
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    from soup_cli.utils.paths import open_no_follow
+
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
     try:
-        descriptor = os.open(path, flags, 0o600)
+        descriptor = open_no_follow(path, flags, 0o600)
     except FileExistsError as exc:
         raise FileExistsError(
             exc.errno, f"the spill file {path} already exists; it was not opened", path
@@ -160,6 +226,8 @@ def create_exclusive(path: str) -> io.FileIO:
 
 def _open_unbuffered(path: str) -> io.FileIO:
     """A read-write handle with the page cache bypassed (Windows, Linux, macOS)."""
+    from soup_cli.utils.paths import open_no_follow
+
     if sys.platform == "win32":
         import _winapi
         import msvcrt
@@ -182,12 +250,12 @@ def _open_unbuffered(path: str) -> io.FileIO:
     direct = getattr(os, "O_DIRECT", None)
     if direct is not None:
         return io.FileIO(
-            os.open(path, os.O_RDWR | direct | getattr(os, "O_NOFOLLOW", 0)), "r+b", closefd=True
+            open_no_follow(path, os.O_RDWR | direct), "r+b", closefd=True
         )
     if sys.platform == "darwin":
         import fcntl
 
-        fd = os.open(path, os.O_RDWR)
+        fd = open_no_follow(path, os.O_RDWR)
         try:
             fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
         except OSError:
@@ -228,18 +296,30 @@ class DirectSpillFile(SpillBackend):
         try:
             with create_exclusive(self.path) as handle:
                 created = True
+                self.identity = file_identity(os.fstat(handle.fileno()))
                 handle.truncate(size)
-            self._writer = _open_unbuffered(self.path)
+            self._writer = self._open_owned()
             zeros = aligned_buffer(fill_chunk, pin=False)
             zeros.zero_()
             for offset in range(0, size, fill_chunk):
                 _write_all(self._writer, offset, zeros[: min(fill_chunk, size - offset)])
-            self._reader = _open_unbuffered(self.path)
+            self._reader = self._open_owned()
         except BaseException as exc:
             # Whoever catches this may clean up only a file this attempt created.
             exc.spill_file_created = created
+            exc.spill_file_identity = self.identity
             self.close(remove=created)
             raise
+
+    def _open_owned(self) -> io.FileIO:
+        """Reopen by path only while the entry is still the file this attempt created."""
+        if not spill_entry_is_owned(self.path, self.identity):
+            raise _refuse_foreign_entry(self.path)
+        handle = _open_unbuffered(self.path)
+        if file_identity(os.fstat(handle.fileno())) != self.identity:
+            handle.close()
+            raise _refuse_foreign_entry(self.path)
+        return handle
 
     def write(self, offset: int, buf: Any) -> None:
         _check_aligned(offset, buf)

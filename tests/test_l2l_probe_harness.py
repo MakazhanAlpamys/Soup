@@ -610,9 +610,22 @@ def _write(tmp_path, timing=None, f1=None, f2=None, f1_det=None, spill=None):
     return str(tmp_path)
 
 
+# The rule reports its four gates under the keys "G1".."G4" in the results JSON, and the
+# committed record and any report reader look them up by those keys, so the keys stay. In
+# order they are: correctness (G1), the spill read hidden behind compute (G2), the step time
+# against the shipped step (G3), and the peak-VRAM growth (G4). The names below say what a
+# test is about; the keys appear only where the report is indexed.
+GATE_CORRECTNESS = "G1"
+GATE_READ_HIDDEN = "G2"
+GATE_STEP_TIME = "G3"
+GATE_PEAK_VRAM = "G4"
+TIMING_GATES = (GATE_READ_HIDDEN, GATE_STEP_TIME, GATE_PEAK_VRAM)
+
+
 def test_all_gates_pass(rule, tmp_path):
     out = rule.evaluate(_write(tmp_path))
-    assert [out["gates"][g]["status"] for g in ("G1", "G2", "G3", "G4")] == ["pass"] * 4
+    every_gate = (GATE_CORRECTNESS, *TIMING_GATES)
+    assert [out["gates"][gate]["status"] for gate in every_gate] == ["pass"] * 4
     assert out["verdict"] == "BUILD STEP 1"
 
 
@@ -623,9 +636,9 @@ def test_g2_fails_when_the_read_does_not_hide(rule, tmp_path):
     assert out["verdict"].startswith("STOP")
 
 
-def test_g4_fails_when_vram_grows(rule, tmp_path):
+def test_the_peak_vram_gate_fails_when_vram_grows(rule, tmp_path):
     out = rule.evaluate(_write(tmp_path, timing=_timing(peak16=5.0)))
-    assert out["gates"]["G4"]["status"] == "fail"
+    assert out["gates"][GATE_PEAK_VRAM]["status"] == "fail"
 
 
 def test_round_spread_over_5pct_removes_the_gates_using_that_arm(rule, tmp_path):
@@ -635,7 +648,7 @@ def test_round_spread_over_5pct_removes_the_gates_using_that_arm(rule, tmp_path)
                 rec["step_s_mean"] = 104.0 * 1.12
 
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[widen])))
-    for gate in ("G2", "G3", "G4"):
+    for gate in TIMING_GATES:
         assert out["gates"][gate]["status"] == "no verdict", gate
     assert out["verdict"].startswith("NO VERDICT")
 
@@ -649,7 +662,7 @@ def test_suspend_void_on_b16_removes_g2_only(rule, tmp_path):
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[void])))
     assert out["gates"]["G2"]["status"] == "no verdict"
     assert out["gates"]["G3"]["status"] == "pass"
-    assert out["gates"]["G4"]["status"] == "pass"
+    assert out["gates"][GATE_PEAK_VRAM]["status"] == "pass"
 
 
 def test_v2_judges_the_work_not_the_time(rule, tmp_path):
@@ -670,7 +683,7 @@ def test_v2_fails_when_l2l_k1_loads_differ_from_the_shipped_step(rule, tmp_path)
 
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[fewer])))
     assert out["validity"]["V2"]["ok"] is False
-    for gate in ("G2", "G3", "G4"):
+    for gate in TIMING_GATES:
         assert out["gates"][gate]["status"] == "no verdict"
 
 
@@ -680,7 +693,7 @@ def test_direct_io_off_removes_every_timing_gate(rule, tmp_path):
     assert out["gates"]["G2"]["status"] == "no verdict"
 
 
-def test_skipped_k16_removes_g2_to_g4(rule, tmp_path):
+def test_skipped_k16_removes_the_timing_gates(rule, tmp_path):
     def skip(records):
         for rec in records:
             if rec["k"] == 16:
@@ -688,7 +701,7 @@ def test_skipped_k16_removes_g2_to_g4(rule, tmp_path):
                 rec["step_s_mean"] = None
 
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[skip])))
-    for gate in ("G2", "G3", "G4"):
+    for gate in TIMING_GATES:
         assert out["gates"][gate]["status"] == "no verdict"
 
 
@@ -733,7 +746,7 @@ def test_spill_ratio_is_informational(rule, tmp_path):
     assert out["verdict"] == "BUILD STEP 1"
 
 
-def test_foreign_reader_on_a16_removes_g2_to_g4(rule, tmp_path):
+def test_foreign_reader_on_a16_removes_the_timing_gates(rule, tmp_path):
     def heavy(records):
         for rec in records:
             if (rec["mode"], rec["arm"], rec["k"], rec["round"]) == ("l2l", "A", 16, 0):
@@ -742,7 +755,7 @@ def test_foreign_reader_on_a16_removes_g2_to_g4(rule, tmp_path):
                 ]
 
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[heavy])))
-    for gate in ("G2", "G3", "G4"):
+    for gate in TIMING_GATES:
         assert out["gates"][gate]["status"] == "no verdict", gate
     assert "SearchIndexer.exe" in out["gates"]["G2"]["detail"]
 
@@ -842,7 +855,7 @@ def test_fits_in_ram_keeps_the_margin(probe):
 # --------------------------------------------------------------------------
 def test_v2_ignores_timing_validity_of_the_k1_arms(rule, tmp_path):
     """I1: V2 is a loads/bytes identity. A 10% round spread on the shipped step
-    voids that arm's time (V4), but no gate reads P1's time, so G2-G4 stand."""
+    voids that arm's time (V4), but no gate reads P1's time, so the timing gates stand."""
 
     def spread(records):
         for rec in records:

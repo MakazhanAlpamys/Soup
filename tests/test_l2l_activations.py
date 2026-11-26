@@ -786,15 +786,13 @@ def test_a_file_planted_at_the_spill_path_is_refused_and_left_intact(tmp_path, b
     assert target.read_bytes() == b"precious"
 
 
+@pytest.mark.requires_symlink
 @pytest.mark.parametrize("backend", ["buffered", "direct"])
 def test_a_symlink_at_the_spill_path_is_refused_without_writing_through(tmp_path, backend):
     victim = tmp_path / "victim.txt"
     victim.write_bytes(b"precious")
     link = tmp_path / "spill.bin"
-    try:
-        link.symlink_to(victim)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks cannot be created here")
+    link.symlink_to(victim)
     factory = acts.BufferedSpillFile if backend == "buffered" else acts.DirectSpillFile
     with pytest.raises(OSError):
         factory(str(link), 4096)
