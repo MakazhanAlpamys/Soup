@@ -4,6 +4,7 @@ import copy
 import re
 from unittest.mock import patch
 
+import pytest
 import torch
 from datasets import Dataset
 from peft import get_peft_model
@@ -23,6 +24,18 @@ from soup_cli.utils.frozen_prefix_forward import FrozenPrefixRunner
 from soup_cli.utils.peft_wiring import build_lora_config
 
 CUTOFF = 2
+
+
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """The disk guard reads the real volume; these tests are about something else."""
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(
+        "soup_cli.utils.frozen_prefix_cache.shutil.disk_usage",
+        lambda path: usage(10**13, 0, 10**13),
+    )
 
 
 def make_model():
@@ -196,23 +209,22 @@ def test_normal_and_cached_sft_trainer_agree(tmp_path):
     )
     cached_trainer = make_trainer(cached_model, tmp_path / "cached", tokenizer)
 
-    frozen_calls = [0]
-    handles = [
-        layer.register_forward_pre_hook(
-            lambda module, args: frozen_calls.__setitem__(0, frozen_calls[0] + 1)
-        )
-        for layer in decoder.layers[:CUTOFF]
-    ]
-    try:
-        with patch.object(decoder, "forward", side_effect=runner.forward):
-            cached_result = cached_trainer.train()
-    finally:
-        for handle in handles:
-            handle.remove()
+    frozen_calls = []
+    for layer in decoder.layers[:CUTOFF]:
+        original = layer.forward
+
+        # Wrapping forward counts the calls; a hook would be refused by the runner.
+        def counting(*args, _original=original, **kwargs):
+            frozen_calls.append(1)
+            return _original(*args, **kwargs)
+
+        layer.forward = counting
+    with patch.object(decoder, "forward", side_effect=runner.forward):
+        cached_result = cached_trainer.train()
 
     assert plain_trainer.state.global_step == cached_trainer.state.global_step == 2
     assert (runner.misses, runner.hits) == (1, 1)
-    assert frozen_calls[0] == CUTOFF, "each frozen layer runs once, in the epoch that fills it"
+    assert len(frozen_calls) == CUTOFF, "each frozen layer runs once, in the epoch that fills it"
 
     plain_weights = trainable_weights(plain_model)
     cached_weights = trainable_weights(cached_model)

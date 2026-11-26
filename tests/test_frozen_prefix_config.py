@@ -9,6 +9,7 @@ def make_config(**training_overrides):
     training = {
         "frozen_prefix_cache": True,
         "freeze_layers": 16,
+        "batch_size": 1,
         "lora": {"r": 8},
     }
     training.update(training_overrides)
@@ -73,8 +74,10 @@ def test_a_non_boolean_switch_is_refused(value):
             {"freeze_layers": None},
             "requires training.freeze_layers or training.freeze_ratio",
         ),
-        ({"lora": {"r": 0}}, "requires training.lora.r >= 1"),
-        ({"stream_layers": True}, "does not support training.stream_layers"),
+        (
+            {"quantization": "none", "lora": {"r": 0}},
+            "requires training.lora.r >= 1",
+        ),
         ({"packing": True}, "does not support training.packing or training.multipack"),
         ({"multipack": True}, "does not support training.packing or training.multipack"),
         (
@@ -90,8 +93,19 @@ def test_a_non_boolean_switch_is_refused(value):
             "does not support training.lora.use_vera",
         ),
         (
-            {"lora": {"r": 8, "target_parameters": ["experts.w1"]}},
+            {
+                "quantization": "none",
+                "lora": {"r": 8, "dropout": 0, "target_parameters": ["experts.w1"]},
+            },
             "does not support training.lora.target_parameters",
+        ),
+        (
+            {"neftune_alpha": 5.0},
+            "cannot be combined with training.neftune_alpha",
+        ),
+        (
+            {"neftune_alpha": 0.0},
+            "cannot be combined with training.neftune_alpha",
         ),
     ],
 )
@@ -100,16 +114,60 @@ def test_incompatible_settings_are_refused_by_name(overrides, message):
         SoupConfig.model_validate(make_config(**overrides))
 
 
+@pytest.mark.parametrize("batch_size", [2, 8, "auto"])
+def test_batches_above_one_need_a_fixed_data_order(batch_size):
+    with pytest.raises(ValueError, match="needs a fixed data order") as caught:
+        SoupConfig.model_validate(make_config(batch_size=batch_size))
+
+    assert "training.batch_size: 1" in str(caught.value)
+    assert "training.curriculum_metric: length" in str(caught.value)
+
+
+def test_batch_of_one_needs_no_fixed_order():
+    config = SoupConfig.model_validate(make_config(batch_size=1))
+
+    assert config.training.batch_size == 1
+
+
+def test_a_length_curriculum_is_the_fixed_order_for_larger_batches():
+    config = SoupConfig.model_validate(
+        make_config(batch_size=4, curriculum=True, curriculum_metric="length")
+    )
+
+    assert config.training.batch_size == 4
+
+
+@pytest.mark.parametrize("metric", ["perplexity", "loss"])
+def test_other_curriculum_metrics_do_not_fix_the_order(metric):
+    with pytest.raises(ValueError, match="needs a fixed data order"):
+        SoupConfig.model_validate(
+            make_config(batch_size=4, curriculum=True, curriculum_metric=metric)
+        )
+
+
+def test_task_gate_is_named_where_the_freeze_check_lets_it_through():
+    raw = make_config(tts_family="orpheus")
+    raw.update({"task": "tts", "modality": "audio_out"})
+
+    with pytest.raises(ValueError, match="requires task='sft'; got task='tts'"):
+        SoupConfig.model_validate(raw)
+
+
 @pytest.mark.parametrize(
-    "top, message",
+    "top, training, message",
     [
-        ({"task": "dpo"}, "requires task='sft'"),
-        ({"backend": "unsloth"}, "requires backend='transformers'"),
-        ({"modality": "vision"}, "requires modality='text'"),
+        ({"task": "dpo"}, {}, "freeze_layers is not applied by task='dpo'"),
+        ({"backend": "unsloth"}, {}, "not applied by task='sft' with backend='unsloth'"),
+        ({"modality": "vision"}, {}, "not applied by task='sft' with modality='vision'"),
+        (
+            {},
+            {"stream_layers": True},
+            "not applied by task='sft' with training.stream_layers=true",
+        ),
     ],
 )
-def test_task_backend_and_modality_gates_are_named(top, message):
-    raw = make_config()
+def test_unsupported_paths_are_refused_by_the_freeze_check_first(top, training, message):
+    raw = make_config(**training)
     raw.update(top)
 
     with pytest.raises(ValueError, match=message):

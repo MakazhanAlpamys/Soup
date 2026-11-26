@@ -2724,11 +2724,33 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             if tcfg.frozen_prefix_cache:
                 from soup_cli.utils.frozen_prefix_forward import frozen_prefix_session
 
+                # The cache is keyed per batch: with a larger batch the data order
+                # must be fixed, or no batch ever repeats and the cache only writes.
+                # Config load covers a sorted curriculum; pre-tokenised data and
+                # other paths can still hand the Trainer a random sampler.
+                if (
+                    self.trainer.args.per_device_train_batch_size > 1
+                    and getattr(self.trainer.args, "train_sampling_strategy", None)
+                    != "sequential"
+                ):
+                    raise ValueError(
+                        "training.frozen_prefix_cache with a batch size above 1 needs a "
+                        "fixed data order, but this run reads its rows in random order "
+                        "(a pre-tokenized dataset does this even with a curriculum), so "
+                        "no batch would repeat. Set training.batch_size: 1."
+                    )
+                try:
+                    train_rows = len(self.trainer.train_dataset)
+                except TypeError:
+                    train_rows = None
                 prefix_runner = train_ctx.enter_context(
                     frozen_prefix_session(
                         self.trainer.model,
                         cutoff=self._frozen_prefix_cutoff or 0,
                         output_dir=self._output_dir,
+                        rows=train_rows,
+                        max_length=self.config.data.max_length,
+                        console=console,
                         model_revision=str(self.config.base),
                         n_gpu=self.trainer.args.n_gpu,
                         quantized=bool(
@@ -2778,6 +2800,11 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                     f"hits={prefix_runner.hits}, misses={prefix_runner.misses}, "
                     f"hit_rate={100 * prefix_runner.hits / lookups if lookups else 0:.1f}%"
                 )
+                if prefix_runner.cache.stop_reason is not None:
+                    console.print(
+                        "[yellow]The cache stopped writing during this run: "
+                        f"{for_terminal(prefix_runner.cache.stop_reason)}.[/]"
+                    )
         duration = time.time() - start
         self._report_rewind()
 

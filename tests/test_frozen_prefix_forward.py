@@ -32,6 +32,18 @@ COMMON = dict(
 )
 
 
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """The disk guard reads the real volume; these tests are about something else."""
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(
+        "soup_cli.utils.frozen_prefix_cache.shutil.disk_usage",
+        lambda path: usage(10**13, 0, 10**13),
+    )
+
+
 def tiny_decoder(**overrides):
     torch.manual_seed(42)
     return MistralModel(MistralConfig(**{**COMMON, **overrides})).eval().requires_grad_(False)
@@ -93,16 +105,17 @@ def test_a_hit_does_not_run_the_frozen_layers(tmp_path):
         runner.forward(input_ids=inputs, attention_mask=mask, position_ids=positions)
 
     calls = []
-    handles = [
-        layer.register_forward_pre_hook(lambda module, args: calls.append(module))
-        for layer in decoder.layers[:2]
-    ]
-    try:
-        with torch.no_grad():
-            runner.forward(input_ids=inputs, attention_mask=mask, position_ids=positions)
-    finally:
-        for handle in handles:
-            handle.remove()
+    for layer in decoder.layers[:2]:
+        original = layer.forward
+
+        # Wrapping forward counts the calls; a hook would be refused by the runner.
+        def counting(*args, _original=original, **kwargs):
+            calls.append(1)
+            return _original(*args, **kwargs)
+
+        layer.forward = counting
+    with torch.no_grad():
+        runner.forward(input_ids=inputs, attention_mask=mask, position_ids=positions)
 
     assert runner.hits == 1
     assert calls == []

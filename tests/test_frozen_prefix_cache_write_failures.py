@@ -1,5 +1,8 @@
 """CPU fault-injection tests for the frozen-prefix disk cache.
 
+A failed write stops the cache from writing (it never raises into training) and
+leaves the disk exactly as it was.
+
 Only pytest-owned temporary directories are modified. These tests simulate
 recoverable exceptions; they do not fill a disk, kill a process, or establish
 power-loss durability or general concurrent-writer correctness.
@@ -8,6 +11,8 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import os
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
@@ -15,6 +20,18 @@ import torch
 from safetensors import torch as st
 
 from soup_cli.utils import frozen_prefix_cache as implementation
+
+
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """The disk guard reads the real volume; these tests are about something else."""
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(
+        "soup_cli.utils.frozen_prefix_cache.shutil.disk_usage",
+        lambda path: usage(10**13, 0, 10**13),
+    )
 
 
 def make_case(tmp_path: Path, entry_exists: bool):
@@ -74,6 +91,8 @@ def test_save_failure_preserves_disk_state_and_allows_retry(
     failure_stage: str,
 ) -> None:
     cache, metadata, other, old, new, unrelated, target = make_case(tmp_path, entry_exists)
+    notices = []
+    cache.notify = notices.append
     before = disk_state(cache.directory)
     expected_before = old if entry_exists else None
     original_new = new.clone()
@@ -118,10 +137,11 @@ def test_save_failure_preserves_disk_state_and_allows_retry(
             patch.setattr(st, "save_file", failed_serialize)
         else:
             patch.setattr(implementation.os, "replace", failed_publish)
-        with pytest.raises(OSError) as caught:
-            cache.save(new, metadata)
+        assert cache.save(new, metadata) is None  # Training is not interrupted.
 
-    assert caught.value is injected  # Neither swallowed nor masked by cleanup.
+    assert cache.writing is False
+    assert str(injected) in cache.stop_reason
+    assert len(notices) == 1 and "stopped writing" in notices[0]
     assert reached == [failure_stage]
     assert torch.equal(new, original_new)
     assert disk_state(cache.directory) == before
@@ -185,3 +205,72 @@ def test_reader_sees_old_or_absent_entry_until_real_replace(
     assert_value(implementation.FrozenPrefixCache(cache.directory), metadata, new)
     assert_value(cache, other, unrelated)
     assert list(cache.directory.glob(".frozen-prefix-*.tmp")) == []
+
+
+_Usage = namedtuple("_Usage", "total used free")
+GIB = 1024**3
+
+
+def test_a_nearly_full_volume_stops_writing_and_keeps_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache, metadata, other, old, new, unrelated, target = make_case(tmp_path, True)
+    notices = []
+    cache.notify = notices.append
+    before = disk_state(cache.directory)
+    # 100 GiB volume: the reserve is 5 GiB; 5 GiB + the entry size would be needed.
+    monkeypatch.setattr(
+        implementation.shutil, "disk_usage", lambda path: _Usage(100 * GIB, 95 * GIB, 5 * GIB)
+    )
+
+    assert cache.save(new, metadata) is None
+    assert cache.save(new, metadata) is None  # still not writing, and no second notice
+
+    assert cache.writing is False
+    assert len(notices) == 1
+    assert "5.0 GB reserve" in notices[0] and "larger of 2 GiB and 5%" in notices[0]
+    assert disk_state(cache.directory) == before
+    assert_value(cache, metadata, old)  # existing entries are still served
+    assert_value(cache, other, unrelated)
+
+
+@pytest.mark.parametrize(
+    "total, free, writes",
+    [
+        (10 * GIB, 2 * GIB + 1024, True),  # 2 GiB floor holds on a small volume
+        (10 * GIB, 2 * GIB - 1, False),
+        (200 * GIB, 11 * GIB, True),  # 5 % of 200 GiB = 10 GiB beats the floor
+        (200 * GIB, 10 * GIB - 1, False),
+    ],
+)
+def test_reserve_is_the_larger_of_two_gib_and_five_percent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, total: int, free: int, writes: bool
+) -> None:
+    cache, metadata, other, old, new, unrelated, target = make_case(tmp_path, False)
+    monkeypatch.setattr(
+        implementation.shutil, "disk_usage", lambda path: _Usage(total, total - free, free)
+    )
+
+    assert (cache.save(new, metadata) is not None) is writes
+    assert cache.writing is writes
+
+
+def test_enospc_on_write_stops_writing_and_removes_the_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache, metadata, other, old, new, unrelated, target = make_case(tmp_path, False)
+    before = disk_state(cache.directory)
+
+    def partial_then_full(tensors, filename, *args, **kwargs):
+        Path(filename).write_bytes(b"half a file")
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(st, "save_file", partial_then_full)
+
+    assert cache.save(new, metadata) is None
+
+    assert cache.writing is False
+    assert "No space left on device" in cache.stop_reason
+    assert disk_state(cache.directory) == before
+    assert list(cache.directory.glob(".frozen-prefix-*.tmp")) == []
+    assert os.path.exists(cache.directory)

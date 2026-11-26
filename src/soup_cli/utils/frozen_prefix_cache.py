@@ -11,12 +11,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 #: Directory name, inside the training output directory, that holds the entries.
 CACHE_DIRNAME = "_frozen_prefix_cache"
+
+#: ``ignore_patterns`` for any upload of a training output directory: the cache
+#: is scratch data, large, and not part of the model.
+UPLOAD_IGNORE_PATTERNS = [CACHE_DIRNAME, f"{CACHE_DIRNAME}/*"]
+
+#: Writing stops when it would leave less free space than the larger of these.
+MIN_FREE_BYTES = 2 * 1024**3
+MIN_FREE_FRACTION = 0.05
+
+
+def free_space_reserve(total_bytes: int) -> int:
+    """Free space that must stay on the volume: max(2 GiB, 5 % of the volume)."""
+    return max(MIN_FREE_BYTES, int(total_bytes * MIN_FREE_FRACTION))
 
 
 def cache_key(metadata: dict[str, Any]) -> str:
@@ -214,34 +228,76 @@ def build_cache_metadata(
 
 
 class FrozenPrefixCache:
-    """Store and retrieve frozen-prefix activations on disk."""
+    """Store and retrieve frozen-prefix activations on disk.
 
-    def __init__(self, directory: str | Path):
+    Writing is best effort: when the volume would drop below the free-space
+    reserve, or a write fails, the cache stops writing, tells ``notify`` once,
+    and keeps serving the entries it already has. Training is never stopped by
+    the cache running out of room.
+    """
+
+    def __init__(
+        self,
+        directory: str | Path,
+        notify: Callable[[str], None] | None = None,
+    ):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        self.notify = notify
+        self.writing = True
+        self.stop_reason: str | None = None
 
     def _path(self, metadata: dict[str, Any]) -> Path:
         return self.directory / f"{cache_key(metadata)}.safetensors"
 
-    def save(self, activation: Any, metadata: dict[str, Any]) -> Path:
-        """Atomically save a frozen-prefix activation."""
+    def _stop_writing(self, reason: str) -> None:
+        self.writing = False
+        self.stop_reason = reason
+        if self.notify is not None:
+            self.notify(
+                "Frozen-prefix cache stopped writing: "
+                f"{reason}. Existing entries are still read; new batches are recomputed."
+            )
+
+    def save(self, activation: Any, metadata: dict[str, Any]) -> Path | None:
+        """Atomically save a frozen-prefix activation, or return ``None`` if not writing."""
         from safetensors.torch import save_file
+
+        if not self.writing:
+            return None
 
         path = self._path(metadata)
         tensor = activation.detach().cpu().contiguous()
 
-        fd, temporary_path = tempfile.mkstemp(
-            prefix=".frozen-prefix-",
-            suffix=".tmp",
-            dir=self.directory,
-        )
-
         try:
+            usage = shutil.disk_usage(self.directory)
+            needed = tensor.numel() * tensor.element_size()
+            reserve = free_space_reserve(usage.total)
+            if usage.free - needed < reserve:
+                self._stop_writing(
+                    f"{usage.free / 1e9:.1f} GB free would drop below the "
+                    f"{reserve / 1e9:.1f} GB reserve (the larger of 2 GiB and 5% of the volume)"
+                )
+                return None
+        except OSError as exc:
+            self._stop_writing(f"free space could not be read ({type(exc).__name__}: {exc})")
+            return None
+
+        temporary_path = None
+        try:
+            fd, temporary_path = tempfile.mkstemp(
+                prefix=".frozen-prefix-",
+                suffix=".tmp",
+                dir=self.directory,
+            )
             os.close(fd)
             save_file({"hidden_states": tensor}, temporary_path)
             os.replace(temporary_path, path)
+        except OSError as exc:
+            self._stop_writing(f"a write failed ({type(exc).__name__}: {exc})")
+            return None
         finally:
-            if os.path.exists(temporary_path):
+            if temporary_path is not None and os.path.exists(temporary_path):
                 os.unlink(temporary_path)
 
         return path

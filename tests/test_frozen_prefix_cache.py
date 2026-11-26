@@ -17,6 +17,18 @@ from soup_cli.utils.frozen_prefix_cache import (
 )
 
 
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """The disk guard reads the real volume; these tests are about something else."""
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(
+        "soup_cli.utils.frozen_prefix_cache.shutil.disk_usage",
+        lambda path: usage(10**13, 0, 10**13),
+    )
+
+
 def tiny_config(**overrides):
     values = dict(
         vocab_size=100,

@@ -832,20 +832,38 @@ training:
 ```
 
 An entry is reused only when the frozen weights, the model configuration (RoPE settings
-included), the input ids, the attention mask and the position ids are all identical; any
-difference is a miss and the layers run as usual. If a frozen weight changes during the run the
-run stops with an error instead of serving stale entries. A batch the data loader composes
-differently from one epoch to the next is a different batch, so shuffled epochs hit only for
-batches that repeat; with a fixed order every later epoch hits.
+included), the input ids, the attention mask, the position ids, the activation dtype, the autocast
+state, the device type and the attention implementation are all identical; any difference is a miss
+and the layers run as usual. If a frozen weight changes during the run the run stops with an error
+instead of serving stale entries. The same goes for a forward hook on the embeddings or on a frozen
+layer, which could change the activation: the run stops with an error naming it.
 
-Entries are written under `<output>/_frozen_prefix_cache/` and grow with the training set (one
-hidden-state tensor per batch), so check the free space on the output drive. The folder is not
-removed when the run ends.
+Hits happen per batch. The cache is keyed by the exact batch, so a batch hits only when the same
+rows come together again in a later epoch. That needs a fixed data order: `training.batch_size: 1`
+(every row repeats whatever the order), or a larger batch with `training.curriculum: true` and
+`training.curriculum_metric: length`, which reads the rows in a fixed order. Config loading refuses a
+batch size above 1 (or `auto`) without one of them, because with a shuffled order no batch repeats
+and the cache would only write. A pre-tokenized dataset keeps the shuffled order even with a
+curriculum, so that combination stops when training starts.
 
-Config loading refuses it outside `task: sft` with `backend: transformers` and a text model, without
-a freeze plan, with `training.lora.r: 0` (full fine-tuning), with `stream_layers`, `packing`,
-`multipack`, `gradient_checkpointing`, `training.lora.use_vera` or `training.lora.target_parameters`.
-It supports Mistral and OLMoE decoders on a single device; any other decoder, a run on more than one
+Where it lives: `<output>/_frozen_prefix_cache/`, one file per distinct batch. The folder is kept
+after the run, so a later run with the same weights, configuration and data reuses it; delete it
+when you no longer need it. `soup push` leaves it out of the upload, and the other hubs refuse a
+folder that still holds it.
+
+How big it gets: one hidden-state tensor per distinct batch, so up to rows x `data.max_length` x the
+model's hidden size x the bytes of its dtype for the whole training set (a 7B model with a 4096
+hidden size in bf16 at 2048 tokens is 16 MB per row; batches are padded only to their longest row,
+so the real figure is smaller). At start the run prints the directory, this upper bound and the free
+space on that volume. Writing stops, with one notice, when a write would leave less free space than
+the larger of 2 GiB and 5 % of the volume, and when a write fails (for example the disk is full):
+entries already stored are still read, new batches are computed as usual, and the run carries on.
+
+Config loading refuses it outside `task: sft` and without a freeze plan, and where a freeze plan is not applied (`backend` other than
+`transformers`, a non-text model, `stream_layers`), with `training.lora.r: 0` (full fine-tuning),
+`packing`, `multipack`, `gradient_checkpointing`, `training.neftune_alpha` (it adds new noise to the
+embeddings on every step), `training.lora.use_vera` or `training.lora.target_parameters`. It
+supports Mistral and OLMoE decoders on a single device; any other decoder, a run on more than one
 visible GPU through `torch.nn.DataParallel`, `output_router_logits` and `output_attentions` refuse
 when training starts. For an OLMoE model set `training.moe_aux_loss_coeff: 0`, because the cached
 prefix has no router logits.

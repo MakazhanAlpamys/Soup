@@ -25,6 +25,56 @@ from soup_cli.utils.frozen_prefix_cache import (
 _SUPPORTED = "Mistral and OLMoE"
 
 
+def hooked_modules(modules: Any) -> list[str]:
+    """Names of the modules (and their submodules) that carry a forward hook.
+
+    A forward or forward-pre hook on the embeddings or a frozen layer can change
+    what that part computes (NEFTune noise is one), so a cached activation could
+    differ from a fresh one.
+    """
+    found = []
+    for prefix, module in modules:
+        for name, submodule in module.named_modules(prefix=prefix):
+            if getattr(submodule, "_forward_hooks", None) or getattr(
+                submodule, "_forward_pre_hooks", None
+            ):
+                found.append(name)
+    return found
+
+
+def execution_signature(embeddings: Any, config: Any) -> dict[str, Any]:
+    """What besides the weights and the inputs shapes the numbers of the frozen prefix.
+
+    The activation dtype, the autocast state, the device type and the attention
+    implementation each change the result, so each is part of the cache key.
+    """
+    import torch
+
+    device_type = embeddings.device.type
+    autocast_dtype = None
+    try:
+        if torch.is_autocast_enabled(device_type):
+            autocast_dtype = str(torch.get_autocast_dtype(device_type))
+    except RuntimeError:  # a device type autocast does not know
+        pass
+    return {
+        "dtype": str(embeddings.dtype),
+        "autocast": autocast_dtype,
+        "device_type": device_type,
+        "attn_implementation": str(getattr(config, "_attn_implementation", None)),
+    }
+
+
+def estimate_cache_bytes(rows: int, max_length: int, hidden_size: int, element_size: int) -> int:
+    """Upper bound on the entries of one epoch: rows x tokens x hidden x bytes.
+
+    The cache stores one activation per distinct batch at the cutoff, so the
+    total does not depend on the batch size; padding to the longest row in each
+    batch makes the real figure smaller.
+    """
+    return rows * max_length * hidden_size * element_size
+
+
 class FrozenPrefixRunner:
     """Execute a decoder with reusable frozen-prefix activations."""
 
@@ -55,6 +105,7 @@ class FrozenPrefixRunner:
         )
 
         self._validate_deterministic_prefix()
+        self._refuse_hooks()
 
         if any(param.requires_grad for param in self._frozen_parameters):
             raise ValueError("The frozen-prefix cache requires a fully frozen prefix")
@@ -90,6 +141,23 @@ class FrozenPrefixRunner:
             raise ValueError(
                 "The frozen-prefix cache requires a deterministic frozen prefix: "
                 "attention_dropout must be zero during training"
+            )
+
+    def _refuse_hooks(self) -> None:
+        """Refuse a forward hook on the embeddings or the frozen layers."""
+        decoder = self.decoder
+        found = hooked_modules(
+            [
+                ("embed_tokens", decoder.embed_tokens),
+                *((f"layers.{index}", decoder.layers[index]) for index in range(self.cutoff)),
+            ]
+        )
+        if found:
+            raise ValueError(
+                "training.frozen_prefix_cache cannot run with a forward hook on the input "
+                f"embeddings or a frozen layer (found on {found[0]}): a hook can change the "
+                "cached activation, and NEFTune installs one. Remove the hook or turn the "
+                "cache off."
             )
 
     def forward(
@@ -143,6 +211,9 @@ class FrozenPrefixRunner:
                 f"The frozen-prefix cache got unsupported forward arguments: {sorted(kwargs)}"
             )
         self._validate_deterministic_prefix()
+        # NEFTune and similar hooks are installed after this runner, when training
+        # starts, so they are looked for on every forward and not only at install.
+        self._refuse_hooks()
         decoder = self.decoder
 
         embeddings = decoder.embed_tokens(input_ids)
@@ -179,6 +250,7 @@ class FrozenPrefixRunner:
             )
         )
         metadata["frozen_prefix_fingerprint"] = self.frozen_prefix_fingerprint
+        metadata["execution"] = execution_signature(embeddings, decoder.config)
 
         current_versions = tuple(param._version for param in self._frozen_parameters)
         if current_versions != self._frozen_versions:
@@ -300,6 +372,56 @@ def install_frozen_prefix_cache(
         decoder.forward = original_forward
 
 
+def announce_cache(
+    console: Any,
+    cache: FrozenPrefixCache,
+    decoder: Any,
+    *,
+    rows: int | None,
+    max_length: int | None,
+) -> None:
+    """Print where the cache lives, how large it can get and how much room there is."""
+    import shutil
+
+    from soup_cli.utils.frozen_prefix_cache import free_space_reserve
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        usage = shutil.disk_usage(cache.directory)
+    except OSError:
+        usage = None
+    free = "unknown" if usage is None else f"{usage.free / 1e9:.1f} GB"
+    reserve = "" if usage is None else (
+        f" Writing stops when less than {free_space_reserve(usage.total) / 1e9:.1f} GB "
+        "would stay free."
+    )
+    estimate = None
+    if rows is None or max_length is None:
+        size = "The size depends on the training set"
+    else:
+        element_size = decoder.embed_tokens.weight.element_size()
+        estimate = estimate_cache_bytes(rows, max_length, decoder.config.hidden_size, element_size)
+        size = (
+            f"Up to about {estimate / 1e9:.1f} GB for {rows} rows of {max_length} tokens "
+            "(an upper bound: batches are padded to their longest row)"
+        )
+    console.print(
+        f"[green]Frozen-prefix cache directory:[/] {for_terminal(str(cache.directory))}. "
+        f"{size}; {free} free on that volume.{reserve} "
+        "The folder is kept after the run."
+    )
+    if (
+        estimate is not None
+        and usage is not None
+        and estimate > usage.free - free_space_reserve(usage.total)
+    ):
+        console.print(
+            "[yellow]The estimate is larger than the free space above the reserve: the "
+            "cache will stop writing before the first epoch ends, and later epochs will "
+            "reuse only the batches already stored.[/]"
+        )
+
+
 @contextlib.contextmanager
 def frozen_prefix_session(
     model: Any,
@@ -309,11 +431,16 @@ def frozen_prefix_session(
     model_revision: str,
     n_gpu: int = 1,
     quantized: bool = False,
+    rows: int | None = None,
+    max_length: int | None = None,
+    console: Any = None,
 ):
     """Install the cache for one training run, with its directory under ``output_dir``.
 
     ``cutoff`` is the number of frozen bottom layers. Yields the runner, whose
-    ``hits`` and ``misses`` count the lookups.
+    ``hits`` and ``misses`` count the lookups. With ``console`` it prints the
+    directory, an upper bound on the cache size (when ``rows`` and ``max_length``
+    are known), the free space, and any later stop of writing.
     """
     from soup_cli.utils.layer_stream_runtime import decoder_owner
 
@@ -332,7 +459,12 @@ def frozen_prefix_session(
         )
 
     decoder = decoder_owner(model)
-    cache = FrozenPrefixCache(resolve_cache_directory(output_dir))
+    cache = FrozenPrefixCache(
+        resolve_cache_directory(output_dir),
+        notify=(lambda message: console.print(f"[yellow]{message}[/]")) if console else None,
+    )
+    if console is not None:
+        announce_cache(console, cache, decoder, rows=rows, max_length=max_length)
     # Computed once per installation: no per-step host synchronisation for the key.
     configuration = fingerprint_prefix_configuration(decoder, cutoff)
 
