@@ -153,6 +153,7 @@ def rewind_skip_reason(
     audio: bool,
     prefix_tree: bool = False,
     l2l: bool = False,
+    cut_ce: bool = False,
 ) -> str:
     """Why this run takes no rewind recorder, in words a user can act on.
 
@@ -175,6 +176,11 @@ def rewind_skip_reason(
         return "audio runs a custom collator"
     if l2l:
         return "L2L runs the layers outside the loss path the recorder wraps"
+    if cut_ce:
+        return (
+            "Cut Cross-Entropy under layer streaming returns neither logits nor "
+            "per-token losses, which the recorder reads"
+        )
     if task != "sft":
         return f"the recorder is SFT-only and this is task {task!r}"
     return "this run does not take the recording trainer path"
@@ -1094,6 +1100,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # option to the two branches below that build `sft_cls`.
         sft_cls = SFTTrainer
         chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        cut_ce_hook = chunk_hook is not None and getattr(chunk_hook, "impl", None) == "cce"
         if chunk_hook is not None:
             from soup_cli.utils.stream_loss_chunk import (
                 HOOK_ATTR,
@@ -1209,6 +1216,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer = self._build_l2l_trainer(sft_cls, trainer_kwargs, training_args)
         elif (
             tcfg.rewind_log
+            and not cut_ce_hook
             and cfg.task == "sft"
             and pretok is None
             and not use_vision
@@ -1246,6 +1254,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         audio=use_audio,
                         prefix_tree=use_prefix_tree,
                         l2l=tcfg.l2l,
+                        cut_ce=cut_ce_hook,
                     )
                 )
 

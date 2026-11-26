@@ -200,6 +200,42 @@ def sft_head(labels: Sequence[Any], n_items: int) -> LossHead:
     return head
 
 
+def sft_chunked_head(
+    labels: Sequence[Any], n_items: int, chunk: Optional[int] = None
+) -> LossHead:
+    """The SFT head with ``training.stream_loss_chunk``: ``norm``, then the chunked causal-LM
+    loss over ``n_items``, so a window never holds one micro-batch's full logits.
+
+    ``chunk`` is the positions per chunk (None: ``training.stream_loss_chunk``'s lower bound).
+    The gradient is taken on the hidden states only, so the output head must be frozen.
+    """
+    from soup_cli.utils.config_bounds import MIN_STREAM_LOSS_CHUNK
+    from soup_cli.utils.stream_loss_chunk import chunked_causal_lm_loss
+
+    size = MIN_STREAM_LOSS_CHUNK if chunk is None else chunk
+
+    def head(causal: Any, owner: Any, hidden: Any, mb: int) -> Any:
+        trainable = [
+            name for name, param in causal.lm_head.named_parameters() if param.requires_grad
+        ]
+        if trainable:
+            raise ValueError(
+                "training.stream_loss_chunk takes the gradient on the hidden states "
+                "only, so the output head must be frozen; trainable: "
+                f"{', '.join(sorted(trainable))}."
+            )
+        loss, _step = chunked_causal_lm_loss(
+            owner.norm(hidden),
+            causal.lm_head,
+            labels[mb],
+            size,
+            num_items_in_batch=n_items,
+        )
+        return loss
+
+    return head
+
+
 @dataclass
 class ReferencePass:
     """A gradient-free pass over the same layers, after each layer's policy micro-batches.

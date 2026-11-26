@@ -58,6 +58,7 @@ from soup_cli.utils.l2l_step import (
     ReferencePass,
     as_passes,
     refuse_moe_l2l,
+    sft_chunked_head,
     sft_head,
 )
 
@@ -419,6 +420,16 @@ class WindowLoss:
 SFT_WINDOW_LOSS = WindowLoss(
     divide_by="items", read_window=_window_tensors, make_head=sft_head
 )
+
+
+def sft_chunked_window_loss(chunk: int) -> WindowLoss:
+    """The SFT window with ``training.stream_loss_chunk``: the same reading and scale, and a
+    head that computes the loss ``chunk`` positions at a time."""
+    return WindowLoss(
+        divide_by="items",
+        read_window=_window_tensors,
+        make_head=lambda labels, n_items: sft_chunked_head(labels, n_items, chunk),
+    )
 
 
 def _has_dropout(model: Any) -> bool:

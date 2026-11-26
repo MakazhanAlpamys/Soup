@@ -986,6 +986,20 @@ on: the measurement stays the authority there and the dense arm is left to it (a
 then points at this arm). The choice is made by the pre-flight every streamed trainer shares (SFT,
 DPO, KTO, ORPO, SimPO, BCO and IPO); only `stream_vram_probe` is SFT-only.
 
+**Cut Cross-Entropy under streaming.** `use_cut_ce: true` with `stream_layers: true` (task
+`sft`) replaces the loss by `cut_cross_entropy.linear_cross_entropy` on the hidden states and
+the streamed output head; the logits are never built. It runs through the same hook as
+`stream_loss_chunk`, so it returns no logits and the `entropy` and `mean_token_accuracy`
+columns are not logged, and the rewind log is off for the run (the kernel returns no per-token
+losses; a notice says so). The pre-flight charges one chunk of logits. The kernel needs the
+`cut_cross_entropy` package and a card its Triton kernel supports; it is not exercised on CPU.
+Use `stream_loss_chunk` where it does not run.
+
+**With `training.l2l`.** The L2L window's head runs the same chunked loss when
+`stream_loss_chunk` is set (the forward hook is not installed there, because the window does
+not go through the model's forward). The step equals gradient accumulation with the chunked
+loss, bit for bit on CPU.
+
 **Refused.** At config load, as listed under "Rejected at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
 `use_cut_ce`. When the model is built, with the reason: a trainable output head, a model
@@ -1093,7 +1107,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
-- `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
+- `use_cut_ce` with `stream_layers` runs Cut Cross-Entropy on the streamed output head instead of the resident patch (see "Cut Cross-Entropy under streaming" above). It is `task: sft` only and refused beside `data.format: raft`, `training.l2l` and `stream_loss_chunk`
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
@@ -1111,7 +1125,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - more than 8 distinct layer shapes in one shard index → refused. Staging is allocated per shape and a shape with one member takes a full slot at any depth, so an index whose every layer differed would hold most of the model in staging at once — page-locked when the box allows it and `stream_pin` is not false, a loud pageable fallback otherwise, and a refusal only under `stream_pin: true` on a CUDA target — which is what the disk tier exists to avoid. A real model has one to three
 - `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
 - `stream_loss_chunk` on any task other than `sft`, or with `data.format: raft` → the chunked step rebuilds the causal-LM cross-entropy and returns no logits. A preference loss reduces the logits to per-token log-probs instead, and RAFT's weighted loss reads all of them (#1693)
-- `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed. Refused before the `use_cut_ce` refusal above, with a message that names both fields (#1693)
+- `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed. The message names both fields (#1693)
 - an architecture outside the supported list (llama / qwen2 / qwen3, including qwen3_5_moe text aliases / qwen4_exp text / mistral / gemma / gemma2 / gemma3_text / phi / phi3 / deepseek_v3) → named explicitly. `deepseek_v3` is the DeepSeek-V3 family (MLA attention, routed experts plus a shared expert); a Kimi K2 checkpoint uses the same decoder under `model_type: kimi_k2` and is admitted through the guard in "Kimi K2" above. Under `quantization: 4bit` its attention, shared-expert and dense-MLP projections are NF4 while the routed experts stay at the stream dtype: they are 3-D parameters, not `nn.Linear` modules, so a DeepSeek-V3 layer streams most of its bytes unquantised
 - a Kimi K2 config (`model_type: kimi_k2`) that transformers' DeepSeek-V3 class would compute differently from K2's own code → refused before any weight is resolved, naming every such field and its value (Kimi-K2-Thinking: `quantization_config.quant_method='compressed-tensors'`). The fields, and why each matters, are under "Kimi K2" above
 
@@ -1212,7 +1226,7 @@ training:
 | `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
 | `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
 
-- **Scope.** Llama and Mistral models on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model is refused with `L2L on a MoE model needs per-expert streaming parity (not yet in this version)`. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
+- **Scope.** Llama and Mistral models on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model is refused with `L2L on a MoE model needs per-expert streaming parity (not yet in this version)`. `l2l` is refused beside `data.format: raft`, `prefix_tree` and `multipack`, which build their own trainer, and with any task but `sft`. With `stream_loss_chunk` the window's head computes the same chunked loss, so the logits of one micro-batch never exist in full; `use_cut_ce` is refused beside `l2l`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`

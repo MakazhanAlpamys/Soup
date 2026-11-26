@@ -3627,7 +3627,10 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable Cut Cross-Entropy (CCE) for large-vocab models. "
             "Saves 8-24GB VRAM on Llama 3.1 128k vocab. Requires cut_cross_entropy. "
-            "Mutually exclusive with Unsloth/MLX backends."
+            "Mutually exclusive with Unsloth/MLX backends. Under stream_layers "
+            "(task='sft' only, not with l2l, raft or stream_loss_chunk) the kernel "
+            "computes the loss from the hidden states and the streamed output head; "
+            "no logits are returned, so the rewind log is off for the run."
         ),
     )
     # v0.28.0 — reserved compatibility field; the implementation never applied
@@ -4309,7 +4312,8 @@ class TrainingConfig(BaseModel):
             "outputs.logits on a labelled forward, and equality to the last "
             "bit with an unchunked step: the per-token terms are the same, the "
             "order of the final sum is not. task='sft' only; refused beside "
-            "use_cut_ce."
+            "use_cut_ce. With training.l2l the L2L window's head runs the same "
+            "chunked loss."
         ),
     )
 
@@ -8174,14 +8178,12 @@ class SoupConfig(BaseModel):
                 "training.stream_loss_chunk."
             )
         if tcfg.stream_loss_chunk is not None and tcfg.use_cut_ce:
-            # #1693 — two mechanisms over the same loss. Checked before the
-            # refusal of use_cut_ce under streaming (#2023), so that the
-            # message names both fields.
+            # #1693 — two mechanisms over the same loss; the message names both
+            # fields.
             raise ValueError(
                 "training.stream_loss_chunk and training.use_cut_ce cannot be "
                 "combined: each replaces how the loss over the logits is "
-                "computed. Keep stream_loss_chunk and set use_cut_ce=false; "
-                "streaming refuses use_cut_ce on its own."
+                "computed. Keep stream_loss_chunk and set use_cut_ce=false."
             )
         if self.backend != "transformers":
             raise ValueError(
@@ -8277,12 +8279,29 @@ class SoupConfig(BaseModel):
                 f"is on the meta device under streaming."
             )
         if tcfg.use_cut_ce:
-            raise ValueError(
-                "training.stream_layers cannot be combined with training.use_cut_ce: "
-                "the streamed setup never installs the resident Cut Cross-Entropy patch. "
-                "Set use_cut_ce=false to stream with the conservative logits budget, "
-                "or disable stream_layers to use resident CCE."
-            )
+            # Cut Cross-Entropy under streaming runs through the same hook as
+            # stream_loss_chunk (utils/stream_loss_chunk.py), not the resident patch.
+            if stream_task != "sft":
+                raise ValueError(
+                    f"training.use_cut_ce with training.stream_layers supports task='sft' "
+                    f"only; got task={stream_task!r}. A preference loss reduces the logits "
+                    f"to per-token log-probs instead of a cross-entropy, which the kernel "
+                    f"does not compute. Set use_cut_ce=false or use task='sft'."
+                )
+            if self.data.format == "raft":
+                raise ValueError(
+                    "training.use_cut_ce with training.stream_layers cannot be combined with "
+                    "data.format='raft': the RAFT loss weights every token and is computed "
+                    "from the full logits, which the kernel does not return. Set "
+                    "use_cut_ce=false."
+                )
+            if tcfg.l2l:
+                raise ValueError(
+                    "training.use_cut_ce with training.stream_layers cannot be combined with "
+                    "training.l2l: the L2L window computes its own head and loss, and the "
+                    "kernel is not wired into it. Set use_cut_ce=false (training."
+                    "stream_loss_chunk bounds the logits under l2l)."
+                )
         conflicts = []
         if tcfg.unfrozen_parameters:
             conflicts.append("unfrozen_parameters")
@@ -8393,15 +8412,13 @@ class SoupConfig(BaseModel):
             for name, is_set in (
                 ("data.format='raft'", self.data.format == "raft"),
                 ("training.prefix_tree", bool(tcfg.prefix_tree)),
-                ("training.stream_loss_chunk", tcfg.stream_loss_chunk is not None),
             )
             if is_set
         ]
         if own_trainer:
             raise ValueError(
                 f"training.l2l cannot be combined with {' / '.join(own_trainer)}: each "
-                "builds its own trainer or replaces how the loss is computed (the L2L loss "
-                "bypasses the chunked-loss hook), so L2L would skip it. "
+                "builds its own trainer, so L2L would skip it. "
                 "Remove one of the two."
             )
         return self

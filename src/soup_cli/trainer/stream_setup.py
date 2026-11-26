@@ -908,7 +908,9 @@ class StreamingSetupMixin:
 
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
-    # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
+    # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set, or with
+    # `use_cut_ce` (Cut Cross-Entropy under streaming). Not installed under `l2l`: the
+    # L2L window runs its own head (utils/l2l_step.py).
     _stream_loss_chunk_hook = None
     #: Set by :meth:`_stream_budget_lines` when the dense-retaining NF4 backward is
     #: predicted not to fit and the packed-state one is: the setup then routes the
@@ -1738,13 +1740,17 @@ class StreamingSetupMixin:
             raise
         if fast_lora_counts is not None:
             console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
-        loss_chunk = getattr(tcfg, "stream_loss_chunk", None)
-        if loss_chunk is not None:
+        from soup_cli.utils.stream_loss_chunk import stream_loss_impl
+
+        loss_impl = stream_loss_impl(tcfg)
+        if loss_impl is not None and not getattr(tcfg, "l2l", False):
             # #1693 -- before the probe, so that it measures the step that runs.
             from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss, causal_lm_of
 
             try:
-                self._stream_loss_chunk_hook = ChunkedHeadLoss(causal_lm_of(model), loss_chunk)
+                self._stream_loss_chunk_hook = ChunkedHeadLoss(
+                    causal_lm_of(model), getattr(tcfg, "stream_loss_chunk", None), loss_impl
+                )
             except Exception:
                 # As for #792's patch above: training's cleanup context has
                 # not started yet, so release the runtime here.
@@ -1964,6 +1970,7 @@ class StreamingSetupMixin:
             attach_l2l_state,
             make_l2l_trainer_class,
             refuse_unsupported_l2l,
+            sft_chunked_window_loss,
             unready_task_warning,
         )
         from soup_cli.utils.l2l_recipe import AVAILABLE_CODECS, refuse_distributed_l2l
@@ -2005,6 +2012,11 @@ class StreamingSetupMixin:
             self._stream_runtime,
             dtype=getattr(torch, resolve_stream_dtype(str(self.device))),
             activation_codec=codec,
+            loss=(
+                None
+                if tcfg.stream_loss_chunk is None
+                else sft_chunked_window_loss(int(tcfg.stream_loss_chunk))
+            ),
             spill_dir=tcfg.l2l_spill_dir,
             weight_dirs=self._stream_weight_dirs,
             effective_k=effective_k,
@@ -2150,6 +2162,12 @@ class StreamingSetupMixin:
         # at one chunk. (`getattr`: the stand-in configs of #348 and #349 name
         # only the fields this method read when they were written.)
         loss_chunk = getattr(tcfg, "stream_loss_chunk", None)
+        cce_loss = loss_chunk is None and getattr(tcfg, "use_cut_ce", False)
+        if cce_loss:
+            # Cut Cross-Entropy never builds the logits; one chunk's worth is charged.
+            from soup_cli.utils.stream_loss_chunk import CCE_CHARGE_CHUNK
+
+            loss_chunk = CCE_CHARGE_CHUNK
         batch = tcfg.batch_size if isinstance(tcfg.batch_size, int) else 1
         # v0.72.4 — a paired loss concatenates chosen and rejected into ONE
         # tensor, so twice the rows reach the model per configured batch. The
@@ -2241,6 +2259,8 @@ class StreamingSetupMixin:
             "" if rows == batch else f" ({rows} rows — chosen+rejected are one concatenated tensor)"
         )
         chunked = "" if loss_chunk is None else f" in chunks of {loss_chunk} tokens"
+        if cce_loss:
+            chunked = f", Cut Cross-Entropy charged as {loss_chunk} tokens"
 
         def peak_line(value: int) -> str:
             return (

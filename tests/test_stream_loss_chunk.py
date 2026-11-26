@@ -821,10 +821,9 @@ class TestTheOption:
         """Two mechanisms over the same loss: refused, with both fields named."""
         from pydantic import ValidationError
 
-        # use_cut_ce alone is refused under streaming (#2023); the pair is
-        # refused first, with both fields named.
-        with pytest.raises(ValidationError, match="cannot be combined with training.use_cut_ce"):
-            _cfg(stream_layers=True, use_cut_ce=True)
+        # use_cut_ce alone loads under streaming; the pair is refused, with both
+        # fields named.
+        _cfg(stream_layers=True, use_cut_ce=True)
         _cfg(stream_layers=True, stream_loss_chunk=128)
         with pytest.raises(ValidationError) as excinfo:
             _cfg(stream_layers=True, stream_loss_chunk=128, use_cut_ce=True)

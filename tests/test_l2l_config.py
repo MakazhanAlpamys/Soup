@@ -133,7 +133,6 @@ def test_l2l_spill_dir_is_kept_when_l2l_is_on(tmp_path):
     ("training", "data", "named"),
     [
         ({"prefix_tree": True}, {}, "training.prefix_tree"),
-        ({"stream_loss_chunk": 256}, {}, "training.stream_loss_chunk"),
         ({}, {"format": "raft"}, "data.format='raft'"),
     ],
 )
