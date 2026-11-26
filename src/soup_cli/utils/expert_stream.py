@@ -29,6 +29,12 @@ the eager loop does, so the numbers do not change.
 What it buys: the VRAM bound, nothing else. ``benchmarks/probe-moe-expert-coverage.md``
 measured that a training step routes to 96.7-100% of the experts of a layer, so
 an expert-streamed step reads at least the bytes a layer-streamed step reads.
+
+``StreamedExperts`` reads through either an ``ExpertFetcher`` (a fresh dequantised copy per
+use) or an ``ExpertBufferPool`` (one bounded arena leased one expert at a time, with optional
+read-ahead, packed transfer and a host cache). Both give the same numbers. Two more levers, off
+by default, change how the hit experts are found and not what is computed: ``grouped_expert_routes``
+and ``fast_row_gather``.
 """
 
 from __future__ import annotations
@@ -964,6 +970,142 @@ def _routing_forward(self: Any, *args: Any, **kwargs: Any) -> Any:
         return forward(self, *args, **kwargs)
 
 
+def _validate_routing(hidden: Any, index: Any, weights: Any, pool: ExpertBufferPool) -> None:
+    """Refuse routing tensors the pooled expert loop cannot visit safely."""
+    import torch
+
+    from soup_cli.utils.layer_stream_runtime import _torch_dtype
+
+    if hidden.ndim != 2 or index.ndim != 2 or weights.shape != index.shape:
+        raise ValueError("expected hidden [tokens, hidden] and routing indices/weights [tokens, k]")
+    if index.shape[0] != hidden.shape[0] or not 1 <= index.shape[1]:
+        raise ValueError("routing token count or top-k does not match hidden states")
+    if index.dtype != torch.int64 or not weights.is_floating_point():
+        raise ValueError("routing indices must be int64 and weights must be floating point")
+    if hidden.dtype != _torch_dtype(pool.dtype):
+        raise ValueError("hidden dtype must match the expert pool compute dtype")
+    if any(value.device != pool.device for value in (hidden, index, weights)):
+        raise ValueError("hidden and routing tensors must be on the expert pool device")
+    if hidden.shape[1] != pool._shapes[GATE_UP][1]:
+        raise ValueError("hidden dimension does not match the expert pool")
+    if not torch.isfinite(weights).all().item():
+        raise ValueError("routing weights must be finite")
+
+
+def _validate_training_activation(act_fn: Any) -> None:
+    """Recomputation is only valid for the native stateless SiLU implementations."""
+    import torch.nn as nn
+    from torch.nn.modules import module as module_hooks
+    from transformers.activations import SiLUActivation
+
+    if type(act_fn) not in (nn.SiLU, SiLUActivation):
+        raise ValueError("expert backward requires an unmodified stateless SiLU activation")
+    if (
+        getattr(act_fn, "inplace", False)
+        or "forward" in vars(act_fn)
+        or any(True for _ in act_fn.parameters())
+        or any(True for _ in act_fn.buffers())
+        or any(True for _ in act_fn.children())
+        or act_fn._forward_hooks
+        or act_fn._forward_pre_hooks
+        or act_fn._backward_hooks
+        or act_fn._backward_pre_hooks
+        or module_hooks._global_forward_hooks
+        or module_hooks._global_forward_pre_hooks
+        or module_hooks._global_backward_hooks
+        or module_hooks._global_backward_pre_hooks
+    ):
+        raise ValueError("expert backward requires an unmodified stateless SiLU activation")
+
+
+def _default_expert_routes(expert_mask: Any, expert_hit: Any) -> Iterator[Tuple[int, Any, Any]]:
+    """The per-expert ``where`` walk: hit experts ascending, each with its (slot, token) rows."""
+    import torch
+
+    for expert_idx in expert_hit:
+        expert = int(expert_idx[0])
+        top_k_pos, token_idx = torch.where(expert_mask[expert])
+        yield expert, top_k_pos, token_idx
+
+
+def _grouped_expert_routes(expert_mask: Any) -> Iterator[Tuple[int, Any, Any]]:
+    """Hit experts with their (top-k slot, token) rows from one nonzero and one count read.
+
+    ``expert_mask`` is the one-hot routing ordered (expert, top-k slot, token). ``nonzero`` walks
+    it in C order, so the experts come out ascending and each expert's rows in the order
+    ``torch.where`` gives. The slices are views of one coordinate tensor made for this call.
+    """
+    import torch
+
+    coordinates = torch.nonzero(expert_mask, as_tuple=False)
+    counts = expert_mask.sum(dim=(-1, -2)).tolist()
+    offset = 0
+    for expert, count in enumerate(counts):
+        if count == 0:
+            continue
+        if count < 0 or offset + count > coordinates.shape[0]:
+            raise ValueError("grouped expert routes require a binary one-hot mask")
+        group = coordinates.narrow(0, offset, count)
+        offset += count
+        yield expert, group[:, 1], group[:, 2]
+    if offset != coordinates.shape[0]:
+        raise ValueError("grouped expert routes omitted nonzero coordinates")
+
+
+_FAST_GATHER_FUNCTIONS = None
+
+
+def fast_gather_functions() -> Any:
+    """``(GatherRows, GatherRouteWeights)``: the expert loop's gathers under ``fast_row_gather``.
+
+    ``hidden_states[token_idx]`` and ``top_k_weights[token_idx, top_k_pos, None]`` backpropagate
+    through ``index_put_(accumulate=True)``, which sorts and launches about a dozen kernels. Each
+    token reaches an expert once, so those indices are unique and the backward is a scatter into
+    zeros, one ``index_add_``: ``0 + g`` gives the same bits as the accumulate (the sign of a zero
+    included), and nothing is summed. The indices must be unique; duplicates would be summed in
+    an undefined order by the atomics.
+    """
+    global _FAST_GATHER_FUNCTIONS
+    if _FAST_GATHER_FUNCTIONS is not None:
+        return _FAST_GATHER_FUNCTIONS
+    import torch
+
+    class GatherRows(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx: Any, source: Any, index: Any) -> Any:
+            ctx.save_for_backward(index)
+            ctx.source_shape = source.shape
+            return source.index_select(0, index)
+
+        @staticmethod
+        def backward(ctx: Any, grad: Any) -> Any:
+            if not ctx.needs_input_grad[0]:
+                return None, None
+            (index,) = ctx.saved_tensors
+            out = grad.new_zeros(ctx.source_shape)
+            return out.index_add_(0, index, grad), None
+
+    class GatherRouteWeights(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx: Any, weights: Any, token_idx: Any, top_k_pos: Any) -> Any:
+            ctx.save_for_backward(token_idx, top_k_pos)
+            ctx.weights_shape = weights.shape
+            return weights[token_idx, top_k_pos, None]
+
+        @staticmethod
+        def backward(ctx: Any, grad: Any) -> Any:
+            if not ctx.needs_input_grad[0]:
+                return None, None, None
+            token_idx, top_k_pos = ctx.saved_tensors
+            out = grad.new_zeros(ctx.weights_shape)
+            flat = token_idx * ctx.weights_shape[1] + top_k_pos
+            out.view(-1).index_add_(0, flat, grad.reshape(-1))
+            return out, None, None
+
+    _FAST_GATHER_FUNCTIONS = (GatherRows, GatherRouteWeights)
+    return _FAST_GATHER_FUNCTIONS
+
+
 def _build_streamed_experts_class():
     import torch
     import torch.nn as nn
@@ -1046,46 +1188,275 @@ def _build_streamed_experts_class():
             grad_weights = grads.pop(0) if need_weights else None
             return grad_hidden, grad_weights, None, None, None
 
-    class StreamedExperts(nn.Module):
-        """Drop-in for a transformers experts module; fetches each expert on use."""
+    class PooledExpert(torch.autograd.Function):
+        """One hit expert as one autograd node that leases its weights again in backward.
 
-        def __init__(self, reader, fetcher, act_fn, layer_idx, two_reads=False):
+        Forward computes under a pool lease and saves only the gathered hidden slice (activation
+        memory, never an arena view). Backward leases the same expert through the same reader
+        and pool, rebuilds the body under the forward's autocast state and differentiates it
+        with respect to the hidden slice only. The routing weight is multiplied outside this
+        node. The activation is validated as the stateless SiLU again before any expert is
+        read, so the recompute draws nothing the forward did not. Backward is first-order only:
+        the gradients carry no graph over the arena weights, which the next lease overwrites,
+        so a higher-order derivative is refused rather than taken against stale memory.
+        """
+
+        @staticmethod
+        def forward(
+            ctx: Any, hidden: Any, owner: Any, expert: int, nxt: Any = None, prv: Any = None
+        ) -> Any:
+            ctx.owner = owner
+            ctx.act_fn = owner.act_fn
+            ctx.expert = expert
+            ctx.hint_prev = prv  # the backward visits experts in the reverse order
+            ctx.device_type = hidden.device.type
+            ctx.autocast_kwargs = _autocast_state(ctx.device_type)
+            ctx.save_for_backward(hidden)
+            with owner.pool.lease(owner.reader, expert) as (gate_up, down):
+                owner.pool.prefetch(owner.reader, nxt)
+                return expert_mlp(hidden, gate_up, down, owner.act_fn)
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            if torch.is_grad_enabled():
+                raise RuntimeError("expert streaming does not support higher-order gradients")
+            if not ctx.needs_input_grad[0]:
+                return None, None, None, None, None
+            _validate_training_activation(ctx.act_fn)
+            (hidden,) = ctx.saved_tensors
+            with ctx.owner.pool.lease(ctx.owner.reader, ctx.expert) as (gate_up, down):
+                ctx.owner.pool.prefetch(ctx.owner.reader, ctx.hint_prev)
+                local = hidden.detach().requires_grad_(True)
+                # Only the recompute replays the forward's autocast state. The VJP itself runs
+                # in the caller's backward state, as eager autograd does, so a backward inside
+                # or outside an autocast region matches the resident module either way.
+                with torch.enable_grad(), torch.autocast(ctx.device_type, **ctx.autocast_kwargs):
+                    result = expert_mlp(local, gate_up, down, ctx.act_fn)
+                (grad_hidden,) = torch.autograd.grad(result, local, grad_out)
+            return grad_hidden, None, None, None, None
+
+    class PooledWeightedExpert(torch.autograd.Function):
+        """``expert_mlp(hidden) * weights`` as one node over a pool, for two reads.
+
+        It saves only the gathered hidden slice and the routing weights, never the expert's
+        output, so a checkpoint recompute can run it with ``replay=True``: no lease, a zero
+        output, and the same two saved inputs the backward needs. Backward leases the expert
+        once, rebuilds the multiply under the forward's autocast state and differentiates with
+        respect to the hidden slice and the routing weights. First-order only, like
+        ``PooledExpert``. The forward's routing decisions reach a recompute through the router
+        replay of ``_routing_forward``; a recompute that routed elsewhere would be a bug there.
+        """
+
+        @staticmethod
+        def forward(ctx, hidden, weights, owner, expert, replay, nxt=None, prv=None):
+            ctx.owner = owner
+            ctx.act_fn = owner.act_fn
+            ctx.expert = expert
+            ctx.hint_prev = prv  # the backward visits experts in the reverse order
+            ctx.device_type = hidden.device.type
+            ctx.autocast_kwargs = _autocast_state(ctx.device_type)
+            ctx.save_for_backward(hidden, weights)
+            if replay:
+                # The consumers of this product (the cast and index_add_) keep it for its
+                # shape alone, so the backward never reads this zero.
+                return hidden.new_zeros(()).expand_as(hidden)
+            scope = _active_scope()
+            phase = "recompute_forward" if scope is not None and scope.replay else "init_forward"
+            with owner.pool.lease(
+                owner.reader, expert, phase=phase, layer_idx=owner.layer_idx
+            ) as (gate_up, down):
+                owner.pool.prefetch(owner.reader, nxt)
+                return expert_mlp(hidden, gate_up, down, owner.act_fn) * weights
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            if torch.is_grad_enabled():
+                raise RuntimeError("expert streaming does not support higher-order gradients")
+            need_hidden, need_weights = ctx.needs_input_grad[0], ctx.needs_input_grad[1]
+            if not (need_hidden or need_weights):
+                return None, None, None, None, None, None, None
+            _validate_training_activation(ctx.act_fn)
+            hidden, weights = ctx.saved_tensors
+            with ctx.owner.pool.lease(
+                ctx.owner.reader, ctx.expert, phase="backward_dX", layer_idx=ctx.owner.layer_idx
+            ) as (gate_up, down):
+                ctx.owner.pool.prefetch(ctx.owner.reader, ctx.hint_prev)
+                local_hidden = hidden.detach().requires_grad_(need_hidden)
+                local_weights = weights.detach().requires_grad_(need_weights)
+                with torch.enable_grad(), torch.autocast(ctx.device_type, **ctx.autocast_kwargs):
+                    result = expert_mlp(local_hidden, gate_up, down, ctx.act_fn) * local_weights
+                wanted = [
+                    tensor for tensor in (local_hidden, local_weights) if tensor.requires_grad
+                ]
+                grads = list(torch.autograd.grad(result, wanted, grad_out))
+            grad_hidden = grads.pop(0) if need_hidden else None
+            grad_weights = grads.pop(0) if need_weights else None
+            return grad_hidden, grad_weights, None, None, None, None, None
+
+    class StreamedExperts(nn.Module):
+        """Drop-in for a transformers experts module; reads each expert on use.
+
+        ``source`` is either an :class:`ExpertFetcher` (every use dequantises the expert into
+        fresh tensors) or an :class:`ExpertBufferPool` (every use leases the one bounded arena,
+        validates routing and the activation, and records :attr:`last_trace`). The two numerics
+        are the same eager loop.
+
+        Opt-in levers, all off by default and all on either source: ``two_reads`` (the routing
+        multiply moves inside the expert node so a checkpoint recompute reads nothing),
+        ``grouped_expert_routes`` (one ``nonzero`` finds the hit experts and their rows) and
+        the instance or class attribute ``fast_row_gather`` (light autograd gathers, see
+        :func:`fast_gather_functions`).
+
+        ``materialize_recompute`` (off) keeps a two-read recompute from skipping the experts:
+        for a caller that needs a real recompute output they are computed again.
+        """
+
+        fast_row_gather = False
+        materialize_recompute = False
+
+        def __init__(
+            self, reader, source, act_fn, layer_idx, two_reads=False, grouped_expert_routes=False
+        ):
             super().__init__()
+            if type(grouped_expert_routes) is not bool:
+                raise ValueError("grouped_expert_routes must be a bool")
+            self.pool = source if isinstance(source, ExpertBufferPool) else None
+            self.fetcher = None if self.pool is not None else source
+            if self.pool is not None:
+                self.pool.validate_reader(reader)
+                if not callable(act_fn) or (
+                    isinstance(act_fn, nn.Module) and any(True for _ in act_fn.parameters())
+                ):
+                    raise ValueError("expert activation must be callable without parameters")
             self.reader = reader
-            self.fetcher = fetcher
             self.act_fn = act_fn
             self.layer_idx = layer_idx
             self.num_experts = reader.count
             self.two_reads = bool(two_reads)
+            self.grouped_expert_routes = grouped_expert_routes
+            #: One row per expert visited by the latest pooled ``forward`` call, bounded by the
+            #: expert count; a checkpoint recompute is a forward call and replaces it. Backward
+            #: leases add no rows (``pool.fetches`` counts them).
+            self.last_trace: list = []
+            self._forward_lock = threading.Lock()
 
         def fetch(self, expert):
+            if self.fetcher is None:
+                raise RuntimeError("pooled experts are leased from their pool, not fetched")
             return self.fetcher.fetch(self.reader, expert)
 
+        def _routes(self, expert_mask):
+            if self.grouped_expert_routes:
+                return _grouped_expert_routes(expert_mask)
+            expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+            return _default_expert_routes(expert_mask, expert_hit)
+
+        def _gather(self, hidden_states, top_k_weights, token_idx, top_k_pos):
+            if self.fast_row_gather:
+                gather_rows, gather_weights = fast_gather_functions()
+                return (
+                    gather_rows.apply(hidden_states, token_idx),
+                    gather_weights.apply(top_k_weights, token_idx, top_k_pos),
+                )
+            return hidden_states[token_idx], top_k_weights[token_idx, top_k_pos, None]
+
+        def _replaying(self):
+            # Inside a two-read checkpoint recompute no expert is read.
+            scope = _active_scope() if self.two_reads else None
+            return scope is not None and scope.replay and not self.materialize_recompute
+
         def forward(self, hidden_states, top_k_index, top_k_weights):
+            if self.pool is not None:
+                return self._forward_pooled(hidden_states, top_k_index, top_k_weights)
             final_hidden_states = torch.zeros_like(hidden_states)
             with torch.no_grad():
                 expert_mask = functional.one_hot(top_k_index, num_classes=self.num_experts)
                 expert_mask = expert_mask.permute(2, 1, 0)
-                expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-            # Inside a two-read checkpoint recompute no expert is read.
-            scope = _active_scope() if self.two_reads else None
-            replay = scope is not None and scope.replay
-            for expert_idx in expert_hit:
-                expert_idx = expert_idx[0]
-                if expert_idx == self.num_experts:
-                    continue
-                top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
-                current_state = hidden_states[token_idx]
+            replay = self._replaying()
+            for expert, top_k_pos, token_idx in self._routes(expert_mask):
+                current_state, weights = self._gather(
+                    hidden_states, top_k_weights, token_idx, top_k_pos
+                )
                 if self.two_reads:
-                    current = _WeightedExpert.apply(
-                        current_state, top_k_weights[token_idx, top_k_pos, None], self,
-                        int(expert_idx), replay,
-                    )
+                    current = _WeightedExpert.apply(current_state, weights, self, expert, replay)
                 else:
-                    current = _ExpertMLP.apply(current_state, self, int(expert_idx))
-                    current = current * top_k_weights[token_idx, top_k_pos, None]
+                    current = _ExpertMLP.apply(current_state, self, expert)
+                    current = current * weights
                 final_hidden_states.index_add_(0, token_idx, current.to(final_hidden_states.dtype))
             return final_hidden_states
+
+        def _forward_pooled(self, hidden_states, top_k_index, top_k_weights):
+            if not self._forward_lock.acquire(blocking=False):
+                raise RuntimeError("expert forward is already active")
+            try:
+                self.last_trace = []
+                self.pool.validate_reader(self.reader)
+                _validate_routing(hidden_states, top_k_index, top_k_weights, self.pool)
+                differentiable = torch.is_grad_enabled() and (
+                    hidden_states.requires_grad or top_k_weights.requires_grad
+                )
+                if differentiable:
+                    _validate_training_activation(self.act_fn)
+                if top_k_index.shape[1] > self.num_experts:
+                    raise ValueError("routing top-k exceeds the expert count")
+                if top_k_index.numel() and (
+                    top_k_index.min().item() < 0 or top_k_index.max().item() >= self.num_experts
+                ):
+                    raise ValueError("routing contains an expert outside the reader")
+                final_hidden_states = torch.zeros_like(hidden_states)
+                expert_mask = functional.one_hot(top_k_index, num_classes=self.num_experts)
+                expert_mask = expert_mask.permute(2, 1, 0)
+                routes = self._routes(expert_mask)
+                replay = self._replaying()
+                # A hint names the next expert of this visit order (and the previous one for the
+                # backward). Hints never cross a layer: the next layer's routes are unknown.
+                hinting = bool(self.pool.prefetch_enabled)
+                visit = list(routes) if hinting else None
+                for position, (expert, top_k_pos, token_idx) in enumerate(
+                    visit if hinting else routes
+                ):
+                    nxt = visit[position + 1][0] if hinting and position + 1 < len(visit) else None
+                    prv = visit[position - 1][0] if hinting and position > 0 else None
+                    row = {
+                        "layer": self.layer_idx, "expert": expert,
+                        "token_routes": token_idx.numel(),
+                        "logical_bytes_read": 0, "status": "loading",
+                    }
+                    self.last_trace.append(row)
+                    before = self.reader.bytes_read
+                    fetches = self.pool.fetches
+                    try:
+                        current_state, weights = self._gather(
+                            hidden_states, top_k_weights, token_idx, top_k_pos
+                        )
+                        if self.two_reads:
+                            current = PooledWeightedExpert.apply(
+                                current_state, weights, self, expert, replay, nxt, prv
+                            )
+                        else:
+                            current = PooledExpert.apply(current_state, self, expert, nxt, prv)
+                            current = current * weights
+                        row["status"] = "replay" if replay else "ok"
+                    except BaseException:
+                        row["status"] = "error"
+                        raise
+                    finally:
+                        if hinting:
+                            # The reader's counter also moves for the expert read ahead.
+                            row["logical_bytes_read"] = (
+                                self.pool.last_lease_bytes if self.pool.fetches != fetches else 0
+                            )
+                        else:
+                            row["logical_bytes_read"] = self.reader.bytes_read - before
+                    # Outside the load status on purpose: the lease is over, and a non-reentrant
+                    # checkpoint recompute may stop here (it raises once every saved tensor has
+                    # been recomputed), which is not an expert load failure.
+                    final_hidden_states.index_add_(
+                        0, token_idx, current.to(final_hidden_states.dtype)
+                    )
+                return final_hidden_states
+            finally:
+                self._forward_lock.release()
 
     return StreamedExperts
 
@@ -1129,11 +1500,19 @@ TWO_READ_DECODERS = frozenset({"DeepseekV3DecoderLayer"})
 def install_expert_streaming(
     layers: Sequence[Any],
     readers: Mapping[int, ExpertShardReader],
-    fetcher: ExpertFetcher,
+    source: Any,
     *,
     two_reads: bool = False,
+    grouped_expert_routes: bool = False,
 ) -> int:
     """Replace each MoE layer's experts module with a ``StreamedExperts``.
+
+    ``source`` is an :class:`ExpertFetcher` or an :class:`ExpertBufferPool`; both are
+    caller-owned, and so are the readers. Every layer is validated before any is replaced,
+    so a refused install leaves the model as it was. With a pool the routed experts must also
+    hold exactly the frozen ``gate_up_proj`` and ``down_proj`` parameters, and every reader
+    must fit the pool's slot. ``grouped_expert_routes`` (off) makes each replacement find its
+    hit experts and their rows with one ``nonzero``.
 
     Runs before the decoder-layer name maps are taken, so the fused expert
     parameters leave the layer and the layer pool never allocates them.
@@ -1163,8 +1542,16 @@ def install_expert_streaming(
     """
     import torch.nn as nn
 
+    if type(grouped_expert_routes) is not bool:
+        raise ValueError("grouped_expert_routes must be a bool")
+    if any(
+        isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(layers)
+        for idx in readers
+    ):
+        raise ValueError("expert reader layer index is outside the supplied layers")
+    pooled = isinstance(source, ExpertBufferPool)
     cls = streamed_experts_class()
-    converted = 0
+    replacements = []
     for idx, layer in enumerate(layers):
         reader = readers.get(idx)
         found = find_experts_module(layer)
@@ -1198,6 +1585,19 @@ def install_expert_streaming(
                 f"while the experts are streamed one at a time; target attention or the "
                 f"shared expert instead"
             )
+        if pooled:
+            source.validate_reader(reader)
+            if set(names) != {"gate_up_proj", "down_proj"}:
+                raise ValueError(
+                    f"decoder layer {idx}: routed experts must hold exactly the frozen "
+                    f"gate_up_proj and down_proj parameters but hold {sorted(names)}; extra "
+                    f"parameters on routed experts are unsupported"
+                )
+            if any(parameter.requires_grad for parameter in module.parameters()):
+                raise ValueError(
+                    f"decoder layer {idx}: routed-expert weights must stay frozen; the "
+                    f"backward goes through streamed routed experts but never trains them"
+                )
         router = getattr(parent, "gate", None) if two_reads else None
         if two_reads and type(layer).__name__ not in TWO_READ_DECODERS:
             raise ValueError(
@@ -1210,8 +1610,21 @@ def install_expert_streaming(
                 f"decoder layer {idx}: two reads replay the router's top-k decisions, but "
                 f"the MoE block has no router module at `.gate`"
             )
-        setattr(parent, attr, cls(reader, fetcher, module.act_fn, idx, two_reads=two_reads))
+        if any(parent is other and attr == name for other, name, _, _ in replacements):
+            raise ValueError(
+                f"decoder layer {idx}: its routed-experts module is also the one of an "
+                f"earlier layer; aliased modules cannot take two replacements"
+            )
+        replacements.append((
+            parent, attr,
+            cls(
+                reader, source, module.act_fn, idx,
+                two_reads=two_reads, grouped_expert_routes=grouped_expert_routes,
+            ),
+            router,
+        ))
+    for parent, attr, replacement, router in replacements:
+        setattr(parent, attr, replacement)
         if router is not None:
             router.forward = types.MethodType(_routing_forward, router)
-        converted += 1
-    return converted
+    return len(replacements)
