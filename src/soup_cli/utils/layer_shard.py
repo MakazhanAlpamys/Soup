@@ -622,6 +622,15 @@ def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
     return [shard_dir] + [os.path.join(root, name) for root in stripe_roots]
 
 
+# A bare shard file name: no separator, drive colon, control character, leading dot or space.
+_BARE_SHARD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+
+
 def contained_leaf(root: str, name: str) -> str:
     """``root``/``name``, refused unless the file itself resolves inside ``root``.
 
@@ -629,7 +638,11 @@ def contained_leaf(root: str, name: str) -> str:
     file, then ``commonpath`` against the resolved root), not on its directory, so a shard
     that is a symlink to a file outside the store is refused too.
     """
-    if not name or name in (".", "..") or name != os.path.basename(name.replace("\\", "/")):
+    if (
+        not isinstance(name, str)
+        or _BARE_SHARD_NAME.fullmatch(name) is None
+        or name.split(".")[0].upper() in _WINDOWS_DEVICE_NAMES
+    ):
         raise ValueError(f"shard file name {name!r} is not a bare file name")
     path = os.path.join(root, name)
     real_root = os.path.realpath(root)
