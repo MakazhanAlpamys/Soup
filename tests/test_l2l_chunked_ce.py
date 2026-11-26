@@ -159,7 +159,7 @@ def test_the_other_refusals_of_l2l_stand():
     from soup_cli.config.loader import load_config_from_string
 
     with pytest.raises(ValueError, match=r"training\.l2l cannot be combined with .*prefix_tree"):
-        load_config_from_string(_yaml(stream_loss_chunk=256, prefix_tree=True))
+        load_config_from_string(_yaml(prefix_tree=True))
 
 
 def test_l2l_without_the_chunk_is_unchanged():
@@ -167,3 +167,64 @@ def test_l2l_without_the_chunk_is_unchanged():
 
     cfg = load_config_from_string(_yaml())
     assert cfg.training.stream_loss_chunk is None and cfg.training.use_cut_ce is False
+
+
+# --- the wiring guards ---------------------------------------------------------------
+
+
+def _builder_state(monkeypatch, **training):
+    """Run ``_build_l2l_trainer`` with the trainer class and ``attach_l2l_state`` stubbed;
+    return what ``attach_l2l_state`` received."""
+    from types import SimpleNamespace
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer import l2l_trainer
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+    cfg = load_config_from_string(_yaml(**training))
+    received = {}
+    monkeypatch.setattr(l2l_trainer, "refuse_unsupported_l2l", lambda *a, **k: None)
+    monkeypatch.setattr(
+        l2l_trainer, "make_l2l_trainer_class", lambda base: (lambda **kwargs: SimpleNamespace())
+    )
+    monkeypatch.setattr(
+        l2l_trainer, "attach_l2l_state", lambda trainer, runtime, **kwargs: received.update(kwargs)
+    )
+    me = SimpleNamespace(
+        config=cfg,
+        device="cpu",
+        model=SimpleNamespace(config=SimpleNamespace()),
+        _l2l_recipe=None,
+        _stream_runtime=object(),
+        _stream_weight_dirs=(),
+    )
+    args = SimpleNamespace(n_gpu=1, fp16=False, gradient_accumulation_steps=2)
+    StreamingSetupMixin._build_l2l_trainer(me, object, {}, args)
+    return received
+
+
+def test_the_chunked_window_loss_reaches_attach_l2l_state(monkeypatch):
+    from soup_cli.trainer.l2l_trainer import SFT_WINDOW_LOSS
+
+    received = _builder_state(monkeypatch, stream_loss_chunk=64)
+
+    assert received["loss"] is not None and received["loss"] is not SFT_WINDOW_LOSS
+    assert received["loss"].divide_by == "items"
+
+
+def test_without_a_chunk_attach_l2l_state_gets_no_loss(monkeypatch):
+    assert _builder_state(monkeypatch)["loss"] is None
+
+
+def test_no_forward_hook_is_installed_under_l2l(tmp_path, monkeypatch):
+    """The window runs its own head; the stream_loss_chunk forward hook stays off."""
+    from tests.test_v07204 import _build_streamed_wrapper
+
+    wrapper, _, _ = _build_streamed_wrapper(
+        tmp_path, monkeypatch, task="sft", n_layers=2, device="cpu",
+        stream_loss_chunk=16, l2l=True, gradient_accumulation_steps=2,
+    )
+    try:
+        assert wrapper._stream_loss_chunk_hook is None
+    finally:
+        wrapper._close_stream_runtime()

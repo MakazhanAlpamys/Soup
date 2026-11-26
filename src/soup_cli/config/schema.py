@@ -4709,6 +4709,12 @@ class TrainingConfig(BaseModel):
                 "yet: the chunked loss has not been checked on prefix-tree rows. "
                 "Remove one of the two."
             )
+        if self.stream_layers and self.use_cut_ce:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.use_cut_ce under "
+                "training.stream_layers yet: the streamed Cut Cross-Entropy loss has not "
+                "been checked on prefix-tree rows. Remove one of the two."
+            )
         if self.neftune_alpha is not None:
             raise ValueError(
                 "training.prefix_tree cannot be combined with training.neftune_alpha: "

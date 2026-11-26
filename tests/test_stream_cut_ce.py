@@ -16,6 +16,7 @@ import pytest
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
+from tests.test_l2l_probe_harness import _load, _micro_batches, streamed  # noqa: F401
 
 
 def _config(**training) -> SoupConfig:
@@ -63,6 +64,17 @@ def test_streamed_cce_refuses_raft():
 def test_streamed_cce_refuses_l2l():
     with pytest.raises(ValueError, match=r"use_cut_ce.*cannot be combined with training\.l2l"):
         _config(stream_layers=True, use_cut_ce=True, l2l=True, gradient_accumulation_steps=2)
+
+
+def test_streamed_cce_refuses_prefix_tree():
+    with pytest.raises(
+        ValueError, match=r"training\.prefix_tree cannot be combined with training\.use_cut_ce"
+    ):
+        _config(stream_layers=True, use_cut_ce=True, prefix_tree=True)
+
+
+def test_prefix_tree_without_streaming_keeps_resident_cce():
+    assert _config(use_cut_ce=True, prefix_tree=True).training.prefix_tree
 
 
 def test_supported_controls():
@@ -138,8 +150,8 @@ def test_the_head_weight_of_a_streamed_large_layer_comes_from_the_pool():
         def wait(self, key):
             return f"weight-of-{key}"
 
-    streamed = SimpleNamespace(pool=Pool(), key="lm_head")
-    assert head_weight(streamed) == "weight-of-lm_head"
+    stub = SimpleNamespace(pool=Pool(), key="lm_head")
+    assert head_weight(stub) == "weight-of-lm_head"
     plain = SimpleNamespace(weight="w")
     assert head_weight(plain) == "w"
 
@@ -310,3 +322,110 @@ def test_the_setup_installs_the_cce_hook_and_charges_a_chunk(tmp_path, monkeypat
         assert type(wrapper.trainer).__name__.startswith("ChunkedLoss")
     finally:
         wrapper._close_stream_runtime()
+
+
+# --- the streamed untied head and the refusals at setup ------------------------------
+
+
+def test_cce_through_the_streamed_untied_head(streamed, fake_cce):  # noqa: F811
+    """Forward and backward through the pool-backed lm_head: the loss and the adapter
+    gradients equal the unhooked labelled step."""
+    from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss, causal_lm_of
+
+    harness = _load("l2l_schedule")
+    model, _runtime = streamed
+    harness.make_non_vacuous(model)
+    ids = _micro_batches(1)[0]
+
+    harness.zero_grads(model)
+    plain = model(input_ids=ids, labels=ids).loss
+    plain.backward()
+    want = harness.collect_grads(model)
+
+    harness.zero_grads(model)
+    hook = ChunkedHeadLoss(causal_lm_of(model), None, "cce")
+    try:
+        assert hook._head.pool is not None  # the premise: a streamed large layer
+        got_loss = model(input_ids=ids, labels=ids).loss
+        got_loss.backward()
+    finally:
+        hook.remove()
+    got = harness.collect_grads(model)
+
+    assert fake_cce
+    assert abs(float(got_loss) - float(plain)) <= 1e-5 * abs(float(plain))
+    assert got.keys() == want.keys() and want
+    for name in want:
+        assert (got[name] - want[name]).abs().max() <= 1e-4 * want[name].abs().max() + 1e-7
+
+
+def test_a_slot_refill_between_forward_and_backward_raises(streamed, fake_cce):  # noqa: F811
+    """The kernel's saved head weight is a view of the shared slot: a load into it before
+    backward must raise, not train on another tensor."""
+    from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss, causal_lm_of
+
+    harness = _load("l2l_schedule")
+    model, runtime = streamed
+    harness.make_non_vacuous(model)
+    ids = _micro_batches(1)[0]
+    hook = ChunkedHeadLoss(causal_lm_of(model), None, "cce")
+    try:
+        loss = model(input_ids=ids, labels=ids).loss
+        pool = runtime.large_pool
+        other = next(key for key in pool.specs if key != pool.owner)
+        pool.load_async(other, runtime.source)
+        with pytest.raises(RuntimeError, match="modified by an inplace operation"):
+            loss.backward()
+    finally:
+        hook.remove()
+
+
+def test_a_trainable_parameter_on_the_streamed_head_is_refused(streamed, fake_cce):  # noqa: F811
+    import torch
+
+    from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss, causal_lm_of
+
+    model, _runtime = streamed
+    causal = causal_lm_of(model)
+    head = causal.get_output_embeddings()
+    head.register_parameter("lora_probe", torch.nn.Parameter(torch.zeros(1)))
+    try:
+        with pytest.raises(ValueError) as caught:
+            ChunkedHeadLoss(causal, None, "cce")
+    finally:
+        del head._parameters["lora_probe"]
+    message = str(caught.value)
+    assert message.startswith("training.use_cut_ce cannot train the streamed output head")
+    assert "lora_probe" in message and "Remove 'lm_head' from the LoRA targets" in message
+
+
+def test_setup_refuses_an_lm_head_lora_target_under_cce(tmp_path, monkeypatch, fake_cce):
+    from tests.test_v07204 import _build_streamed_wrapper
+
+    with pytest.raises(ValueError) as caught:
+        _build_streamed_wrapper(
+            tmp_path, monkeypatch, task="sft", device="cpu", use_cut_ce=True,
+            lora={"r": 4, "alpha": 8, "target_modules": ["q_proj", "lm_head"]},
+        )
+    assert str(caught.value) == (
+        "training.use_cut_ce cannot train the streamed output head: "
+        "training.lora.target_modules includes 'lm_head', and the kernel reads only the base "
+        "weight, so the adapter would get no gradient. Remove 'lm_head' from "
+        "lora.target_modules or set use_cut_ce=false."
+    )
+
+
+def test_setup_refuses_a_missing_kernel_before_any_sharding(tmp_path, monkeypatch):
+    from tests.test_v07204 import _build_streamed_wrapper
+
+    monkeypatch.setitem(sys.modules, "cut_cross_entropy", None)  # the import fails
+    with pytest.raises(ValueError) as caught:
+        _build_streamed_wrapper(
+            tmp_path, monkeypatch, task="sft", device="cpu", use_cut_ce=True
+        )
+    assert str(caught.value) == (
+        "training.use_cut_ce with training.stream_layers needs the cut_cross_entropy "
+        "package, which is not importable. Install it (pip install cut-cross-entropy) or "
+        "set use_cut_ce=false."
+    )
+    assert not (tmp_path / "cache").exists()

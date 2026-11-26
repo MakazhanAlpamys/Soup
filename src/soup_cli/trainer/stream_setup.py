@@ -1027,6 +1027,26 @@ class StreamingSetupMixin:
         # this configuration cannot work, and finding out minutes into disk I/O
         # is worse than finding out now.
         refuse_if_data_parallel(self.device)
+        if getattr(tcfg, "use_cut_ce", False):
+            # Also before the sharding: the kernel is first imported at the first labelled
+            # forward, and a missing package must not cost a shard write.
+            from soup_cli.utils.cut_ce import check_cut_ce_available
+
+            if not check_cut_ce_available():
+                raise ValueError(
+                    "training.use_cut_ce with training.stream_layers needs the "
+                    "cut_cross_entropy package, which is not importable. Install it "
+                    "(pip install cut-cross-entropy) or set use_cut_ce=false."
+                )
+            targets = getattr(tcfg.lora, "target_modules", None)
+            names = [targets] if isinstance(targets, str) else list(targets or ())
+            if "lm_head" in names:
+                raise ValueError(
+                    "training.use_cut_ce cannot train the streamed output head: "
+                    "training.lora.target_modules includes 'lm_head', and the kernel reads "
+                    "only the base weight, so the adapter would get no gradient. Remove "
+                    "'lm_head' from lora.target_modules or set use_cut_ce=false."
+                )
 
         from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
         from soup_cli.utils.fp8_block import (
