@@ -1,6 +1,7 @@
 """Tests for soup infer — batch inference command."""
 
 import json
+import os
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
@@ -233,6 +234,41 @@ class TestReadPrompts:
             {"prompt": prompt, "response": f"echo: {prompt}", "tokens_generated": 1}
             for prompt in prompts
         ]
+
+    @pytest.mark.parametrize("alias", ["same-path", "hard-link"])
+    def test_cli_refuses_output_that_aliases_the_input(
+        self, tmp_path, monkeypatch, alias,
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        input_path = tmp_path / "prompts.jsonl"
+        input_path.write_text(
+            json.dumps({"prompt": "first", "prompt_id": "retain_me"}) + "\n",
+            encoding="utf-8",
+        )
+        original = input_path.read_bytes()
+        output_path = (
+            input_path if alias == "same-path" else tmp_path / "prompts-alias.jsonl"
+        )
+        if alias == "hard-link":
+            os.link(input_path, output_path)
+
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
+        result = CliRunner().invoke(app, [
+            "infer", "--model", "fake/model",
+            "--input", str(input_path), "--output", str(output_path),
+            "--device", "cpu",
+        ])
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "same file" in result.output
+        assert input_path.read_bytes() == original
 
 
 class TestPromptDependentBatchPairing:
