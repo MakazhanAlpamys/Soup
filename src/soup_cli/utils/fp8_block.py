@@ -440,9 +440,8 @@ def resolve_fp8_double_quant(
     unset). Every source but a block-scaled FP8 one, and every run that does not shard
     NF4, keeps the shipped default: on unless ``False``. For an FP8 block source sharded
     NF4 the supported setting is double-quant OFF: with it on, the nested absmax
-    quantisation measured on real DeepSeek-V3 weights breaks the per-block reconstruction
-    bound (error up to 2.15 x the block absmax against 0.17 x without it), so unset
-    resolves to off and an explicit ``True`` is refused by name rather than overridden.
+    quantisation broke the per-block reconstruction bound on DeepSeek-V3 weights, so
+    unset resolves to off and an explicit ``True`` is refused by name rather than overridden.
     """
     if fp8_block is None or not quant_nf4:
         return requested is not False
@@ -450,8 +449,8 @@ def resolve_fp8_double_quant(
         raise ValueError(
             "training.bnb_4bit_use_double_quant=true is not supported for an FP8 "
             "block-quantised base sharded as NF4: with double-quant on, the NF4 codec "
-            "breaks the per-block reconstruction bound on DeepSeek-V3 weights (worst "
-            "2.15 x the block absmax against 0.17 x with it off). Leave it unset or set "
+            "breaks the per-block reconstruction bound on DeepSeek-V3 weights. "
+            "Leave it unset or set "
             "it to false; the cost is about 0.37 bit per parameter of extra NF4 statistics."
         )
     return False
