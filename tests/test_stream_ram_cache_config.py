@@ -106,9 +106,12 @@ def test_cache_failure_closes_the_created_runtime(tmp_path, monkeypatch):
     class Recording(MagicMock):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            if not runtimes:
-                self.source.configure_ram_cache.side_effect = OSError("cache read sentinel")
+            # Record first: reading ``self.source`` below builds a child mock through this
+            # very constructor, so a "first instance" test must already be false by then.
+            first = not runtimes
             runtimes.append(self)
+            if first:
+                self.source.configure_ram_cache.side_effect = OSError("cache read sentinel")
 
     monkeypatch.setattr(wiring, "MagicMock", Recording)
     with pytest.raises(OSError, match="cache read sentinel"):
