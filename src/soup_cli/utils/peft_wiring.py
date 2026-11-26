@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from threading import RLock
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -762,82 +761,6 @@ def build_lora_config(
         spec["init_kwargs"]["exclude_modules"] = exclude_modules
     config_cls = getattr(peft, spec["peft_cls"])
     return config_cls(**spec["init_kwargs"])
-
-
-_SHARED_EXPERT_PROJECTION = re.compile(r"(?:^|\.)shared_experts?\.(?:gate|up|down)_proj$")
-_FUSED_MOE_PROJECTIONS = {"gate_proj", "up_proj", "down_proj"}
-_PEFT_CONVERSION_LOCK = RLock()
-
-
-def attach_adapter(model: Any, peft_config: Any) -> Any:
-    """Keep explicit shared-expert LoRA on the native shared projections."""
-    from peft import get_peft_model
-
-    targets = getattr(peft_config, "target_modules", None)
-    if not targets or getattr(peft_config, "target_parameters", None):
-        return get_peft_model(model, peft_config)
-
-    is_regex = isinstance(targets, str)
-    explicit_shared = (
-        [] if is_regex else sorted(t for t in targets if _SHARED_EXPERT_PROJECTION.search(t))
-    )
-    if (is_regex and "shared_expert" not in targets) or (not is_regex and not explicit_shared):
-        return get_peft_model(model, peft_config)
-
-    shared_paths = [
-        name for name, _ in model.named_modules() if _SHARED_EXPERT_PROJECTION.search(name)
-    ]
-    if is_regex:
-        pattern = re.compile(targets)
-        shared = {name for name in shared_paths if pattern.fullmatch(name)}
-        if not shared:
-            return get_peft_model(model, peft_config)
-    else:
-        shared = set()
-        for target in explicit_shared:
-            paths = {name for name in shared_paths if name == target or name.endswith(f".{target}")}
-            if not paths:
-                raise ValueError(
-                    f"training.lora.target_modules entry {target!r} matches no shared-expert "
-                    "gate_proj, up_proj or down_proj module."
-                )
-            shared.update(paths)
-        other = set(targets).difference(explicit_shared)
-        bare = sorted(other & _FUSED_MOE_PROJECTIONS)
-        if bare:
-            from soup_cli.utils.moe import find_fused_expert_parameters
-
-            if find_fused_expert_parameters(model):
-                raise ValueError(
-                    f"training.lora.target_modules {bare!r} sit beside shared-expert targets. "
-                    "Name these projections by full path, or set training.moe_lora: true "
-                    "to target routed experts."
-                )
-            return get_peft_model(model, peft_config)
-        peft_config.target_modules = shared | other
-
-    from peft.utils import transformers_weight_conversion as conversion
-
-    # The v4-to-v5 rewrite can move these targets to the routed experts or widen
-    # a regex. PEFT imports this function during attach. Bypass it for this
-    # config only, leaving unrelated attaches and the saved config's spelling intact.
-    with _PEFT_CONVERSION_LOCK:
-        original = conversion.convert_peft_config_for_transformers
-
-        def convert(config: Any, *args: Any, **kwargs: Any) -> None:
-            if config is not peft_config:
-                original(config, *args, **kwargs)
-
-        conversion.convert_peft_config_for_transformers = convert
-        try:
-            adapted = get_peft_model(model, peft_config)
-        finally:
-            conversion.convert_peft_config_for_transformers = original
-
-    missing = sorted(name for name in shared if not hasattr(model.get_submodule(name), "lora_A"))
-    if missing:
-        raise ValueError(f"shared-expert LoRA did not attach to {missing[:3]!r}")
-    return adapted
 
 
 def apply_pre_lora_patches(model: Any, base: str) -> None:

@@ -1244,9 +1244,9 @@ class StreamingSetupMixin:
 
             from soup_cli.utils.layer_stream import resolve_available_vram_bytes
             from soup_cli.utils.stream_adapter_preflight import (
-                build_stream_adapter_plan,
                 check_stream_adapter_budget,
                 recommend_stream_adapter_targets,
+                try_build_stream_adapter_plan,
             )
 
             optimizer_backend = None
@@ -1262,9 +1262,10 @@ class StreamingSetupMixin:
                 on_cuda=on_cuda,
                 optimizer_backend=optimizer_backend,
             )
-            adapter_plan = build_stream_adapter_plan(
+            adapter_plan = try_build_stream_adapter_plan(
                 cfg.base, model_config, tcfg, console=console, **probe_options
             )
+        if on_cuda and adapter_plan is not None:
             # Driver free memory excludes PyTorch's reserve. Some of that reserve can be
             # reused, so include it in the upper bound for this early refusal.
             free_bytes = int(torch.cuda.mem_get_info(self.device)[0])

@@ -61,9 +61,9 @@ def build_stream_adapter_plan(
     optimizer_backend: str | None = None,
     console: Any = None,
 ) -> StreamAdapterPlan:
-    """Resolve and attach adapters with the same wiring used by the real build."""
+    """Size the adapter that the real build attaches with ``get_peft_model``."""
     from accelerate import init_empty_weights
-    from peft import TaskType
+    from peft import TaskType, get_peft_model
     from torch.random import fork_rng
 
     from soup_cli.utils.layer_shard import QUANT_NF4
@@ -71,7 +71,6 @@ def build_stream_adapter_plan(
     from soup_cli.utils.moe import resolve_moe_lora_targets
     from soup_cli.utils.peft_wiring import (
         apply_pre_lora_patches,
-        attach_adapter,
         build_lora_config,
         resolve_lora_target_modules,
     )
@@ -93,7 +92,7 @@ def build_stream_adapter_plan(
         # PEFT mutates the config during target conversion. The real build needs the original.
         probe_config = deepcopy(config)
         with init_empty_weights(include_buffers=True):
-            model = attach_adapter(model, probe_config)
+            model = get_peft_model(model, probe_config)
 
     tensors = []
     for name, param in model.named_parameters():
@@ -114,6 +113,32 @@ def build_stream_adapter_plan(
         profile = "unsupported: LoRA-FA on fused expert parameters"
     budget = estimate_adapter_budget(tensors, profile=profile, device="cuda" if on_cuda else "cpu")
     return StreamAdapterPlan(tuple(tensors), budget, config, suffixes, targets)
+
+
+def try_build_stream_adapter_plan(
+    base: str,
+    model_config: Any,
+    tcfg: Any,
+    *,
+    console: Any,
+    **build_kwargs: Any,
+) -> StreamAdapterPlan | None:
+    """Build the plan, or return None after one notice when the probe itself fails.
+
+    The preflight may refuse only on a computed "adapter does not fit" result. A
+    probe error (skeleton, pre-LoRA patches, owner resolution) for any architecture
+    skips the preflight; setup then continues exactly as it did without it.
+    """
+    try:
+        return build_stream_adapter_plan(base, model_config, tcfg, console=console, **build_kwargs)
+    except Exception as exc:  # noqa: BLE001 - fail open on any probe failure
+        from soup_cli.utils.terminal import for_terminal
+
+        console.print(
+            "[yellow]Adapter memory preflight skipped: "
+            f"{for_terminal(f'{type(exc).__name__}: {exc}')}[/]"
+        )
+        return None
 
 
 def _validate_cuda_capacity(available_cuda_bytes: int) -> None:

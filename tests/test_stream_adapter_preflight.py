@@ -146,8 +146,10 @@ def test_unknown_optimizer_warns_and_checks_weights_only(tiny_config: tuple[str,
 
 
 def test_real_shapes_and_materialization(tiny_config: tuple[str, Any]) -> None:
+    from peft import get_peft_model
+
     from soup_cli.utils.layer_stream_runtime import build_meta_skeleton, materialize_meta_adapters
-    from soup_cli.utils.peft_wiring import apply_pre_lora_patches, attach_adapter
+    from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
     plan = _plan(tiny_config)
     assert plan.budget.stored_parameters == 3584
@@ -158,7 +160,7 @@ def test_real_shapes_and_materialization(tiny_config: tuple[str, Any]) -> None:
     for param in actual.parameters():
         param.requires_grad = False
     apply_pre_lora_patches(actual, base)
-    actual = attach_adapter(actual, deepcopy(plan.lora_config))
+    actual = get_peft_model(actual, deepcopy(plan.lora_config))
     materialize_meta_adapters(actual, device="cpu")
     real = {
         name: (tuple(param.shape), str(param.dtype))
@@ -186,18 +188,17 @@ def test_probe_preserves_training_rng(tiny_config: tuple[str, Any]) -> None:
 def test_probe_refuses_unaccounted_parameters(
     tiny_config: tuple[str, Any], monkeypatch: pytest.MonkeyPatch, device: str, message: str
 ) -> None:
+    import peft
     import torch
 
-    from soup_cli.utils import peft_wiring
-
-    real_attach = peft_wiring.attach_adapter
+    real_attach = peft.get_peft_model
 
     def attach_extra(model: Any, config: Any) -> Any:
         adapted = real_attach(model, config)
         adapted.unexpected = torch.nn.Parameter(torch.empty(1, device=device))
         return adapted
 
-    monkeypatch.setattr(peft_wiring, "attach_adapter", attach_extra)
+    monkeypatch.setattr(peft, "get_peft_model", attach_extra)
     with pytest.raises(ValueError) as error:
         _plan(tiny_config)
     assert str(error.value) == message
@@ -327,7 +328,7 @@ def test_fused_moe_probe_keeps_build_config_unmodified(tmp_path: Any) -> None:
     transformers = pytest.importorskip("transformers")
     pytest.importorskip("peft")
 
-    from soup_cli.utils.peft_wiring import attach_adapter
+    from peft import get_peft_model
 
     config = transformers.Qwen3MoeConfig(
         vocab_size=128, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
@@ -338,7 +339,7 @@ def test_fused_moe_probe_keeps_build_config_unmodified(tmp_path: Any) -> None:
     plan = _plan((str(tmp_path), config), _settings(moe_lora=True))
     assert plan.lora_config.target_parameters
     assert not plan.lora_config.rank_pattern
-    actual = attach_adapter(
+    actual = get_peft_model(
         transformers.AutoModelForCausalLM.from_config(config), plan.lora_config
     )
     real = {
@@ -378,10 +379,14 @@ def deepseek_config(tmp_path: Any) -> tuple[str, Any]:
 
 
 @pytest.mark.parametrize("use_regex", [False, True])
-def test_probe_counts_shared_expert_targets_without_routed_experts(
+def test_probe_sizes_exactly_what_main_attaches_for_shared_expert_targets(
     deepseek_config: tuple[str, Any], use_regex: bool,
 ) -> None:
+    """The preflight sizes main's get_peft_model result and never changes the attach."""
+    from peft import get_peft_model
+
     from soup_cli.config.schema import LoraConfig
+    from soup_cli.utils.layer_stream_runtime import build_meta_skeleton
 
     target_modules = (
         r".*\.(?:self_attn\.(?:q_a_proj|q_b_proj)|mlp\.shared_experts\.(?:gate|up)_proj)"
@@ -391,40 +396,26 @@ def test_probe_counts_shared_expert_targets_without_routed_experts(
         lora=LoraConfig(r=4, alpha=8, dropout=0, target_modules=target_modules)
     )
     plan = _plan(deepseek_config, settings, dtype="float32", on_cuda=False)
-    owners = {
-        tensor.name.rsplit(".lora_", 1)[0].removeprefix("base_model.model.")
-        for tensor in plan.tensors
+    native = get_peft_model(
+        build_meta_skeleton(deepseek_config[0], dtype="float32"), deepcopy(plan.lora_config)
+    )
+    expected = {
+        name: tuple(param.shape) for name, param in native.named_parameters() if ".lora_" in name
     }
-    expected = {f"model.layers.{idx}.mlp.shared_experts.{proj}_proj"
-                for idx in (1, 2) for proj in ("gate", "up")}
-    if use_regex:
-        expected.update(f"model.layers.{idx}.self_attn.{proj}"
-                        for idx in range(3) for proj in ("q_a_proj", "q_b_proj"))
-    assert owners == expected
-    assert plan.budget.stored_parameters == (3840 if use_regex else 1536)
+    assert {tensor.name: tensor.shape for tensor in plan.tensors} == expected
 
 
-def test_probe_refuses_a_missing_shared_expert_projection(tiny_config: tuple[str, Any]) -> None:
-    settings = _settings()
-    settings.lora.target_modules = ["q_proj", "shared_experts.up_proj"]
-    with pytest.raises(ValueError) as error:
-        _plan(tiny_config, settings)
-    assert str(error.value) == (
-        "training.lora.target_modules entry 'shared_experts.up_proj' matches no shared-expert "
-        "gate_proj, up_proj or down_proj module."
-    )
+def test_attached_target_modules_equal_main_attach(deepseek_config: tuple[str, Any]) -> None:
+    """build_streamed_model attaches via get_peft_model: wrapped modules equal main's."""
+    import inspect
 
+    from soup_cli.utils import layer_stream_runtime, peft_wiring
 
-def test_probe_refuses_ambiguous_shared_expert_targets(deepseek_config: tuple[str, Any]) -> None:
-    settings = _settings()
-    settings.lora.target_modules = ["shared_experts.up_proj", "gate_proj"]
-    with pytest.raises(ValueError) as error:
-        _plan(deepseek_config, settings)
-    assert str(error.value) == (
-        "training.lora.target_modules ['gate_proj'] sit beside shared-expert targets. "
-        "Name these projections by full path, or set training.moe_lora: true "
-        "to target routed experts."
-    )
+    source = inspect.getsource(layer_stream_runtime.build_streamed_model)
+    assert "get_peft_model(model, lora_config)" in source
+    assert "attach_adapter" not in source
+    assert not hasattr(peft_wiring, "attach_adapter")
+
 
 
 def test_moe_lora_with_explicit_shared_target_matches_native_peft(
@@ -447,26 +438,6 @@ def test_moe_lora_with_explicit_shared_target_matches_native_peft(
     }
     assert any(".experts." in name for name in expected)
     assert {tensor.name: tensor.shape for tensor in plan.tensors} == expected
-
-
-def test_shared_expert_attach_restores_peft_conversion_on_exception(
-    deepseek_config: tuple[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import peft
-    from peft.utils import transformers_weight_conversion as conversion
-
-    original = conversion.convert_peft_config_for_transformers
-
-    def fail_attach(model: Any, config: Any) -> Any:
-        assert conversion.convert_peft_config_for_transformers is not original
-        raise RuntimeError("injected PEFT attach failure")
-
-    settings = _settings()
-    settings.lora.target_modules = ["shared_experts.up_proj"]
-    monkeypatch.setattr(peft, "get_peft_model", fail_attach)
-    with pytest.raises(RuntimeError, match="^injected PEFT attach failure$"):
-        _plan(deepseek_config, settings)
-    assert conversion.convert_peft_config_for_transformers is original
 
 
 def test_attention_recommendation_rebuilds_and_preserves_rank_pattern(
@@ -619,15 +590,16 @@ def test_trainer_optimizer_state_matches_adapter_profile(
     tiny_config: tuple[str, Any], tmp_path: Any, optimizer_name: str,
 ) -> None:
     import torch
+    from peft import get_peft_model
     from transformers import LlamaForCausalLM, Trainer, TrainingArguments
 
-    from soup_cli.utils.peft_wiring import attach_adapter, attach_lorafa_optimizer
+    from soup_cli.utils.peft_wiring import attach_lorafa_optimizer
 
     use_lorafa = optimizer_name == "lorafa"
     settings = _settings(optimizer="adamw_torch" if use_lorafa else optimizer_name,
                          use_lorafa=use_lorafa)
     plan = _plan(tiny_config, settings, on_cuda=False)
-    model = attach_adapter(LlamaForCausalLM(tiny_config[1]), plan.lora_config)
+    model = get_peft_model(LlamaForCausalLM(tiny_config[1]), plan.lora_config)
     trainer = Trainer(model=model, args=TrainingArguments(
         output_dir=str(tmp_path / "trainer"), optim=settings.optimizer,
         use_cpu=True, report_to="none",
@@ -662,3 +634,195 @@ def test_trainer_bnb_factory_uses_profiled_options(tmp_path: Any, optimizer_name
     assert optimizer_cls.__module__.startswith("bitsandbytes.")
     assert kwargs["optim_bits"] == 8
     assert kwargs["is_paged"] is False
+
+
+def _fake_plan(owner: str, shape: tuple[int, int]) -> Any:
+    from soup_cli.utils.adapter_budget import AdapterTensor, estimate_adapter_budget
+
+    tensors = (AdapterTensor(f"{owner}.lora_A.default.weight", shape, "float32", True),)
+    return SimpleNamespace(
+        tensors=tensors,
+        budget=estimate_adapter_budget(tensors, profile="torch_adamw_fp32", device="cuda"),
+    )
+
+
+_ATTN_OWNER = "base_model.model.model.layers.0.self_attn.q_proj"
+_NO_ALTERNATIVE = (
+    " No smaller verified attention/shared-expert alternative fits the adapter budget."
+)
+
+
+def _recommend(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any], candidate: Any,
+    *, available: int = 10**9,
+) -> str:
+    from soup_cli.utils import stream_adapter_preflight as module
+
+    original = _fake_plan(_ATTN_OWNER, (8, 8))
+
+    def build(*args: Any, **kwargs: Any) -> Any:
+        if isinstance(candidate, Exception):
+            raise candidate
+        return candidate
+
+    monkeypatch.setattr(module, "build_stream_adapter_plan", build)
+    return module.recommend_stream_adapter_targets(
+        original, *tiny_config, _settings(), available_cuda_bytes=available, **_build_kwargs()
+    )
+
+
+def test_recommendation_positive_control_accepts_a_smaller_attention_plan(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    message = _recommend(monkeypatch, tiny_config, _fake_plan(_ATTN_OWNER, (2, 2)))
+    assert "attention only: 4 adapter parameters" in message
+
+
+def test_recommendation_skips_a_candidate_that_fails_to_build(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    message = _recommend(monkeypatch, tiny_config, RuntimeError("probe failed"))
+    assert message == _NO_ALTERNATIVE
+
+
+def test_recommendation_skips_owners_outside_the_suggested_pattern(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    stray = _fake_plan("base_model.model.model.layers.0.mlp.down_proj", (2, 2))
+    assert _recommend(monkeypatch, tiny_config, stray) == _NO_ALTERNATIVE
+
+
+def test_recommendation_skips_a_candidate_that_is_not_smaller(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    message = _recommend(monkeypatch, tiny_config, _fake_plan(_ATTN_OWNER, (8, 8)))
+    assert message == _NO_ALTERNATIVE
+
+
+def test_recommendation_rejects_invalid_cuda_capacity(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    with pytest.raises(ValueError, match="non-negative integer byte count; got -1"):
+        _recommend(monkeypatch, tiny_config, _fake_plan(_ATTN_OWNER, (2, 2)), available=-1)
+
+
+def test_budget_check_without_a_capacity_is_a_no_op(tiny_config: tuple[str, Any]) -> None:
+    from soup_cli.utils.stream_adapter_preflight import check_stream_adapter_budget
+
+    console = Mock()
+    check_stream_adapter_budget(_plan(tiny_config), available_cuda_bytes=None, console=console)
+    console.print.assert_not_called()
+
+
+def test_try_build_fails_open_and_scrubs_the_notice(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    from soup_cli.utils import stream_adapter_preflight as module
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise KeyError("odd\x1b[31m arch")
+
+    monkeypatch.setattr(module, "build_stream_adapter_plan", boom)
+    buffer = StringIO()
+    result = module.try_build_stream_adapter_plan(
+        *tiny_config, _settings(), console=Console(file=buffer, width=200), **_build_kwargs()
+    )
+    assert result is None
+    text = buffer.getvalue()
+    assert "Adapter memory preflight skipped: KeyError:" in text
+    assert "\x1b" not in text
+
+
+def test_try_build_does_not_swallow_base_exceptions(
+    monkeypatch: pytest.MonkeyPatch, tiny_config: tuple[str, Any]
+) -> None:
+    from soup_cli.utils import stream_adapter_preflight as module
+
+    def interrupt(*args: Any, **kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(module, "build_stream_adapter_plan", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        module.try_build_stream_adapter_plan(
+            *tiny_config, _settings(), console=Mock(), **_build_kwargs()
+        )
+
+
+def _setup_harness(
+    tiny_config: tuple[str, Any], monkeypatch: pytest.MonkeyPatch, free_bytes: int
+) -> tuple[Any, Any, Any, StringIO]:
+    import torch
+    from transformers import AutoTokenizer
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer import stream_setup
+    from soup_cli.utils import layer_shard, layer_stream, spectrum_scan, stripe_roots
+
+    cfg = SoupConfig.model_validate({
+        "base": tiny_config[0],
+        "training": {
+            "stream_layers": True, "quantization": "none", "batch_size": 1, "lora": {"r": 8},
+        },
+        "data": {"train": "unused.jsonl"},
+    })
+    buffer = StringIO()
+    monkeypatch.setattr(stream_setup, "console", Console(file=buffer, width=400))
+    monkeypatch.setattr(stream_setup, "refuse_if_data_parallel", lambda device: None)
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", Mock(return_value=SimpleNamespace(
+        pad_token="pad", eos_token="eos",
+    )))
+    monkeypatch.setattr(layer_stream, "resolve_stream_dtype", lambda device: "float32")
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (free_bytes, 10**9))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda device: 0)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda device: 0)
+    monkeypatch.setattr(layer_shard, "resolve_shard_dir", lambda base: "unused-cache")
+    monkeypatch.setattr(stripe_roots, "resolve_stripe_roots", lambda *args, **kwargs: ())
+    weights = Mock(side_effect=RuntimeError("reached weight resolution"))
+    monkeypatch.setattr(spectrum_scan, "resolve_model_weights", weights)
+    monkeypatch.setattr(layer_shard, "shard_checkpoint", Mock(side_effect=AssertionError))
+    wrapper = stream_setup.StreamingSetupMixin()
+    wrapper.device = "cuda:0"
+    wrapper._trust_remote_code = False
+    return wrapper, cfg, weights, buffer
+
+
+@pytest.mark.parametrize("free_bytes", [10**9, 1])
+def test_setup_continues_when_the_probe_raises(
+    tiny_config: tuple[str, Any], monkeypatch: pytest.MonkeyPatch, free_bytes: int
+) -> None:
+    """A probe error never refuses: even with 1 free byte, setup reaches weight resolution."""
+    import peft
+
+    wrapper, cfg, weights, buffer = _setup_harness(tiny_config, monkeypatch, free_bytes)
+    monkeypatch.setattr(peft, "get_peft_model", Mock(side_effect=RuntimeError("probe exploded")))
+    with pytest.raises(RuntimeError, match="^reached weight resolution$"):
+        wrapper._setup_streaming_transformers(cfg, cfg.training)
+    weights.assert_called_once()
+    text = " ".join(buffer.getvalue().split())
+    assert "Adapter memory preflight skipped: RuntimeError: probe exploded" in text
+    assert "before checkpoint loading" not in text
+
+
+def test_setup_fitting_config_is_silent(
+    tiny_config: tuple[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wrapper, cfg, weights, buffer = _setup_harness(tiny_config, monkeypatch, 10**9)
+    with pytest.raises(RuntimeError, match="^reached weight resolution$"):
+        wrapper._setup_streaming_transformers(cfg, cfg.training)
+    assert "Adapter" not in buffer.getvalue()
+    assert "preflight" not in buffer.getvalue()
+
+
+def test_setup_refuses_a_non_fitting_config_with_the_exact_message(
+    tiny_config: tuple[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wrapper, cfg, weights, _ = _setup_harness(tiny_config, monkeypatch, 1)
+    with pytest.raises(ValueError) as error:
+        wrapper._setup_streaming_transformers(cfg, cfg.training)
+    assert str(error.value).startswith(
+        "Adapter memory budget exceeded before checkpoint loading: 3,584 adapter parameters; "
+        "weights=14336, gradients=14336, optimizer=28672 CUDA bytes; CPU tensors=32 bytes; "
+        "required=57344 bytes (0.000 GB), available=1 bytes (0.000 GB). "
+        "Reduce LoRA targets or rank. The full training step needs additional memory."
+    )
+    weights.assert_not_called()

@@ -4708,6 +4708,9 @@ def build_streamed_model(
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
     ``install_streaming``'s: an API switch, no config field.
     """
+    if lora_config is not None:
+        from peft import get_peft_model
+
     model = build_meta_skeleton(
         model_id,
         dtype=dtype,
@@ -4732,12 +4735,12 @@ def build_streamed_model(
         extras = materialize_extras(model, shard_dir, index, device=device, dtype=dtype)
         for param in model.parameters():
             param.requires_grad = False
-        from soup_cli.utils.peft_wiring import apply_pre_lora_patches, attach_adapter
+        from soup_cli.utils.peft_wiring import apply_pre_lora_patches
 
         apply_pre_lora_patches(model, model_id)
         if lora_config is not None:
             _refuse_trainable_streamed_boundary(model, index, lora_config)
-            model = attach_adapter(model, lora_config)
+            model = get_peft_model(model, lora_config)
             materialize_meta_adapters(model, seed=seed, device=device)
             assert_trainable_adapters_materialized(model)
         runtime = install_streaming(
