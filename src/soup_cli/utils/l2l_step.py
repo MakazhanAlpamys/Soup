@@ -19,12 +19,13 @@ and walk the backward the same way in reverse.
   large slot is not refilled between that recompute and its immediate backward.
 * The backward turns the wrapper's checkpoint off for its per-(layer,
   micro-batch) forward+backward, which would otherwise pay a third forward.
-* The top-level forward is re-implemented for Llama/Mistral and DeepSeek-V3:
-  ``embed_tokens`` -> layers with the kwargs HF passed to layer 0 -> ``norm`` ->
+* The top-level forward is re-implemented for Llama, Mistral, DeepSeek-V3 and Qwen3.5:
+  ``embed_tokens`` -> layers with their captured arguments -> ``norm`` ->
   ``lm_head(h[:, slice(0, None), :])`` -> the model's own ``loss_function``
   with ``num_items_in_batch``. DeepSeek-V3's top-level forward is that same sequence (it
   adds no auxiliary routing loss). ``capture_layer_call`` records the layer kwargs from a
-  real forward instead of rebuilding the rotary embeddings and the mask.
+  real forward instead of rebuilding the rotary embeddings and the mask. For Qwen3.5
+  it captures the arguments for linear attention and full attention separately.
 
 * A preference loss with a reference model passes one or more ``ReferencePass``es: after each
   layer's policy micro-batches the same loaded layer runs the k micro-batches again, without
@@ -57,9 +58,11 @@ from dataclasses import dataclass, field
 from types import MethodType
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
+_QWEN35_ARCHS = ("qwen3_5", "qwen3_5_text")
+
 #: Architectures whose top-level forward this step re-implements. ``training.l2l`` admits them
 #: at launch under the rules in ``trainer.l2l_trainer.refuse_unsupported_l2l``.
-SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3")
+SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3", *_QWEN35_ARCHS)
 
 #: Architectures whose layers carry streamed routed experts. The MoE branches below are kept
 #: in place, but entry is refused until per-expert streaming parity lands.
@@ -83,7 +86,7 @@ def refuse_moe_l2l(arch: str) -> None:
 
 @dataclass(frozen=True)
 class LayerCall:
-    """What HF passes to every decoder layer after ``hidden_states``."""
+    """What HF passes to decoder layers after ``hidden_states``."""
 
     args: Tuple[Any, ...]
     kwargs: Dict[str, Any]
@@ -91,6 +94,15 @@ class LayerCall:
     draws: Tuple[Tuple[Any, ...], ...] = ()
     #: Dropouts the native output head draws after the decoder layers of each micro-batch.
     head_draws: Tuple[Any, ...] = ()
+    #: Hybrid decoders index the captured arguments by layer type.
+    layer_types: Tuple[str, ...] = ()
+    typed: Dict[str, Tuple[Tuple[Any, ...], Dict[str, Any]]] = field(default_factory=dict)
+
+    def for_layer(self, idx: int) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+        """The arguments HF passes to decoder layer ``idx``."""
+        if self.typed:
+            return self.typed[self.layer_types[idx]]
+        return self.args, self.kwargs
 
 
 #: ``LoadCounters`` field -> the ``runtime.stats()`` key whose growth it counts.
@@ -233,38 +245,50 @@ class ReferencePass:
 
 
 class _CapturedError(Exception):
-    """Raised from layer 0's pre-hook to end a capture forward before any layer runs."""
+    """End the capture forward once all the needed arguments have been recorded."""
 
 
 def capture_layer_call(model: Any, input_ids: Any, *, draws: bool = True) -> LayerCall:
-    """Run one forward without grad and record what layer 0 receives.
+    """Run one forward without grad and record the first call for each layer type.
 
     The random state is restored afterwards, so the capture draws nothing from it.
 
     With ``draws`` (the default) the forward runs through every layer and the native output
     head and records which dropouts each draws, for the replay in :meth:`L2LStep.run`; on a
-    streamed model that walk loads every layer once. With ``draws=False`` the forward stops at
-    layer 0's pre-hook, which already holds the arguments, so no layer loads or runs. Use it
-    when the model draws no dropout; the returned call has no draws.
+    streamed model that walk loads every layer once. With ``draws=False`` the forward stops
+    before the first layer of the last needed type runs. For a uniform decoder this is layer 0.
+    Use it when the model draws no dropout; the returned call has no draws.
     """
     import torch
 
     from soup_cli.utils.l2l_rng import record_draws
 
     causal, owner = model_parts(model)
-    seen: Dict[str, Any] = {}
+    layer_types = _layer_types(causal, len(owner.layers))
+    kinds = layer_types or ("layer",)
+    firsts: Dict[str, int] = {}
+    for idx, kind in enumerate(kinds):
+        firsts.setdefault(kind, idx)
+    seen: Dict[str, Tuple[Tuple[Any, ...], Dict[str, Any]]] = {}
 
-    def hook(_module: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> None:
-        if "call" not in seen:
-            seen["call"] = (tuple(args[1:]), dict(kwargs))
-            if not draws:
-                raise _CapturedError
+    def make_hook(kind: str) -> Callable[..., None]:
+        def hook(_module: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> None:
+            if kind not in seen:
+                seen[kind] = (tuple(args[1:]), dict(kwargs))
+                if not draws and len(seen) == len(firsts):
+                    raise _CapturedError
 
-    handle = owner.layers[0].register_forward_pre_hook(hook, with_kwargs=True)
+        return hook
+
     # The capture forward runs in training mode, so NEFTune would draw noise from it.
     cuda = [input_ids.device] if input_ids.device.type == "cuda" else []
     plan: List[List[Any]] = []
+    handles = []
     try:
+        for kind, idx in firsts.items():
+            handles.append(
+                owner.layers[idx].register_forward_pre_hook(make_hook(kind), with_kwargs=True)
+            )
         with torch.no_grad(), torch.random.fork_rng(devices=cuda):
             if draws:
                 with record_draws([*owner.layers, causal.lm_head]) as plan:
@@ -275,17 +299,39 @@ def capture_layer_call(model: Any, input_ids: Any, *, draws: bool = True) -> Lay
                 except _CapturedError:
                     pass
     finally:
-        handle.remove()
-    if "call" not in seen:
-        raise RuntimeError("decoder layer 0 was never called by the forward")
-    args, kwargs = seen["call"]
-    kwargs.pop("num_items_in_batch", None)
+        for handle in handles:
+            handle.remove()
+    missing = [idx for kind, idx in firsts.items() if kind not in seen]
+    if missing:
+        if not layer_types:
+            raise RuntimeError("decoder layer 0 was never called by the forward")
+        raise RuntimeError(f"decoder layer(s) {missing} never called by the forward")
+    for _args, kwargs in seen.values():
+        kwargs.pop("num_items_in_batch", None)
+    args, kwargs = seen[kinds[0]]
+    typed = seen if len(firsts) > 1 else {}
     return LayerCall(
         args=args,
         kwargs=kwargs,
         draws=tuple(tuple(layer) for layer in plan[:-1]),
         head_draws=tuple(plan[-1]) if plan else (),
+        layer_types=layer_types if typed else (),
+        typed=typed,
     )
+
+
+def _layer_types(causal: Any, n_layers: int) -> Tuple[str, ...]:
+    """Read the Qwen3.5 decoder layout from the text config."""
+    config = getattr(causal, "config", None)
+    if getattr(config, "model_type", "") not in _QWEN35_ARCHS:
+        return ()
+    text = config.get_text_config() if hasattr(config, "get_text_config") else config
+    types = tuple(getattr(text, "layer_types", None) or ())
+    if types and len(types) < n_layers:
+        raise ValueError(
+            f"config.layer_types names {len(types)} layers, the decoder has {n_layers}"
+        )
+    return types[:n_layers]
 
 
 class RoutingGuard:
@@ -874,14 +920,15 @@ class L2LStep:
         #: Optional expert read counters split by layer and step phase.
         self.expert_phase_stats: Optional[Dict[str, Any]] = None
 
-    def _layer(self, module: Any, hidden: Any, state: Any, call: LayerCall) -> Any:
+    def _layer(self, module: Any, hidden: Any, state: Any, call: LayerCall, idx: int = 0) -> Any:
         # ``state`` is where accumulation's stream stands before this (micro-batch, layer)
         # pair, so the forward and the recompute in the backward draw the same mask in any
         # visiting order. ``None`` without dropout.
         from soup_cli.utils import l2l_rng
 
         with l2l_rng.state_at(state) if state is not None else nullcontext():
-            out = module(hidden, *call.args, **call.kwargs)
+            args, kwargs = call.for_layer(idx)
+            out = module(hidden, *args, **kwargs)
         return out[0] if isinstance(out, tuple) else out
 
     def _route_preserving_layer_window(
@@ -1412,6 +1459,7 @@ class L2LStep:
                                 hidden[mb],
                                 states[mb][idx] if states else None,
                                 calls[mb],
+                                idx,
                             )
                     if before is not None:
                         after = self._expert_read_snapshot()
@@ -1428,7 +1476,7 @@ class L2LStep:
                     # ``guard.record``, so the routing guard sees the policy forward only.
                     with self._pass_adapters(spec):
                         for mb in range(k):
-                            current[mb] = self._layer(layer, current[mb], None, spec_calls[mb])
+                            current[mb] = self._layer(layer, current[mb], None, spec_calls[mb], idx)
             for spec, current in zip(passes, pass_hidden):
                 spec.outputs.clear()
                 with self._pass_adapters(spec):
@@ -1603,7 +1651,7 @@ class L2LStep:
                             pair[1] if pair else nullcontext(),
                         ):
                             out = self._layer(
-                                layer, inputs, states[mb][idx] if states else None, calls[mb]
+                                layer, inputs, states[mb][idx] if states else None, calls[mb], idx
                             )
                         phase_recompute_after = (
                             self._expert_read_snapshot() if phase_stats is not None else None

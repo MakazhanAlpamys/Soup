@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from soup_cli.utils.moe_l2l_budget import MoEL2LMemoryPlan
 
 #: Architectures ``training.l2l`` admits at launch with any weight layout.
-PUBLIC_ARCHS = ("llama", "mistral")
+PUBLIC_ARCHS = ("llama", "mistral", "qwen3_5", "qwen3_5_text")
 
 #: Architectures ``training.l2l`` admits only with ``training.stream_expert_layout``
 #: set to ``EXPERT_LAYOUT_PER_EXPERT``: the DeepSeek-V3 step reads each routed expert from its
