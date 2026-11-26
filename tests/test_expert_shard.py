@@ -3,8 +3,8 @@
 The storage layer is shared by the expert runtimes. The runtime keeps importing
 its names from ``utils/expert_stream.py``; the shard format is version 5 with the
 index fields this tree has always written. A cache written before the storage
-layer was split out must load unchanged, and an index that also carries the
-soup-rnd runtime's fields must load too.
+layer was split out must load unchanged, and an index written with the extra
+fields must load too.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def test_an_index_written_by_this_trees_writer_loads_with_identical_tensors(tmp_
     _assert_cache_reads_back(expected, out, index)
 
 
-def test_this_trees_writer_adds_no_index_field_of_the_rnd_runtime(tmp_path):
+def test_this_trees_writer_adds_no_extra_index_fields(tmp_path):
     _, out, _ = _main_cache(tmp_path)
     payload = json.loads((out / "index.json").read_text())
     assert payload["format_version"] == 5
@@ -205,7 +205,7 @@ def test_this_trees_writer_adds_no_index_field_of_the_rnd_runtime(tmp_path):
         assert field not in payload, field
 
 
-def test_an_rnd_style_index_loads_through_the_same_reader(tmp_path):
+def test_an_extra_field_index_loads_through_the_same_reader(tmp_path):
     from soup_cli.utils.layer_shard import read_shard_index
 
     expected, out, index = _main_cache(tmp_path)
@@ -755,6 +755,9 @@ def test_a_float32_cache_written_before_the_split_reads_back_identically():
 
 def test_a_nested_nf4_cache_written_before_the_split_reads_back_identically():
     """Real bitsandbytes NF4 with the default double quantisation, written by the old sharder."""
+    pytest.importorskip(
+        "bitsandbytes.functional", reason="NF4 fixture needs a working bitsandbytes"
+    )
     import torch
     from bitsandbytes.functional import dequantize_4bit, quantize_4bit
     from safetensors.torch import load_file
