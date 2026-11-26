@@ -74,8 +74,8 @@ PER_EXPERT_ARCHS = ("deepseek_v3",)
 
 logger = logging.getLogger(__name__)
 
-#: Tasks that passed the A6 readiness rule (``benchmarks/l2l-preference-readiness-rule-a6.md``).
-#: The config accepts more (``config.schema.L2L_SUPPORTED_TASKS``); the others run with a warning.
+#: Tasks whose L2L result is verified to match gradient accumulation. Any other task the
+#: caller admits runs with a warning.
 L2L_READY_TASKS = ("sft", "dpo")
 
 
@@ -84,9 +84,8 @@ def unready_task_warning(task: Optional[str]) -> Optional[str]:
     if task is None or task in L2L_READY_TASKS:
         return None
     return (
-        f"training.l2l with task '{task}' is not ready: it did not pass the A6 readiness "
-        "rule, so its result is not verified to match gradient accumulation. See "
-        "docs/performance-and-quantization.md ('L2L for preference tasks')."
+        f"training.l2l with task '{task}' is not ready: its result is not verified to "
+        "match gradient accumulation."
     )
 
 
