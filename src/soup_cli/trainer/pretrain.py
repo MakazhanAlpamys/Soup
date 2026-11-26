@@ -194,6 +194,10 @@ class PretrainTrainerWrapper:
         if self.fsdp_config:
             training_kwargs.update(self.fsdp_config)
 
+        if tcfg.lisa_enabled and training_kwargs["gradient_checkpointing"]:
+            # LISA freezes decoder parameters after DDP registers them.
+            training_kwargs["ddp_find_unused_parameters"] = True
+
         # LoRA+ — different learning rates for A and B matrices. Not a
         # TrainingArguments field: the optimizer is built and attached after the
         # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
