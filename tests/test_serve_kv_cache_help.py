@@ -48,15 +48,19 @@ class TestServeHelpDescribesKvCacheType:
     def test_names_the_values_that_work(self, monkeypatch):
         text = _kv_cache_help(monkeypatch)
 
-        assert "on --backend transformers only" in text
-        assert "q8_0 (8-bit quantized cache, needs hqq)" in text
+        assert "Transformers: q8_0" in text
+        assert "needs hqq or optimum-quanto" in text
         assert "bf16 or f16 (cache dtype)" in text
 
-    def test_says_fp8_is_refused(self, monkeypatch):
+    def test_describes_backend_specific_fp8_support(self, monkeypatch):
         text = _kv_cache_help(monkeypatch)
 
-        assert "fp8 is refused on every backend, Hopper GPUs included" in text
-        assert "every other backend refuses this option" in text
+        assert "fp8 is unsupported" in text
+        assert "fp8 requires Hopper" in text
+        assert "compute capability >= 9.0" in text
+        assert "installed vLLM version must" in text
+        assert "q8_0 is unsupported" in text
+        assert "SGLang KV-cache wiring is deferred" in text
 
     def test_does_not_send_a_reader_to_vllm_hopper(self, monkeypatch):
         text = _kv_cache_help(monkeypatch)
@@ -66,13 +70,15 @@ class TestServeHelpDescribesKvCacheType:
 
 
 class TestGeneratedReferenceMatchesTheHelp:
-    def test_cli_reference_row_says_fp8_is_refused(self):
+    def test_cli_reference_row_describes_backend_specific_support(self):
         page = (_REPO / "docs" / "cli-reference.md").read_text(encoding="utf-8")
         rows = [line for line in page.splitlines() if line.startswith("| `--kv-cache-type`")]
 
         assert len(rows) == 1, rows
-        assert "fp8 is refused on every backend, Hopper GPUs included" in rows[0]
-        assert "vLLM+Hopper" not in rows[0]
+        assert "fp8 is unsupported" in rows[0]
+        assert "fp8 requires Hopper" in rows[0]
+        assert "installed vLLM version" in rows[0]
+        assert "SGLang KV-cache wiring is deferred" in rows[0]
 
 
 class TestTheHelpIsTrueOfTheCode:

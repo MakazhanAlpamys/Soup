@@ -318,10 +318,14 @@ def serve(
         None,
         "--kv-cache-type",
         help=(
-            "KV-cache type for decoding, on --backend transformers only: q8_0 "
-            "(8-bit quantized cache, needs hqq), bf16 or f16 (cache dtype). fp8 is "
-            "refused on every backend, Hopper GPUs included, and every other "
-            "backend refuses this option. v0.71.14 (#140)."
+            "KV-cache type for decoding. Transformers: q8_0 (8-bit quantized "
+            "cache; needs hqq or optimum-quanto), bf16 or f16 (cache dtype); "
+            "fp8 is unsupported. vLLM: bf16/f16 must match the checkpoint dtype "
+            "and float32 checkpoints are refused; fp8 requires Hopper "
+            "(compute capability >= 9.0). The installed vLLM version must "
+            "accept bf16, f16 or fp8. q8_0 is unsupported. SGLang KV-cache "
+            "wiring is deferred; other backends refuse this option. "
+            "v0.71.14 (#140)."
         ),
     ),
     tool_auth_token: Optional[str] = typer.Option(
