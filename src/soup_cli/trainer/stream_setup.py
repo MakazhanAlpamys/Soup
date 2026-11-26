@@ -908,6 +908,8 @@ class StreamingSetupMixin:
 
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
+    #: The ResidencyPlan chosen by training.stream_resident_layers, else None.
+    _stream_residency_plan = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
     #: Set by :meth:`_stream_budget_lines` when the dense-retaining NF4 backward is
@@ -1776,20 +1778,61 @@ class StreamingSetupMixin:
             except Exception:
                 self._close_stream_runtime()
                 raise
+        # training.stream_resident_layers -- after the recompute mode and before
+        # the probe, so that the residency measurement and the probe both see the
+        # step that will train. Off by default: nothing is read or imported.
+        if getattr(tcfg, "stream_resident_layers", 0) != 0:
+            try:
+                self._configure_stream_residency(
+                    model, runtime, cfg, tcfg, model_config=model_config,
+                )
+            except BaseException:
+                self._close_stream_runtime()
+                raise
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
         source_line = _stream_source_line(stats)
         large_runtime_buffer = stats.get("large_buffer_bytes", 0)
-        decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer
+        resident_bytes = stats.get("resident_layer_bytes", 0)
+        decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer - resident_bytes
         buffer_line = (
             f"{stats['buffers']} x "
             f"{decoder_buffers / stats['buffers'] / 1e6:.0f} MB decoder buffers + "
             f"1 x {large_runtime_buffer / 1e6:.0f} MB large-layer slot"
         )
+        if resident_bytes:
+            buffer_line += (
+                f", {len(stats['resident_layer_indices'])} persistent decoder layers "
+                f"({resident_bytes / 1e6:.0f} MB)"
+            )
         console.print(
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
             f"{source_line}, {buffer_line}"
+        )
+
+    def _configure_stream_residency(
+        self, model, runtime, cfg, tcfg, *, model_config
+    ) -> None:
+        """``training.stream_resident_layers``: keep a measured block of decoder
+        layers on the GPU for the whole run. Dense decoders only."""
+        from soup_cli.utils.stream_residency import configure_stream_residency
+
+        if self._stream_total_experts(model_config) > 1:
+            raise ValueError(
+                "training.stream_resident_layers supports dense decoders only; this "
+                "base routes over several experts. Remove training.stream_resident_layers."
+            )
+        rows, seq_len, vocab_size = self._stream_step_shape(cfg, tcfg, model_config)
+        self._stream_residency_plan = configure_stream_residency(
+            model,
+            runtime,
+            tcfg.stream_resident_layers,
+            rows=rows,
+            seq_len=seq_len,
+            vocab_size=vocab_size,
+            override_bytes=getattr(tcfg, "stream_vram_override", None),
+            notify=console.print,
         )
 
     def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:

@@ -469,6 +469,7 @@ training:
   stream_source: auto          # 'auto' (same-host RAM), 'ram', 'disk' (v0.72.3)
   stream_ngram_source: auto    # Qwen4 PLE only: 'auto', 'ram', or read-only 'disk'
   stream_buffers: 2            # Double-buffering; range [2, 8]
+  # stream_resident_layers: auto  # Keep measured decoder layers in spare VRAM (CUDA/RAM tier SFT); see below
   stream_read_ahead: 2         # Disk tier only; range [1, 8]. N stages N-1 layers ahead, and each level costs one layer of pinned host RAM
   # stream_pin: false          # Force the pinned RAM store off (escape hatch) or on; unset = automatic. See below
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
@@ -499,6 +500,31 @@ A Kimi K2 base is read the same way, through a guarded rewrite of its `config.js
 (see "Kimi K2" below).
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
+
+**Persistent decoder weights (opt-in).** `training.stream_resident_layers: auto`
+measures a forward/backward at the configured batch size and maximum context, then keeps a
+centred block of frozen decoder weights in private GPU slots. They are copied once during
+setup and reused across training steps; the other layers use the existing rotating buffers.
+An integer selects that many centred layers; `0` (the default) leaves ordinary streaming.
+The complete host store is retained. Precision does not change and base weights are not updated.
+
+The scope is dense text SFT on CUDA with the RAM tier and an AdamW optimizer. NF4 slots keep
+the packed weights and quantization sidecars; dense slots keep the stream dtype. `auto` reports
+a fallback to ordinary streaming on CPU/MPS or the disk tier; an explicit positive count
+refuses an unsupported or over-budget request. The config refuses it beside
+`activation_offloading` and a non-default `stream_recompute`, because those also spend the spare
+VRAM and their combined budget is not measured.
+
+The measured candidate must fit the smallest of 85% of physical VRAM, currently free plus
+reserved memory, and `stream_vram_override`, after a 64 MiB setup reserve and an estimated
+12 bytes per trainable parameter for future AdamW state. The setup probe runs forward and
+backward but no optimizer step; it preserves Torch RNG, adapter values and module training
+flags and requires pristine gradients. An automatic OOM or failed capacity check keeps the
+ordinary pool; a non-OOM execution error refuses the run. The ready message reports the
+persistent memory separately from the rotating buffers. Setup time is additional to training.
+
+This is a conservative capacity policy, not a speed selector: occupying more VRAM is not a
+promise of a faster step. Check speed and peak memory for the actual model and configuration.
 
 For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
 bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
@@ -1099,7 +1125,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_resident_layers` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
 - a pre-quantised bitsandbytes NF4 base (`unsloth/*-bnb-4bit`: `quant_method: bitsandbytes`, `load_in_4bit`, `bnb_4bit_quant_type: nf4`, `bnb_4bit_use_double_quant: true`, `bnb_4bit_compute_dtype: bfloat16`, `uint8` storage) is the one quantised source that streams, and only under `training.quantization: 4bit` on a dense decoder architecture (not `deepseek_v3` or `qwen4_exp`): it is imported into the layer cache byte for byte, with no dequantisation and no requantisation, and the cache is the same on every run device. The run needs a bfloat16 card (a float16 GPU and the CPU are refused), double quantisation left on and an unstriped cache, each refused by name before the weights are resolved. An import killed half way leaves a `.soup-nf4-import.<pid>.*` staging folder in the cache folder; the next run removes it before the disk pre-flight (a folder whose process is still running, another run of the same base, is left alone). The same base under `quantization: none`, and bitsandbytes 8-bit, FP4 or a base that is not double-quantised, stay refused like the other quantised sources

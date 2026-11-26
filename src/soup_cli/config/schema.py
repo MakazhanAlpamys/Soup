@@ -193,6 +193,12 @@ def _reject_boolean_numeric_field(
     return value
 
 
+# Optimizers whose moment allocation ``stream_resident_layers`` can budget up
+# front (two fp32 moments per trainable parameter).
+_STREAM_RESIDENCY_OPTIMIZERS = frozenset(
+    {"adamw_torch", "adamw_torch_fused", "adamw_8bit", "paged_adamw_8bit"}
+)
+
 _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
     "seed",
     "data_seed",
@@ -4272,6 +4278,39 @@ class TrainingConfig(BaseModel):
             )
         return v
 
+    stream_resident_layers: Union[int, Literal["auto"]] = Field(
+        default=0,
+        description=(
+            "Opt-in persistent decoder weights for streamed text SFT. 0 (the "
+            "default) keeps ordinary streaming; a positive integer keeps a centred "
+            "block of that many decoder layers resident on the GPU, so they are "
+            "never re-read; 'auto' measures the configured forward+backward peak "
+            "and selects the layers that fit a conservative VRAM budget (the "
+            "smaller of 85% of the card and free + reserved VRAM, or "
+            "stream_vram_override, minus the measured peak, a setup reserve and an "
+            "estimated optimizer state). CUDA and the RAM tier only, dense "
+            "decoders only; 'auto' falls back to ordinary streaming where it "
+            "cannot measure, a positive count refuses instead. The host store is "
+            "retained. Setup probes preserve RNG and do not update adapters. No "
+            "speed guarantee. task='sft' with an AdamW optimizer only, and "
+            "refused beside activation_offloading and a non-default "
+            "stream_recompute."
+        ),
+    )
+
+    @field_validator("stream_resident_layers", mode="before")
+    @classmethod
+    def _validate_stream_resident_layers(cls, v: Any) -> Any:
+        """A count is an int, never a bool (``True`` would read as one layer)."""
+        if v == "auto" and isinstance(v, str):
+            return v
+        if type(v) is not int or v < 0:
+            raise ValueError(
+                "training.stream_resident_layers must be 0, a positive int or 'auto'; "
+                f"got {type(v).__name__} {v!r}"
+            )
+        return v
+
     stream_expert_layout: Literal["fused", "per_expert"] = Field(
         default="fused",
         description=(
@@ -8008,6 +8047,7 @@ class SoupConfig(BaseModel):
                     ("stream_vram_probe", bool(tcfg.stream_vram_probe)),
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
+                    ("stream_resident_layers", tcfg.stream_resident_layers != 0),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
@@ -8134,6 +8174,43 @@ class SoupConfig(BaseModel):
                 f"backward is not supported yet. Remove training.stream_recompute "
                 f"or set it to 'on'."
             )
+        if tcfg.stream_resident_layers != 0:
+            if stream_task != "sft":
+                raise ValueError(
+                    f"training.stream_resident_layers supports task='sft' only; got "
+                    f"task={stream_task!r}. The layers it keeps are chosen from a "
+                    f"measured causal-LM step, which is the SFT step; a preference "
+                    f"loss runs a different computation. Remove "
+                    f"training.stream_resident_layers."
+                )
+            if tcfg.activation_offloading is not None:
+                raise ValueError(
+                    f"training.stream_resident_layers cannot be combined with "
+                    f"training.activation_offloading={tcfg.activation_offloading!r}: "
+                    f"both claim the spare VRAM. Unset one of them."
+                )
+            if tcfg.stream_recompute != "on":
+                raise ValueError(
+                    f"training.stream_resident_layers cannot be combined with "
+                    f"training.stream_recompute={tcfg.stream_recompute!r}: both "
+                    f"decide what stays in spare VRAM and their combined budget is "
+                    f"not measured. Set stream_recompute to 'on' or remove "
+                    f"training.stream_resident_layers."
+                )
+            if tcfg.stream_source == "disk" and tcfg.stream_resident_layers != "auto":
+                raise ValueError(
+                    "training.stream_resident_layers requires the RAM tier: "
+                    "training.stream_source='disk' forces the disk tier. Use "
+                    "stream_source='ram' or 'auto', or stream_resident_layers='auto', "
+                    "which keeps ordinary streaming there."
+                )
+            if tcfg.optimizer not in _STREAM_RESIDENCY_OPTIMIZERS:
+                raise ValueError(
+                    f"training.stream_resident_layers requires an AdamW optimizer "
+                    f"({', '.join(sorted(_STREAM_RESIDENCY_OPTIMIZERS))}) whose future "
+                    f"moment allocation can be budgeted; got optimizer="
+                    f"{tcfg.optimizer!r}."
+                )
         if tcfg.stream_recompute != "on" and tcfg.activation_offloading is not None:
             # A retained layer saves its activations through its own
             # saved_tensors_hooks, the innermost ones, so the offloading hooks

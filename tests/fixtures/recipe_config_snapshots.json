@@ -283,6 +283,7 @@
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,
     "training.stream_recompute": "on",
+    "training.stream_resident_layers": 0,
     "training.stream_source": "auto",
     "training.stream_vram_override": null,
     "training.stream_vram_probe": false,
