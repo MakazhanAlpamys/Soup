@@ -96,8 +96,9 @@ committed changes, or pass specific repository-relative files to choose the inpu
 The selector follows static imports and string references to Soup modules. It
 uses test names when the import graph finds no tests, with a stop list for
 generic stems. If transitive links select more than 300 files, the selector uses
-the complete set of direct imports and their test-helper links. The status reports
-which scope ran.
+the complete set of direct imports and their test-helper links. This direct scope
+can omit tests that only reach the changed files through intermediate source
+modules. The status reports which scope the selector chose.
 Shared files (including a changed `conftest.py`), deletions, and uncertain or still
 too-large selections request the full suite. Focused commands use `--no-cov`
 because coverage is measured on the full suite.
@@ -774,9 +775,10 @@ changes is under `docs/` or `changelog.d/`, or is `CONTRIBUTORS.md` or
 `CONTRIBUTING.md` (a renamed file counts under both names; `README*.md`,
 `benchmarks/` and everything else do not count), the `plan` job marks the run
 docs-only: `test (ubuntu-latest, 3.12)` runs the whole suite as always, and the
-other test cells and the three smoke jobs still report, as success, without
-running a step. If the file list cannot be read, or is not the whole list, the
-full set runs. A push, the nightly run and a release branch are never docs-only.
+other test cells and the three smoke jobs report success without running a step
+when a maintainer requests the full matrix. If GitHub returns an incomplete
+file list, CI runs every step in the matrix selected for that event. The docs-only
+shortcut applies to pull-request runs.
 
 **A maintainer can run the approval matrix by hand.** `gh workflow run ci.yml
 --ref <branch> -f matrix=approval` starts the four required test cells and the
@@ -791,15 +793,13 @@ about 95 of the 215 minutes of such a run. On a pull request's branch the dispat
 tests the branch tip, not its merge with `main`, and does not replace the label
 run: the pull request's required checks come from its own pull-request run alone.
 
-**A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
-the approval run of a pull request check out the same merge commit:
-`github.sha` of a pull-request run is the merge commit GitHub built when the run
-was created, and adding `ci:full` does not rebuild it (14 of 14 sampled pairs, up
-to six hours apart, logged the same `HEAD is now at ... Merge <head> into
-<main>`). So the approval run's cell would test exactly what the quick run
-tested, and when that run ended green the approval run reuses its result instead
-of repeating it. The quick run's cell leaves a few bytes in the Actions cache
-under `suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
+**Approval can reuse a green `test (ubuntu-latest, 3.12)` for the same merge commit.**
+`github.sha` of a pull-request run identifies the synthetic merge commit built for
+that run. If the quick and approval runs use the same merge commit, the approval
+cell can reuse the quick result. If GitHub builds a different merge commit, the
+approval cell needs a green result for that commit. The quick run's cell leaves
+a few bytes in the Actions cache under
+`suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
 the runner and the Python version, with no prefix match), and the approval run's
 cell looks for that key before it does anything else. On a hit it runs no other
 step and still reports `test (ubuntu-latest, 3.12)` as success under the same
