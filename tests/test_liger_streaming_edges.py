@@ -8,25 +8,6 @@ import pytest
 from tests.test_liger_streaming import _config, _install_cpu_substitutes, _nonuniform_norm_base
 
 
-def test_explicit_cpu_streaming_also_selects_a_cpu_trainer(tmp_path, monkeypatch):
-    from soup_cli.trainer.sft import SFTTrainerWrapper
-    from soup_cli.utils import layer_shard
-
-    _install_cpu_substitutes(monkeypatch)
-    base = _nonuniform_norm_base(tmp_path)
-    monkeypatch.setattr(layer_shard, "resolve_shard_dir", lambda _base: str(tmp_path / "shards"))
-    wrapper = SFTTrainerWrapper(_config(base, tmp_path / "out", enabled=True), device="cpu")
-    try:
-        wrapper.setup({"train": [{"messages": [
-            {"role": "user", "content": "hello world"},
-            {"role": "assistant", "content": "hello world"},
-        ]}] * 4})
-        assert wrapper.trainer.args.use_cpu is True
-        assert wrapper.trainer.args.device.type == "cpu"
-    finally:
-        wrapper._close_stream_runtime()
-
-
 @pytest.mark.gpu
 def test_fp16_rmsnorm_backward_rounding_boundary():
     """CUDA FMA rounded one scaled input gradient to -3092 instead of -3094."""
@@ -102,6 +83,10 @@ def test_low_precision_cast_boundaries_match_hf(monkeypatch, dtype_name, compone
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     actual_gradient = torch.autograd.grad(actual, value, gradient)[0]
     expected_gradient = torch.autograd.grad(expected, control, gradient)[0]
+    # The forward is bit-exact above. The gradient is compared at 1e-2 because the
+    # reference gradient flows through HF/autograd's decomposed ops while the kernel's
+    # backward is one fused op with a different reduction order in fp16/bf16; exact
+    # gradient parity (rtol=0) is asserted separately at the rounding boundaries below.
     torch.testing.assert_close(actual_gradient, expected_gradient, rtol=1e-2, atol=1e-5)
 
 

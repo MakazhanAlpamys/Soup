@@ -8378,20 +8378,19 @@ class SoupConfig(BaseModel):
                 raise ValueError("training.liger_components must not contain duplicate entries")
         if not (tcfg.use_liger and tcfg.stream_layers):
             return self
-        if self.task != "sft" or self.backend != "transformers" or self.modality != "text":
-            raise ValueError(
-                "training.use_liger with training.stream_layers requires task='sft', "
-                "backend='transformers' and modality='text'"
-            )
-        if tcfg.use_cut_ce:
-            raise ValueError(
-                "training.use_liger with training.stream_layers cannot be combined with "
-                "training.use_cut_ce"
-            )
+        # task / backend / modality / use_cut_ce are refused earlier by main's guards
+        # (use_liger's task gate #806, stream_layers' backend and modality gates, #1206).
         if tcfg.l2l:
             raise ValueError(
                 "training.l2l cannot be combined with training.use_liger: streamed Liger "
                 "is not wired into the L2L window step. Set use_liger=false or l2l=false."
+            )
+        if tcfg.stream_recompute != "on":
+            raise ValueError(
+                f"training.stream_recompute={tcfg.stream_recompute!r} cannot be combined "
+                "with training.use_liger: streamed Liger saves the RMSNorm weight for "
+                "autograd and relies on the decoder's checkpoint recompute to restore it. "
+                "Set stream_recompute='on' or use_liger=false."
             )
         if not isinstance(tcfg.gradient_checkpointing, bool):
             raise ValueError(

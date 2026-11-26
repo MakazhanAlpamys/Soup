@@ -99,23 +99,59 @@ def test_streaming_liger_config_round_trip(source, quantization, components):
 
 
 @pytest.mark.parametrize(
-    "updates,match",
+    "updates,message",
     [
         ({"liger_components": []}, "liger_components"),
         ({"liger_components": ["rope"]}, "liger_components"),
         ({"liger_components": ["cross_entropy"]}, "liger_components"),
         ({"liger_components": ["fused_linear_cross_entropy"]}, "liger_components"),
-        ({"liger_components": ["rms_norm", "rms_norm"]}, "duplicate"),
+        (
+            {"liger_components": ["rms_norm", "rms_norm"]},
+            "training.liger_components must not contain duplicate entries",
+        ),
         ({"fast_lora": True}, "fast_lora"),
-        ({"use_cut_ce": True}, "use_cut_ce"),
-        ({"gradient_checkpointing": "selective"}, "checkpointing"),
+        (
+            {"l2l": True},
+            "training.l2l cannot be combined with training.use_liger: streamed Liger "
+            "is not wired into the L2L window step. Set use_liger=false or l2l=false.",
+        ),
+        (
+            {"gradient_checkpointing": "selective"},
+            "training.use_liger with training.stream_layers supports boolean "
+            "training.gradient_checkpointing only",
+        ),
+        (
+            {"stream_recompute": "off"},
+            "training.stream_recompute='off' cannot be combined with training.use_liger: "
+            "streamed Liger saves the RMSNorm weight for autograd and relies on the "
+            "decoder's checkpoint recompute to restore it. "
+            "Set stream_recompute='on' or use_liger=false.",
+        ),
+        (
+            {"stream_recompute": "auto"},
+            "training.stream_recompute='auto' cannot be combined with training.use_liger: "
+            "streamed Liger saves the RMSNorm weight for autograd and relies on the "
+            "decoder's checkpoint recompute to restore it. "
+            "Set stream_recompute='on' or use_liger=false.",
+        ),
+        (
+            {"use_cut_ce": True},
+            "training.stream_layers cannot be combined with training.use_cut_ce",
+        ),
     ],
 )
-def test_streaming_liger_rejects_unsupported_options(updates, match):
+def test_streaming_liger_rejects_unsupported_options(updates, message):
     payload = _payload()
     payload["training"].update(updates)
-    with pytest.raises(ValidationError, match=match):
+    with pytest.raises(ValidationError) as excinfo:
         SoupConfig.model_validate(payload)
+    assert message in str(excinfo.value)
+
+
+def test_streaming_liger_accepts_default_stream_recompute():
+    payload = _payload()
+    payload["training"]["stream_recompute"] = "on"
+    assert SoupConfig.model_validate(payload).training.stream_recompute == "on"
 
 
 @pytest.mark.parametrize("use_liger,stream_layers", [(False, True), (True, False)])
@@ -124,15 +160,42 @@ def test_component_selection_requires_streaming_liger(use_liger, stream_layers):
     payload["training"].update(
         use_liger=use_liger, stream_layers=stream_layers, liger_components=["rms_norm"]
     )
-    with pytest.raises(ValidationError, match="liger_components"):
+    with pytest.raises(ValidationError) as excinfo:
         SoupConfig.model_validate(payload)
+    assert (
+        "training.liger_components requires training.use_liger=true and "
+        "training.stream_layers=true"
+    ) in str(excinfo.value)
 
 
 def test_streaming_liger_requires_sft():
     payload = _payload()
     payload["task"] = "dpo"
-    with pytest.raises(ValidationError, match="use_liger"):
+    with pytest.raises(ValidationError) as excinfo:
         SoupConfig.model_validate(payload)
+    assert "training.use_liger=true requires task in ['sft', 'tts']; got task='dpo'" in str(
+        excinfo.value
+    )
+
+
+def test_streaming_liger_refuses_non_transformers_backend():
+    payload = _payload()
+    payload["backend"] = "unsloth"
+    with pytest.raises(ValidationError) as excinfo:
+        SoupConfig.model_validate(payload)
+    assert "training.stream_layers requires backend='transformers'; got backend='unsloth'" in str(
+        excinfo.value
+    )
+
+
+def test_streaming_liger_refuses_non_text_modality():
+    payload = _payload()
+    payload["modality"] = "vision"
+    with pytest.raises(ValidationError) as excinfo:
+        SoupConfig.model_validate(payload)
+    assert "training.stream_layers requires modality='text'; got modality='vision'" in str(
+        excinfo.value
+    )
 
 
 def test_streaming_liger_cpu_refusal_is_explicit():
@@ -567,8 +630,27 @@ def test_streamed_liger_dependency_floor(monkeypatch, installed):
         return installed
 
     monkeypatch.setattr(importlib.metadata, "version", package_version)
-    with pytest.raises(ValueError, match="liger-kernel==0.8.1"):
+    with pytest.raises(ValueError, match="liger-kernel==0.8.1") as excinfo:
         validate_streaming_liger_environment("cuda")
+    if installed is None:
+        assert str(excinfo.value) == (
+            'streamed Liger requires liger-kernel==0.8.1; pip install "liger-kernel==0.8.1"'
+        )
+    else:
+        assert f"found {installed}" in str(excinfo.value)
+
+
+def test_streamed_liger_accepts_the_pinned_version(monkeypatch):
+    import importlib.metadata
+
+    from soup_cli.utils import liger_streaming
+
+    calls = []
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.8.1")
+    monkeypatch.setattr(liger_streaming, "_assert_no_global_liger", lambda: calls.append("global"))
+    monkeypatch.setattr(liger_streaming, "_load_liger_ops", lambda: calls.append("ops"))
+    liger_streaming.validate_streaming_liger_environment("cuda")
+    assert calls == ["global", "ops"]
 
 
 @pytest.mark.parametrize(
@@ -594,3 +676,44 @@ def test_previous_global_liger_patch_is_refused(monkeypatch, target):
     monkeypatch.setattr(owner, name, foreign)
     with pytest.raises(ValueError, match="global Liger"):
         _assert_no_global_liger()
+
+
+_HARDWARE_FIT_SHAPE = {
+    "model_type": "llama",
+    "hidden_size": 896,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 14,
+    "num_key_value_heads": 2,
+    "intermediate_size": 4864,
+    "vocab_size": 32000,
+}
+
+
+def _fused_loss_of(monkeypatch, **updates):
+    from soup_cli.utils import hardware_fit, model_shape
+
+    monkeypatch.setattr(
+        model_shape, "_hub_lookup", lambda repo, **kw: (dict(_HARDWARE_FIT_SHAPE), None)
+    )
+    monkeypatch.setattr(model_shape, "_hub_param_count", lambda repo, **kw: 494_032_768)
+    payload = _payload()
+    payload["training"]["quantization"] = "4bit"
+    config = SoupConfig.model_validate(payload)
+    training = config.training.model_copy(update=updates)  # skips validation on purpose
+    result = hardware_fit.hardware_fit_input_or_reason(
+        config.model_copy(update={"training": training}), allow_network=False
+    )
+    assert isinstance(result, hardware_fit.HardwareFitInput), result
+    return result.fused_loss
+
+
+def test_streamed_liger_is_not_priced_as_a_fused_loss(monkeypatch):
+    assert _fused_loss_of(monkeypatch) == ()
+
+
+def test_resident_liger_is_still_priced_as_a_fused_loss(monkeypatch):
+    assert _fused_loss_of(monkeypatch, stream_layers=False) == ("use_liger",)
+
+
+def test_streamed_cut_ce_is_still_priced_as_a_fused_loss(monkeypatch):
+    assert _fused_loss_of(monkeypatch, use_cut_ce=True) == ("use_cut_ce",)
