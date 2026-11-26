@@ -1785,6 +1785,9 @@ matching train records. Record numbers are one-based logical JSONL records,
 excluding blank lines. Examples use the first matching train record and follow
 eval order. Exit codes: **0** clean, **2** any overlap, **3** unusable input/options.
 
+Both modes run only on explicit invocation of `soup data leakage`. The command
+reads the two datasets and only reports overlaps.
+
 ### Lexical near-duplicates
 
 Install the optional data dependencies and use `--near-duplicates` to include
@@ -1808,8 +1811,10 @@ signature (default 128, 16–256), and `--seed` fixes the candidate search (defa
 1, 0–4294967295). Each eval record counts once. For a near match the sample uses
 the highest-scoring candidate and then the earliest train record to break ties.
 Its `train_matches` counts the candidate train records that passed the threshold.
-JSON samples in this mode add `method` (`exact` or `near`) and `score` (1 for an
-exact match). Empty or unusable input still exits 3.
+In lexical-mode JSON, the report's `matching` text describes both checks, and
+`near_duplicates` records the effective `threshold`, `permutations` and `seed`.
+Samples add `method` (`exact` or `near`) and `score` (1 for an exact match). Empty
+or unusable input still exits 3.
 
 The lexical mode accepts up to 10,000 records and 16 MiB per JSONL file. It
 retains the parsed rows, the train shingles and up to one LSH table per
@@ -1818,4 +1823,10 @@ the permutation count. The candidate scoring budget across the run is
 50,000,000 shingle comparisons, charged by the smaller shingle set in each
 candidate pair. Above any of these limits, the command exits 3. Use a smaller
 split or run the exact check.
-There is no automatic training hook or dataset filtering.
+
+The limit-size benchmark used an Intel Xeon Platinum 8558 CPU, Python 3.12.3
+and datasketch 2.0.0. Each split had 10,000 rows of 236 words and occupied
+16 MiB with blank padding. Three runs with the default options took 9.50,
+9.06 and 9.43 seconds, each with 415.5 MiB peak process RSS. One run on the
+same files with `--permutations 256` took 10.80 seconds and peaked
+at 450.0 MiB RSS.
