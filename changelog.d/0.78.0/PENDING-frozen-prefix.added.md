@@ -1,1 +1,0 @@
-- Add `training.frozen_prefix_cache` for SFT with `freeze_layers` or `freeze_ratio` and LoRA: the output of the frozen bottom layers is stored on disk in the first epoch and reused in later epochs, keyed by the frozen weights, the model configuration, the input ids, the attention mask and the position ids. (by @nurseit14)
