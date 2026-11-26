@@ -1,0 +1,1 @@
+- Add a native Kimi K2 tokenizer for layer-streamed training, with token IDs matching the reference tokenizer. (by @M1kado0)

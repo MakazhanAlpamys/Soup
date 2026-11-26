@@ -38,8 +38,10 @@ No top-level torch or transformers: the trainer imports this on its setup path.
 
 from __future__ import annotations
 
+import base64
 import copy
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -1164,6 +1166,116 @@ def _fuse_per_expert_state(state: dict, config: Any) -> None:
             del parts["gate_proj"], parts["up_proj"], parts["down_proj"]
         state[prefix + ".mlp.experts.gate_up_proj"] = gate_up
         state[prefix + ".mlp.experts.down_proj"] = down
+
+
+# Moonshot's split pattern from Kimi-K2-Instruct's tokenization_kimi.py.
+_K2_SPLIT_PATTERN = "|".join(
+    [
+        r"[\p{Han}]+",
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*"
+        r"[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+"
+        r"[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+        r"\p{N}{1,3}",
+        r" ?[^\s\p{L}\p{N}]+[\r\n]*",
+        r"\s*[\r\n]+",
+        r"\s+(?!\S)",
+        r"\s+",
+    ]
+)
+_K2_RESERVED_TOKENS = 256
+
+
+def _read_tiktoken_ranks(path: Path) -> dict[bytes, int]:
+    """Read the base64 token and rank pairs from ``tiktoken.model``."""
+    ranks: dict[bytes, int] = {}
+    with path.open("rb") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                token, rank = line.split()
+                ranks[base64.b64decode(token, validate=True)] = int(rank)
+            except ValueError as exc:
+                raise ValueError(f"{path}:{number}: not a 'base64-token rank' line") from exc
+    return ranks
+
+
+def has_native_kimi_k2_tokenizer(model_id: str) -> bool:
+    """Whether a local Kimi K2 checkpoint has the native tokenizer's vocabulary."""
+    return (Path(model_id) / "tiktoken.model").is_file() and _local_kimi_k2_dir(model_id)
+
+
+def load_kimi_k2_tokenizer(model_dir: str, *, trust_remote_code: bool = False) -> Any:
+    """Build the Kimi K2 fast tokenizer from local ranks, special tokens and chat template.
+
+    The split pattern and 256 reserved IDs match Moonshot's reference tokenizer.
+    Reading the ranks directly avoids importing either repository code or ``tiktoken``.
+    """
+    if trust_remote_code:
+        raise ValueError(
+            "the native Kimi K2 tokenizer replaces Moonshot's tokenizer code, so "
+            "--trust-remote-code has no use here. Run again without --trust-remote-code."
+        )
+
+    directory = Path(model_dir)
+    vocab_file = directory / "tiktoken.model"
+    if not vocab_file.is_file():
+        raise FileNotFoundError(f"tiktoken.model not found in {model_dir}")
+
+    try:
+        from tokenizers import AddedToken
+    except ImportError as exc:
+        raise ImportError(
+            "The native Kimi K2 tokenizer requires tokenizers. Run pip install tokenizers."
+        ) from exc
+    try:
+        from transformers import PreTrainedTokenizerFast
+        from transformers.convert_slow_tokenizer import TikTokenConverter
+    except ImportError as exc:
+        raise ImportError(
+            "The native Kimi K2 tokenizer requires transformers. Run pip install transformers."
+        ) from exc
+
+    config = json.loads((directory / "tokenizer_config.json").read_text(encoding="utf-8"))
+    template_path = directory / "chat_template.jinja"
+    chat_template = config.get("chat_template")
+    if template_path.is_file():
+        chat_template = template_path.read_text(encoding="utf-8")
+
+    ranks = _read_tiktoken_ranks(vocab_file)
+
+    class _Converter(TikTokenConverter):
+        @staticmethod
+        def load_tiktoken_bpe(tiktoken_url: str) -> dict[bytes, int]:
+            return ranks
+
+    tokenizer = _Converter(vocab_file=str(vocab_file), pattern=_K2_SPLIT_PATTERN).converted()
+    declared = {
+        int(index): entry for index, entry in config.get("added_tokens_decoder", {}).items()
+    }
+    first = len(ranks)
+    reserved = []
+    for index in range(first, first + _K2_RESERVED_TOKENS):
+        entry = declared.get(index)
+        reserved.append(
+            AddedToken(
+                entry["content"] if entry else f"<|reserved_token_{index}|>",
+                normalized=False,
+                special=entry["special"] if entry else True,
+            )
+        )
+    tokenizer.add_tokens(reserved)
+    return PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer,
+        bos_token=config.get("bos_token"),
+        eos_token=config.get("eos_token"),
+        unk_token=config.get("unk_token"),
+        pad_token=config.get("pad_token"),
+        additional_special_tokens=config.get("additional_special_tokens") or None,
+        chat_template=chat_template,
+        clean_up_tokenization_spaces=False,
+    )
 
 
 def _tiktoken_available() -> bool:

@@ -1014,7 +1014,11 @@ class StreamingSetupMixin:
         from peft import TaskType
         from transformers import AutoTokenizer
 
-        from soup_cli.utils.kimi_k2 import load_stream_model_config
+        from soup_cli.utils.kimi_k2 import (
+            has_native_kimi_k2_tokenizer,
+            load_kimi_k2_tokenizer,
+            load_stream_model_config,
+        )
 
         # BEFORE the tokenizer load, the weight resolve and the shard write:
         # this configuration cannot work, and finding out minutes into disk I/O
@@ -1089,22 +1093,23 @@ class StreamingSetupMixin:
         )
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        try:
-            # config=: without it AutoTokenizer reads the config again, with the user's
-            # trust_remote_code, and for a repository with an auto_map (Kimi K2, Moonlight)
-            # imports and runs its configuration module (second review of #2107). The
-            # native config is what the tokenizer is resolved against; the flag still
-            # reaches the tokenizer's own code (K2's tokenization_kimi.py).
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                cfg.base, config=model_config, trust_remote_code=self._trust_remote_code,
-                **base_revision_kwargs(cfg.base),
+        if has_native_kimi_k2_tokenizer(cfg.base):
+            self.tokenizer = load_kimi_k2_tokenizer(
+                cfg.base, trust_remote_code=self._trust_remote_code
             )
-        except Exception:
-            # Kimi K2's tokenizer is repository code that imports tiktoken: say so by name.
-            from soup_cli.utils.kimi_k2 import print_kimi_k2_tokenizer_hint
+        else:
+            try:
+                # Pass the config already loaded with trust_remote_code=False so AutoTokenizer
+                # cannot re-read it with the user's tokenizer trust setting.
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    cfg.base, config=model_config, trust_remote_code=self._trust_remote_code,
+                    **base_revision_kwargs(cfg.base),
+                )
+            except Exception:
+                from soup_cli.utils.kimi_k2 import print_kimi_k2_tokenizer_hint
 
-            print_kimi_k2_tokenizer_hint(cfg.base, console, **base_revision_kwargs(cfg.base))
-            raise
+                print_kimi_k2_tokenizer_hint(cfg.base, console, **base_revision_kwargs(cfg.base))
+                raise
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
