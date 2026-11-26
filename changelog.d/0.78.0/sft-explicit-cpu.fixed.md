@@ -1,0 +1,1 @@
+- `soup train` on SFT now honours an explicit CPU device on a host with CUDA: the trainer passes `use_cpu=True` to `TrainingArguments`, so the run no longer moves to the GPU (#PENDING by @kok-o).
