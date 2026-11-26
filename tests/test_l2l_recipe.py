@@ -163,3 +163,50 @@ def test_resume_accepts_the_same_recipe(tmp_path, monkeypatch):
     recipe = resolve_l2l_recipe(_tcfg())
     write_recipe(tmp_path, recipe)
     validate_resume(tmp_path, recipe)
+
+
+def test_resume_source_reads_the_recipe_of_the_checkpoint_run_not_the_output(
+    tmp_path, monkeypatch
+):
+    from soup_cli.utils.l2l_recipe import validate_resume_source
+
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "runA"
+    (run / "checkpoint-3").mkdir(parents=True)
+    write_recipe(run, resolve_l2l_recipe(_tcfg(gradient_accumulation_steps=4)))
+    with pytest.raises(ValueError, match=r"cannot resume: .*effective_k=4.*effective_k=8"):
+        validate_resume_source(run / "checkpoint-3", resolve_l2l_recipe(_tcfg()))
+    validate_resume_source(
+        run / "checkpoint-3", resolve_l2l_recipe(_tcfg(gradient_accumulation_steps=4))
+    )
+
+
+def test_resume_source_prefers_a_recipe_inside_the_checkpoint(tmp_path, monkeypatch):
+    from soup_cli.utils.l2l_recipe import validate_resume_source
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "run" / "checkpoint-1").mkdir(parents=True)
+    write_recipe(tmp_path / "run", resolve_l2l_recipe(_tcfg(gradient_accumulation_steps=4)))
+    write_recipe(
+        tmp_path / "run" / "checkpoint-1",
+        resolve_l2l_recipe(_tcfg(gradient_accumulation_steps=8)),
+    )
+    validate_resume_source(tmp_path / "run" / "checkpoint-1", resolve_l2l_recipe(_tcfg()))
+
+
+def test_resume_source_refuses_an_l2l_checkpoint_when_l2l_is_off(tmp_path, monkeypatch):
+    from soup_cli.utils.l2l_recipe import validate_resume_source
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "run" / "checkpoint-1").mkdir(parents=True)
+    write_recipe(tmp_path / "run", resolve_l2l_recipe(_tcfg()))
+    with pytest.raises(ValueError, match=r"cannot resume: .*training\.l2l off"):
+        validate_resume_source(tmp_path / "run" / "checkpoint-1", None)
+
+
+def test_resume_source_accepts_a_checkpoint_without_a_recipe(tmp_path):
+    from soup_cli.utils.l2l_recipe import validate_resume_source
+
+    (tmp_path / "run" / "checkpoint-1").mkdir(parents=True)
+    validate_resume_source(tmp_path / "run" / "checkpoint-1", None)
+    validate_resume_source(tmp_path / "run" / "checkpoint-1", resolve_l2l_recipe(_tcfg()))

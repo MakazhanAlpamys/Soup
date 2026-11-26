@@ -68,8 +68,16 @@ def refuse_unsupported_dpo(trainer: Any) -> None:
 
 def _completion_logps(logits: Any, shift_labels: Any, shift_mask: Any) -> Any:
     """Sum of token log-probabilities over the completion tokens of each row, as TRL does."""
+    import torch
     from trl.trainer.utils import selective_log_softmax
 
+    # Accelerate's native AMP returns float32 from the ordinary forward, so TRL's dtype-sensitive
+    # ``selective_log_softmax`` sees float32 there. The L2L step calls ``lm_head`` inside the
+    # autocast itself and would hand it the raw half-precision logits.
+    if logits.dtype in (torch.bfloat16, torch.float16) and torch.is_autocast_enabled(
+        logits.device.type
+    ):
+        logits = logits.float()
     shift_logits = logits[..., :-1, :].contiguous()
     per_token = selective_log_softmax(shift_logits, shift_labels)
     per_token[shift_mask == 0] = 0.0

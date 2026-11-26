@@ -134,3 +134,49 @@ def validate_resume(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> 
                 f"cannot resume: the checkpoint was trained with {name}={before!r}, but this "
                 f"run has {name}={now!r}. Restore the old value in the config."
             )
+
+
+def _source_recipe_dir(checkpoint: "str | os.PathLike[str]") -> Optional[str]:
+    """The directory holding the recipe of the run that wrote ``checkpoint``.
+
+    The trainer writes the recipe next to its checkpoints, so ``<run>/checkpoint-N`` belongs to
+    ``<run>/l2l_recipe.json``; a recipe inside the checkpoint directory itself wins. None when
+    neither exists (a run without ``training.l2l``, or from before the recipe existed).
+    """
+    path = os.path.realpath(os.fspath(checkpoint))
+    for candidate in (path, os.path.dirname(path)):
+        if os.path.isfile(os.path.join(candidate, RECIPE_NAME)):
+            return candidate
+    return None
+
+
+def validate_resume_source(
+    checkpoint: "str | os.PathLike[str]", recipe: Optional[L2LRecipe]
+) -> None:
+    """Refuse a resume whose SOURCE checkpoint was trained under another L2L recipe.
+
+    ``checkpoint`` is the path handed to ``resume_from_checkpoint``; it may sit in another run
+    directory than this launch's output, so its own recipe is the one that counts. ``recipe`` is
+    this launch's, or None when ``training.l2l`` is off.
+
+    - A source recipe that differs in ``effective_k`` or ``activation_codec`` is refused.
+    - A source with a recipe resumed with ``training.l2l`` off is refused.
+    - A source without a recipe is accepted with either setting: it is a run without L2L (or
+      from before the recipe existed), and the optimizer-step boundaries come from
+      ``gradient_accumulation_steps`` in both modes, because ``l2l_auto_k`` is refused.
+    """
+    source = _source_recipe_dir(checkpoint)
+    if source is None:
+        return
+    if recipe is not None:
+        validate_resume(source, recipe)
+        return
+    saved = load_recipe(source)
+    if saved is None:
+        return
+    raise ValueError(
+        f"cannot resume: the checkpoint was trained with training.l2l "
+        f"(effective_k={saved.effective_k!r}, activation_codec={saved.activation_codec!r}), "
+        "but this run has training.l2l off. Set training.l2l to true with the same "
+        "settings."
+    )

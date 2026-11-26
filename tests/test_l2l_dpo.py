@@ -943,3 +943,174 @@ def test_wrapper_train_refuses_a_resume_whose_saved_recipe_differs(monkeypatch, 
         "effective_k=2. Restore the old value in the config."
     )
     assert Path(path).read_text(encoding="utf-8") == before
+
+
+def _other_run_checkpoint(tmp_path, recipe=None):
+    """A checkpoint in run A (``tmp_path/runA``); its recipe is written there when given."""
+    from soup_cli.utils.l2l_recipe import write_recipe
+
+    run = tmp_path / "runA"
+    (run / "checkpoint-1").mkdir(parents=True)
+    if recipe is not None:
+        write_recipe(run, recipe)
+    return str(run / "checkpoint-1")
+
+
+def test_wrapper_train_checks_the_recipe_of_the_source_checkpoint_not_the_output(
+    monkeypatch, tmp_path
+):
+    import dataclasses
+
+    from soup_cli.utils.l2l_recipe import write_recipe
+
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    # the destination run B holds a MATCHING recipe; the source run A holds another k
+    write_recipe(wrapper._output_dir, wrapper._l2l_recipe)
+    old = dataclasses.replace(wrapper._l2l_recipe, requested_k=4, effective_k=4)
+    checkpoint = _other_run_checkpoint(tmp_path, old)
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=checkpoint)
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with effective_k=4, but this run has "
+        "effective_k=2. Restore the old value in the config."
+    )
+
+
+def test_wrapper_train_accepts_a_source_checkpoint_with_a_matching_recipe(
+    monkeypatch, tmp_path
+):
+    import json
+
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    checkpoint = _other_run_checkpoint(tmp_path, wrapper._l2l_recipe)
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=checkpoint)
+    saved = json.loads((tmp_path / "out" / "l2l_recipe.json").read_text(encoding="utf-8"))
+    assert saved["effective_k"] == 2
+
+
+def test_wrapper_train_refuses_resuming_an_l2l_checkpoint_with_l2l_off(monkeypatch, tmp_path):
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    checkpoint = _other_run_checkpoint(tmp_path, wrapper._l2l_recipe)
+    wrapper._l2l_recipe = None
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=checkpoint)
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with training.l2l (effective_k=2, "
+        "activation_codec='none'), but this run has training.l2l off. Set training.l2l to "
+        "true with the same settings."
+    )
+    assert not (tmp_path / "out" / "l2l_recipe.json").exists()
+
+
+def test_wrapper_train_accepts_a_checkpoint_without_a_recipe_with_l2l_on_or_off(
+    monkeypatch, tmp_path
+):
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    checkpoint = _other_run_checkpoint(tmp_path)
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=checkpoint)
+    wrapper._l2l_recipe = None
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=checkpoint)
+
+
+# --------------------------------------------------------------------------
+# the logits reach the DPO log-probabilities in the dtype the ordinary forward returns
+# --------------------------------------------------------------------------
+def _head_parts():
+    import torch
+
+    torch.manual_seed(0)
+    lm_head = torch.nn.Linear(8, 16, bias=False)
+    causal = SimpleNamespace(lm_head=lm_head)
+    owner = SimpleNamespace(norm=torch.nn.Identity())
+    ids = torch.randint(0, 16, (4, 6))
+    mask = torch.tensor([[0, 0, 1, 1, 1]] * 4)
+    labels = (ids[..., 1:].contiguous(), mask)
+    return causal, owner, labels
+
+
+def _dpo_loss_under_autocast(causal, owner, labels, hidden, ref_hidden, *, ordinary):
+    import torch
+
+    from soup_cli.trainer.l2l_dpo import _completion_logps_of, dpo_loss
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        if not ordinary:
+            policy = _completion_logps_of(causal, owner, hidden, labels)
+            ref = _completion_logps_of(causal, owner, ref_hidden, labels).chunk(2, dim=0)
+        else:
+            from trl.trainer.utils import selective_log_softmax
+
+            def logps(source):
+                logits = causal.lm_head(source).float()  # what the ordinary forward returns
+                per_token = selective_log_softmax(logits[..., :-1, :].contiguous(), labels[0])
+                per_token[labels[1] == 0] = 0.0
+                return per_token.sum(dim=1)
+
+            policy = logps(hidden)
+            ref = logps(ref_hidden).chunk(2, dim=0)
+    return dpo_loss(policy, ref, 0.3)
+
+
+def test_dpo_loss_and_gradients_under_bf16_autocast_equal_the_float32_logits_computation():
+    import torch
+
+    causal, owner, labels = _head_parts()
+    base = torch.randn(4, 6, 8)
+    ref_hidden = torch.randn(4, 6, 8)
+    results = []
+    for ordinary in (False, True):
+        causal.lm_head.weight.grad = None
+        hidden = base.clone().requires_grad_(True)
+        loss = _dpo_loss_under_autocast(
+            causal, owner, labels, hidden, ref_hidden, ordinary=ordinary
+        )
+        loss.backward()
+        results.append((loss.detach(), hidden.grad.clone(), causal.lm_head.weight.grad.clone()))
+    assert torch.equal(results[0][0], results[1][0])
+    assert torch.equal(results[0][1], results[1][1])
+    assert torch.equal(results[0][2], results[1][2])
+
+
+def test_the_logits_reach_selective_log_softmax_as_float32_under_autocast(monkeypatch):
+    import torch
+    import trl.trainer.utils as trl_utils
+
+    from soup_cli.trainer.l2l_dpo import _completion_logps_of
+
+    seen = []
+    original = trl_utils.selective_log_softmax
+
+    def recording(logits, index):
+        seen.append(logits.dtype)
+        return original(logits, index)
+
+    monkeypatch.setattr(trl_utils, "selective_log_softmax", recording)
+    causal, owner, labels = _head_parts()
+    hidden = torch.randn(4, 6, 8)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        assert causal.lm_head(hidden).dtype == torch.bfloat16  # the raw logits are half precision
+        _completion_logps_of(causal, owner, hidden, labels)
+    assert seen == [torch.float32]
+
+
+def test_the_logits_dtype_is_left_alone_without_autocast(monkeypatch):
+    import torch
+    import trl.trainer.utils as trl_utils
+
+    from soup_cli.trainer.l2l_dpo import _completion_logps_of
+
+    seen = []
+    original = trl_utils.selective_log_softmax
+
+    def recording(logits, index):
+        seen.append(logits.dtype)
+        return original(logits, index)
+
+    monkeypatch.setattr(trl_utils, "selective_log_softmax", recording)
+    causal, owner, labels = _head_parts()
+    causal.lm_head = causal.lm_head.to(torch.bfloat16)
+    _completion_logps_of(causal, owner, torch.randn(4, 6, 8, dtype=torch.bfloat16), labels)
+    assert seen == [torch.bfloat16]  # the ordinary forward returns the model dtype here too
