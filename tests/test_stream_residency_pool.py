@@ -145,7 +145,7 @@ def test_second_allocation_failure_leaves_pool_and_scheduler_usable(monkeypatch)
     assert pool.owner == [None, None]
     assert pool.loads == 0
     assert pool.resident_slots == {}
-    assert not hasattr(pool, "generation")
+    assert pool.generation == [0, 0]
     assert runtime.source.calls == []
     trajectory(model, runtime)
 
