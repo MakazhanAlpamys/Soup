@@ -97,10 +97,10 @@ DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE
 #: Bump this integer in the **same change** that alters a bundled scorer's
 #: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
 #: test fails if a scorer's output moves without the revision moving.
-BUNDLED_SCORER_REVISION: int = 8
+BUNDLED_SCORER_REVISION: int = 9
 
 #: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
-#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 8;
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 9;
 #: update together with ``BUNDLED_SCORER_REVISION``. Revisions 4 and 5 (#1192)
 #: changed ``mini_arithmetic``'s and then ``mini_common_sense``'s items, not a
 #: scorer: the corpus fixes correctness by item parity, so the hash did not
@@ -112,6 +112,10 @@ BUNDLED_SCORER_REVISION: int = 8
 #: Revision 8 (#1192) is a scorer change: ``mini_format_json`` rows carry an
 #: ``expect`` shape and the scorer checks it, so the corpus gained right- and
 #: wrong-shape replies and the hash moved.
+#: Revision 9: the MCQ letter extractor no longer reads a bare echo of the option list
+#: as its last option, and reads "A is the correct answer." as A. The corpus now holds
+#: both forms for the lettered MCQ suites; under the corrected extractor they keep each
+#: suite's pass fraction, so the hash is unchanged, and reverting the fix moves it.
 BUNDLED_SCORER_FINGERPRINT: str = (
     "219efa5873a85e124b94d13f0f16c5217e76abf0c7eda9961c266c63b7331b1f"
 )
@@ -607,8 +611,19 @@ def _build_fingerprint_response_map() -> dict[str, str]:
         if name in MINI_BENCHMARKS:
             for i, item in enumerate(MINI_BENCHMARKS[name]):
                 prompt = build_mcq_prompt(item["question"], item.get("answer", ""))
-                if i % 2 == 0:
+                options = item["question"].find("(A)")
+                if options < 0:  # not a lettered MCQ: correct/incorrect by parity, as before
+                    responses[prompt] = (
+                        item["answer"] if i % 2 == 0 else _wrong_mcq_answer(item["answer"])
+                    )
+                elif i % 4 == 0:
                     responses[prompt] = item["answer"]
+                elif i % 4 == 2:
+                    # Revision 9: a letter-first statement is a committed answer.
+                    responses[prompt] = f"{item['answer']} is the correct answer."
+                elif i % 4 == 3:
+                    # Revision 9: repeating the option list is not an answer.
+                    responses[prompt] = item["question"][options:]
                 else:
                     responses[prompt] = _wrong_mcq_answer(item["answer"])
             continue
