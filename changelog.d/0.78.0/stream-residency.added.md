@@ -8,4 +8,4 @@
   `training.stream_partial_ram`, an explicit host envelope that keeps a prefix of the decoder
   layers of a dense unquantized Llama in RAM beside the async SSD reader. All are off by default;
   residency is refused beside `activation_offloading` and a non-default `stream_recompute`. No
-  speed guarantee (#PENDING by @kok-o, @nurseit14).
+  speed guarantee. (#PENDING by @kok-o, @nurseit14)
