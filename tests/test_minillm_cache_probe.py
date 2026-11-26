@@ -1,9 +1,11 @@
-"""Version-independent tests for MiniLLM's KV-cache capability probe (#3381).
+"""Version-independent tests for MiniLLM's KV-cache capability probe (#3381, #3385).
 
-Transformers 5.40 renamed the explicit forward parameter ``past_key_values``
-to ``cache``. These tests use tiny stand-in forwards for both spellings and
-for a model that only swallows ``**kwargs``, so the cached path is chosen by
-the declared signature rather than by whichever Transformers is installed.
+Newer Transformers forwards (5.24.1 included) declare ``cache`` rather than
+``past_key_values``; the deprecation decorator for the old spelling names
+5.40.0. These tests use real forward signatures for both spellings, for a
+positional-only cache, a ``**cache`` catch-all, and a model that only swallows
+``**kwargs``, so the cached path is chosen by the declared signature rather
+than by whichever Transformers is installed.
 """
 
 from __future__ import annotations
@@ -17,37 +19,66 @@ from soup_cli.utils.minillm import (
 )
 
 
-def _model(parameters: tuple[str, ...]) -> object:
-    def forward(**kwargs):
-        return None
+def legacy_forward(input_ids=None, past_key_values=None, use_cache=None, **kwargs):
+    return None
 
-    forward.__signature__ = __import__("inspect").Signature(
-        [__import__("inspect").Parameter(name, __import__("inspect").Parameter.KEYWORD_ONLY)
-         for name in parameters]
-    )
+
+def renamed_forward(input_ids=None, cache=None, use_cache=None, **kwargs):
+    return None
+
+
+def positional_cache_forward(input_ids=None, cache=None, /, use_cache=None, **kwargs):
+    return None
+
+
+def variadic_cache_forward(input_ids=None, use_cache=None, **cache):
+    return None
+
+
+def kwargs_only_forward(input_ids=None, use_cache=None, **kwargs):
+    return None
+
+
+def renamed_without_use_cache(input_ids=None, cache=None, **kwargs):
+    return None
+
+
+def _model(forward) -> object:
     return SimpleNamespace(forward=forward)
 
 
 def test_legacy_parameter_is_recognised():
-    model = _model(("input_ids", "past_key_values", "use_cache"))
+    model = _model(legacy_forward)
     assert _kv_cache_parameter(model) == "past_key_values"
     assert _supports_kv_cache(model) is True
 
 
 def test_renamed_cache_parameter_is_recognised():
-    model = _model(("input_ids", "cache", "use_cache"))
+    model = _model(renamed_forward)
     assert _kv_cache_parameter(model) == "cache"
     assert _supports_kv_cache(model) is True
 
 
+def test_positional_only_cache_is_not_passable_by_keyword():
+    model = _model(positional_cache_forward)
+    assert _kv_cache_parameter(model) is None
+    assert _supports_kv_cache(model) is False
+
+
+def test_variadic_cache_is_not_a_declared_parameter():
+    model = _model(variadic_cache_forward)
+    assert _kv_cache_parameter(model) is None
+    assert _supports_kv_cache(model) is False
+
+
 def test_kwargs_only_is_not_a_cache_capability():
-    model = _model(("input_ids", "kwargs"))
+    model = _model(kwargs_only_forward)
     assert _kv_cache_parameter(model) is None
     assert _supports_kv_cache(model) is False
 
 
 def test_a_cache_parameter_without_use_cache_is_not_enough():
-    model = _model(("input_ids", "cache"))
+    model = _model(renamed_without_use_cache)
     assert _kv_cache_parameter(model) == "cache"
     assert _supports_kv_cache(model) is False
 

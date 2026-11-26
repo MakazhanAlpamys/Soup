@@ -268,17 +268,27 @@ def _supports_forward_parameters(model: object, *names: str) -> bool:
         params = inspect.signature(forward).parameters
     except (TypeError, ValueError):
         return False
-    return all(name in params for name in names)
+    # Only a declared parameter that accepts a keyword can be passed by name.
+    # A positional-only one would raise TypeError, and ``**cache`` would
+    # silently swallow the kwarg without using it (#3385).
+    keyword_names = {
+        name
+        for name, param in params.items()
+        if param.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    return all(name in keyword_names for name in names)
 
 
 def _kv_cache_parameter(model: object) -> Optional[str]:
     """The explicit name of the model's per-call KV cache parameter.
 
-    Transformers 5.40 renamed ``past_key_values`` to ``cache`` in model
-    forwards (5.24.1 declares only ``cache``, with ``past_key_values`` accepted
-    through a deprecation shim). A bare ``**kwargs`` never counts: a model that
-    merely swallows the kwarg would silently ignore the cache and the rollout
-    would feed one token per step against an empty context (#3381).
+    Newer Transformers forwards declare and return ``cache``: 5.24.1 already
+    uses that spelling, while ``past_key_values`` is accepted through a
+    deprecation decorator that names 5.40.0. A bare ``**kwargs`` never counts:
+    a model that merely swallows the kwarg would silently ignore the cache and
+    the rollout would feed one token per step against an empty context
+    (#3381, #3385).
     """
     for name in ("past_key_values", "cache"):
         if _supports_forward_parameters(model, name):
