@@ -79,9 +79,60 @@ def test_fp8_is_refused_before_the_model_load_with_the_exact_message(monkeypatch
 
 
 def test_auto_k_is_refused_before_the_model_load(monkeypatch):
-    wrapper = _wrapper(monkeypatch, l2l=True, l2l_auto_k=True, stream_expert_layout="per_expert")
-    with pytest.raises(ValueError, match="l2l_auto_k plans the window of a MoE model"):
+    wrapper = _wrapper(monkeypatch, l2l=True, l2l_auto_k=True)
+    with pytest.raises(ValueError, match="l2l_auto_k is not available yet for this model"):
         wrapper.setup({})
+
+
+_DISTRIBUTED = (
+    "training.l2l cannot run on a distributed layer stream: the L2L step runs its "
+    "own backward, so the adapter-gradient average between ranks would be skipped. "
+    "Run one process, or set training.l2l to false."
+)
+
+
+def test_l2l_is_refused_at_setup_in_a_multi_process_launch(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    wrapper = _wrapper(monkeypatch, l2l=True)
+    with pytest.raises(ValueError) as caught:
+        wrapper.setup({})
+    assert str(caught.value) == _DISTRIBUTED
+
+
+def test_l2l_is_refused_at_setup_when_the_stream_is_distributed(monkeypatch):
+    wrapper = _wrapper(monkeypatch, l2l=True)
+    wrapper._distributed_stream = True
+    with pytest.raises(ValueError) as caught:
+        wrapper.setup({})
+    assert str(caught.value) == _DISTRIBUTED
+
+
+def test_the_builder_refuses_a_distributed_stream_before_building_anything(monkeypatch):
+    calls = []
+    owner, build = _builder(monkeypatch, "none", calls)
+    owner._distributed_stream = True
+    with pytest.raises(ValueError) as caught:
+        build()
+    assert str(caught.value) == _DISTRIBUTED
+    assert calls == []
+
+
+def test_a_spill_dir_outside_the_allowed_roots_is_refused_at_setup_and_never_swept(
+    monkeypatch, tmp_path
+):
+    from soup_cli.utils import l2l_spill
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    monkeypatch.setattr(l2l_spill, "_allowed_roots", lambda: (str(allowed),))
+    swept = []
+    monkeypatch.setattr(l2l_spill, "sweep_stale", lambda *args, **kwargs: swept.append(args))
+    wrapper = _wrapper(monkeypatch, l2l=True, l2l_spill_dir=str(outside))
+    with pytest.raises(ValueError, match=r"training\.l2l_spill_dir is refused: .*outside \$HOME"):
+        wrapper.setup({})
+    assert not outside.exists()
+    assert swept == []
 
 
 def _builder(monkeypatch, codec, calls, k=2):

@@ -8400,7 +8400,8 @@ class SoupConfig(BaseModel):
         if own_trainer:
             raise ValueError(
                 f"training.l2l cannot be combined with {' / '.join(own_trainer)}: each "
-                "builds its own trainer or loss, and the L2L step would never run it. "
+                "builds its own trainer or replaces how the loss is computed (the L2L loss "
+                "bypasses the chunked-loss hook), so L2L would skip it. "
                 "Remove one of the two."
             )
         return self

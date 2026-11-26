@@ -37,18 +37,40 @@ def validate_l2l_options(tcfg: Any) -> None:
             f"training.l2l_activation_codec={codec!r} is not available yet: the launch "
             f"supports {', '.join(repr(c) for c in AVAILABLE_CODECS)}. Set it to 'none'."
         )
-    if not tcfg.l2l_auto_k:
-        return
-    if tcfg.stream_expert_layout != "per_expert" or type(tcfg.batch_size) is not int:
+    spill_dir = getattr(tcfg, "l2l_spill_dir", None)
+    if spill_dir is not None:
+        # Checked here, before the trainer's `train` sweeps the directory: the spill may live
+        # only under $HOME, $CWD or $TMPDIR (realpath + commonpath, see utils/l2l_spill.py).
+        from soup_cli.utils.l2l_spill import _outside_allowed_roots
+
+        reason = _outside_allowed_roots(spill_dir)
+        if reason is not None:
+            raise ValueError(
+                f"training.l2l_spill_dir is refused: {reason}. Set it to a directory under "
+                "$HOME, the working directory or the temp directory."
+            )
+    if tcfg.l2l_auto_k:
         raise ValueError(
-            "training.l2l_auto_k requires DeepSeek-V3 per_expert streaming and a fixed batch_size"
+            "training.l2l_auto_k is not available yet for this model: the launch cannot plan "
+            "the window automatically. Unset training.l2l_auto_k and set "
+            "training.gradient_accumulation_steps to the k you want: L2L runs that many "
+            "micro-batches per layer load."
         )
-    if tcfg.l2l_spill_dir is not None:
-        raise ValueError("training.l2l_auto_k uses RAM only; unset training.l2l_spill_dir")
-    raise ValueError(
-        "training.l2l_auto_k plans the window of a MoE model, and L2L on a MoE model is not "
-        "available in this version. Unset training.l2l_auto_k."
-    )
+
+
+def refuse_distributed_l2l(distributed: bool) -> None:
+    """Refuse ``training.l2l`` on a distributed layer stream.
+
+    The data-parallel stream trainer (#3267) averages the adapter gradients between backward
+    and clipping in its own ``training_step``; the L2L step runs its own backward, so the
+    average would be skipped and each rank would train an unsynchronised copy.
+    """
+    if distributed:
+        raise ValueError(
+            "training.l2l cannot run on a distributed layer stream: the L2L step runs its "
+            "own backward, so the adapter-gradient average between ranks would be skipped. "
+            "Run one process, or set training.l2l to false."
+        )
 
 
 def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecipe:

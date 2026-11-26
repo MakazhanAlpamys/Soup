@@ -1966,9 +1966,12 @@ class StreamingSetupMixin:
             refuse_unsupported_l2l,
             unready_task_warning,
         )
-        from soup_cli.utils.l2l_recipe import AVAILABLE_CODECS
+        from soup_cli.utils.l2l_recipe import AVAILABLE_CODECS, refuse_distributed_l2l
         from soup_cli.utils.layer_stream import resolve_stream_dtype
 
+        # `_distributed_stream` is set by the data-parallel layer stream (#3267); absent
+        # until that lands, so this is a no-op here.
+        refuse_distributed_l2l(bool(getattr(self, "_distributed_stream", False)))
         tcfg = self.config.training
         codec = str(tcfg.l2l_activation_codec)
         if codec not in AVAILABLE_CODECS:

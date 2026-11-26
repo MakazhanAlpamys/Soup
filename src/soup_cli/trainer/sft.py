@@ -681,8 +681,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # auto-k this version cannot plan.
         self._l2l_recipe = None
         if tcfg.l2l:
-            from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
+            from soup_cli.trainer.stream_setup import _distributed_launch
+            from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
 
+            refuse_distributed_l2l(
+                _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
+            )
             self._l2l_recipe = resolve_l2l_recipe(tcfg)
 
         use_unsloth = cfg.backend == "unsloth"

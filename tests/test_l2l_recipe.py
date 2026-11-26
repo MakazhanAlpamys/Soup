@@ -6,6 +6,7 @@ Seam: ``soup_cli.utils.l2l_recipe`` (pure logic and one JSON file in the output 
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from soup_cli.utils.l2l_recipe import (
     AVAILABLE_CODECS,
     RECIPE_NAME,
     load_recipe,
+    refuse_distributed_l2l,
     resolve_l2l_recipe,
     validate_l2l_options,
     validate_resume,
@@ -65,23 +67,55 @@ def test_the_effective_k_is_the_configured_accumulation():
     assert recipe.activation_codec == "none"
 
 
-def test_auto_k_without_per_expert_streaming_is_refused_with_the_field_named():
-    with pytest.raises(ValueError, match=r"training\.l2l_auto_k requires DeepSeek-V3 per_expert"):
-        validate_l2l_options(_tcfg(l2l_auto_k=True))
+_AUTO_K = (
+    "training.l2l_auto_k is not available yet for this model: the launch cannot plan the "
+    "window automatically. Unset training.l2l_auto_k and set "
+    "training.gradient_accumulation_steps to the k you want: L2L runs that many "
+    "micro-batches per layer load."
+)
 
 
-def test_auto_k_with_a_spill_dir_is_refused():
-    tcfg = _tcfg(l2l_auto_k=True, stream_expert_layout="per_expert", l2l_spill_dir="spill")
-    with pytest.raises(ValueError, match=r"training\.l2l_auto_k uses RAM only"):
-        validate_l2l_options(tcfg)
+@pytest.mark.parametrize("layout", ["fused", "per_expert"])
+def test_auto_k_is_refused_with_the_exact_message_and_no_deepseek_detour(layout):
+    with pytest.raises(ValueError) as caught:
+        validate_l2l_options(_tcfg(l2l_auto_k=True, stream_expert_layout=layout))
+    assert str(caught.value) == _AUTO_K
+    assert "DeepSeek" not in str(caught.value)
+    with pytest.raises(ValueError, match="is not available yet for this model"):
+        resolve_l2l_recipe(_tcfg(l2l_auto_k=True), effective_k=2)
 
 
-def test_auto_k_is_refused_until_moe_l2l_is_available():
-    tcfg = _tcfg(l2l_auto_k=True, stream_expert_layout="per_expert")
-    with pytest.raises(ValueError, match=r"l2l_auto_k plans the window of a MoE model"):
-        validate_l2l_options(tcfg)
-    with pytest.raises(ValueError, match=r"l2l_auto_k plans the window of a MoE model"):
-        resolve_l2l_recipe(tcfg, effective_k=2)
+def test_a_spill_dir_outside_the_allowed_roots_is_refused(tmp_path, monkeypatch):
+    from soup_cli.utils import l2l_spill
+    from soup_cli.utils.terminal import for_terminal
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = str(tmp_path / "outside")
+    monkeypatch.setattr(l2l_spill, "_allowed_roots", lambda: (str(allowed),))
+    with pytest.raises(ValueError) as caught:
+        validate_l2l_options(_tcfg(l2l_spill_dir=outside))
+    reason = (
+        f"{for_terminal(outside)} resolves to {for_terminal(os.path.realpath(outside))}, "
+        "which is outside $HOME, $CWD and $TMPDIR, the only places the spill may be written"
+    )
+    assert str(caught.value) == (
+        f"training.l2l_spill_dir is refused: {reason}. Set it to a directory under "
+        "$HOME, the working directory or the temp directory."
+    )
+    assert not os.path.exists(outside)
+    validate_l2l_options(_tcfg(l2l_spill_dir=str(allowed / "spill")))
+
+
+def test_the_distributed_refusal_names_l2l_and_the_distributed_stream():
+    refuse_distributed_l2l(False)
+    with pytest.raises(ValueError) as caught:
+        refuse_distributed_l2l(True)
+    assert str(caught.value) == (
+        "training.l2l cannot run on a distributed layer stream: the L2L step runs its "
+        "own backward, so the adapter-gradient average between ranks would be skipped. "
+        "Run one process, or set training.l2l to false."
+    )
 
 
 def test_the_recipe_round_trips_through_the_output_directory(tmp_path, monkeypatch):
