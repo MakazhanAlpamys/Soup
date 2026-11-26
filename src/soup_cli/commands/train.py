@@ -3113,6 +3113,7 @@ def train(
         raise
 
     from soup_cli.monitoring.manual_save import capture_manual_stop
+    from soup_cli.utils.lisa import LisaResumeError
 
     try:
         with (
@@ -3174,6 +3175,10 @@ def train(
             run_id,
             trust_remote_code=trust_remote_code,
         )
+    except LisaResumeError as exc:
+        _record_run_failure(tracker, run_id, exc)
+        console.print(f"[red]{for_terminal(str(exc), single_line=True)}[/]")
+        raise typer.Exit(1) from None
     except Exception as exc:
         _record_run_failure(tracker, run_id, exc)
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
