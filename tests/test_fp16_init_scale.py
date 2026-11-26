@@ -1,4 +1,4 @@
-"""``training.fp16_init_scale`` sets the fp16 GradScaler's starting scale (rnd PR #67, ported).
+"""``training.fp16_init_scale`` sets the fp16 GradScaler's starting scale.
 
 torch starts the scaler at 2**16 and halves it on every step whose gradients overflow;
 the step is skipped. A model that overflows well below that start skips its first

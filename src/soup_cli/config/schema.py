@@ -3854,7 +3854,7 @@ class TrainingConfig(BaseModel):
             "on every other task, whose trainers pick their own precision."
         ),
     )
-    # fp16 GradScaler starting scale (rnd PR #67, ported). Refused outside
+    # fp16 GradScaler starting scale. Refused outside
     # task='sft' + backend='transformers' by SoupConfig._validate_fp16_init_scale_task.
     fp16_init_scale: Optional[int] = Field(
         default=None,
@@ -7000,7 +7000,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_fp16_init_scale_task(self) -> "SoupConfig":
-        """rnd PR #67 (ported) — ``training.fp16_init_scale`` is applied by the transformers
+        """``training.fp16_init_scale`` is applied by the transformers
         SFT wrapper's ``_finish_setup`` only; elsewhere it would be accepted and never reach
         the scaler. Refused on every other task and backend, naming both gates.
         """

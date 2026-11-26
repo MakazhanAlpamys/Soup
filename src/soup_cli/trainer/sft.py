@@ -1275,7 +1275,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
     def _apply_fp16_init_scale(self, tcfg) -> None:
-        """``training.fp16_init_scale`` (rnd PR #67, ported): start the fp16 GradScaler low.
+        """``training.fp16_init_scale``: start the fp16 GradScaler low.
 
         Prints one line either way, so a set key that did nothing is visible in the log.
         """
