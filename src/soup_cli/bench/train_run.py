@@ -187,6 +187,21 @@ def _device_provenance(torch: Any, device: str, sm_clock_mhz_busy: dict) -> dict
     }
 
 
+def _device_synchronize(torch, device):
+    """The call that waits for queued device work, or ``None`` on the CPU.
+
+    The collector reads the clock at each step boundary, and CUDA and MPS both
+    queue kernels asynchronously, so a boundary reading without a synchronize
+    measures the launch and not the step.
+    """
+    name = str(device)
+    if name.startswith("cuda") and torch.cuda.is_available():
+        return torch.cuda.synchronize
+    if name.startswith("mps") and torch.backends.mps.is_available():
+        return torch.mps.synchronize
+    return None
+
+
 def run_bench_train(
     cfg: Any,
     *,
@@ -234,8 +249,9 @@ def run_bench_train(
             trainer.args.eval_strategy = "no"
 
         collector = BenchCollector(warmup_steps=warmup)
-        if device == "cuda" and torch.cuda.is_available():
-            collector._sync = torch.cuda.synchronize
+        step_sync = _device_synchronize(torch, device)
+        if step_sync is not None:
+            collector._sync = step_sync
         trainer.add_callback(collector)
 
         # Tokens come from what training_step receives: that is the batch the
@@ -310,6 +326,10 @@ def run_bench_train(
             "python": platform.python_version(),
             "versions": _versions(),
             "dtype": str(getattr(model, "dtype", None)),
+            "training_precision": {
+                "bf16": trainer.args.bf16,
+                "fp16": trainer.args.fp16,
+            },
             "optimizer": str(trainer.args.optim),
             "seed": trainer.args.seed,
             "data_seed": trainer.args.data_seed,
