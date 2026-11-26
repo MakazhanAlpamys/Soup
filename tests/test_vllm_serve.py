@@ -512,6 +512,7 @@ class TestServeVllmIntegration:
                 quantization=None,  # default: model's native dtype
                 trust_remote_code=False,  # v0.71.33 — default-deny gate
                 max_model_len=None,  # #333 — new --max-model-len lever
+                base_revision=None,
             )
             mock_create_app.assert_called_once()
 
