@@ -1351,6 +1351,31 @@ class EvalGateConfig(BaseModel):
         return self
 
 
+class StreamPartialRamConfig(BaseModel):
+    """Experimental host envelope for ``training.stream_partial_ram``: explicit bytes only."""
+
+    model_config = {"extra": "forbid"}
+    limit_bytes: int = Field(
+        gt=0, strict=True,
+        description="Total host bytes the weights, staging and reservations may account for",
+    )
+    reserved_bytes: int = Field(
+        ge=0, strict=True,
+        description="Host bytes kept for activations and every other consumer; never measured",
+    )
+    cache_bytes: int = Field(
+        ge=0, strict=True,
+        description="Allocation cap, in bytes, for the decoder layers kept in RAM",
+    )
+
+    @model_validator(mode="after")
+    def _check_budget(self) -> "StreamPartialRamConfig":
+        from soup_cli.utils.partial_ram_source import PartialRamBudget
+
+        PartialRamBudget(self.limit_bytes, self.reserved_bytes, self.cache_bytes)
+        return self
+
+
 class TrainingConfig(BaseModel):
     @field_validator("*", mode="before")
     @classmethod
@@ -4311,6 +4336,19 @@ class TrainingConfig(BaseModel):
                 f"got {type(v).__name__} {v!r}"
             )
         return v
+
+    stream_partial_ram: Optional[StreamPartialRamConfig] = Field(
+        default=None,
+        description=(
+            "Experimental: keep a bounded prefix of the decoder layers in host RAM beside "
+            "the async SSD reader, under an explicit host envelope. limit_bytes is the "
+            "total the weights may take, reserved_bytes covers activations and every other "
+            "host consumer (it is never measured for you) and cache_bytes caps the "
+            "allocation for the cached layers. Dense Llama, unquantized, task='sft', "
+            "stream_source='disk' only; an allocation envelope, not a process-RSS limit. "
+            "Refused beside stream_ram_cache_mb and stream_resident_layers."
+        ),
+    )
 
     stream_ram_cache_mb: int = Field(
         default=0,
@@ -8067,6 +8105,7 @@ class SoupConfig(BaseModel):
                     ("stream_recompute", tcfg.stream_recompute != "on"),
                     ("stream_resident_layers", tcfg.stream_resident_layers != 0),
                     ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                    ("stream_partial_ram", tcfg.stream_partial_ram is not None),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
@@ -8122,6 +8161,29 @@ class SoupConfig(BaseModel):
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
             )
+        if tcfg.stream_partial_ram is not None:
+            if (
+                tcfg.stream_source != "disk"
+                or self.task != "sft"
+                or self.backend != "transformers"
+                or tcfg.quantization != "none"
+            ):
+                raise ValueError(
+                    "training.stream_partial_ram requires unquantized transformers SFT, "
+                    "stream_layers=true and stream_source='disk'; other modes are not "
+                    "supported yet"
+                )
+            for other, is_set in (
+                ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                ("stream_resident_layers", tcfg.stream_resident_layers != 0),
+            ):
+                if is_set:
+                    raise ValueError(
+                        f"training.stream_partial_ram cannot be combined with "
+                        f"training.{other}: each decides which layers sit in host RAM "
+                        f"or VRAM and their combined budget is not measured. Set one "
+                        f"of them."
+                    )
         if tcfg.stream_source == "ram" and tcfg.stream_ram_cache_mb != 0:
             raise ValueError(
                 f"training.stream_ram_cache_mb={tcfg.stream_ram_cache_mb} has no effect "

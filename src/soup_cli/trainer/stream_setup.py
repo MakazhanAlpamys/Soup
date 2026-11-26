@@ -83,6 +83,13 @@ def _stream_source_line(stats: dict) -> str:
         )
     # Since #974 the staging lives in the same power-of-two arenas as the RAM
     # store, so the disk tier can say what was page-locked too.
+    if stats.get("resident_bytes", 0):
+        return (
+            f"{stats['resident_bytes'] / 1e6:.1f} MB resident decoder tensors, "
+            f"{stats['staging_bytes'] / 1e6:.1f} MB disk staging, "
+            f"{stats['host_allocated_bytes'] / 1e6:.1f} MB owned host allocations; "
+            f"read_ahead={stats['read_ahead']}"
+        ) + _page_locked_note(stats)
     drive_count = stats.get("drive_count", 1)
     direct_io = stats.get("direct_io_drives", drive_count)
     media = "an NVMe volume"
@@ -1119,6 +1126,9 @@ class StreamingSetupMixin:
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.
         arch = stream_arch_of(model_config)
+        partial_config = getattr(tcfg, "stream_partial_ram", None)
+        if partial_config is not None and arch != "llama":
+            raise ValueError("training.stream_partial_ram currently supports dense Llama only")
         # training.stream_expert_layout, in the sharder's spelling ("" = fused).
         # Refused here for an architecture the layout is not gated on: before any
         # weight is resolved, downloaded or sharded.
@@ -1698,6 +1708,35 @@ class StreamingSetupMixin:
                 "a pageable CPU source.[/]"
             )
 
+        partial_budget = None
+        if partial_config is not None:
+            # Free RAM already excludes live allocations. This intentionally conservative
+            # envelope also reserves the caller-declared host consumers plus the resident
+            # extras.
+            from soup_cli.utils.layer_stream import (
+                PHYSICAL_RAM_TIER_HEADROOM,
+                RAM_TIER_HEADROOM,
+            )
+            from soup_cli.utils.partial_ram_source import PartialRamBudget
+
+            ceiling = int(free_ram * RAM_TIER_HEADROOM)
+            if total_ram is not None:
+                ceiling = min(ceiling, int(total_ram * PHYSICAL_RAM_TIER_HEADROOM))
+            if partial_config.limit_bytes > ceiling:
+                raise ValueError("stream_partial_ram limit exceeds current safe host RAM budget")
+            partial_budget = PartialRamBudget(
+                partial_config.limit_bytes,
+                partial_config.reserved_bytes
+                + embed_bytes
+                + (ngram_bytes if ngram_source == "ram" else 0),
+                partial_config.cache_bytes,
+            )
+            console.print(
+                "[yellow]training.stream_partial_ram is experimental: you reserve the other "
+                "host users, and the envelope is an allocation budget, not a process-RSS "
+                "limit. CUDA performance is not validated.[/]"
+            )
+
         model, runtime = build_streamed_model(
             model_id=cfg.base,
             shard_dir=shard_dir,
@@ -1729,6 +1768,7 @@ class StreamingSetupMixin:
             ngram_source=ngram_source,
             refill_before_backward=self._STREAM_REFILL_BEFORE_BACKWARD,
             nf4_scale_cache=bool(getattr(tcfg, "stream_nf4_scale_cache", False)),
+            **({"partial_ram_budget": partial_budget} if partial_budget is not None else {}),
         )
         self.model = model
         self._stream_runtime = runtime

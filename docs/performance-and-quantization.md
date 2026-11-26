@@ -559,6 +559,53 @@ Setup preload consumes time and additional RAM. A speed benefit requires exposed
 waiting and enough repeated reads to repay the preload; filling memory alone is not a
 speed guarantee.
 
+### Experimental partial RAM residency
+
+`training.stream_partial_ram` keeps a fixed subset of decoder layers in CPU RAM
+and sends only the remaining layers to the existing asynchronous disk reader.
+It is off by default. The supported path is **dense Llama, unquantized
+Transformers SFT, explicit disk tier**. CPU correctness tests pass; CUDA correctness,
+pinned-transfer lifetime and throughput still need hardware validation. It is refused
+beside `stream_ram_cache_mb` and `stream_resident_layers`: each decides which layers sit
+in host RAM or VRAM, and their combined budget is not measured.
+
+```yaml
+training:
+  stream_layers: true
+  stream_source: disk
+  quantization: none
+  batch_size: 1
+  stream_partial_ram:
+    limit_bytes: 8589934592     # example 8 GiB host allocation envelope
+    reserved_bytes: 4294967296  # example 4 GiB for other host users/safety
+    cache_bytes: 2147483648     # at most 2 GiB of resident allocations
+```
+
+These values illustrate the configuration, not a measured safe recipe. Choose
+reservations for the actual workload. The trainer also charges resident extras
+and RAM-backed auxiliary weights, and caps the envelope using the existing
+free/physical-RAM headroom rules. The source checks the envelope **before buffer
+allocation**: caller/trainer reservations + resident allocations + disk staging
+allocations + the largest selected shard's loading map must fit. Pinned arena
+rounding and pageable staging alignment overhead count against the envelope.
+An oversized plan is refused; it does not silently reduce reservations, change
+pinning or restart with another plan.
+
+Selection is stable first-fit in decoder order, retaining complete layers only.
+Embedding/head shards remain on the existing path. Cached layers are removed
+from the disk reader's path list, including speculative lookahead; get/release
+indices are remapped together. Cache loading reads each selected shard once.
+The cache is immutable throughout training and is released on runtime close;
+outstanding recorded transfer events are synchronized before cached storage is
+released. Constructor failures close any already-started disk reader.
+
+The envelope bounds accounted allocations, **not process RSS**. Python overhead,
+allocator retention, the OS page cache and unrelated processes are not controlled.
+There is no dynamic pressure-driven eviction. `resident_tensor_bytes_served` counts
+logical tensor requests served from RAM; it is neither physical SSD bytes saved nor a
+measured speedup. Runtime statistics distinguish resident tensor bytes, staging bytes,
+owned host allocations and the reserved peak including the loading transient.
+
 For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
 bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
 checkpoint-visible autograd Function so pooled packed weights cannot outlive their
@@ -1158,7 +1205,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_resident_layers` / `stream_ram_cache_mb` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_resident_layers` / `stream_ram_cache_mb` / `stream_partial_ram` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
 - a pre-quantised bitsandbytes NF4 base (`unsloth/*-bnb-4bit`: `quant_method: bitsandbytes`, `load_in_4bit`, `bnb_4bit_quant_type: nf4`, `bnb_4bit_use_double_quant: true`, `bnb_4bit_compute_dtype: bfloat16`, `uint8` storage) is the one quantised source that streams, and only under `training.quantization: 4bit` on a dense decoder architecture (not `deepseek_v3` or `qwen4_exp`): it is imported into the layer cache byte for byte, with no dequantisation and no requantisation, and the cache is the same on every run device. The run needs a bfloat16 card (a float16 GPU and the CPU are refused), double quantisation left on and an unstriped cache, each refused by name before the weights are resolved. An import killed half way leaves a `.soup-nf4-import.<pid>.*` staging folder in the cache folder; the next run removes it before the disk pre-flight (a folder whose process is still running, another run of the same base, is left alone). The same base under `quantization: none`, and bitsandbytes 8-bit, FP4 or a base that is not double-quantised, stay refused like the other quantised sources

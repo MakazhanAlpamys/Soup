@@ -389,6 +389,7 @@ class AsyncDiskSource:
         read_ranges: int = DEFAULT_STREAM_READ_RANGES,
         layer_roots: Optional[Sequence[int]] = None,
         ram_cache_bytes: int = 0,
+        max_host_bytes: Optional[int] = None,
     ):
         from soup_cli.utils.layer_stream_runtime import RamSource
 
@@ -585,7 +586,21 @@ class AsyncDiskSource:
                 region_sizes.append(span)
                 first_member.append(members_of_group[0])
             self._group_slots.append(flat)
+        # Refuse before any tensor allocation or reader thread is started: a caller
+        # that shares one host budget names the bytes this staging may take.
+        if max_host_bytes is not None:
+            if type(max_host_bytes) is not int or max_host_bytes < 0:
+                raise ValueError("host RAM budget must be non-negative integer bytes")
+            needed = self._staging_allocation_bytes(region_sizes)
+            if needed > max_host_bytes:
+                raise ValueError(
+                    f"disk staging needs {needed} bytes, "
+                    f"exceeding remaining host RAM budget {max_host_bytes}"
+                )
         self._arenas, self._regions = self._allocate_staging(region_sizes)
+        self.host_allocated_bytes = sum(
+            arena.numel() * arena.element_size() for arena in self._arenas
+        )
         self._slots: List[Dict[str, Any]] = [
             self._views(self._plans[first_member[slot]], self._regions[slot])
             for slot in range(len(region_sizes))
@@ -852,6 +867,16 @@ class AsyncDiskSource:
         self._run()
 
     # -- staging ---------------------------------------------------------
+    def _staging_allocation_bytes(self, region_sizes: Sequence[int]) -> int:
+        """Host bytes ``_allocate_staging`` can take for these regions, worst case."""
+        if not self.pinned:
+            return sum(size + SECTOR_BYTES for size in region_sizes)
+        from soup_cli.utils.layer_stream_runtime import plan_pinned_arenas
+        from soup_cli.utils.stream_ram_cache import pinned_allocation_bytes
+
+        plan = plan_pinned_arenas(region_sizes, align=SECTOR_BYTES)
+        return pinned_allocation_bytes(plan, region_sizes, SECTOR_BYTES)
+
     def _allocate_staging(self, region_sizes: Sequence[int]) -> Tuple[List[Any], List[Any]]:
         """Regions on sector boundaries; pinned ones as views of power-of-two arenas."""
         import torch

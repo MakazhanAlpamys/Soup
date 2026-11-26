@@ -4,6 +4,8 @@
   RNG and adapter state preserved, reserves future AdamW state, validates the candidate and falls
   back to ordinary streaming when no complete layer fits. Add opt-in `training.stream_ram_cache_mb`,
   a bounded RAM hotset of the most re-read layers on the SSD tier that is sized from the real
-  allocation and the cgroup limits and excludes the GPU-resident layers. Both are off by default;
+  allocation and the cgroup limits and excludes the GPU-resident layers. Add experimental
+  `training.stream_partial_ram`, an explicit host envelope that keeps a prefix of the decoder
+  layers of a dense unquantized Llama in RAM beside the async SSD reader. All are off by default;
   residency is refused beside `activation_offloading` and a non-default `stream_recompute`. No
   speed guarantee (#PENDING by @kok-o, @nurseit14).

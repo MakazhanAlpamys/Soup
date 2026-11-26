@@ -280,6 +280,7 @@
     "training.stream_loss_chunk": null,
     "training.stream_nf4_scale_cache": false,
     "training.stream_ngram_source": "auto",
+    "training.stream_partial_ram": null,
     "training.stream_pin": null,
     "training.stream_ram_cache_mb": 0,
     "training.stream_read_ahead": 2,

@@ -3972,6 +3972,13 @@ class StreamRuntime:
             "resident_layer_indices": sorted(getattr(self.pool, "resident_slots", {})),
             "large_buffer_bytes": getattr(self.large_pool, "nbytes", 0),
             "store_bytes": self.source.nbytes,
+            "staging_bytes": getattr(self.source, "staging_bytes", 0),
+            "resident_bytes": getattr(self.source, "resident_bytes", 0),
+            "host_allocated_bytes": getattr(self.source, "host_allocated_bytes", None),
+            "accounted_peak_bytes": getattr(self.source, "accounted_peak_bytes", None),
+            "resident_tensor_bytes_served": getattr(
+                self.source, "resident_tensor_bytes_served", 0
+            ),
             "pinned": self.pinned,
             # What is actually page-locked for the store (#901): the arenas'
             # power-of-two sizes on a pinned RamSource, 0 on a pageable one, and
@@ -4147,8 +4154,13 @@ def install_streaming(
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
+    partial_ram_budget: Any = None,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
+
+    ``partial_ram_budget`` (a ``partial_ram_source.PartialRamBudget``,
+    ``training.stream_partial_ram``): keep a bounded prefix of the decoder layers in host
+    RAM beside the async disk reader. Disk tier, dense Llama, unquantized only.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
@@ -4195,6 +4207,12 @@ def install_streaming(
                 logger.warning(message)
         pin = False
         require_pin = False
+
+    if partial_ram_budget is not None:
+        if tier != "disk" or getattr(model.config, "model_type", None) != "llama":
+            raise ValueError("partial RAM currently requires disk streaming of dense Llama")
+        if getattr(index, "quant", "none") != "none":
+            raise ValueError("partial RAM NF4 model validation is pending; use quant='none'")
 
     # Validate the index BEFORE touching the model: an index whose `quant` and
     # `quant_specs` disagree passes the cache key (which reads `quant`) and
@@ -4306,148 +4324,158 @@ def install_streaming(
         read_ahead=read_ahead,
         layer_roots=source_roots,
         read_ahead_decision=read_ahead_decision,
+        partial_ram_budget=partial_ram_budget,
+        cacheable_layers=n_layers,
     )
-    pool = LayerBufferPool(
-        spec,
-        n_buffers=buffers,
-        device=device,
-        active_keys_by_layer=active_keys_by_layer,
-    )
-    stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
-    large_pool = (
-        LargeLayerBufferPool(large_specs, large_source_indices, device=device)
-        if large_specs
-        else None
-    )
-    output_key = explicit_head_key or embed_key
+    try:
+        pool = LayerBufferPool(
+            spec,
+            n_buffers=buffers,
+            device=device,
+            active_keys_by_layer=active_keys_by_layer,
+        )
+        stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
+        large_pool = (
+            LargeLayerBufferPool(large_specs, large_source_indices, device=device)
+            if large_specs
+            else None
+        )
+        output_key = explicit_head_key or embed_key
 
-    def _prefetch_output() -> None:
-        if large_pool is not None and output_key is not None:
-            large_pool.load_async(output_key, source, stream)
+        def _prefetch_output() -> None:
+            if large_pool is not None and output_key is not None:
+                large_pool.load_async(output_key, source, stream)
 
-    def _prefetch_embed() -> None:
-        if large_pool is not None and embed_key is not None:
-            large_pool.load_async(embed_key, source, stream)
+        def _prefetch_embed() -> None:
+            if large_pool is not None and embed_key is not None:
+                large_pool.load_async(embed_key, source, stream)
 
-    prefetcher = StreamPrefetcher(
-        pool,
-        source,
-        n_layers,
-        stream,
-        tail_prefetch=_prefetch_output if large_pool is not None else None,
-        backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
-        # #1174 part 2: the head's load right after the embedding lookup. Set
-        # `prefetcher.head_prefetch_layer = None` to restore the last-layer timing.
-        head_prefetch_layer=0 if large_pool is not None else None,
-    )
-
-    layer_cls = _streamed_layer_class()
-    for idx in range(n_layers):
-        layers[idx] = layer_cls(
-            layers[idx],
-            idx,
+        prefetcher = StreamPrefetcher(
             pool,
-            prefetcher,
-            layer_name_maps[idx],
-            quant_specs=quant_specs,
-            codes=codes,
-            scale_cache=scale_cache,
-            checkpoint_context_fn=context_fns[idx],
+            source,
+            n_layers,
+            stream,
+            tail_prefetch=_prefetch_output if large_pool is not None else None,
+            backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
+            # #1174 part 2: the head's load right after the embedding lookup. Set
+            # `prefetcher.head_prefetch_layer = None` to restore the last-layer timing.
+            head_prefetch_layer=0 if large_pool is not None else None,
         )
 
-    if large_pool is not None:
-        input_module = model.get_input_embeddings()
-        output_module = model.get_output_embeddings()
-        if input_module is None or output_module is None:
-            raise RuntimeError("layer streaming needs both input and output embedding modules")
-        for role, module, key in (
-            ("input embedding", input_module, embed_key),
-            ("output head", output_module, output_key),
-        ):
-            weight = getattr(module, "weight", None)
-            if key is None or weight is None or not getattr(weight, "is_meta", False):
-                raise RuntimeError(f"streamed {role} is not an unmaterialised meta weight")
-            expected_shape = tuple(large_specs[key][0])
-            if tuple(weight.shape) != expected_shape:
-                raise ValueError(
-                    f"streamed {role} shape {tuple(weight.shape)} does not match "
-                    f"the shard {expected_shape} — reshard the checkpoint"
+        layer_cls = _streamed_layer_class()
+        for idx in range(n_layers):
+            layers[idx] = layer_cls(
+                layers[idx],
+                idx,
+                pool,
+                prefetcher,
+                layer_name_maps[idx],
+                quant_specs=quant_specs,
+                codes=codes,
+                scale_cache=scale_cache,
+                checkpoint_context_fn=context_fns[idx],
+            )
+
+        if large_pool is not None:
+            input_module = model.get_input_embeddings()
+            output_module = model.get_output_embeddings()
+            if input_module is None or output_module is None:
+                raise RuntimeError("layer streaming needs both input and output embedding modules")
+            for role, module, key in (
+                ("input embedding", input_module, embed_key),
+                ("output head", output_module, output_key),
+            ):
+                weight = getattr(module, "weight", None)
+                if key is None or weight is None or not getattr(weight, "is_meta", False):
+                    raise RuntimeError(f"streamed {role} is not an unmaterialised meta weight")
+                expected_shape = tuple(large_specs[key][0])
+                if tuple(weight.shape) != expected_shape:
+                    raise ValueError(
+                        f"streamed {role} shape {tuple(weight.shape)} does not match "
+                        f"the shard {expected_shape} — reshard the checkpoint"
+                    )
+
+            large_cls = _streamed_large_layer_class()
+            if input_module is output_module:
+                # UNEXERCISED by the test suite, deliberately (#1010 review): no
+                # supported architecture returns ONE module object for both
+                # boundaries -- a tied Llama shares the Parameter, not the module,
+                # and takes the resident path above -- so this branch has no fixture
+                # and its `named_modules()` memo de-duplication (one wrapper reached
+                # under two attribute names yields once, as torch's own walk would)
+                # is read, not run. Kept for the architecture that does share it.
+                if embed_key != output_key:
+                    raise ValueError("one module cannot represent two untied large-layer weights")
+                shared = large_cls(
+                    input_module,
+                    embed_key,
+                    large_pool,
+                    refill_before_backward=refill_before_backward,
+                    weight_path=large_shard_path(shard_dir, embed_key),
                 )
+                if not _replace_module_references(model, input_module, shared):
+                    raise RuntimeError("could not install the streamed tied embedding module")
+            else:
+                streamed_input = large_cls(
+                    input_module,
+                    embed_key,
+                    large_pool,
+                    refill_before_backward=refill_before_backward,
+                    weight_path=large_shard_path(shard_dir, embed_key),
+                )
+                streamed_output = large_cls(
+                    output_module,
+                    output_key,
+                    large_pool,
+                    refill_before_backward=refill_before_backward,
+                    weight_path=large_shard_path(shard_dir, output_key),
+                )
+                if not _replace_module_references(model, input_module, streamed_input):
+                    raise RuntimeError("could not install the streamed input embedding")
+                if not _replace_module_references(model, output_module, streamed_output):
+                    raise RuntimeError("could not install the streamed output head")
+            _attach_streamed_boundary_adapter_bridge(model)
 
-        large_cls = _streamed_large_layer_class()
-        if input_module is output_module:
-            # UNEXERCISED by the test suite, deliberately (#1010 review): no
-            # supported architecture returns ONE module object for both
-            # boundaries -- a tied Llama shares the Parameter, not the module,
-            # and takes the resident path above -- so this branch has no fixture
-            # and its `named_modules()` memo de-duplication (one wrapper reached
-            # under two attribute names yields once, as torch's own walk would)
-            # is read, not run. Kept for the architecture that does share it.
-            if embed_key != output_key:
-                raise ValueError("one module cannot represent two untied large-layer weights")
-            shared = large_cls(
-                input_module,
-                embed_key,
-                large_pool,
-                refill_before_backward=refill_before_backward,
-                weight_path=large_shard_path(shard_dir, embed_key),
-            )
-            if not _replace_module_references(model, input_module, shared):
-                raise RuntimeError("could not install the streamed tied embedding module")
-        else:
-            streamed_input = large_cls(
-                input_module,
-                embed_key,
-                large_pool,
-                refill_before_backward=refill_before_backward,
-                weight_path=large_shard_path(shard_dir, embed_key),
-            )
-            streamed_output = large_cls(
-                output_module,
-                output_key,
-                large_pool,
-                refill_before_backward=refill_before_backward,
-                weight_path=large_shard_path(shard_dir, output_key),
-            )
-            if not _replace_module_references(model, input_module, streamed_input):
-                raise RuntimeError("could not install the streamed input embedding")
-            if not _replace_module_references(model, output_module, streamed_output):
-                raise RuntimeError("could not install the streamed output head")
-        _attach_streamed_boundary_adapter_bridge(model)
+        def _prime(*_args: Any, **_kwargs: Any) -> None:
+            # #975 — the backward-tail prefetch above already loads this for every
+            # step but the first, so `load_async`'s own-owner check makes this a
+            # no-op on the hot path. Kept unconditional: it is the only load for
+            # step 0, and for any forward that follows a backward that never
+            # reached layer 0.
+            if large_pool is not None and embed_key is not None:
+                large_pool.load_async(embed_key, source, stream)
+            prefetcher.prime()
 
-    def _prime(*_args: Any, **_kwargs: Any) -> None:
-        # #975 — the backward-tail prefetch above already loads this for every
-        # step but the first, so `load_async`'s own-owner check makes this a
-        # no-op on the hot path. Kept unconditional: it is the only load for
-        # step 0, and for any forward that follows a backward that never
-        # reached layer 0.
-        if large_pool is not None and embed_key is not None:
-            large_pool.load_async(embed_key, source, stream)
-        prefetcher.prime()
+        handle = owner.register_forward_pre_hook(_prime)
 
-    handle = owner.register_forward_pre_hook(_prime)
+        # transformers' Trainer.__init__ calls _move_model_to_device -> model.to(),
+        # and .to() on a module holding meta parameters raises NotImplementedError.
+        # The decoder weights stay on meta BY DESIGN, so declare that this model
+        # manages its own placement — exactly the marker a device_map-sharded model
+        # carries, and the one _move_model_to_device short-circuits on.
+        model.hf_device_map = {"": _device_map_value(device)}
 
-    # transformers' Trainer.__init__ calls _move_model_to_device -> model.to(),
-    # and .to() on a module holding meta parameters raises NotImplementedError.
-    # The decoder weights stay on meta BY DESIGN, so declare that this model
-    # manages its own placement — exactly the marker a device_map-sharded model
-    # carries, and the one _move_model_to_device short-circuits on.
-    model.hf_device_map = {"": _device_map_value(device)}
-
-    return StreamRuntime(
-        pool=pool,
-        source=source,
-        prefetcher=prefetcher,
-        n_layers=n_layers,
-        pinned=pinned,
-        device=str(device),
-        large_pool=large_pool,
-        hook=handle,
-        total_params=int(getattr(index, "total_params", 0) or 0),
-        expert_readers=expert_readers,
-        tier=tier,
-        scale_cache=scale_cache,
-    )
+        return StreamRuntime(
+            pool=pool,
+            source=source,
+            prefetcher=prefetcher,
+            n_layers=n_layers,
+            pinned=pinned,
+            device=str(device),
+            large_pool=large_pool,
+            hook=handle,
+            total_params=int(getattr(index, "total_params", 0) or 0),
+            expert_readers=expert_readers,
+            tier=tier,
+            scale_cache=scale_cache,
+        )
+    except BaseException:
+        # A source can own resident buffers and a running disk reader before the
+        # device pools and wrappers exist: a construction failure releases them.
+        close = getattr(source, "close", None)
+        if close is not None:
+            close()
+        raise
 
 
 def _is_out_of_memory(exc: BaseException) -> bool:
@@ -4651,6 +4679,8 @@ def _build_source(
     read_ahead=DEFAULT_STREAM_READ_AHEAD,
     layer_roots=None,
     read_ahead_decision=None,
+    partial_ram_budget=None,
+    cacheable_layers=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -4684,6 +4714,18 @@ def _build_source(
     The second element of the returned tuple means the same thing on both tiers:
     the host-side source memory is page-locked.
     """
+    if partial_ram_budget is not None:
+        from soup_cli.utils.partial_ram_source import PartialRamSource
+
+        if tier != "disk":
+            raise ValueError("partial RAM needs the disk tier")
+        # Explicit mode: do not silently retry with a different allocation plan.
+        source = PartialRamSource(
+            shard_dir, n_layers, spec, budget=partial_ram_budget, pin=pin,
+            shard_paths=shard_paths, read_ahead=read_ahead, layer_roots=layer_roots,
+            cacheable_layers=cacheable_layers,
+        )
+        return source, source.pinned
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
         from soup_cli.utils.async_disk_source import AsyncDiskSource
@@ -4853,6 +4895,7 @@ def build_streamed_model(
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
+    partial_ram_budget: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
@@ -4866,7 +4909,8 @@ def build_streamed_model(
 
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
-    ``install_streaming``'s: an API switch, no config field.
+    ``install_streaming``'s: an API switch, no config field. ``partial_ram_budget`` is
+    ``training.stream_partial_ram`` as a ``PartialRamBudget``.
     """
     if lora_config is not None:
         from peft import get_peft_model
@@ -4919,6 +4963,7 @@ def build_streamed_model(
             read_ahead_decision=read_ahead_decision,
             nf4_scale_cache=nf4_scale_cache,
             two_read_experts=two_read_experts,
+            partial_ram_budget=partial_ram_budget,
         )
         if lora_config is None:
             try:
