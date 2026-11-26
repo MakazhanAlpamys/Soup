@@ -42,11 +42,6 @@ def _shipped_store(k, n_layers=3, hidden=64):
     )
 
 
-@pytest.fixture()
-def acts():
-    return _load("l2l_activations")
-
-
 def _watch_autocast(model):
     import torch
 
@@ -90,7 +85,7 @@ def test_accumulation_backward_outside_autocast_is_seen_as_off(sched, streamed):
 
 @pytest.mark.parametrize("k", [1, 2])
 def test_l2l_backward_runs_with_autocast_off_inside_the_trainers_autocast(
-    sched, acts, streamed, k  # noqa: F811
+    sched, streamed, k  # noqa: F811
 ):
     import torch
 
@@ -107,7 +102,7 @@ def test_l2l_backward_runs_with_autocast_off_inside_the_trainers_autocast(
     assert seen and not any(seen)
 
 
-def test_l2l_forward_and_recompute_still_run_under_autocast(sched, acts, streamed):  # noqa: F811
+def test_l2l_forward_and_recompute_still_run_under_autocast(sched, streamed):  # noqa: F811
     """Only the backward leaves autocast; the layer calls keep the trainer's mixed precision."""
     import torch
 
