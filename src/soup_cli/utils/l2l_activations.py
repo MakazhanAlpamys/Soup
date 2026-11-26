@@ -235,7 +235,9 @@ class DirectSpillFile(SpillBackend):
             for offset in range(0, size, fill_chunk):
                 _write_all(self._writer, offset, zeros[: min(fill_chunk, size - offset)])
             self._reader = _open_unbuffered(self.path)
-        except BaseException:
+        except BaseException as exc:
+            # Whoever catches this may clean up only a file this attempt created.
+            exc.spill_file_created = created
             self.close(remove=created)
             raise
 

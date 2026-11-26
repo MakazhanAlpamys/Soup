@@ -359,6 +359,30 @@ def test_a_full_drive_while_creating_the_file_names_size_and_directory(tmp_path,
     assert not os.path.exists(path)
 
 
+def test_a_file_planted_at_the_spill_path_survives_the_failed_attempt(tmp_path):
+    from soup_cli.utils.l2l_spill import open_spill_file, spill_file_name
+
+    path = tmp_path / spill_file_name()
+    path.write_bytes(b"not ours")
+    with pytest.raises(FileExistsError, match="already exists"):
+        open_spill_file(str(path), 5 * 4096)
+    assert path.read_bytes() == b"not ours"
+
+
+def test_a_file_this_attempt_created_is_removed_even_when_the_constructor_could_not(
+        tmp_path, monkeypatch):
+    from soup_cli.utils import l2l_activations
+    from soup_cli.utils.l2l_spill import SpillDiskFullError, open_spill_file, spill_file_name
+
+    path = str(tmp_path / spill_file_name())
+    monkeypatch.setattr(l2l_activations, "_write_all", _enospc)
+    # the constructor's own cleanup fails, so the handler must remove the file it created
+    monkeypatch.setattr(l2l_activations.SpillBackend, "_remove", lambda self: None)
+    with pytest.raises(SpillDiskFullError):
+        open_spill_file(path, 5 * 4096)
+    assert not os.path.exists(path)
+
+
 def test_a_full_drive_in_the_writer_thread_removes_the_file(tmp_path, monkeypatch):
     import time
 

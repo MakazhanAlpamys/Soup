@@ -977,7 +977,9 @@ def open_spill_file(path: str, size: int) -> Any:
     except OSError as exc:
         full = is_disk_full(exc)
         left = None
-        if os.path.exists(path):
+        # Remove only a file this attempt created: a pre-existing entry (FileExistsError
+        # from the exclusive create) belongs to someone else and is never touched.
+        if getattr(exc, "spill_file_created", False) and os.path.exists(path):
             try:
                 os.remove(path)
             except OSError:
