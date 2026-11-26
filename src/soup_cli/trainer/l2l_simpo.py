@@ -1,4 +1,4 @@
-"""SimPO window loss for L2L (ticket A6-03).
+"""SimPO window loss for L2L.
 
 SimPO is TRL's ``CPOTrainer`` with ``loss_type="simpo"``. Like ORPO it builds one micro-batch
 from separate tensors ``chosen_*`` and ``rejected_*`` (right-padded) with no ``input_ids``,

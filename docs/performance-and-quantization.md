@@ -1237,7 +1237,8 @@ Refused when the config is read, besides the SFT refusals above:
 - `task: dpo` with `dpo_beta_schedule` or `dpo_beta_end`. The L2L loss keeps beta fixed.
 - `task: dpo` with `neftune_alpha`. The reference forward draws NEFTune noise between the policy
   forwards, an order the layer-major walk does not reproduce.
-- `dpo_ref_regen_epochs` on any DPO run, with or without L2L.
+- `task: dpo` with `dpo_ref_regen_epochs`. A regenerated reference would overwrite the `ref`
+  adapter between steps.
 
 `lora.dropout` above 0 is accepted, because TRL zeroes every `nn.Dropout` when it builds the DPO
 trainer.

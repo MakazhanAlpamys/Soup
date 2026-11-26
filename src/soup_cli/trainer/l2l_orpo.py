@@ -1,4 +1,4 @@
-"""ORPO window loss for L2L (ticket A6-02).
+"""ORPO window loss for L2L.
 
 TRL's ``ORPOTrainer`` builds one micro-batch from separate tensors ``chosen_*`` and
 ``rejected_*`` (right-padded) and has no ``input_ids``. Its ``concatenated_forward`` stacks

@@ -1,4 +1,4 @@
-"""Ticket A6-04: DPO on L2L, the reference pass inside the loaded layer (CPU).
+"""DPO on L2L, the reference pass inside the loaded layer (CPU).
 
 TRL 0.29.1 gives a ``PeftModel`` without ``ref_model`` a frozen ``ref`` adapter, a copy of the
 policy adapter at trainer build, and computes the reference log-probabilities per micro-batch
@@ -8,7 +8,7 @@ these tests is that trainer under gradient accumulation, built by the real
 from the same adapters and the same data order; the LoRA gradient of every optimizer step and
 the logged loss must be equal with ``torch.equal``.
 
-Seams, agreed by the ticket:
+Seams:
 
 * ``L2LStep.run(..., reference=ReferencePass(...))``: the second, gradient-free pass through
   the loaded layer (step level, ``test_reference_pass_*``).
@@ -333,6 +333,8 @@ def test_the_trainer_is_the_l2l_subclass_only_with_l2l_true(tmp_path, monkeypatc
         ("precompute_ref_logps", True, "precompute_ref_log_probs"),
         ("ld_alpha", 0.5, "ld_alpha"),
         ("f_divergence_type", "forward_kl", "f_divergence_type"),
+        ("label_smoothing", 0.1, "label_smoothing"),
+        ("use_weighting", True, "use_weighting"),
     ],
 )
 def test_a_trainer_that_departs_from_plain_sigmoid_dpo_is_refused(attribute, value, match):
@@ -353,6 +355,23 @@ def test_a_trainer_that_departs_from_plain_sigmoid_dpo_is_refused(attribute, val
     setattr(trainer, attribute, value)
     with pytest.raises(ValueError, match=match):
         refuse_unsupported_dpo(trainer)
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    ["loss_types", "loss_weights", "ref_model", "precompute_ref_logps", "ld_alpha",
+     "f_divergence_type", "label_smoothing", "use_weighting"],
+)
+def test_a_trainer_that_lacks_a_checked_attribute_is_refused(attribute):
+    from soup_cli.trainer.l2l_dpo import refuse_unsupported_dpo
+
+    values = dict(
+        loss_types=["sigmoid"], loss_weights=[1.0], ref_model=None, precompute_ref_logps=False,
+        ld_alpha=None, f_divergence_type="reverse_kl", label_smoothing=0.0, use_weighting=False,
+    )
+    del values[attribute]
+    with pytest.raises(ValueError, match=f"this trainer has no attribute '{attribute}'"):
+        refuse_unsupported_dpo(SimpleNamespace(**values))
 
 
 # --------------------------------------------------------------------------
@@ -722,19 +741,37 @@ def test_the_schema_refuses_dpo_with_l2l_when_streaming_is_off():
         load_config_from_string(text)
 
 
+_BETA_FIXED = (
+    "training.l2l with task='dpo' keeps beta fixed: remove "
+    "training.dpo_beta_schedule and training.dpo_beta_end."
+)
+_REF_FIXED = (
+    "training.l2l with task='dpo' keeps the reference fixed: remove "
+    "training.dpo_ref_regen_epochs, which would overwrite the 'ref' adapter between steps."
+)
+_NEFTUNE = (
+    "training.l2l with task='dpo' does not support training.neftune_alpha: the reference "
+    "forward draws NEFTune noise between the policy forwards, an order the layer-major walk "
+    "does not reproduce."
+)
+
+
 @pytest.mark.parametrize(
-    "extra,match",
+    "extra,message",
     [
-        ({"dpo_beta_schedule": "linear", "dpo_beta_end": 0.05}, "dpo_beta_schedule"),
-        ({"dpo_ref_regen_epochs": 1}, "dpo_ref_regen_epochs"),
-        ({"neftune_alpha": 5.0}, "neftune_alpha"),
+        ({"dpo_beta_schedule": "linear", "dpo_beta_end": 0.05}, _BETA_FIXED),
+        ({"dpo_beta_schedule": "linear"}, _BETA_FIXED),
+        ({"dpo_beta_end": 0.05}, _BETA_FIXED),
+        ({"dpo_ref_regen_epochs": 1}, _REF_FIXED),
+        ({"neftune_alpha": 5.0}, _NEFTUNE),
     ],
 )
-def test_the_schema_refuses_what_changes_the_reference_between_steps(extra, match):
+def test_the_schema_refuses_what_changes_the_reference_between_steps(extra, message):
     from soup_cli.config.loader import load_config_from_string
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError) as caught:
         load_config_from_string(_l2l_yaml(**extra))
+    assert message in str(caught.value)
 
 
 def test_the_schema_accepts_the_default_lora_dropout_with_dpo_and_l2l():
@@ -762,3 +799,147 @@ def test_the_tasks_that_are_not_ready_stay_refused_with_l2l(task):
     pattern = rf"training\.l2l supports task in \['sft', 'dpo'\]; got task='{task}'"
     with pytest.raises(ValueError, match=pattern):
         load_config_from_string(_l2l_yaml(task=task))
+
+
+# --------------------------------------------------------------------------
+# launch guards, through the DPO wrapper: each refuses before any model load
+# --------------------------------------------------------------------------
+class _ReachedError(Exception):
+    """The streamed model load, which these tests replace."""
+
+
+def _launch_wrapper(monkeypatch, **training):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+    wrapper = DPOTrainerWrapper.__new__(DPOTrainerWrapper)
+    wrapper.config = load_config_from_string(_l2l_yaml(**training))
+    wrapper.device = "cpu"
+
+    def reached(self, cfg, tcfg):
+        raise _ReachedError
+
+    monkeypatch.setattr(DPOTrainerWrapper, "_setup_streaming_transformers", reached)
+    return wrapper
+
+
+_DISTRIBUTED = (
+    "training.l2l cannot run on a distributed layer stream: the L2L step runs its "
+    "own backward, so the adapter-gradient average between ranks would be skipped. "
+    "Run one process, or set training.l2l to false."
+)
+
+
+def test_a_clean_l2l_config_resolves_the_recipe_before_the_model_load(monkeypatch):
+    wrapper = _launch_wrapper(monkeypatch, gradient_accumulation_steps=4)
+    with pytest.raises(_ReachedError):
+        wrapper.setup({})
+    assert (wrapper._l2l_recipe.requested_k, wrapper._l2l_recipe.effective_k) == (4, 4)
+
+
+def test_without_l2l_the_dpo_wrapper_resolves_no_recipe(monkeypatch):
+    wrapper = _launch_wrapper(monkeypatch)
+    wrapper.config.training.l2l = False
+    with pytest.raises(_ReachedError):
+        wrapper.setup({})
+    assert wrapper._l2l_recipe is None
+
+
+def test_fp8_is_refused_by_the_dpo_wrapper_before_the_model_load(monkeypatch):
+    wrapper = _launch_wrapper(monkeypatch, l2l_activation_codec="fp8_e4m3")
+    with pytest.raises(ValueError) as caught:
+        wrapper.setup({})
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch "
+        "supports 'none'. Set it to 'none'."
+    )
+
+
+def test_auto_k_is_refused_by_the_dpo_wrapper_before_the_model_load(monkeypatch):
+    wrapper = _launch_wrapper(monkeypatch, l2l_auto_k=True)
+    with pytest.raises(ValueError, match="l2l_auto_k is not available yet for this model"):
+        wrapper.setup({})
+
+
+def test_a_spill_dir_outside_the_roots_is_refused_by_the_dpo_wrapper_and_never_swept(
+    monkeypatch, tmp_path
+):
+    from soup_cli.utils import l2l_spill
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    monkeypatch.setattr(l2l_spill, "_allowed_roots", lambda: (str(allowed),))
+    swept = []
+    monkeypatch.setattr(l2l_spill, "sweep_stale", lambda *args, **kwargs: swept.append(args))
+    wrapper = _launch_wrapper(monkeypatch, l2l_spill_dir=str(outside))
+    with pytest.raises(ValueError, match=r"training\.l2l_spill_dir is refused: .*outside \$HOME"):
+        wrapper.setup({})
+    assert not outside.exists()
+    assert swept == []
+
+
+def test_l2l_is_refused_by_the_dpo_wrapper_in_a_multi_process_launch(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    wrapper = _launch_wrapper(monkeypatch)
+    with pytest.raises(ValueError) as caught:
+        wrapper.setup({})
+    assert str(caught.value) == _DISTRIBUTED
+
+
+def test_l2l_is_refused_by_the_dpo_wrapper_when_the_stream_is_distributed(monkeypatch):
+    wrapper = _launch_wrapper(monkeypatch)
+    wrapper._distributed_stream = True
+    with pytest.raises(ValueError) as caught:
+        wrapper.setup({})
+    assert str(caught.value) == _DISTRIBUTED
+
+
+# --------------------------------------------------------------------------
+# the recipe: written by wrapper.train(), checked on resume
+# --------------------------------------------------------------------------
+def _train_wrapper(monkeypatch, tmp_path):
+    from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
+
+    wrapper = _launch_wrapper(monkeypatch, gradient_accumulation_steps=2)
+    monkeypatch.chdir(tmp_path)
+    wrapper._output_dir = str(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    wrapper._batch_size = 1
+    wrapper.trainer = SimpleNamespace()
+    wrapper._l2l_recipe = resolve_l2l_recipe(wrapper.config.training)
+
+    def stop(**kwargs):
+        raise _ReachedError
+
+    # the first thing wrapper.train() does after the recipe, so the test stops there
+    monkeypatch.setattr("soup_cli.utils.dpo_variants.build_dpo_variant_callbacks", stop)
+    return wrapper
+
+
+def test_wrapper_train_writes_the_l2l_recipe(monkeypatch, tmp_path):
+    import json
+
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    with pytest.raises(_ReachedError):
+        wrapper.train()
+    saved = json.loads((tmp_path / "out" / "l2l_recipe.json").read_text(encoding="utf-8"))
+    assert saved["effective_k"] == 2 and saved["activation_codec"] == "none"
+
+
+def test_wrapper_train_refuses_a_resume_whose_saved_recipe_differs(monkeypatch, tmp_path):
+    import dataclasses
+
+    from soup_cli.utils.l2l_recipe import write_recipe
+
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    old = dataclasses.replace(wrapper._l2l_recipe, requested_k=4, effective_k=4)
+    path = write_recipe(wrapper._output_dir, old)
+    before = Path(path).read_text(encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(tmp_path / "out" / "checkpoint-1"))
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with effective_k=4, but this run has "
+        "effective_k=2. Restore the old value in the config."
+    )
+    assert Path(path).read_text(encoding="utf-8") == before

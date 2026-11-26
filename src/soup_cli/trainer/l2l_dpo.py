@@ -1,4 +1,4 @@
-"""DPO window loss for L2L (ticket A6-04).
+"""DPO window loss for L2L.
 
 TRL 0.29.1 ``DPOTrainer`` builds one micro-batch ``[chosen rows; rejected rows]`` with
 ``DataCollatorForPreference`` (``input_ids``, ``attention_mask``, ``completion_mask``,

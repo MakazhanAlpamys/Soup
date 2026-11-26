@@ -1,4 +1,4 @@
-"""KTO window loss for L2L (ticket A6-05).
+"""KTO window loss for L2L.
 
 TRL 0.29.1 ``KTOTrainer`` reads unpaired rows ``(prompt, completion, label)``. At data
 preparation it builds a second completion for every row, the KL completion: the answers of a

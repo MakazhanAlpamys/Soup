@@ -8355,13 +8355,20 @@ class SoupConfig(BaseModel):
         """training.l2l with task='dpo' reproduces TRL's sigmoid DPO against a frozen ``ref``
         adapter at a fixed beta. Refuse what changes that between steps or draws random numbers
         in the reference forward, which the layer-major walk cannot replay. A regenerated
-        reference (dpo_ref_regen_epochs) is refused for every DPO run by the variants check.
+        reference (dpo_ref_regen_epochs) would overwrite the ``ref`` adapter mid-run, so it is
+        refused here too.
         lora.dropout is not refused: TRL's DPOTrainer zeroes every nn.Dropout when it is built
         (``disable_dropout=True``), so no LoRA dropout mask is drawn in either forward."""
         if tcfg.dpo_beta_schedule is not None or tcfg.dpo_beta_end is not None:
             raise ValueError(
                 "training.l2l with task='dpo' keeps beta fixed: remove "
                 "training.dpo_beta_schedule and training.dpo_beta_end."
+            )
+        if tcfg.dpo_ref_regen_epochs is not None:
+            raise ValueError(
+                "training.l2l with task='dpo' keeps the reference fixed: remove "
+                "training.dpo_ref_regen_epochs, which would overwrite the 'ref' adapter "
+                "between steps."
             )
         if tcfg.neftune_alpha is not None:
             raise ValueError(
