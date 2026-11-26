@@ -852,6 +852,30 @@ Set while `stream_layers: false` the key is rejected as a footgun, like the othe
 
 ### Sizing a streaming run (v0.72.3)
 
+**Early adapter memory check.** With `training.stream_layers` on CUDA, Soup resolves the
+LoRA targets and ranks on a model skeleton before loading checkpoint weights or preparing
+layer shards. The estimate uses the shapes of the resulting adapters, including per-module
+ranks and expert projections. Soup compares the persistent adapter tensors with free VRAM
+plus PyTorch's unused memory reserve, or with the byte limit set by
+`training.stream_vram_override`. This check also runs when `training.stream_vram_probe`
+is enabled.
+
+If the adapter exceeds the limit, Soup reports the required and available bytes. For a
+supported optimizer profile, the message breaks down the adapter weights, gradients and
+optimizer tensors. The estimate covers ordinary FP32 AdamW, SGD without momentum, Adagrad,
+RMSprop without momentum or centering, Adafactor without a first moment, and standard
+LoRA-FA. The non-paged 8-bit AdamW estimate is specific to bitsandbytes 0.50.2. Optimizer
+step counters stored on the CPU count toward host memory. When the optimizer cost is
+unknown, adapter weights alone can still trigger a refusal.
+
+Soup may suggest an attention-only target pattern or one that also includes shared experts
+if the smaller adapter fits. To use a suggestion, copy its
+`training.lora.target_modules` pattern and set `training.moe_lora: false`. Lowering the
+LoRA rank also reduces the adapter budget.
+
+A fitting adapter proceeds to the usual streaming setup. The later peak VRAM forecast still
+accounts for the memory needed by base buffers and activations.
+
 Streaming bounds the **weights**. It does nothing for activations or for the logits
 tensor, and both scale with `batch × seq`. On a large-vocabulary model that second term
 dominates everything else: measured on Qwen2.5-0.5B (vocab 151 936) at batch 8, S=512,

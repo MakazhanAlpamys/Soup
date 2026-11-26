@@ -1,0 +1,1 @@
+- Layer streaming checks LoRA adapter memory before loading checkpoint weights and suggests smaller target patterns when they fit the adapter budget. (by @Artix6034, @M1kado0)
