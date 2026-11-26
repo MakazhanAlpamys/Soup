@@ -549,28 +549,32 @@ def test_recording_wrapper_keeps_epoch_reseeding(tmp_path):
     assert recorded_epochs == plain_epochs
 
 
-def test_seedable_swap_follows_accelerates_own_conditions(tmp_path):
-    """``_seedable`` makes the swap Accelerator.prepare would make: only for a RandomSampler,
-    only while ``use_seedable_sampler`` is on, seeded by ``data_seed``. Anything else passes
-    through as the same object."""
-    from types import SimpleNamespace
-
+def test_seedable_swap_follows_accelerates_own_conditions(tmp_path, monkeypatch):
+    """The sampler hook makes the swap Accelerator.prepare would make: only for a RandomSampler,
+    only while ``use_seedable_sampler`` is on, seeded by ``data_seed``. Anything else reaches
+    the recorder as the same object."""
     from accelerate.data_loader import SeedableRandomSampler
     from torch.utils.data import RandomSampler, SequentialSampler
+    from trl import SFTTrainer
 
-    trainer = _trainer(tmp_path, wrap=False, per_device_train_batch_size=1)
+    trainer = _trainer(tmp_path, per_device_train_batch_size=1)
+    rewind_hf.attach_rewind_state(trainer, FakeSink())
     config = trainer.accelerator.dataloader_config
     config.data_seed = 1234
-    dataset = trainer.train_dataset
-    random_sampler = RandomSampler(dataset)
-    sequential_sampler = SequentialSampler(dataset)
 
-    swapped = rewind_hf._seedable(trainer, random_sampler)
+    def recorded_inner():
+        # The recorder wraps whatever the base trainer returned; ``_inner`` is that object.
+        return trainer._get_train_sampler(trainer.train_dataset)._inner
+
+    config.use_seedable_sampler = True
+    swapped = recorded_inner()
     assert isinstance(swapped, SeedableRandomSampler)
     assert swapped.initial_seed == 1234
-    assert rewind_hf._seedable(trainer, sequential_sampler) is sequential_sampler
 
     config.use_seedable_sampler = False
-    assert rewind_hf._seedable(trainer, random_sampler) is random_sampler
+    assert type(recorded_inner()) is RandomSampler
 
-    assert rewind_hf._seedable(SimpleNamespace(), random_sampler) is random_sampler
+    config.use_seedable_sampler = True
+    sequential = SequentialSampler(trainer.train_dataset)
+    monkeypatch.setattr(SFTTrainer, "_get_train_sampler", lambda self, *args, **kwargs: sequential)
+    assert recorded_inner() is sequential
