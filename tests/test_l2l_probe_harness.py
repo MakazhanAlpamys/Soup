@@ -339,14 +339,34 @@ def sched():
     return _load("l2l_schedule")
 
 
+def hermetic_ram(monkeypatch, tmp_path, free=10**12):
+    """The L2L trainer's RAM budget sees ``free`` bytes of free RAM and no cgroup limit, so a
+    test does not depend on the host's free memory (the budget keeps a 512 MiB reserve)."""
+    from soup_cli.utils import l2l_spill
+
+    empty = tmp_path / "no-cgroup"
+    empty.mkdir(exist_ok=True)
+    for name in ("PROC_ROOT", "CGROUP_V2_ROOT", "CGROUP_V1_ROOT"):
+        monkeypatch.setattr(l2l_spill, name, str(empty))
+    monkeypatch.setattr("soup_cli.utils.layer_stream.free_ram_bytes", lambda: free)
+
+
 @pytest.fixture()
-def streamed(tmp_path):
+def streamed(tmp_path, monkeypatch):
     """A tiny untied Llama through shard_checkpoint + build_streamed_model on CPU.
 
     Untied, so the embed/head share the streamed large slot exactly as the 70B
     fixture's do; three layers, so the zig-zag turnaround and the backward
-    prefetch both run.
+    prefetch both run. The activations always fit the L2L budget (``hermetic_ram``).
     """
+    model, runtime = build_streamed(tmp_path)
+    hermetic_ram(monkeypatch, tmp_path)
+    yield model, runtime
+    runtime.close()
+
+
+def build_streamed(tmp_path, lora_dropout=0.0, device="cpu", n_layers=3):
+    """The ``streamed`` fixture's model; the caller closes ``runtime``."""
     pytest.importorskip("peft")
     from peft import LoraConfig, TaskType
 
@@ -354,13 +374,13 @@ def streamed(tmp_path):
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
     from tests.test_v07204 import _tiny_llama_dir
 
-    weights, _model, _config = _tiny_llama_dir(tmp_path, n_layers=3, tie=False)
+    weights, _model, _config = _tiny_llama_dir(tmp_path, n_layers=n_layers, tie=False)
     shards = str(tmp_path / "shards")
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     lora = LoraConfig(
         r=4,
         lora_alpha=8,
-        lora_dropout=0.0,
+        lora_dropout=lora_dropout,
         bias="none",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         task_type=TaskType.CAUSAL_LM,
@@ -370,14 +390,13 @@ def streamed(tmp_path):
         shard_dir=shards,
         index=index,
         lora_config=lora,
-        device="cpu",
+        device=device,
         dtype="float32",
         buffers=2,
         pin=False,
         seed=3,
     )
-    yield model, runtime
-    runtime.close()
+    return model, runtime
 
 
 def _micro_batches(k, vocab=64, seed=17):
