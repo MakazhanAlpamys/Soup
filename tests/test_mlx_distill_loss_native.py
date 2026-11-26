@@ -112,14 +112,14 @@ def test_chunk_and_recompute_preserve_values_and_gradients(divergence, chunk_siz
     assert mx.allclose(metrics["kd_sum"], expected_metrics["kd_sum"], atol=2e-6).item()
 
 
-def test_identical_distributions_keep_ce_and_freeze_teacher_gradient():
-    student, _, labels, active = fixture()
+def test_unequal_distributions_keep_ce_and_freeze_teacher_gradient():
+    student, teacher, labels, active = fixture()
     (loss, metrics), grads = mx.value_and_grad(
         lambda s, t: token_loss_sums(s, t, labels, active), argnums=(0, 1),
-    )(student, student)
-    assert abs(metrics["kd_sum"].item()) < 1e-6
+    )(student, teacher)
+    assert metrics["kd_sum"].item() > 1e-4
     assert metrics["ce_sum"].item() > 0
-    assert mx.allclose(loss, metrics["ce_sum"] / 2).item()
+    assert mx.allclose(loss, (metrics["ce_sum"] + metrics["kd_sum"]) / 2).item()
     assert mx.any(grads[0] != 0).item()
     assert mx.all(grads[1] == 0).item()
 

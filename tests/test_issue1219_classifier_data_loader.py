@@ -90,6 +90,10 @@ class TestTaskPreservesSourceColumns:
     def test_helper_predicate_values(self, task: str, expected: bool) -> None:
         assert task_preserves_source_columns(task) is expected
 
+    def test_native_mlx_distillation_preserves_only_its_source_columns(self) -> None:
+        assert task_preserves_source_columns("distill", backend="mlx") is True
+        assert task_preserves_source_columns("distill", backend="transformers") is False
+
     def test_train_and_sweep_use_same_helper_ast(self) -> None:
         """Audit AST of train.py and sweep.py: both must call task_preserves_source_columns."""
         repo_root = Path(__file__).resolve().parents[1]
@@ -100,13 +104,26 @@ class TestTaskPreservesSourceColumns:
         assert 'preserve_source_columns=cfg.task == "grpo"' not in train_py
         assert 'preserve_source_columns=cfg.task == "grpo"' not in sweep_py
 
-        # Both must call task_preserves_source_columns
-        assert "task_preserves_source_columns(cfg.task)" in train_py
-        assert "task_preserves_source_columns(cfg.task)" in sweep_py
-
         # Both must import task_preserves_source_columns from soup_cli.data.loader
         train_ast = ast.parse(train_py)
         sweep_ast = ast.parse(sweep_py)
+
+        def finds_backend_aware_call(tree: ast.AST) -> bool:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if not isinstance(node.func, ast.Name):
+                    continue
+                if node.func.id != "task_preserves_source_columns":
+                    continue
+                for keyword in node.keywords:
+                    if keyword.arg != "backend" or not isinstance(keyword.value, ast.Attribute):
+                        continue
+                    if (isinstance(keyword.value.value, ast.Name)
+                            and keyword.value.value.id == "cfg"
+                            and keyword.value.attr == "backend"):
+                        return True
+            return False
 
         def finds_import(tree: ast.AST, target_name: str) -> bool:
             for node in ast.walk(tree):
@@ -121,6 +138,12 @@ class TestTaskPreservesSourceColumns:
         )
         assert finds_import(sweep_ast, "task_preserves_source_columns"), (
             "sweep.py must import task_preserves_source_columns"
+        )
+        assert finds_backend_aware_call(train_ast), (
+            "train.py must pass the resolved backend to task_preserves_source_columns"
+        )
+        assert finds_backend_aware_call(sweep_ast), (
+            "sweep.py must pass the resolved backend to task_preserves_source_columns"
         )
 
 

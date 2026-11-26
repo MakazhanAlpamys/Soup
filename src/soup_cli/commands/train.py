@@ -2786,7 +2786,9 @@ def train(
         try:
             dataset = load_dataset(
                 data_config_for_task(run_data_config, cfg.task),
-                preserve_source_columns=task_preserves_source_columns(cfg.task),
+                preserve_source_columns=task_preserves_source_columns(
+                    cfg.task, backend=cfg.backend,
+                ),
             )
         except (OSError, ValueError, ImportError, CsvError):
             if receipt is not None:
@@ -2832,7 +2834,9 @@ def train(
         console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
         data_config_for_task(run_data_config, cfg.task),
-        preserve_source_columns=task_preserves_source_columns(cfg.task),
+        preserve_source_columns=task_preserves_source_columns(
+            cfg.task, backend=cfg.backend,
+        ),
     )
     _validate_preference_dataset_if_applicable(cfg, dataset)
     _refuse_empty_train(cfg.data, dataset)

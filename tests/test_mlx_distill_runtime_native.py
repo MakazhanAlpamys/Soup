@@ -231,6 +231,89 @@ def test_full_batch_and_unequal_token_accumulation_match_including_final_window(
         assert mx.allclose(outputs[0][name], outputs[1][name], atol=2e-6, rtol=2e-5).item(), name
 
 
+def test_optimizer_receives_independent_full_window_active_token_mean(
+    pair, tmp_path, monkeypatch,
+):
+    from mlx.utils import tree_map
+
+    import soup_cli.trainer.mlx_distill as module
+
+    train_rows = rows()["train"][:2]
+    trainer = module.MLXDistillTrainerWrapper(config(
+        *pair, tmp_path / "token-mean", batch_size=1,
+        gradient_accumulation_steps=2, max_grad_norm=1e6,
+    ))
+    trainer.setup({"train": train_rows})
+    tokens, labels, active = collate(
+        trainer._train_rows, pad_id=trainer.tokenizer.pad_token_id,
+        max_length=trainer.config.data.max_length,
+    )
+    teacher_logits = trainer._teacher_logits(tokens)
+    loss_arguments = trainer._loss_arguments()
+
+    def independent_full_batch_loss(input_ids, targets, selected, teacher):
+        return module.token_loss_sums(
+            trainer.model(input_ids), teacher, targets, selected, **loss_arguments,
+        )
+
+    (_, _), full_batch_gradient = nn.value_and_grad(
+        trainer.model, independent_full_batch_loss,
+    )(tokens, labels, active, teacher_logits)
+    expected = tree_map(
+        lambda gradient: gradient / sum(row.active_count for row in trainer._train_rows),
+        full_batch_gradient,
+    )
+    captured = []
+    original_build = module.build_optimizer
+
+    def capture_optimizer(plan):
+        optimizer = original_build(plan)
+        update = optimizer.update
+
+        def record(model, gradients):
+            captured.append(dict(tree_flatten(gradients)))
+            return update(model, gradients)
+
+        optimizer.update = record
+        return optimizer
+
+    monkeypatch.setattr(module, "build_optimizer", capture_optimizer)
+    result = trainer.train()
+
+    assert result["optimizer_updates"] == 1
+    assert len(captured) == 1
+    expected_flat = dict(tree_flatten(expected))
+    assert set(captured[0]) == set(expected_flat)
+    for name, gradient in expected_flat.items():
+        assert mx.allclose(captured[0][name], gradient, atol=2e-6, rtol=2e-5).item(), name
+
+
+def test_failed_setup_retry_freezes_base_and_reapplies_lora(pair, tmp_path):
+    from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
+
+    trainer = MLXDistillTrainerWrapper(config(*pair, tmp_path / "retry-setup"))
+    invalid = {
+        "train": [{
+            "messages": [
+                {"role": "user", "content": "alpha"},
+                {"role": "assistant", "content": "beta"},
+            ],
+            "chat_template_kwargs": {"enable_thinking": False},
+        }],
+    }
+    with pytest.raises(ValueError, match="chat_template_kwargs is unsupported"):
+        trainer.setup(invalid)
+    assert trainer.model is trainer.teacher is trainer.tokenizer is None
+
+    trainer.setup(rows())
+    trainable = dict(tree_flatten(trainer.model.trainable_parameters()))
+    assert trainable
+    fresh = MLXDistillTrainerWrapper(config(*pair, tmp_path / "fresh-control"))
+    fresh.setup(rows())
+    expected_trainable = dict(tree_flatten(fresh.model.trainable_parameters()))
+    assert set(trainable) == set(expected_trainable)
+
+
 @pytest.mark.parametrize("bad", ["teacher-nan", "student-inf", "interruption"])
 def test_failure_prevents_update_and_final_success_artifact(pair, tmp_path, bad, monkeypatch):
     from soup_cli.trainer.mlx_distill import MLXDistillTrainerWrapper
@@ -400,6 +483,69 @@ def test_nonfinite_accumulated_gradient_aborts_before_update(pair, tmp_path, mon
     assert all(mx.array_equal(value, dict(tree_flatten(trainer.model.trainable_parameters()))[name])
                .item() for name, value in before.items())
     assert not (tmp_path / "nan-grad" / "adapters.safetensors").exists()
+
+
+def test_finite_microbatch_gradients_that_overflow_when_summed_abort_before_update(
+    pair, tmp_path, monkeypatch,
+):
+    import soup_cli.trainer.mlx_distill as module
+
+    trainer = module.MLXDistillTrainerWrapper(config(
+        *pair, tmp_path / "overflow-window", batch_size=1,
+        gradient_accumulation_steps=2,
+    ))
+    duplicated = rows()["train"][:1] * 2
+    trainer.setup({"train": duplicated})
+    microbatch_gradients = []
+    update_calls = []
+
+    def finite_grad_compile(function, *args, **kwargs):
+        def step(*step_args, **step_kwargs):
+            (loss_metrics, _real_gradient) = function(*step_args, **step_kwargs)
+            total, metrics = loss_metrics
+            import mlx.utils
+
+            controlled = mlx.utils.tree_map(
+                lambda value: mx.full(value.shape, 2e38, dtype=mx.float32),
+                _real_gradient,
+            )
+            microbatch_gradients.append(dict(tree_flatten(controlled)))
+            return (total, metrics), controlled
+
+        return step
+
+    monkeypatch.setattr(mx, "compile", finite_grad_compile)
+    original_build = module.build_optimizer
+
+    def capture_optimizer(plan):
+        optimizer = original_build(plan)
+        update = optimizer.update
+
+        def record(model, gradients):
+            update_calls.append(gradients)
+            return update(model, gradients)
+
+        optimizer.update = record
+        return optimizer
+
+    monkeypatch.setattr(module, "build_optimizer", capture_optimizer)
+    with pytest.raises(ValueError, match="student_gradients"):
+        trainer.train()
+
+    assert len(microbatch_gradients) == 2
+    assert all(
+        mx.all(mx.isfinite(value)).item()
+        for batch_gradients in microbatch_gradients
+        for value in batch_gradients.values()
+    )
+    assert any(
+        not mx.all(mx.isfinite(
+            microbatch_gradients[0][name] + microbatch_gradients[1][name]
+        )).item()
+        for name in microbatch_gradients[0]
+    )
+    assert update_calls == []
+    assert not (tmp_path / "overflow-window" / "adapters.safetensors").exists()
 
 
 def test_real_offline_cli_train_evaluate_reload_and_auto_warm_start(pair, tmp_path, monkeypatch):

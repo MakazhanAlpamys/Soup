@@ -26,6 +26,7 @@ from soup_cli.trainer.mlx_sft import (
     resolve_mlx_target_keys,
 )
 from soup_cli.utils.mlx_distill import validate_native_distill
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -131,6 +132,7 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
                                             split="val", **args)
             self._dataset = dataset
         except BaseException:
+            self._applied_lora = False
             self.teacher = self.teacher_tokenizer = self.model = self.tokenizer = None
             mx.clear_cache()
             raise
@@ -260,7 +262,10 @@ class MLXDistillTrainerWrapper(MLXSFTTrainerWrapper):
             inputs=[self.model.state, mx.random.state],
             outputs=[self.model.state, mx.random.state],
         )
-        output = Path(cfg.output)
+        output = Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None),
+            backend="mlx", task=cfg.task,
+        ))
         output.mkdir(parents=True, exist_ok=True)
         status = output / "distillation_run.json"
 

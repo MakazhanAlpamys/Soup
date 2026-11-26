@@ -325,9 +325,14 @@ PRESERVE_SOURCE_TASKS: frozenset[str] = frozenset({
 })
 
 
-def task_preserves_source_columns(task: str) -> bool:
-    """Return whether task requires source dataset columns to be preserved."""
-    return task in PRESERVE_SOURCE_TASKS
+def task_preserves_source_columns(task: str, *, backend: str | None = None) -> bool:
+    """Whether normalization must retain task-specific source columns.
+
+    Native MLX distillation reads per-row tokenizer arguments to refuse settings it
+    cannot verify. Restrict that preservation to MLX; the Transformers distiller
+    consumes its normalized messages through its own dataset mapping.
+    """
+    return task in PRESERVE_SOURCE_TASKS or (task == "distill" and backend == "mlx")
 
 
 PREFERENCE_PAIR_TASKS = frozenset({

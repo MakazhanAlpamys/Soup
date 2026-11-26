@@ -953,6 +953,9 @@ Prompts and padding are excluded according to `train_on_responses_only`;
 plain text supervises all real causal targets, including real EOS when pad=EOS.
 Chat/prompt-completion response masks require the shipped prefix-stable template.
 A row with no target after truncation is refused by split and 1-based position.
+The CLI preserves per-row `chat_template_kwargs` for native MLX distillation so
+unsupported tokenizer overrides are refused before training instead of being
+silently discarded during dataset normalization.
 
 Each optimizer window divides summed gradients by **all** its active targets.
 Unequal microbatches, a final partial batch/window and validation splits smaller

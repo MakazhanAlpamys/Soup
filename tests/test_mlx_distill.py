@@ -1,5 +1,7 @@
 """Portable native-distillation configuration and public routing contracts."""
 
+import json
+
 import pytest
 
 from soup_cli.config.schema import SoupConfig
@@ -150,6 +152,47 @@ def test_public_offline_dry_run_with_real_data_does_not_require_mlx(tmp_path, mo
     assert outcome.exit_code == 0, (outcome.output, repr(outcome.exception))
     output = " ".join(strip_ansi(outcome.output).split())
     assert "Config valid" in output
+
+
+def test_public_cli_preserves_chatml_template_kwargs_for_native_distill(
+    tmp_path, monkeypatch,
+):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.commands import train as train_command
+    from soup_cli.data.loader import load_dataset as real_load_dataset
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    data = tmp_path / "chatml.jsonl"
+    kwargs = {"enable_thinking": False}
+    data.write_text(json.dumps({
+        "messages": [
+            {"role": "user", "content": "Why is the sky blue?"},
+            {"role": "assistant", "content": "Scattering."},
+        ],
+        "chat_template_kwargs": kwargs,
+    }) + "\n")
+    raw = recipe()
+    raw["data"].update(train=str(data), format="chatml", val_split=0)
+    config_path = tmp_path / "soup.json"
+    config_path.write_text(SoupConfig.model_validate(raw).model_dump_json())
+    loaded = []
+
+    def capture_loaded_dataset(data_config, **options):
+        dataset = real_load_dataset(data_config, **options)
+        loaded.append(dataset)
+        return dataset
+
+    monkeypatch.setattr(train_command, "load_dataset", capture_loaded_dataset)
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert loaded[0]["train"][0]["chat_template_kwargs"] == kwargs
+    assert loaded[0]["train"][0]["messages"][1]["content"] == "Scattering."
 
 
 @pytest.mark.parametrize("option", ["deepspeed_config", "fsdp_config", "trust_remote_code"])
