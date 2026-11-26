@@ -244,9 +244,10 @@ class L2LState:
             "l2l_capture_seconds": self.capture_seconds,
             "l2l_layer_loads": self.totals.layer_loads,
             "l2l_large_loads": self.totals.large_loads,
-            "l2l_weight_restores": self.totals.restores,
             "l2l_spill_layers": int(self.spill_plan["spill_layers"]) if self.spill_plan else 0,
         }
+        if self.totals.restores is not None:
+            fields["l2l_weight_restores"] = self.totals.restores
         if self.effective_k is not None:
             fields["l2l_effective_k"] = self.effective_k
         # Only a runtime that streams routed experts has them to count; a dense run's log

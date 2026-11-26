@@ -119,7 +119,8 @@ def _assert_same_run(ga, l2l, windows):
     for earlier, later in zip(l2l.logs, l2l.logs[1:]):
         for key in ("l2l_layer_loads", "l2l_large_loads"):
             assert later[key] > earlier[key], key
-        assert later["l2l_weight_restores"] >= earlier["l2l_weight_restores"]
+        # the main runtime keeps no restore counter, so the field is absent, never a zero
+        assert "l2l_weight_restores" not in later
     assert l2l.logs[0]["l2l_layer_loads"] > 0
 
 

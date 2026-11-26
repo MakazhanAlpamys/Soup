@@ -320,3 +320,57 @@ def test_the_trainer_still_admits_a_dense_model():
     for arch in ("llama", "mistral"):
         config = type("Config", (), {"model_type": arch})()
         refuse_unsupported_l2l(config, n_gpu=1)
+
+
+# --------------------------------------------------------------------------
+# weight restores: "not counted" on a runtime without the counter, never zero
+# --------------------------------------------------------------------------
+class _StatsRuntime:
+    def __init__(self, **stats):
+        self._stats = stats
+
+    def stats(self):
+        return dict(self._stats)
+
+
+_BASE_STATS = {"layer_loads": 4, "large_loads": 1, "expert_fetches": 0, "expert_bytes_read": 0}
+
+
+def test_a_runtime_without_a_restore_counter_reports_none_not_zero():
+    from soup_cli.utils.l2l_step import count_loads
+
+    runtime = _StatsRuntime(**_BASE_STATS)
+    with count_loads(runtime) as counters:
+        runtime._stats["layer_loads"] += 3
+    assert counters.layer_loads == 3
+    assert counters.restores is None
+
+
+def test_a_runtime_with_a_restore_counter_reports_its_delta():
+    from soup_cli.utils.l2l_step import count_loads
+
+    runtime = _StatsRuntime(layer_restores=2, **_BASE_STATS)
+    with count_loads(runtime) as counters:
+        runtime._stats["layer_restores"] += 5
+    assert counters.restores == 5
+
+
+def test_adding_counters_keeps_not_counted_apart_from_zero():
+    from soup_cli.utils.l2l_step import LoadCounters
+
+    total = LoadCounters()
+    total.add(LoadCounters(layer_loads=2))
+    assert total.layer_loads == 2 and total.restores is None
+    total.add(LoadCounters(restores=3))
+    total.add(LoadCounters(restores=None))
+    assert total.restores == 3
+
+
+def test_the_trainer_log_omits_weight_restores_when_they_are_not_counted():
+    from soup_cli.trainer.l2l_trainer import L2LState
+    from soup_cli.utils.l2l_step import LoadCounters
+
+    state = L2LState(runtime=_StatsRuntime(**_BASE_STATS), dtype=None)
+    assert "l2l_weight_restores" not in state.log_fields()
+    state.totals = LoadCounters(restores=0)
+    assert state.log_fields()["l2l_weight_restores"] == 0

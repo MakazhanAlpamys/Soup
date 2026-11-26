@@ -62,7 +62,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3")
 
 #: Architectures whose layers carry streamed routed experts. The MoE branches below are kept
-#: from the research fork, but entry is refused until per-expert streaming parity lands.
+#: kept in place, but entry is refused until per-expert streaming parity lands.
 MOE_ARCHS = ("deepseek_v3",)
 
 #: Raised at every L2L entry for a MoE model (``model_parts`` and ``refuse_unsupported_l2l``).
@@ -108,7 +108,9 @@ class LoadCounters:
     """Loads and weight restores over a span, read from the runtime's own counters.
 
     ``layer_loads`` and ``large_loads`` are the pools' ``loads``; ``restores`` is the
-    NF4 rebuilds of ``Params4bit`` views (always 0 without quantization). ``expert_fetches``
+    NF4 rebuilds of ``Params4bit`` views, or ``None`` when the runtime does not count them
+    (the main runtime rebuilds the quantization state on each layer load but keeps no
+    counter, so ``None`` there means "not counted", never "zero"). ``expert_fetches``
     is the reads of one routed expert into the expert arena, whether the forward, the
     recompute or the expert's own backward asked for it, and ``expert_bytes_read`` the stored
     bytes those reads took; both are 0 without a per-expert cache. Nothing is patched: the
@@ -117,20 +119,26 @@ class LoadCounters:
 
     layer_loads: int = 0
     large_loads: int = 0
-    restores: int = 0
+    restores: Optional[int] = None
     expert_fetches: int = 0
     expert_bytes_read: int = 0
 
     def add(self, other: "LoadCounters") -> None:
         for name in _STAT_KEYS:
-            setattr(self, name, getattr(self, name) + getattr(other, name))
+            mine, theirs = getattr(self, name), getattr(other, name)
+            if theirs is None:
+                continue
+            setattr(self, name, theirs if mine is None else mine + theirs)
 
 
-def _counter_values(runtime: Any) -> Dict[str, int]:
+def _counter_values(runtime: Any) -> Dict[str, Optional[int]]:
     stats = runtime.stats()
-    # ``layer_restores`` is a research-fork counter the main runtime does not keep (no NF4
-    # weight-restore pass there), so a missing key counts as zero restores.
-    return {name: int(stats.get(key, 0)) for name, key in _STAT_KEYS.items()}
+    # A runtime without ``layer_restores`` (the main runtime) does not count weight
+    # restores: report that as ``None``, not as zero.
+    values: Dict[str, Optional[int]] = {}
+    for name, key in _STAT_KEYS.items():
+        values[name] = int(stats[key]) if key in stats else None
+    return values
 
 
 @contextmanager
@@ -142,7 +150,8 @@ def count_loads(runtime: Any) -> Iterator[LoadCounters]:
         yield counters
     finally:
         for name, value in _counter_values(runtime).items():
-            setattr(counters, name, value - before[name])
+            if value is not None and before[name] is not None:
+                setattr(counters, name, value - before[name])
 
 
 def model_parts(model: Any) -> Tuple[Any, Any]:
