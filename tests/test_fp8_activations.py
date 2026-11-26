@@ -93,7 +93,7 @@ def _store(budget=None, **overrides):
 
 
 def _reference_fp8(tensor):
-    """G4's original operation order, independent of the shared codec entry points."""
+    """The original operation order, independent of the shared codec entry points."""
     torch = _torch()
     values = tensor.float()
     absmax = values.abs().amax(dim=-1, keepdim=True)

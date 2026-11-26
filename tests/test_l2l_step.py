@@ -1,10 +1,10 @@
-"""G1 on CPU: the shipped L2L step equals gradient accumulation bit for bit.
+"""On CPU: the shipped L2L step equals gradient accumulation bit for bit.
 
 The seam is ``soup_cli.utils.l2l_step.L2LStep.run`` plus the shipped
 ``ActivationStore``. The gradient-accumulation reference and the comparison
-helpers come from the benchmark harness (``benchmarks/harness/l2l_schedule.py``), which is
-not shipped. The NF4 weight-restore counter of the research fork is not in the main
-runtime, so its tests are not ported.
+helpers come from the benchmark harness (``benchmarks/harness/l2l_schedule.py``), which lives
+outside the package. The main runtime keeps no NF4 weight-restore counter, so there are
+no restore-count tests.
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ def test_k4_does_not_load_four_times_what_k1_loads(harness, streamed):  # noqa: 
 
 
 # --------------------------------------------------------------------------
-# ticket 03: SFT labels (-100 on padding / masked tokens) reach the loss
+# SFT labels (-100 on padding / masked tokens) reach the loss
 # --------------------------------------------------------------------------
 def test_l2l_step_with_masked_labels_equals_gradient_accumulation(harness, streamed):  # noqa: F811
     import torch
@@ -168,7 +168,7 @@ def test_l2l_step_with_masked_labels_equals_gradient_accumulation(harness, strea
 
 
 # --------------------------------------------------------------------------
-# ticket 07: rows of different lengths run at their own length, no padding
+# rows of different lengths run at their own length, no padding
 # --------------------------------------------------------------------------
 MIXED_LENGTHS = [5, 8, 3, 6]
 

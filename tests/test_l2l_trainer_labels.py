@@ -1,4 +1,4 @@
-"""Masked labels and mixed lengths through the real SFT trainer (ticket 01, CPU).
+"""Masked labels and mixed lengths through the real SFT trainer (CPU).
 
 HF counts ``num_items_in_batch`` over the whole window and the losses divide by it. The
 L2L trainer must give the loss of the window and the LoRA gradients that gradient

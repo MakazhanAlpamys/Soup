@@ -76,7 +76,7 @@ def plan_moe_l2l(
     ``max_shape`` is ``(batch, sequence, hidden)``. Charge every position at that
     capacity using the store's allocation calculation. FP8 includes per-token scales,
     pinned rounding and codec host scratch. Charge pageable int64 routing records for
-    streamed MoE layers, plus one temporary record for the B1.3 recompute comparison.
+    streamed MoE layers, plus one temporary record for the routing comparison of the recompute.
 
     If supplied, expert_input_dtype is the dtype of the gathered hidden states
     entering the streamed experts. Backward runs for one recomputed layer and

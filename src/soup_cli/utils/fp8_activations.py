@@ -2,7 +2,7 @@
 
 One FP8 payload slot per layer and micro-batch holds logical hidden vectors.
 One ragged float32 slab holds their per-token absmax scales. No compressed spill
-is supported. The numerical codec is the unchanged G4 implementation.
+is supported. The numerical codec is the one in ``activation_codec``.
 
 The host reservation includes requested storage, pinned allocator rounding, and
 host codec scratch. CUDA codec scratch is reported separately, never charged to
@@ -54,7 +54,7 @@ class FP8ActivationAllocation:
 
     A codec operation handles at most 256 rows. The scratch bound allows eight
     float32 tile matrices and eight float32 row vectors, plus one full decoded
-    result and one scalar flag. This covers input staging, the unchanged G4
+    result and one scalar flag. This covers input staging, the unchanged shared
     expressions, payload/scale transfers, and finite-check masks conservatively.
     CUDA reserves only a row-sized host finite mask plus its scalar reduction;
     all codec matrices and the decoded result belong to device scratch instead.

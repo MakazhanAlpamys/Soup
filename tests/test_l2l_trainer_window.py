@@ -1,4 +1,4 @@
-"""A last window shorter than k through the real SFT trainer (ticket 02, CPU).
+"""A last window shorter than k through the real SFT trainer (CPU).
 
 A dataset whose size k does not divide ends in a shorter window. HF builds that window
 with its own ``num_items_in_batch``, takes one optimizer step on it and moves the lr

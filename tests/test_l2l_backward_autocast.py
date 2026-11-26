@@ -1,9 +1,9 @@
-"""Ticket 08: the backward of the L2L step runs outside ``torch.autocast``, as in accumulation.
+"""The backward of the L2L step runs outside ``torch.autocast``, as in accumulation.
 
 HF's loop calls ``backward`` after the forward's autocast block has exited. The L2L step is
 called inside that block (it runs forward, recompute and backward itself), so its backward
 calls must switch autocast off, or the gradient kernels run under another dtype policy than
-accumulation's and the gradients differ in bf16 (ticket 04, losses outside the A3-07 rule).
+accumulation's and the gradients differ in bf16 (the losses then disagree with accumulation).
 
 The instrument is a hook on each LoRA parameter, which runs inside the backward and reads
 the autocast state of the thread that computes the gradient.

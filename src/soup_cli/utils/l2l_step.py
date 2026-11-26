@@ -62,7 +62,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3")
 
 #: Architectures whose layers carry streamed routed experts. The MoE branches below are kept
-#: kept in place, but entry is refused until per-expert streaming parity lands.
+#: in place, but entry is refused until per-expert streaming parity lands.
 MOE_ARCHS = ("deepseek_v3",)
 
 #: Raised at every L2L entry for a MoE model (``model_parts`` and ``refuse_unsupported_l2l``).

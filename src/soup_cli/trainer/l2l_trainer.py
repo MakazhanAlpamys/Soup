@@ -1,4 +1,4 @@
-"""SFT trainer mode for L2L (``training.l2l``, ADR 0002).
+"""SFT trainer mode for L2L (``training.l2l``).
 
 HF's loop prefetches ``gradient_accumulation_steps`` batches per optimizer step
 (``Trainer.get_batch_samples``) and then calls ``training_step`` once per batch. The
@@ -224,15 +224,18 @@ class L2LState:
             self.c3_plan is not None and self.host_budget is not None
             and self.host_budget is not self.c3_plan.activations
         ):
-            raise ValueError("C3 L2L host_budget must be the reserved activation partition")
+            raise ValueError(
+                "L2L host_budget must be the reserved activation partition of a shared-budget store"
+            )
         if self.c3_plan is not None and self.memory_plan is not None:
             routing_bytes = (
                 self.memory_plan.routing_record_bytes + self.memory_plan.routing_comparison_bytes
             )
             if self.c3_plan.routing_bytes != routing_bytes:
                 raise ValueError(
-                    "combined C3 and L2L memory plans require matching routing_bytes reserved "
-                    "in the C3 activation partition before weight allocation"
+                    "combined shared-budget and L2L memory plans require matching routing_bytes "
+                    "reserved "
+                    "in the shared activation partition before weight allocation"
                 )
 
     def log_fields(self) -> Dict[str, Any]:
@@ -861,7 +864,7 @@ def attach_l2l_state(
     ``training.l2l_spill_dir`` (None: ``<output_dir>/_l2l_spill``), and ``weight_dirs`` lists
     the directories the weights stream from on the disk tier.
     ``memory_plan`` is already resolved and must match HF's accumulation count. Its
-    routing allocation and activation storage use the supplied ``host_budget``; a C3
+    routing allocation and activation storage use the supplied ``host_budget``; a shared-budget
     store instead uses its reserved activation partition. Without either budget, FP8
     reads the safe RAM budget and refuses an unknown limit rather than spilling.
     """
