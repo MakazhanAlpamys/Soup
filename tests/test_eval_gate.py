@@ -101,6 +101,38 @@ class TestEvalSuiteLoading:
         with pytest.raises(ValueError):
             load_suite(str(suite_path))
 
+    def test_load_rejects_empty_task_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            yaml.safe_dump({
+                "suite": "bad",
+                "tasks": [{"type": "custom", "name": "",
+                            "tasks": "evals/math.jsonl", "threshold": 0.8}],
+            }),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="null-free"):
+            load_suite(str(suite_path))
+
+    def test_load_rejects_null_byte_task_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        suite_path.write_text(
+            "suite: bad\ntasks:\n"
+            "  - type: custom\n"
+            '    name: "draft\\0task"\n'
+            "    tasks: evals/math.jsonl\n"
+            "    threshold: 0.8\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="null-free"):
+            load_suite(str(suite_path))
+
     def test_load_rejects_path_traversal(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.eval.gate import load_suite
@@ -511,6 +543,241 @@ class TestJudgeModelValidation:
                 judge_model="http://localhost.attacker.com/model",
             )
 
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            (
+                "http://judge.example.com/m",
+                "judge_model 'http://judge.example.com/m' uses http to a host that is not "
+                "loopback; http is accepted for a loopback host only (127.0.0.1, ::1, "
+                "localhost). Use https://, ollama:// or a loopback http:// URL instead",
+            ),
+            (
+                "ftp://judge.example.com/m",
+                "judge_model 'ftp://judge.example.com/m' uses unsupported scheme 'ftp'; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+            (
+                "HTTP://judge.example.com/m",
+                "judge_model 'HTTP://judge.example.com/m' uses http to a host that is not "
+                "loopback; http is accepted for a loopback host only (127.0.0.1, ::1, "
+                "localhost). Use https://, ollama:// or a loopback http:// URL instead",
+            ),
+            (
+                "judge.example.com/m",
+                "judge_model 'judge.example.com/m' uses unsupported scheme ''; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+            (
+                "localhost:8000/m",
+                "judge_model 'localhost:8000/m' uses unsupported scheme 'localhost'; "
+                "accepted: https://, ollama:// or http:// to a loopback host",
+            ),
+        ],
+    )
+    def test_refusal_says_why_and_what_to_use(self, url, message):
+        """#2190 — a remote http URL is told http is loopback-only; another scheme
+        is told which ones are accepted."""
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        assert strip_ansi(str(caught.value)) == message
+
+    @pytest.mark.parametrize(
+        ("url", "shown", "reason"),
+        [
+            pytest.param(
+                "http://fixture-user:fixture-password@judge.example.com/m",
+                "http://judge.example.com/m",
+                "uses http to a host that is not loopback", id="userinfo-password",
+            ),
+            pytest.param(
+                "ftp://fixture-user@judge.example.com/m", "ftp://judge.example.com/m",
+                "uses unsupported scheme 'ftp'", id="userinfo-no-password",
+            ),
+            pytest.param(
+                "http://localhost@judge.example.com/m", "http://judge.example.com/m",
+                "uses http to a host that is not loopback", id="userinfo-is-not-the-host",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture@password@judge.example.com/",
+                "https://judge.example.com/", "missing model id", id="userinfo-last-at",
+            ),
+            pytest.param(
+                "http://fixture-user:fixture-password@[2001:db8::1]:8000/m",
+                "http://[2001:db8::1]:8000/m",
+                "uses http to a host that is not loopback", id="ipv6-authority",
+            ),
+            pytest.param(
+                "http://judge.example.com/path/with@sign", "http://judge.example.com/path/with@sign",
+                "uses http to a host that is not loopback", id="path-at",
+            ),
+            pytest.param(
+                "http://judge.example.com?label=with@sign",
+                "http://judge.example.com?label=with@sign",
+                "uses http to a host that is not loopback", id="pathless-query-at",
+            ),
+            pytest.param(
+                "http://judge.example.com#with@sign", "http://judge.example.com#with@sign",
+                "uses http to a host that is not loopback", id="pathless-fragment-at",
+            ),
+            pytest.param(
+                "fixture-user@judge.example.com/m", "judge.example.com/m",
+                "uses unsupported scheme ''", id="no-scheme-userinfo",
+            ),
+            pytest.param(
+                "fixture-user:fixture-password@judge.example.com/m", "judge.example.com/m",
+                "uses unsupported scheme ''", id="no-scheme-colon",
+            ),
+            pytest.param(
+                "https:fixture-user:fixture-password@judge.example.com/",
+                "https:judge.example.com/", "missing model id", id="https-without-double-slash",
+            ),
+            pytest.param(
+                "https://judge.example.com/", "https://judge.example.com/", "missing model id",
+                id="missing-model",
+            ),
+            pytest.param("", "", "uses unsupported scheme ''", id="empty"),
+        ],
+    )
+    def test_refusal_shows_the_url_without_its_userinfo_part(self, url, shown, reason):
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        message = strip_ansi(str(caught.value))
+        assert message.startswith(f"judge_model {shown!r} {reason}")
+        assert "fixture-user" not in message
+        assert "fixture-password" not in message
+        assert "fixture@password" not in message
+        assert "localhost@" not in message
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param(
+                "https://fixture-user:fixture-password@[::1/m", id="unbalanced-ipv6",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password@judge.example.com\uff1a443/m",
+                id="fullwidth-colon",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password\uff20judge.example.com/m",
+                id="fullwidth-at",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password\ufe6bjudge.example.com/m",
+                id="small-at",
+            ),
+            pytest.param("https://[::1/m", id="malformed-without-userinfo"),
+        ],
+    )
+    def test_malformed_url_is_refused_without_a_raw_parser_diagnostic(self, url):
+        import traceback
+
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        message = strip_ansi(str(caught.value))
+        assert message == "judge_model is not a valid URL"
+        diagnostic = strip_ansi("".join(traceback.format_exception(caught.value)))
+        assert url not in diagnostic
+        assert "fixture-user" not in diagnostic
+        assert "fixture-password" not in diagnostic
+
+    def test_a_url_without_userinfo_is_shown_unchanged(self):
+        from soup_cli.utils.redaction import url_without_userinfo
+
+        for url in (
+            "http://judge.example.com/m",
+            "https://judge.example.com/path/with@sign",
+            "https://judge.example.com?label=with@sign",
+            "https://judge.example.com#with@sign",
+            "ollama://llama3.1",
+            "judge.example.com/m",
+            "",
+        ):
+            assert url_without_userinfo(url) == url
+
+    @pytest.mark.parametrize(
+        ("url", "parsed"),
+        [
+            ("http://localhost:8000/m", ("server", "m", "http://localhost:8000")),
+            ("https://judge.example.com/m", ("server", "m", "https://judge.example.com")),
+            ("ollama://llama3.1", ("ollama", "llama3.1", None)),
+            pytest.param(
+                "https://fixture-user:fixture-password@judge.example.com/m",
+                ("server", "m", "https://fixture-user:fixture-password@judge.example.com"),
+                id="https-userinfo",
+            ),
+            pytest.param(
+                "http://fixture-user@[::1]:8000/m", ("server", "m", "http://fixture-user@[::1]:8000"),
+                id="loopback-ipv6-userinfo",
+            ),
+            pytest.param(
+                "https:judge.example.com/m", ("server", "m", "https:judge.example.com"),
+                id="https-without-double-slash",
+            ),
+        ],
+    )
+    def test_accepted_urls_parse_as_before(self, url, parsed):
+        from soup_cli.eval.gate import _parse_judge_url
+
+        assert _parse_judge_url(url) == parsed
+
+    def test_ollama_digest_reference_is_displayed_and_parsed_unchanged(self):
+        from soup_cli.eval.gate import _parse_judge_url
+        from soup_cli.utils.redaction import url_without_userinfo
+
+        model = "llama3.1@sha256:" + "a" * 64
+        url = f"ollama://{model}"
+        assert url_without_userinfo(url) == url
+        assert _parse_judge_url(url) == ("ollama", model, None)
+
+    @pytest.mark.parametrize(
+        ("url", "diagnostic"),
+        [
+            pytest.param(
+                "ftp://fixture-user:fixture-password@judge.example.com/m",
+                "judge_model URL 'ftp://judge.example.com/m' uses disallowed scheme - "
+                "use ollama://, https://, or http://localhost",
+                id="disallowed-scheme",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password@[::1/m",
+                "judge_model URL is not a valid URL", id="malformed-authority",
+            ),
+        ],
+    )
+    def test_loading_suite_refuses_judge_url_without_echoing_userinfo(
+        self, tmp_path, monkeypatch, url, diagnostic,
+    ):
+        from soup_cli.eval.gate import load_suite
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        suite = tmp_path / "gate.yaml"
+        suite.write_text(yaml.safe_dump({
+            "suite": "judge",
+            "tasks": [{
+                "type": "judge", "name": "quality", "threshold": 0.5,
+                "prompts": "prompts.jsonl", "judge_model": url,
+            }],
+        }), encoding="utf-8")
+
+        with pytest.raises(ValueError) as caught:
+            load_suite(str(suite))
+        message = strip_ansi(str(caught.value))
+        assert message == f"eval-gate suite '{suite}': tasks[0].judge_model: {diagnostic}"
+        assert "fixture-user" not in message
+        assert "fixture-password" not in message
+
 
 # ---------------------------------------------------------------------------
 # Judge task score normalization
@@ -643,3 +910,75 @@ class TestJudgeTaskNormalization:
         assert task_res.score == pytest.approx(1.0)
         assert task_res.passed is True
         assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# #3122: empty / NUL task names refused at suite load (CLI, exit 3)
+# ---------------------------------------------------------------------------
+
+BAD_NAMES = ["", "draft\x00task"]
+
+
+def _name_suite(tmp_path, name: str) -> str:
+    import json
+    tasks_path = tmp_path / "tasks.jsonl"
+    tasks_path.write_text(
+        '{"prompt": "0", "expected": "gold"}\n', encoding="utf-8",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        "suite: names\n"
+        "tasks:\n"
+        "  - type: custom\n"
+        f"    name: {json.dumps(name)}\n"
+        "    tasks: tasks.jsonl\n"
+        "    scorer: exact\n"
+        "    threshold: 0.0\n",
+        encoding="utf-8",
+    )
+    return str(suite_path)
+
+
+@pytest.mark.parametrize("name", BAD_NAMES)
+def test_cli_bad_task_name_refusal_never_mints_baseline(
+    tmp_path, monkeypatch, name,
+):
+    monkeypatch.chdir(tmp_path)
+    from rich.console import Console
+
+    from soup_cli.commands import eval as eval_command
+    from soup_cli.eval import quant_check
+    from tests.conftest import strip_ansi
+
+    factory_calls = []
+
+    def factory(model):
+        factory_calls.append(model)
+        return lambda prompt: "gold"
+
+    monkeypatch.setattr(quant_check, "make_model_generator", factory)
+    monkeypatch.setattr(eval_command, "console", Console(width=200))
+    baseline = tmp_path / "baseline.json"
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", _name_suite(tmp_path, name),
+        "--model", "synthetic-base", "--write-baseline", str(baseline),
+    ])
+    output = " ".join(strip_ansi(result.output).split())
+    suite_path = str(tmp_path / "suite.yaml")
+    assert result.exit_code == 3
+    assert (
+        f"Cannot load suite: eval-gate suite '{suite_path}': "
+        "tasks[0].name: task name must be non-empty and null-free" in output
+    )
+    assert "GATE PASSED" not in output
+    assert factory_calls == []
+    assert not baseline.exists()
+
+
+@pytest.mark.parametrize("name", ["math", "  math  "])
+def test_cli_accepted_task_names_load_unchanged(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.eval import gate
+
+    suite = gate.load_suite(_name_suite(tmp_path, name))
+    assert suite.tasks[0].name == name

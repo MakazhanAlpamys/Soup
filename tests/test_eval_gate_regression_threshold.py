@@ -163,6 +163,44 @@ def test_cli_still_refuses_nonfinite_before_loading(
     assert factory_calls == []
 
 
+@pytest.mark.parametrize("value", ["-0.1", "1.1"])
+def test_cli_refuses_finite_threshold_before_loading(
+    tmp_path: Path, suite: gate.EvalSuite, monkeypatch: pytest.MonkeyPatch, value: str,
+) -> None:
+    # The suite fixture already chdirs here and writes the tasks.jsonl row.
+    (tmp_path / "suite.yaml").write_text(
+        "suite: raw-tolerance\n"
+        "tasks:\n"
+        "  - type: custom\n"
+        "    name: control\n"
+        "    tasks: tasks.jsonl\n"
+        "    scorer: exact\n"
+        "    threshold: 0.0\n",
+        encoding="utf-8",
+    )
+    loader_calls: list[str] = []
+    real_load_suite = gate.load_suite
+
+    def _record_load(path: str) -> gate.EvalSuite:
+        loader_calls.append(path)
+        return real_load_suite(path)
+
+    monkeypatch.setattr(gate, "load_suite", _record_load)
+    factory_calls: list[str] = []
+    monkeypatch.setattr(
+        quant_check, "make_model_generator",
+        lambda model: factory_calls.append(model) or (lambda prompt: "yes"),
+    )
+    result = CliRunner().invoke(app, [
+        "eval", "gate", "--suite", "suite.yaml", "--model", "synthetic",
+        f"--regression-threshold={value}",
+    ])
+    assert result.exit_code == 3
+    assert "regression-threshold must be between" in strip_ansi(result.output)
+    assert loader_calls == []
+    assert factory_calls == []
+
+
 @pytest.mark.parametrize("threshold", NONFINITE, ids=NONFINITE_IDS)
 def test_config_still_refuses_nonfinite(threshold: float) -> None:
     with pytest.raises(ValidationError, match="regression_threshold"):

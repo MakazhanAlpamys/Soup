@@ -81,6 +81,15 @@ against your own data, and check what got dropped.
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
 
+Semantic dedup compares with an absolute `1e-6` tolerance for float32 rounding.
+At a positive `--threshold`, a row must have strictly positive cosine and meet
+`cosine >= threshold - 1e-6`; the tolerance never makes an exact zero match.
+At `--threshold 0.0`, the comparison remains inclusive (`cosine >= 0.0`). This
+lets identical nonzero embeddings match at `--threshold 1.0`; audit pairs keep
+the raw measured cosine, rather than rounding it to 1.0. True zero vectors have
+a dot product of zero and stay distinct at every positive threshold. Empty text
+that produces a nonzero embedding follows the same comparison as any other text.
+
 With either backend, a nonempty `--field` must occur in at least one loaded
 row. A field absent from every row is refused before backend work or output
 writes, preserving any existing output. Present-but-empty values and fields
@@ -154,6 +163,10 @@ taxonomy: "82% code" means 82% of rows landed in a cluster whose top terms look
 like code. Requires `[train]`.
 
 ## Canaries (`soup data canary insert|check`)
+
+The canary commands display paths, diagnostics and exposure-table secrets literally,
+with terminal controls and bidi marks removed from the display. Dataset/manifest/report
+contents, scoring inputs, verdicts and secret-file permissions remain unchanged.
 
 Prove whether a model memorized your data — for leak detection and provenance.
 
@@ -389,7 +402,7 @@ soup ingest --source otel         --logs ./otel-spans.jsonl
 soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 ```
 
-With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
+With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. `--pull` for LangSmith also reads `LANGSMITH_PROJECT` and `LANGSMITH_ENDPOINT`. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
 
 In a `--logs` export, Langfuse feedback uses `score` when it is present and non-null, including `0`,
 `0.0` and `false` as negative feedback. Only a missing or null score falls back
@@ -399,7 +412,7 @@ to `rating`. Negative scores remain available for preference-pair construction.
 
 ### Live pull from Langfuse (`--pull`, #204)
 
-Langfuse is the one source Soup can fetch directly, so there is no export step:
+Langfuse and LangSmith (below) can be fetched directly, so there is no export step:
 
 ```bash
 export LANGFUSE_PUBLIC_KEY=pk-lf-...   # Project Settings -> API Keys
@@ -412,6 +425,21 @@ soup ingest --source langfuse --pull --since 7d --output traces.jsonl
 - **Credentials.** Read from the environment only, never from a flag, so they never reach the audit log's argv. `LANGFUSE_BASE_URL` is honoured before `LANGFUSE_HOST`, the same precedence as the Langfuse SDK. The key pair is not written to the output, the console, debug logs or error messages.
 - **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local, shared (`100.64.0.0/10`), site-local (`fec0::/10`) or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
 - **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request is bounded by a 30 s wall-clock deadline covering the connect and the whole response — a server that drip-feeds bytes cannot outlast it — and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling, and a pagination cursor the server repeats stops the pull instead of spending the rest of the page budget.
+- **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
+
+### Live pull from LangSmith (`--pull`, #204)
+
+```bash
+export LANGSMITH_API_KEY=lsv2_...
+export LANGSMITH_PROJECT=my-project    # the tracing project to read
+export LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com   # optional: default is https://api.smith.langchain.com
+soup ingest --source langsmith --pull --since 7d --output traces.jsonl
+```
+
+- **What one row is.** One output row per LLM run of the project in the window: the run that holds the exact model input and output. Chain, tool and other runs are not model calls and give no row. The run type is sent as a filter and checked again on each run, so a server that ignores the filter cannot turn them into rows; they are counted as skipped in the summary. Runs go through the same parser as a `--logs` export (`parse_langsmith`), so a LangChain chat model run and an OpenAI-style run read the same either way. A row's `trace_id` is the run id, and thumbs feedback becomes the `signal`.
+- **The API.** The project named by `LANGSMITH_PROJECT` is looked up with `GET /api/v1/sessions?name=`, and its runs are read with `POST /api/v2/runs/query`, asking for the fields Soup reads. The window is always sent: without it the API covers only the last day.
+- **Settings.** `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` are required; `LANGSMITH_ENDPOINT` is read the way the LangSmith SDK reads it, so a self-hosted `https://host/api/v1` works as is. All three come from the environment only, never from a flag. The key is sent as `X-API-Key` and is not written to the output, the console, debug logs or error messages.
+- **Host checks and bounds** are those of the Langfuse pull above: HTTPS only, the same SSRF validator, `--allow-private-host` for a private or loopback address, redirects refused, the 30 s deadline and 64 MiB cap per request, pages of 100 runs up to `--max-pages`, a stop with exit 1 and nothing written when results are still pending, the same 429 retries and the repeated-cursor stop.
 - **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
 
 The other sources have no live pull yet — export them and pass `--logs`.
@@ -503,7 +531,7 @@ soup data generate --prompt "..." --provider ollama --model llama3.1
 soup data generate --prompt "..." --ollama-model llama3.1  # shorthand
 
 # Generate via Anthropic Claude API (set ANTHROPIC_API_KEY env var)
-soup data generate --prompt "..." --provider anthropic --model claude-3-haiku-20240307
+soup data generate --prompt "..." --provider anthropic --model claude-haiku-5-5
 
 # Generate via local vLLM server
 soup data generate --prompt "..." --provider vllm --model meta-llama/Llama-3.1-8B-Instruct
@@ -675,8 +703,11 @@ notebook `RewardTrainer` migrates to `reward_model`, `BCOTrainer` to `bco`,
 `OnlineDPOTrainer` to `online_dpo` (with a placeholder `training.online_dpo_judge`
 to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
 its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
-be read statically, stops the migration naming the value. `SFTConfig` and the
-other TRL `*Config` classes are read for hyperparameters.
+be read statically, stops the migration naming the value. A `DPOTrainer` whose
+`DPOConfig` sets `loss_type="ipo"` migrates to `task: ipo`; any DPO loss other than
+`sigmoid` and `ipo` (`hinge`, `robust`, a list of several) stops the migration
+naming the value. `SFTConfig` and the other TRL `*Config` classes are read for
+hyperparameters.
 The final trainer determines the task; its inline or named config, passed as `args=`
 or positionally, supplies output and hyperparameters using the latest module-level
 binding before that trainer (including annotated assignments).
@@ -692,9 +723,9 @@ where a key is absent (#1807):
   default) rather than leaving Soup's default of 0.1 in force. A value `data.val_split`
   cannot express (an absolute row count, or a fraction above 0.5) is named in a warning
   and not written.
-- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8 and a missing `lora_alpha` is
-  `2 * rank`, as LLaMA-Factory has them; a quoted rank (`lora_rank: "32"`) counts as the
-  integer. A comma-separated `lora_target` becomes a list,
+- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8, a missing `lora_alpha` is
+  `2 * rank` and a missing `lora_dropout` is 0, as LLaMA-Factory has them; a quoted
+  rank (`lora_rank: "32"`) counts as the integer. A comma-separated `lora_target` becomes a list,
   and `lora_target: all` (also the default when the key is absent) becomes `all-linear`,
   every linear layer; so does axolotl `lora_target_linear: true`. `auto` would have
   resolved to `q_proj` / `v_proj` only on Llama.
@@ -706,7 +737,11 @@ where a key is absent (#1807):
   training model wins over the reload. `gradient_accumulation_steps`, `warmup_ratio`,
   `weight_decay` and `seed` are read from the final trainer's `TrainingArguments` or
   TRL `*Config`; `warmup_steps` has no Soup field (warmup comes from
-  `training.warmup_ratio`) and is named in a warning.
+  `training.warmup_ratio`) and is named in a warning. The config's `beta` maps to the
+  field the task's trainer passes to TRL as `beta`: `dpo_beta` (also for online DPO),
+  `ipo_tau`, `kto_beta`, `orpo_beta`, `bco_beta` or `grpo_beta`. A `CPOConfig` `beta`
+  has no Soup field, and is named in the warning below, as is a `loss_type` on any
+  config but `DPOConfig` and `CPOConfig`.
 - **Nothing is dropped in silence.** Every source key, `TrainingArguments` keyword or
   `get_peft_model` keyword the migrator does not map is listed in one
   "not migrated" warning.
@@ -737,15 +772,13 @@ generation context documents, and Autopilot's local model `config.json` probe.
 Only the file's initial UTF-8 signature is consumed; embedded U+FEFF remains
 content, and these commands continue writing ordinary UTF-8 without a BOM.
 
-**Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
-to the richest format its keys fit. If every row agrees, that format is used. A file
-that mixes `chatml` and `tool-calling` rows loads as `tool-calling` (the plain rows
-convert as ordinary chat turns). Every other mix (`sharegpt` with `llava`, `chatml`
-with `audio`, `plaintext` with `asr`, or two unrelated shapes) is refused with a message
-naming both shapes and the row where each first appears, because converting the file
-with either one would drop the other's keys or rows; set `data.format` to choose. Rows
-after the first 100 are not inspected; `soup data validate` lists every row the chosen
-format drops.
+**Auto-detection.** Soup inspects up to 100 retained rows. Each recognized row
+votes for the richest format its keys fit. If those votes agree, Soup uses that format.
+For two related formats, Soup chooses the richer one only if it converts every sampled
+row of the simpler format to the same messages, including their fields. Otherwise it
+reports the conflicting formats and the first row of each. Set `data.format` to choose
+explicitly. After selecting a format, `soup data validate` counts every rejected row
+and shows up to three format-rejection examples, followed by the remaining count.
 
 **Alpaca:**
 ```json
@@ -1274,6 +1307,10 @@ soup data clean ./data/train.jsonl
 soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
+Alpaca holds one exchange per row, so `soup data convert --to alpaca` counts a
+conversation with more turns than that as failed instead of shortening it to
+its last exchange.
+
 `soup data filter --perplexity` and `--score-only` require torch and transformers
 (install with `pip install "soup-cli[train]"`). If either package cannot be
 imported, the command exits 1 with installation instructions before writing an
@@ -1288,14 +1325,27 @@ dataset has no usable rows or falls below `--min-valid-fraction`. A file whose
 every row was skipped is not empty: it exits with code `2` ("no usable rows
 remain") when `--format` names the format, and `3` without one, since nothing is
 left to detect a format from. A partially valid dataset still exits with code `0`
-when no minimum is specified.
+when no minimum is specified. With an explicit `--format`, an empty `.jsonl` file
+or a `.json` file containing `[]` reports `0/0` and exits `0`, even with a positive
+minimum. Auto-detection on either input exits `3`. A 0-byte `.json` file fails JSON
+parsing.
+
+**PREVIEW.** Use `soup data validate ./data/train.jsonl --result-json` to
+request one UTF-8 `soup.command_result` v1 JSON object followed by a newline on
+stdout. Diagnostics and progress use stderr. The result includes the decision,
+numeric exit code, and row counts when validation completed. Known file loading
+failures emit a receipt and retain exit 1. An interrupt during validation emits
+`cancelled` and exits 130. Help and errors before command dispatch can exit
+without a receipt. The wheel includes `soup_cli/schemas/command-result-v1.json`.
+Readers should ignore unknown optional fields. Preview fields may change until
+an end-to-end consumer test passes.
 
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The
 drop is reported: `soup train`, and every other command that loads a dataset,
 prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
-command that lists them all. The
+command, which reports the total number of dropped rows and shows examples. The
 count agrees with `soup data validate` for the same file, except that the training
 drop report counts retained rows only, so the rows the loader skipped before
 conversion appear in `soup data validate` alone. Before #1181 the rows
@@ -1488,8 +1538,30 @@ soup data preprocess soup.yaml --output ./tokenized_cache
 
 SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
-the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
-up from the last completed shard.
+the per-epoch tokenization tax. Cache keys reject incompatible configured inputs.
+
+The writer completes Arrow and `metadata.json` in a unique sibling staging directory,
+then reopens them for validation before changing the target. Rebuilding with `--yes`
+moves the previous cache to a unique sibling backup, installs the complete new cache,
+and removes the backup. A failed install restores the previous cache. Concurrent
+writers stage separately and serialize commit/rollback using a per-key OS lock;
+a writer that waits 30 seconds for the lock fails and can be retried. The hidden
+`.lock_<key>` file remains for reuse; do not remove it while writers are running.
+
+If restoring the backup also fails, the error names the retained `.backup_<key>.*`
+directory. Stop writers and readers, resolve the reported filesystem error, then
+rename that directory back to `<key>` when the target is absent. A backup-cleanup
+warning means the new target is complete and usable; the named backup can be removed
+after confirming that no reader needs it. Cleanup only removes the current writer's
+temporary files. Abandoned `.tmp_<key>.*` directories can be removed once their
+writers have stopped.
+
+This protects against handled publication errors. The two directory renames leave a
+brief interval when the target path is absent, and readers do not pin a cache
+generation. Stop training/readers before rebuilding a cache they use. SIGKILL and
+power loss do not trigger automatic recovery or resume from an intermediate shard;
+inspect any retained backup and rebuild if necessary. The direct-Arrow layout, cache
+key and advisory for external datasets without metadata are unchanged.
 
 **Native MLX text SFT** also consumes this cache with both
 `data.format: pre_tokenized` and `data.tokenized_path` set. Install its optional

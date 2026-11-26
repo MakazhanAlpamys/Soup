@@ -309,6 +309,9 @@ def doctor(
     # Check torchvision + torch compatibility
     _check_torchvision_compat(issues)
 
+    # Check torchao + peft compatibility (#2663)
+    _check_torchao_peft_compat(issues)
+
     if nccl:
         _run_nccl_check()
 
@@ -410,6 +413,7 @@ def _report_config_support(cfg) -> None:
         DEFAULT_BACKEND,
         DEFAULT_MODALITY,
         check_config,
+        is_reviewed,
         unsupported_for,
     )
 
@@ -427,9 +431,16 @@ def _report_config_support(cfg) -> None:
         f"\n[bold]Config check[/] - task=[bold]{cfg.task}[/] "
         f"backend=[bold]{backend}[/]{modality_str}"
     )
+    modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
+    if not is_reviewed(task, backend, modality):
+        console.print(
+            f"  [yellow]task={cfg.task} backend={backend}{modality_msg} has not been "
+            "reviewed for settings it ignores, so this check cannot vouch for this "
+            "config.[/]"
+        )
+        return
     if not gaps:
         known = unsupported_for(task, backend, modality)
-        modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
             f"on task={cfg.task} backend={backend}{modality_msg} is switched on in this config.[/]"
@@ -602,8 +613,8 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     """Return hardware/software support for the reported precision features."""
     from soup_cli.utils.advanced_precision import (
         _torchao_available,
-        is_blackwell_gpu,
         is_nvfp4_software_supported,
+        is_nvfp4_training_gpu,
     )
     from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
@@ -620,7 +631,9 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     return {
         "BF16": (bf16_supported, None),
         "FP8": (bool(is_fp8_gpu_supported()), torchao_available),
-        "NVFP4": (bool(is_blackwell_gpu()), nvfp4_software),
+        # #2867: the cards torchao's NVFP4 training compiles for (SM 10.0 / 10.3),
+        # not every Blackwell card: SM 12.x cannot build its backward pass.
+        "NVFP4": (bool(is_nvfp4_training_gpu()), nvfp4_software),
     }
 
 
@@ -1136,6 +1149,24 @@ def _check_torchvision_compat(issues: list):
     except (ImportError, AttributeError):
         # AttributeError: torchvision circular import on some platforms
         pass
+
+
+def _check_torchao_peft_compat(issues: list) -> None:
+    """Report an installed torchao that makes peft refuse to load (#2663)."""
+    try:
+        from peft.import_utils import is_torchao_available
+    except ImportError:
+        return  # peft not installed: nothing to check
+    try:
+        is_torchao_available()
+    except ImportError as exc:
+        msg = (
+            f"Current torchao version stops peft from loading: {exc}\n"
+            "  Fix 1: pip uninstall -y torchao"
+            "  (Soup needs torchao only for training.quantization_aware)\n"
+            f'  Fix 2: pip install "torchao>={TORCHAO_MIN_VERSION}"'
+        )
+        issues.append(msg)
 
 
 def _version_ok(installed: str, minimum: str) -> bool:

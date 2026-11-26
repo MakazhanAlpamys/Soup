@@ -16,7 +16,10 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   from the model's own dims and the configured target modules, in fp32.
 - ``gradients`` and ``optimizer``: per trainable parameter.
 - ``activations``: what the backward pass keeps per layer; with gradient
-  checkpointing, one boundary tensor per layer plus one layer recomputed.
+  checkpointing, one boundary tensor per layer plus one layer recomputed. Under 8-bit
+  loading a checkpointed layer also keeps its int8 linear layers' inputs, which
+  bitsandbytes holds outside checkpointing (``INT8_CHECKPOINT_KEPT``, and
+  ``INT8_CHECKPOINT_KEPT_FP32`` for a ``kbit_fp32`` run).
 - ``logits``: the output head's logits and the loss chain over them, at the streaming
   planner's measured loss arithmetic (``layer_stream.LOGITS_LOSS_BYTES_PER_ELEMENT``).
   A PRM step builds the logits and no loss over them, so it is charged the logits
@@ -26,6 +29,15 @@ Every term is in bytes; GB in the output is 1e9 bytes. The terms:
   bases). Checkpointing does not reduce it.
 - ``dequant``: under 4-bit loading, the bf16 copy of the largest weight a matmul
   dequantizes.
+- ``teacher`` and ``distill`` (``task: distill``, #2909): the frozen teacher's weights at
+  the dtype its checkpoint stores, and what a token-level distillation step builds over
+  the vocabulary on top of the student's own logits: the teacher's logits and the fp32
+  divergence over both (``trainer/distill.py``'s ``_compute_distill_term``), per element
+  of batch x sequence x vocabulary, by kernel, divergence and chunk size, measured
+  (``benchmarks/gate-distill-teacher-vram.md``).
+- ``teacher_generation`` (``distill_mode: sequence``, #2909): the teacher writes the
+  training text during setup and is freed, so its weights, its generation cache and its
+  prefill belong to that phase; this is how far it exceeds training, or 0.
 - ``overhead``: the CUDA context and allocator slack, which ``max_memory_allocated``
   does not see but the card's total does.
 
@@ -142,6 +154,26 @@ ACT_EXTRA: dict[str, tuple[float, float]] = {
 ACTIVATION_BYTES = 2.0
 #: Checkpointing keeps one hidden-sized tensor per layer, in bytes per element.
 BOUNDARY_BYTES = {"lora": 2.0, "nf4": 2.0, "int8": 2.0, "full": 2.0}
+#: What a checkpointed layer keeps on top of its boundary under 8-bit loading, per token
+#: in bf16 values, as (per hidden, per intermediate). bitsandbytes' int8 matmul
+#: (``MatMul8bitLt``) holds its input on ``ctx.tensors``, not through
+#: ``save_for_backward``, and checkpointing only drops what is saved through
+#: ``save_for_backward``. So every int8 linear layer's input stays on the card from the
+#: forward pass until that layer's backward: the q/k/v input, the o_proj input, the
+#: gate/up input and the down_proj input. On a card with bf16 hardware the norms stay in
+#: bf16 (``KBIT_UNQUANTIZED_BYTES``, #2683), so all four are bf16: 1 + 1 + 1 per hidden
+#: and 1 per intermediate, read off with forward hooks on Qwen2.5-0.5B, Qwen2.5-1.5B and
+#: SmolLM2-360M on main ``3f9ba5ce``. 4-bit's matmul keeps only the weight, so nf4 has no
+#: such term (``benchmarks/gate-int8-checkpointing-vram.md``).
+INT8_CHECKPOINT_KEPT = (3.0, 1.0)
+#: The same inputs in a ``kbit_fp32`` run, whose norms are fp32 (PEFT's own preparation):
+#: the q/k/v input and the gate/up input in fp32, the o_proj input in half precision and
+#: the down_proj input in fp32, so 2 + 2 + 1 per hidden and 2 per intermediate. The
+#: down_proj input is half precision instead when gate/up met an outlier column
+#: (bitsandbytes adds the outliers back with an ``addmm`` that autocast runs in half
+#: precision); fp32 is the upper bound. Measured before #2683 (main ``527314a4``) and on
+#: ``auto_mixed_precision`` fp16 runs on ``3f9ba5ce``.
+INT8_CHECKPOINT_KEPT_FP32 = (5.0, 2.0)
 
 # --- logits ----------------------------------------------------------------------
 
@@ -185,6 +217,58 @@ ACTIVATION_OFFLOADING_MODES = frozenset({"cpu", "disk"})
 #: bf16 copies of the largest dequantized weight live at once under 4-bit loading.
 DEQUANT_COPIES = 1.0
 
+# --- distillation (#2909) ----------------------------------------------------------
+
+#: What a token-level distillation step holds over the vocabulary beyond the student's
+#: own logits and loss chain (``logits``), per element of batch x sequence x vocabulary,
+#: when ``_compute_distill_term`` (``trainer/distill.py``) runs its divergence as ONE
+#: chunk (``distill_chunk_size`` unset): the teacher's half-precision logits, the fp32
+#: copies of both models' logits, their masked selections, the two log-softmaxes and the
+#: divergence's products. By kernel and ``distill_divergence``: ``dense`` is the shipped
+#: kernel, ``checkpoint`` is ``distill_checkpoint: true``, whose one chunk is recomputed in
+#: the backward and peaks as high as ``dense`` for the two KL divergences (measured equal)
+#: and a little lower for JS. The largest figure measured, rounded up, on an RTX PRO 5000
+#: Blackwell (``benchmarks/gate-distill-teacher-vram.md``). A batch of two or more holds
+#: about 4 bytes an element more than a batch of one, since ``student_logits[:, :-1, :]
+#: .contiguous()`` in the CE path is then a copy, not a view; a batch of one is priced
+#: that much high.
+DISTILL_ONE_CHUNK_BYTES_PER_ELEMENT: dict[str, dict[str, float]] = {
+    "dense": {"forward_kl": 38.0, "reverse_kl": 38.0, "js": 50.0},
+    "checkpoint": {"forward_kl": 38.0, "reverse_kl": 38.0, "js": 46.0},
+}
+#: With ``distill_chunk_size`` below the step's positions, what the step keeps for the
+#: backward whatever the chunk size, per element of batch x sequence x vocabulary: the
+#: inputs to the chunks and, without checkpointing, every chunk's saved tensors. Each
+#: chunk's own tensors cost ``ONE_CHUNK - KEPT`` per element of chunk x vocabulary, so a
+#: step is charged ``vocab x (KEPT x positions + (ONE_CHUNK - KEPT) x min(chunk,
+#: positions))``. Measured linear in the chunk size from 32 tokens to one chunk; the
+#: largest intercept, rounded up.
+DISTILL_KEPT_BYTES_PER_ELEMENT: dict[str, dict[str, float]] = {
+    "dense": {"forward_kl": 26.0, "reverse_kl": 26.0, "js": 38.0},
+    "checkpoint": {"forward_kl": 18.0, "reverse_kl": 18.0, "js": 18.0},
+}
+DISTILL_DIVERGENCES = frozenset(DISTILL_ONE_CHUNK_BYTES_PER_ELEMENT["dense"])
+#: ``uld_strategy`` and ``minillm_enabled`` compute their own loss, which reads none of
+#: ``distill_divergence``, ``distill_chunk_size`` and ``distill_checkpoint``. Neither is
+#: measured: both are priced at the largest measured figure, dense JS in one chunk, and
+#: the estimate says so.
+DISTILL_UNMEASURED_KERNELS = frozenset({"uld", "minillm"})
+DISTILL_KERNELS = frozenset(DISTILL_ONE_CHUNK_BYTES_PER_ELEMENT) | DISTILL_UNMEASURED_KERNELS
+DISTILL_UNMEASURED_BYTES_PER_ELEMENT = DISTILL_ONE_CHUNK_BYTES_PER_ELEMENT["dense"]["js"]
+DISTILL_MODES = frozenset({"token", "sequence"})
+#: The teacher loads with ``dtype="auto"``; a config.json that names no dtype is priced
+#: as a 16-bit checkpoint.
+TEACHER_DEFAULT_BYTES_PER_PARAM = 2.0
+#: ``distill_mode: sequence``: the teacher answers each prompt with at most this many new
+#: tokens, or ``data.max_length`` if shorter (``trainer/distill.py``).
+SEQUENCE_KD_MAX_NEW_TOKENS = 256
+#: Tensors of the teacher's intermediate width its MLP holds at once while it reads a
+#: prompt (the gate and up projections, the activation and their product).
+GENERATION_PREFILL_INTERMEDIATE_TENSORS = 4
+#: The cuBLAS (8,320 KiB) and cuBLASLt (1 MiB) workspaces the first matmul allocates and
+#: the process keeps: what stays allocated once the teacher is freed (measured).
+GENERATION_WORKSPACE_BYTES = 9_568_256
+
 # --- overhead ----------------------------------------------------------------------
 
 #: CUDA context and cuBLAS workspaces: on the card, never in ``max_memory_allocated``.
@@ -200,7 +284,10 @@ TERM_NAMES = (
     "activations",
     "logits",
     "dequant",
+    "teacher",
+    "distill",
     "optimizer_step",
+    "teacher_generation",
     "overhead",
 )
 
@@ -247,6 +334,22 @@ class RunSpec:
     #: a card without bf16 hardware, ``grpo_fp16``, or a run measured before #2609. False
     #: is the bf16 default (``KBIT_UNQUANTIZED_BYTES``).
     kbit_fp32: bool = False
+    #: ``task: distill`` (#2909): the frozen teacher's shape, as ``read_model_shape`` read
+    #: ``training.teacher_model``; ``None`` for every other task, and then the four
+    #: ``distill_*`` fields below are not read.
+    teacher: Optional[ModelShape] = None
+    #: ``training.distill_mode`` (``DISTILL_MODES``): ``token`` keeps the teacher for the
+    #: whole run; ``sequence`` has it write the training text during setup and frees it.
+    distill_mode: str = "token"
+    #: The loss a token-level step computes over the two models' logits
+    #: (``DISTILL_KERNELS``): ``dense``, ``checkpoint`` (``distill_checkpoint: true``),
+    #: ``uld`` (``uld_strategy``) or ``minillm`` (``minillm_enabled``).
+    distill_kernel: str = "dense"
+    #: ``training.distill_chunk_size``: tokens per chunk of the divergence; ``None`` is
+    #: one chunk.
+    distill_chunk_size: Optional[int] = None
+    #: ``training.distill_divergence`` (``DISTILL_DIVERGENCES``).
+    distill_divergence: str = "forward_kl"
 
     def __post_init__(self) -> None:
         if not isinstance(self.kbit_fp32, bool):
@@ -274,6 +377,27 @@ class RunSpec:
             raise ValueError(f"unknown quant {self.quant!r}")
         if self.peft not in ("full", "lora", "dora", "qlora"):
             raise ValueError(f"unknown peft {self.peft!r}")
+        if self.teacher is not None:
+            if not isinstance(self.teacher, ModelShape):
+                raise TypeError(
+                    f"teacher must be ModelShape, got {type(self.teacher).__name__}"
+                )
+            if self.teacher.stored_bytes_per_param not in (None, 2.0, 4.0):
+                raise ValueError(
+                    "the teacher's stored_bytes_per_param must be 2.0, 4.0 or None, "
+                    f"got {self.teacher.stored_bytes_per_param!r}"
+                )
+        if self.distill_mode not in DISTILL_MODES:
+            raise ValueError(f"unknown distill_mode {self.distill_mode!r}")
+        if self.distill_kernel not in DISTILL_KERNELS:
+            raise ValueError(f"unknown distill_kernel {self.distill_kernel!r}")
+        chunk = self.distill_chunk_size
+        if chunk is not None and (isinstance(chunk, bool) or not isinstance(chunk, int)):
+            raise TypeError(f"distill_chunk_size must be int, got {type(chunk).__name__}")
+        if chunk is not None and chunk < 1:
+            raise ValueError("distill_chunk_size must be >= 1")
+        if self.distill_divergence not in DISTILL_DIVERGENCES:
+            raise ValueError(f"unknown distill_divergence {self.distill_divergence!r}")
 
     @property
     def checkpointing(self) -> str:
@@ -367,6 +491,13 @@ def activations_bytes(shape: ModelShape, run: RunSpec) -> int:
         + ACT_PER_ADAPTED_INPUT * adapted_inputs
     )
     boundary = tokens * shape.hidden_size * BOUNDARY_BYTES[mode]
+    if mode == "int8":
+        kept_hidden, kept_intermediate = (
+            INT8_CHECKPOINT_KEPT_FP32 if run.kbit_fp32 else INT8_CHECKPOINT_KEPT
+        )
+        boundary += tokens * ACTIVATION_BYTES * (
+            kept_hidden * shape.hidden_size + kept_intermediate * shape.intermediate_size
+        )
     layers = shape.num_layers
     if run.checkpointing == "full":
         total = layers * boundary + per_layer
@@ -434,9 +565,65 @@ def dequant_bytes(shape: ModelShape, run: RunSpec) -> int:
     return math.ceil(largest * 2.0 * DEQUANT_COPIES)
 
 
+def teacher_bytes_per_param(teacher: ModelShape) -> float:
+    """What a ``dtype="auto"`` load holds per parameter: the dtype config.json stores."""
+    stored = teacher.stored_bytes_per_param
+    return TEACHER_DEFAULT_BYTES_PER_PARAM if stored is None else float(stored)
+
+
+def teacher_weights_bytes(run: RunSpec) -> int:
+    """A distillation teacher's weights at the dtype its checkpoint stores (#2909)."""
+    if run.teacher is None:
+        return 0
+    return math.ceil(run.teacher.params * teacher_bytes_per_param(run.teacher))
+
+
+def distill_bytes(shape: ModelShape, run: RunSpec) -> int:
+    """What a token-level distillation step adds over the vocabulary (#2909).
+
+    Per element of batch x sequence x the student's vocabulary, every position charged
+    (the divergence covers the trained ones): ``DISTILL_KEPT_BYTES_PER_ELEMENT`` for the
+    whole step plus ``DISTILL_ONE_CHUNK - KEPT`` for one chunk of ``distill_chunk_size``
+    positions; unset is one chunk of every position. ``uld`` and ``minillm`` are not
+    measured and are charged ``DISTILL_UNMEASURED_BYTES_PER_ELEMENT`` on every position.
+    Nothing for another task, ``distill_mode: sequence`` or an unknown vocabulary.
+    """
+    if run.teacher is None or run.distill_mode != "token" or shape.vocab_size is None:
+        return 0
+    positions = run.seq_len * run.batch_size
+    if run.distill_kernel in DISTILL_UNMEASURED_KERNELS:
+        return math.ceil(shape.vocab_size * positions * DISTILL_UNMEASURED_BYTES_PER_ELEMENT)
+    one_chunk = DISTILL_ONE_CHUNK_BYTES_PER_ELEMENT[run.distill_kernel][run.distill_divergence]
+    kept = DISTILL_KEPT_BYTES_PER_ELEMENT[run.distill_kernel][run.distill_divergence]
+    chunk = positions if run.distill_chunk_size is None else min(run.distill_chunk_size, positions)
+    return math.ceil(shape.vocab_size * (kept * positions + (one_chunk - kept) * chunk))
+
+
+def teacher_generation_bytes(run: RunSpec) -> int:
+    """What ``distill_mode: sequence`` holds over the student while its teacher writes.
+
+    The teacher's weights, its key/value cache for a prompt of ``seq_len`` tokens and
+    ``min(seq_len, SEQUENCE_KD_MAX_NEW_TOKENS)`` new ones (one row at a time), its MLP's
+    tensors while it reads that prompt, and the workspaces of the first matmul.
+    """
+    teacher = run.teacher
+    if teacher is None or run.distill_mode != "sequence":
+        return 0
+    per = teacher_bytes_per_param(teacher)
+    tokens = run.seq_len + min(run.seq_len, SEQUENCE_KD_MAX_NEW_TOKENS)
+    cache = 2 * teacher.num_layers * teacher.num_kv_heads * teacher.head_dim * per * tokens
+    prefill = (
+        GENERATION_PREFILL_INTERMEDIATE_TENSORS * teacher.intermediate_size * per * run.seq_len
+    )
+    return math.ceil(
+        teacher_weights_bytes(run) + cache + prefill + GENERATION_WORKSPACE_BYTES
+    )
+
+
 def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
     """The per-term peak for ``run`` on a model of ``shape``."""
     trainable = trainable_params(shape, run)
+    token_level = run.teacher is not None and run.distill_mode == "token"
     terms = {
         "weights": weights_bytes(shape, run),
         "adapters": (
@@ -447,21 +634,37 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         "activations": activations_bytes(shape, run),
         "logits": logits_bytes(shape, run),
         "dequant": dequant_bytes(shape, run),
+        # A token-level teacher is resident for the whole run (#2909).
+        "teacher": teacher_weights_bytes(run) if token_level else 0,
+        "distill": distill_bytes(shape, run),
     }
     # The peak is the larger of two phases (#2277). The forward/backward pass holds
-    # every term above. The optimizer step holds the parameters, their gradients, the
-    # optimizer state and the step's scratch, after the activations, logits and
-    # dequantized copy are freed. `optimizer_step` is how far the step exceeds the
-    # pass, so the total stays a sum of terms.
+    # every term above. The optimizer step holds the parameters (a token-level
+    # distillation teacher's too), their gradients, the optimizer state and the step's
+    # scratch, after the activations, logits, dequantized copy and divergence are freed.
+    # `optimizer_step` is how far the step exceeds the pass, so the total stays a sum
+    # of terms.
     forward_backward = sum(terms.values())
     step = (
         terms["weights"]
+        + terms["teacher"]
         + terms["adapters"]
         + terms["gradients"]
         + terms["optimizer"]
         + math.ceil(trainable * OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM.get(run.optimizer, 0.0))
     )
     terms["optimizer_step"] = max(step - forward_backward, 0)
+    training = forward_backward + terms["optimizer_step"]
+    # #2909: with distill_mode: sequence the teacher writes the training text during setup
+    # and is freed before the first step, so its weights belong to a third phase, which
+    # holds the student and its adapters too. `teacher_generation` is how far that phase
+    # exceeds training, or 0.
+    generation = (
+        terms["weights"] + terms["adapters"] + teacher_generation_bytes(run)
+        if run.teacher is not None and run.distill_mode == "sequence"
+        else 0
+    )
+    terms["teacher_generation"] = max(generation - training, 0)
     allocated = sum(terms.values())
     terms["overhead"] = math.ceil(OVERHEAD_FIXED_BYTES + OVERHEAD_SLACK * allocated)
     notes = []
@@ -487,7 +690,7 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
             "Selective checkpointing (attention only) is priced as no checkpointing, an "
             "upper bound; the tier is not measured."
         )
-    if terms["optimizer_step"]:
+    if terms["optimizer_step"] and not terms["teacher_generation"]:
         notes.append(
             "The optimizer step, not the forward and backward pass, sets this peak: "
             "the update holds the optimizer state and its scratch after the "
@@ -503,7 +706,38 @@ def estimate_vram(shape: ModelShape, run: RunSpec) -> VramEstimate:
         )
     if run.activation_offloading is not None:
         notes.append(activation_offloading_note(run.activation_offloading, terms["activations"]))
+    notes.extend(distill_notes(run, generation=generation, training=training))
     return VramEstimate(terms=terms, shape=shape, run=run, notes=tuple(notes))
+
+
+def distill_notes(run: RunSpec, *, generation: int, training: int) -> list[str]:
+    """What the estimate says about a distillation teacher it priced (#2909)."""
+    teacher = run.teacher
+    if teacher is None:
+        return []
+    notes = []
+    if teacher.guessed:
+        notes.append(
+            "No config.json could be read for training.teacher_model, so the teacher's "
+            "shape is guessed from its parameter count and its terms are approximate."
+        )
+    if run.distill_mode == "sequence":
+        larger = "writing" if generation > training else "training"
+        notes.append(
+            "distill_mode: sequence: the teacher writes the training text during setup and "
+            "is freed before the first step. Writing holds both models, the teacher's cache "
+            f"and its prefill, {generation / GB:.2f} GB; a training step holds "
+            f"{training / GB:.2f} GB. The peak is the larger of the two, {larger}."
+        )
+    elif run.distill_kernel in DISTILL_UNMEASURED_KERNELS:
+        setting = "uld_strategy" if run.distill_kernel == "uld" else "minillm_enabled"
+        notes.append(
+            f"training.{setting} is set: that loss is not measured, so it is priced as the "
+            "largest divergence that is (JS in one chunk, "
+            f"{DISTILL_UNMEASURED_BYTES_PER_ELEMENT:.0f} bytes an element of batch x "
+            "sequence x vocabulary)."
+        )
+    return notes
 
 
 def activation_offloading_note(mode: str, activation_bytes: int) -> str:
@@ -531,6 +765,11 @@ def fit_verdict(total_bytes: float, available_bytes: float) -> str:
 __all__ = [
     "ACTIVATION_OFFLOADING_MODES",
     "BYTES_PER_PARAM_BY_QUANT",
+    "DISTILL_DIVERGENCES",
+    "DISTILL_KEPT_BYTES_PER_ELEMENT",
+    "DISTILL_KERNELS",
+    "DISTILL_MODES",
+    "DISTILL_ONE_CHUNK_BYTES_PER_ELEMENT",
     "GB",
     "OPTIMIZER_BYTES_PER_PARAM",
     "OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM",

@@ -25,6 +25,8 @@ _ALLOWED_KEYS = frozenset(
         "loss",
         "val_loss",
         "val_reward",
+        "reward",
+        "reward_std",
         "lr",
         "grad_norm",
         "tokens_per_s",
@@ -60,6 +62,13 @@ class TrainEvent:
     #: Its own field for the same reason ``val_loss`` is: a reward written into
     #: the loss curve would read as a loss.
     val_reward: Optional[float] = None
+    #: A reinforcement-style run's training reward for the step (``metrics.reward``;
+    #: experiment/reward_columns.py), and its spread (``metrics.reward_std``). Their own
+    #: fields, not ``val_reward``: that one is the held-out reward at an evaluation.
+    #: None -- every non-RL step, and a reward that is not finite -- is omitted from
+    #: the payload.
+    reward: Optional[float] = None
+    reward_std: Optional[float] = None
     lr: Optional[float] = None
     grad_norm: Optional[float] = None
     tokens_per_s: Optional[float] = None
@@ -106,6 +115,8 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "loss",
         "val_loss",
         "val_reward",
+        "reward",
+        "reward_std",
         "lr",
         "grad_norm",
         "tokens_per_s",

@@ -14,7 +14,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Union
 from urllib.parse import urlencode
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -480,8 +480,13 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def create_app(host: str = "127.0.0.1", port: int = 7860):
+def create_app(
+    host: str = "127.0.0.1",
+    port: int = 7860,
+    server_dir: Optional[Union[str, Path]] = None,
+):
     """Create the Soup Web UI FastAPI application."""
+    base_dir = Path.cwd() if server_dir is None else Path(server_dir)
     if not _is_loopback(host):
         token = get_auth_token()
         valid = False
@@ -707,11 +712,12 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     @app.get("/api/runs", dependencies=[Depends(_verify_token)])
     def list_runs(limit: int = Query(default=50, ge=1, le=500)):
         from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.utils.paths import sanitize_run_row
 
         tracker = ExperimentTracker()
         try:
             runs = tracker.list_runs(limit=limit)
-            return {"runs": runs}
+            return {"runs": [sanitize_run_row(run, base=base_dir) for run in runs]}
         finally:
             tracker.close()
 
@@ -756,6 +762,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     @app.get("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def get_run(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
+        from soup_cli.utils.paths import sanitize_run_row
 
         tracker = ExperimentTracker()
         try:
@@ -767,7 +774,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                         tracker, run_id, markup=False, name_missing_id=False
                     ),
                 )
-            return run
+            return sanitize_run_row(run, base=base_dir)
         finally:
             tracker.close()
 
@@ -793,25 +800,53 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     @app.delete("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def delete_run(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        """Delete the run that ``run_id`` names, as ``soup runs delete`` does.
+
+        A unique prefix resolves to its run; an unknown id or a prefix that
+        matches several runs answers 404 and deletes nothing.
+        """
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
-            deleted = tracker.delete_run(run_id)
-            if not deleted:
+            run = tracker.get_run(run_id)
+            if not run:
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
+                )
+            resolved_id = run["run_id"]
+            # Another request may have removed the run since ``get_run`` found it.
+            if not tracker.delete_run(resolved_id):
                 raise HTTPException(status_code=404, detail="Run not found")
-            return {"deleted": True, "run_id": run_id}
+            return {"deleted": True, "run_id": resolved_id}
         finally:
             tracker.close()
 
     @app.get("/api/runs/{run_id}/eval", dependencies=[Depends(_verify_token)])
     def get_run_eval(run_id: str):
-        from soup_cli.experiment.tracker import ExperimentTracker
+        """The eval results of the run that ``run_id`` names, newest first.
+
+        The id resolves as in ``GET /api/runs/{run_id}``; an unknown id or an
+        ambiguous prefix answers 404. A run with no eval rows answers an empty list.
+        """
+        from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
         tracker = ExperimentTracker()
         try:
-            results = tracker.get_eval_results(run_id=run_id)
-            return {"run_id": run_id, "eval_results": results}
+            run = tracker.get_run(run_id)
+            if not run:
+                raise HTTPException(
+                    status_code=404,
+                    detail=run_lookup_failure(
+                        tracker, run_id, markup=False, name_missing_id=False
+                    ),
+                )
+            resolved_id = run["run_id"]
+            results = tracker.get_eval_results(run_id=resolved_id)
+            return {"run_id": resolved_id, "eval_results": results}
         finally:
             tracker.close()
 

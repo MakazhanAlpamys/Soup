@@ -1,0 +1,20 @@
+{
+  "qualification_commit": "693a928f838c147e412cacf74c7bdb00cdb8f6fc",
+  "patch_sha256": "4334662f352b1ed43cece34b10b426fdd1f07b2b03989602a796524c12a8e638",
+  "publication_correspondence": {
+    "src/soup_cli/trainer/ipo.py": "byte-identical",
+    "tests/test_ipo_streaming.py": "byte-identical",
+    "src/soup_cli/utils/config_bounds.py": "executable AST identical",
+    "src/soup_cli/trainer/stream_setup.py": "executable AST identical, module documentation updated",
+    "src/soup_cli/config/schema.py": "only field description and two suggestion strings differ",
+    "tests/test_v07204.py": "all fixture functions used by CUDA are identical"
+  },
+  "source_sha256": {
+    "src/soup_cli/trainer/ipo.py": "f4ba84524251e1b42cabefd29a8fa674a9f260e07823590c3d175fd6d73e1ddf",
+    "tests/test_ipo_streaming.py": "8cf8cdb802f1ee10681510048c21ea6558f611a27f8d4373112e565c2ab8ebf5",
+    "src/soup_cli/utils/config_bounds.py": "7c1359539ec41524260a14eb7de7b24622ab6de9f06d85b5bcf2dc3b62ea2458",
+    "src/soup_cli/trainer/stream_setup.py": "690a7011a4abee9e0fe161eb036717b68b561de87f8d97a468b44aafdc91a604",
+    "src/soup_cli/config/schema.py": "0be144d166e2a66fd796c84be3fdef13fc9afd751eb8fa4ef55e5b16b496dc5a",
+    "tests/test_v07204.py": "d6283809895b76f89577237a5d490d1521ed527737e7d1f579aa80cacce16388"
+  }
+}

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.experiment.row_kinds import ROW_KIND_EVAL, ROW_KIND_TRAIN
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -263,6 +265,11 @@ def mlx_lora_scale(lora_cfg: object) -> float:
     return alpha / rank
 
 
+def mlx_adapter_base(model: str) -> str:
+    """Anchor an existing local base; leave remote identities exactly as typed."""
+    return os.path.realpath(model) if Path(model).is_dir() else model
+
+
 def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: object) -> dict:
     """The ``lora_parameters`` block, keyed off the RESOLVED module list.
 
@@ -282,6 +289,8 @@ def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: ob
         },
     }
     config.update(extra)
+    if "model" in config:
+        config["model"] = mlx_adapter_base(config["model"])
     return config
 
 
@@ -856,7 +865,9 @@ class MLXSFTTrainerWrapper:
         from mlx_lm.tuner.trainer import TrainingArgs, train  # type: ignore
 
         cfg = self.config
-        output_dir = Path(cfg.output)
+        output_dir = Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        ))
         if full_finetune and (
             list(output_dir.glob("*.safetensors"))
             or (output_dir / "adapter_config.json").exists()
@@ -1401,7 +1412,7 @@ class MLXSFTTrainerWrapper:
         training_metadata = {
             **(self._full_model_metadata if full_finetune else
                build_mlx_adapter_config(cfg.training.lora, adapter_path=str(output_dir))),
-            "model": str(cfg.base),
+            "model": str(cfg.base) if full_finetune else mlx_adapter_base(str(cfg.base)),
             "num_layers": len(getattr(self.model, "layers", [])),
             "batch_size": batch_size,
             "iters": iters,

@@ -258,8 +258,12 @@ _ALLOWED_METRIC_HELP = (
 _RESERVED_TRAINING_METRICS = frozenset(
     # every column of the metrics table a run writes, so `benchmark:<name>` can
     # never gate on a training-time series; `val_reward` is grpo's held-out
-    # reward (#1389), a training-time measurement like `val_loss`
-    {"loss", "val_loss", "val_reward", "lr", "grad_norm", "speed", "gpu_mem", "epoch"}
+    # reward (#1389), a training-time measurement like `val_loss`, and `reward` /
+    # `reward_std` are a reinforcement-style run's per-step training reward
+    {
+        "loss", "val_loss", "val_reward", "reward", "reward_std", "lr", "grad_norm", "speed",
+        "gpu_mem", "epoch",
+    }
 )
 
 

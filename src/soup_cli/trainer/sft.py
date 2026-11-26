@@ -12,6 +12,8 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.packed_lora_setup import PackedLoraSetupMixin
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -28,6 +30,7 @@ from soup_cli.utils.mixed_precision import (
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.training_output import training_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,38 @@ def _assert_finite_training_state(
         )
 
 
+def curriculum_keeps_sorted_order(
+    *,
+    curriculum: bool,
+    pretokenized: bool,
+    is_raft: bool,
+    packing: bool,
+    multipack: bool,
+) -> bool:
+    """Whether a ``curriculum: true`` SFT run reads its length-sorted rows in order.
+
+    The sort reaches the model only through a sequential sampler, and only on the paths
+    that hand the sorted list to the Trainer's own sampler:
+
+    - plain text, vision and audio rows, and RAFT with or without ``raft_epoch_shuffle``
+      (the shuffle re-permutes the documents inside each row per epoch, not the rows;
+      RAFT's plain Trainer ignores ``packing`` and ``multipack``): the order holds;
+    - a pre-tokenised dataset (``soup data preprocess``) replaces the sorted list with
+      the cached rows in file order: left shuffled, as before;
+    - ``packing: true``: TRL's default ``bfd`` packing sorts the rows longest first into
+      bins, so reading the bins in order would run long to short: left shuffled;
+    - ``multipack: true``: its FFD batch sampler owns the dataloader and ignores the
+      sampling strategy: left as it is.
+
+    No combination is refused (#2863).
+    """
+    if not curriculum or pretokenized:
+        return False
+    if is_raft:
+        return True
+    return not (packing or multipack)
+
+
 def rewind_skip_reason(
     *,
     task: str,
@@ -117,6 +152,7 @@ def rewind_skip_reason(
     multipack: bool,
     vision: bool,
     audio: bool,
+    prefix_tree: bool = False,
 ) -> str:
     """Why this run takes no rewind recorder, in words a user can act on.
 
@@ -131,6 +167,8 @@ def rewind_skip_reason(
         return "RAFT builds its own trainer and collator"
     if multipack:
         return "multipack owns the dataloader the recorder wraps"
+    if prefix_tree:
+        return "prefix-tree batches own the dataloader the recorder wraps"
     if vision:
         return "vision runs a custom collator"
     if audio:
@@ -519,7 +557,7 @@ def is_full_finetune(tcfg) -> bool:
     return bool(tcfg.unfrozen_parameters or tcfg.lisa_enabled or tcfg.lora.r == 0)
 
 
-class SFTTrainerWrapper(StreamingSetupMixin):
+class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
     """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
 
     def __init__(
@@ -672,6 +710,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "[yellow]Could not release the layer-streaming runtime: "
                     f"{for_terminal(str(close_error))}[/]"
                 )
+            self._close_packed_lora()
             raise
 
     def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
@@ -837,9 +876,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             eval_ds = _ensure_assistant_masks(eval_ds)
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # #674 — QuEST calibration needs the actual tokenized training rows,
@@ -872,8 +909,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             "optim": tcfg.optimizer,
             "lr_scheduler_type": tcfg.scheduler,
             "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
+            **save_kwargs(tcfg),
             "bf16": bf16_flag,
             "fp16": fp16_flag,
             "report_to": self.report_to,
@@ -892,6 +928,21 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # the default val_split was withheld and never evaluated.
             **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
+
+        # Curriculum: the length sort above reaches the model only if the
+        # sampler keeps it. The Trainer's default sampler is random, which
+        # dealt the sorted rows out in a seeded random order, so a
+        # `curriculum: true` run saw no easier-to-harder progression at all.
+        # Pre-tokenised data, packing and multipack keep the default; the
+        # helper says why for each (#2863).
+        if curriculum_keeps_sorted_order(
+            curriculum=bool(tcfg.curriculum),
+            pretokenized=pretok is not None,
+            is_raft=self._is_raft,
+            packing=bool(tcfg.packing),
+            multipack=bool(getattr(tcfg, "multipack", False)),
+        ):
+            training_kwargs["train_sampling_strategy"] = "sequential"
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables
         # torch.compile when tcfg.use_fsdp2_compile is True.
@@ -1022,11 +1073,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # so two ``multipack: true`` runs against the same base class share
         # the same subclass.
         use_multipack = bool(getattr(tcfg, "multipack", False))
+        # Prefix-tree batches (utils/prefix_tree.py): the same kind of wiring, a
+        # trainer subclass that builds its own training dataloader.
+        use_prefix_tree = bool(getattr(tcfg, "prefix_tree", False))
         # #1693 -- with `stream_loss_chunk` the model returns no logits, which
         # TRL's `compute_loss` reads for its metrics. The schema keeps the
         # option to the two branches below that build `sft_cls`.
         sft_cls = SFTTrainer
-        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        # ... and so does training.packed_lora (the packed step returns the loss and no logits).
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None) or getattr(
+            self, "_packed_lora_hook", None
+        )
         if chunk_hook is not None:
             from soup_cli.utils.stream_loss_chunk import (
                 HOOK_ATTR,
@@ -1119,6 +1176,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 ),
             )
             console.print("[green]Multipack FFD bin-packing sampler enabled[/]")
+        elif use_prefix_tree:
+            from soup_cli.utils.prefix_tree_trainer import make_prefix_tree_trainer_class
+
+            self.trainer = make_prefix_tree_trainer_class(sft_cls)(**trainer_kwargs)
+            self._attach_prefix_tree(
+                batch_size=batch_size,
+                max_length=cfg.data.max_length,
+                seed=DEFAULT_MULTIPACK_SEED if tcfg.seed is None else tcfg.seed,
+            )
         elif use_vision and not tcfg.packing:
             # Vision rows still contain PIL images and structured messages.
             # Plain Trainer must receive the custom collator directly; letting
@@ -1166,6 +1232,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         multipack=use_multipack,
                         vision=use_vision,
                         audio=use_audio,
+                        prefix_tree=use_prefix_tree,
                     )
                 )
 
@@ -1430,26 +1497,50 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # enabling the option undo the validated MPS policy above.
             return bf16_fp16_flags(self.device, allow_mps_bf16=True)
 
+        picked = self._auto_mixed_precision_pick(base_model)
+        if picked is None:
+            return (self.device == "cuda", False)
+        mode, _cc = picked
+        return (mode == "bf16", mode == "fp16")
+
+    def _auto_mixed_precision_pick(self, base_model: str) -> Optional[tuple[str, float]]:
+        """``(mode, compute capability)`` that ``pick_mixed_precision`` gives the CUDA card.
+
+        ``None`` when the card or the model name cannot be read; the callers then keep
+        their defaults. The one answer for the run: ``_resolve_load_dtype`` (the dtype
+        the base is stored in), ``_kbit_compute_dtype`` (#2683, the dtype a 4-bit/8-bit
+        base's unquantized weights keep) and ``_resolve_mixed_precision`` (the dtype it
+        trains in) all read it, so it is asked once per base and the "Auto mixed-precision
+        picked" line prints once, however many of them a run reaches.
+        """
+        picks = self.__dict__.setdefault("_auto_mixed_precision_picks", {})
+        if base_model not in picks:
+            picked = self._read_auto_mixed_precision_pick(base_model)
+            picks[base_model] = picked
+            if picked is not None:
+                console.print(
+                    f"[green]Auto mixed-precision picked:[/] {picked[0]} "
+                    f"(model={base_model}, cc={picked[1]})"
+                )
+        return picks[base_model]
+
+    @staticmethod
+    def _read_auto_mixed_precision_pick(base_model: str) -> Optional[tuple[str, float]]:
+        """Ask the card and ``pick_mixed_precision``; ``None`` when either cannot answer."""
         try:
             import torch
 
             major, minor = torch.cuda.get_device_capability()
             cc = float(f"{major}.{minor}")
         except (ImportError, RuntimeError, AssertionError, OSError):
-            return (self.device == "cuda", False)
+            return None
 
         from soup_cli.utils.mixed_precision import pick_mixed_precision
 
         try:
-            mode = pick_mixed_precision(base_model, cc)
+            return pick_mixed_precision(base_model, cc), cc
         except ValueError:
-            return (self.device == "cuda", False)
-
-        console.print(
-            f"[green]Auto mixed-precision picked:[/] {mode} "
-            f"(model={base_model}, cc={cc})"
-        )
-        return (mode == "bf16", mode == "fp16")
+            return None
 
     def _kbit_compute_dtype(self, tcfg, base_model: str):
         """The dtype a 4-bit/8-bit run computes in, for ``prepare_kbit_model`` (#2609).
@@ -1495,14 +1586,123 @@ class SFTTrainerWrapper(StreamingSetupMixin):
           fourteen other places. One resolver instead of two duplicated
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
+        - ``auto_mixed_precision`` picking fp16 on a card that has bf16 (the
+          Qwen2 / Qwen2.5 / Phi-3 entries of ``KNOWN_PRECISION_QUIRKS``): the
+          same split from the other side, so an unquantized frozen base loads
+          ``torch.float16``, as it does on a pre-Ampere card. Left at ``"auto"``,
+          a bf16 checkpoint under fp16 autocast has each frozen weight cast to
+          an fp16 copy that the backward pass keeps, and its bf16 + fp16
+          residual adds promote the hidden states to fp32: one LoRA step of
+          Qwen2.5-1.5B at 4 x 128 peaked at 7.81 GiB against 4.94 GiB with the
+          storage matching the compute (RTX PRO 5000, sm_120). A 4/8-bit base is
+          left alone: k-bit preparation casts its unquantized weights to fp32.
 
         The loader uses ``dtype`` consistently with the declared Transformers
         5.16.1 floor (#2200); the former ``torch_dtype`` spelling is deprecated.
         This changes the argument name, not the precision decision above.
         """
-        return resolve_base_load_dtype(
+        dtype = resolve_base_load_dtype(
             self.device, full_finetune=is_full_finetune(tcfg)
         )
+        if (
+            isinstance(dtype, str)
+            and dtype == "auto"
+            and self.device == "cuda"
+            and getattr(tcfg, "auto_mixed_precision", False)
+            and getattr(tcfg, "quantization", "none") == "none"
+        ):
+            picked = self._auto_mixed_precision_pick(self.config.base)
+            if picked is not None and picked[0] == "fp16":
+                import torch
+
+                return torch.float16
+        return dtype
+
+    def _attach_prefix_tree(self, *, batch_size: int, max_length: int, seed: int) -> None:
+        """``training.prefix_tree``: plan the rows, check the model, say what it saves.
+
+        The model check raises before any step when the model does not compute
+        a prefix-tree row as it computes the ordinary batch.
+        """
+        from soup_cli.utils.prefix_tree_trainer import (
+            _model_float_dtype,
+            attach_prefix_tree_state,
+            check_prefix_tree_model,
+            dropout_in_model,
+            examples_from_dataset,
+            planning_notice,
+            verification_examples,
+        )
+
+        dropped = dropout_in_model(self.model)
+        if dropped:
+            shown = ", ".join(dropped[:4])
+            if len(dropped) > 4:
+                shown += f" and {len(dropped) - 4} more"
+            raise ValueError(
+                f"training.prefix_tree needs a model that applies no dropout in training; "
+                f"this one does: {shown}. A prefix-tree row computes a shared beginning "
+                "once, so one dropout mask would serve every example that shares it and "
+                "the loss would no longer be the ordinary batch's. Set those rates to 0 "
+                "in the model's config or set training.prefix_tree: false."
+            )
+        trainer = self.trainer
+        collator = trainer.data_collator
+        pad_token_id = getattr(collator, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "eos_token_id", None) or 0
+        try:
+            notice = planning_notice(len(trainer.train_dataset), int(max_length))
+        except TypeError:
+            notice = None  # no length: examples_from_dataset refuses it below
+        if notice:
+            console.print(f"[yellow]Prefix-tree batches:[/] {notice}.")
+        examples = examples_from_dataset(trainer.train_dataset, collator)
+        state = attach_prefix_tree_state(
+            trainer,
+            examples=examples,
+            max_tokens=int(max_length),
+            batch_size=int(batch_size),
+            pad_token_id=int(pad_token_id),
+            seed=int(seed),
+            drop_last=bool(getattr(trainer.args, "dataloader_drop_last", False)),
+        )
+        # Checked on real training examples, the ones the first planned row holds:
+        # half-precision arithmetic on tokens a model never saw is too unstable
+        # to verify anything (see verify_prefix_tree_model).
+        verdict = check_prefix_tree_model(
+            self.model,
+            pad_token_id=int(pad_token_id),
+            examples=verification_examples(
+                examples, state.sampler.rows, max_tokens=int(max_length)
+            ),
+        )
+        if verdict.mask == "additive":
+            state.additive_dtype = _model_float_dtype(self.model)
+        stats = state.sampler.stats
+        console.print(
+            f"[green]Prefix-tree batches enabled:[/] {stats.examples} examples in "
+            f"{stats.rows} rows, {stats.tree_tokens:,} tokens per epoch instead of "
+            f"{stats.source_tokens:,} ({stats.ratio:.2f}x fewer)"
+        )
+        console.print(
+            f"[dim]Prefix-tree model check ({verdict.mask} mask): logits differ from the "
+            f"ordinary batch by {verdict.error:.3g} of a range of {verdict.scale:.3g}; "
+            f"this model's own layout noise {verdict.noise:.3g}; a plain causal mask "
+            f"moves them by {verdict.mask_control:.3g}, wrong positions by "
+            f"{0.0 if verdict.control is None else verdict.control:.3g}[/]"
+        )
+        if stats.ratio < 1.02:
+            per_row = stats.examples / max(stats.rows, 1)
+            console.print(
+                "[yellow]Prefix-tree batches:[/] these examples share almost no "
+                "untrained beginning, so an epoch runs as many tokens as before; a row "
+                f"still holds {per_row:.1f} examples on average. Sharing needs prompt "
+                "tokens that are not trained on (data.train_on_responses_only) and that "
+                "several examples begin with."
+            )
 
     @staticmethod
     def _as_sft_config(training_args, max_length, packing=False):
@@ -1564,6 +1764,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
             validate_cuda_hardware()
             self._quest_base_identity_before = resolve_base_model_identity(cfg.base)
+
+        # training.packed_lora -- the machine and the model's config, before anything is loaded.
+        self._begin_packed_lora(cfg, tcfg)
 
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
@@ -1722,13 +1925,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_kbit_model(
-                self.model,
-                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
-                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
-                ),
-                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
-            )
+            compute_dtype = self._kbit_compute_dtype(tcfg, cfg.base)
+            with self._packed_lora_kbit_context(compute_dtype):
+                self.model = prepare_kbit_model(
+                    self.model,
+                    use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                        tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                    ),
+                    compute_dtype=compute_dtype,
+                )
 
         # Freeze training — freeze bottom layers before LoRA
         # #1432: cutoff re-read below to scope the LoRA adapter to it too.
@@ -2003,6 +2208,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             apply_router_only_freeze_if_configured(self.model, tcfg, console)
 
         self._apply_quantization_aware(tcfg)
+        # training.packed_lora -- on the final LoRA model, last, so the kernels see what trains.
+        self._install_packed_lora(cfg, tcfg)
 
     def _apply_quantization_aware(self, tcfg) -> None:
         """Apply quantization-aware training post-LoRA (shared text/vision).
@@ -2504,6 +2711,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         ) as train_ctx:
             # #1693: also when training raises.
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
+            # training.packed_lora: the hook comes off and the pinned memory goes back.
+            train_ctx.callback(self._close_packed_lora)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

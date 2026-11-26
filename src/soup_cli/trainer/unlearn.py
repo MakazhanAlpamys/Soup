@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from rich.console import Console
 
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -43,10 +44,11 @@ _RMU_CONTROL_SCALE = 6.0
 _DEFAULT_BETA = 0.1
 
 
-def _validated_output_dir(output_dir: str) -> str:
+def _validated_output_dir(output_dir: str, experiment_name: str | None = None) -> str:
     """Reject an output dir outside cwd or pointing at a symlink (TOCTOU)."""
     from soup_cli.utils.paths import is_under_cwd
 
+    output_dir = training_output_dir(output_dir, experiment_name, task="unlearn")
     if not isinstance(output_dir, str) or not output_dir:
         raise ValueError("output dir must be a non-empty string")
     if "\x00" in output_dir:
@@ -191,7 +193,9 @@ class UnlearnTrainerWrapper:
         # #1445 — refuse an output dir outside cwd or a symlinked one BEFORE
         # torch / peft are even imported and any model is loaded; the check
         # in ``train()`` stays as the TOCTOU guard after the run.
-        _validated_output_dir(self.config.output)
+        output_dir = _validated_output_dir(
+            self.config.output, getattr(self.config, "experiment_name", None),
+        )
 
         from peft import get_peft_model
 
@@ -305,7 +309,7 @@ class UnlearnTrainerWrapper:
         from transformers import Trainer, TrainingArguments, get_scheduler
 
         optimizer_args = TrainingArguments(
-            output_dir=str(cfg.output),
+            output_dir=output_dir,
             optim=tcfg.optimizer,
             learning_rate=lr,
             weight_decay=float(tcfg.weight_decay),
@@ -442,7 +446,7 @@ class UnlearnTrainerWrapper:
             if step >= self._max_examples:
                 break
 
-        output_dir = _validated_output_dir(cfg.output)
+        output_dir = _validated_output_dir(cfg.output, getattr(cfg, "experiment_name", None))
         os.makedirs(output_dir, exist_ok=True)
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)

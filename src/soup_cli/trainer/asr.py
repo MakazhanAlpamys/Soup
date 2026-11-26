@@ -31,11 +31,13 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.eval_schedule import training_eval_kwargs
-from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -225,8 +227,14 @@ class AsrTrainerWrapper:
             )
 
         console.print(f"[dim]Loading Whisper model: {cfg.base}[/]")
+        # #2941: a full fine-tune (the default; ``asr_lora`` is opt-in) steps every
+        # weight, so it loads fp32 master weights. With no ``dtype`` transformers 5
+        # loads the checkpoint's own: fp16 for whisper-large-v3 and -large-v3-turbo.
         self.model = WhisperForConditionalGeneration.from_pretrained(
             cfg.base, trust_remote_code=self._trust_remote_code,
+            dtype=resolve_base_load_dtype(
+                self.device, full_finetune=not self._should_use_lora(tcfg)
+            ),
             **base_revision_kwargs(cfg.base),
         )
         self.model.config.forced_decoder_ids = None
@@ -316,9 +324,7 @@ class AsrTrainerWrapper:
                 f"extractor truncates to 30s — the transcript may not align.[/]"
             )
 
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
@@ -352,8 +358,7 @@ class AsrTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=use_bf16,
             fp16=use_fp16,
             report_to=self.report_to,

@@ -51,7 +51,7 @@ def workdir(tmp_path, monkeypatch):
         (r'tool.bat a\"b', ["tool.bat", 'a"b']),
         (r'tool.bat ""', ["tool.bat", ""]),
         (r"C:\Users\O'Brien\tool.bat {ckpt}", [r"C:\Users\O'Brien\tool.bat", "{ckpt}"]),
-        (r"tool.bat --ckpt='{ckpt}'", ["tool.bat", "--ckpt='{ckpt}'"]),
+        (r"tool.bat --ckpt='{ckpt}'", ["tool.bat", "--ckpt={ckpt}"]),  # groups since #3088
     ],
 )
 def test_windows_split_preserves_paths_and_argument_boundaries(command, expected):

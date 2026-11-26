@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
@@ -18,7 +19,8 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.run_provenance import warn_stopped_inputs
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -135,6 +137,17 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
+            from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+            revision_kwargs = recorded_base_kwargs(str(model_path), base_model)
+            if revision_kwargs:
+                revision = revision_kwargs["revision"]
+                model_arg = f"{model_arg},revision={revision}"
+                console.print(f"[dim]Base revision: {revision} (recorded run)[/]")
+            else:
+                console.print(
+                    "[dim]Base revision: unknown (legacy, local source or base override)[/]"
+                )
             console.print(
                 f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
@@ -142,6 +155,7 @@ def benchmark(
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+    warn_stopped_inputs(model_path)
 
     if trust_remote_code:
         # Appended only from the resolved --trust-remote-code flag, never
@@ -456,6 +470,7 @@ def custom(
     results_list = []
     from soup_cli.eval.custom import _create_default_generator, score_task
 
+    warn_stopped_inputs(model_path)
     console.print("[dim]Loading model...[/]")
     generate_fn = _create_default_generator(
         str(model_path), trust_remote_code=trust_remote_code,
@@ -560,6 +575,7 @@ def judge(
         JudgeEvaluator,
         JudgeUnavailableError,
         load_rubric,
+        rubric_file_label,
         validate_judge_api_base,
     )
 
@@ -577,7 +593,7 @@ def judge(
         raise typer.Exit(1)
 
     items: list[dict] = []
-    with open(target_path, encoding="utf-8") as fh:
+    with open(target_path, encoding="utf-8-sig") as fh:
         for line_num, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
@@ -601,9 +617,17 @@ def judge(
     if rubric:
         try:
             rubric_data = load_rubric(Path(rubric))
-        except (FileNotFoundError, ValueError) as exc:
+        except FileNotFoundError as exc:
             # The message quotes the path it was given.
             console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1)
+        except ValueError as exc:
+            message = str(exc)
+            # An error of reading the file already names it; one of the rubric's shape
+            # gets the prefix the evaluator's refusals below carry.
+            if not message.startswith(rubric_file_label(Path(rubric))):
+                message = f"Cannot use rubric {rubric!r}: {message}"
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(1)
 
     console.print(
@@ -861,14 +885,14 @@ def compare(
     for rid in (run1, run2):
         run_data = tracker.get_run(rid)
         if run_data is None:
-            console.print(f"[red]{run_lookup_failure(tracker, rid)}[/]")
+            console.print(terminal_text(run_lookup_failure(tracker, rid, markup=False), "red"))
             raise typer.Exit(1)
         resolved_ids.append(run_data["run_id"])
 
     try:
         comparison = compare_runs(tracker, *resolved_ids)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from None
 
     if not comparison["comparisons"]:
@@ -877,7 +901,9 @@ def compare(
         raise typer.Exit(1)
 
     # Display comparison table
-    table = Table(title=f"Eval Comparison: {run1} vs {run2}")
+    table = Table(title=Text.assemble(
+        "Eval Comparison: ", terminal_text(run1), " vs ", terminal_text(run2),
+    ))
     table.add_column("Benchmark", style="bold")
     table.add_column("Run 1", justify="right")
     table.add_column("Run 2", justify="right")
@@ -903,15 +929,15 @@ def compare(
         else:
             delta_str = "-"
 
-        table.add_row(comp["benchmark"], score_a, score_b, delta_str)
+        table.add_row(terminal_text(comp["benchmark"]), score_a, score_b, delta_str)
 
     console.print(table)
 
     if comparison["has_regressions"]:
-        console.print(
-            f"\n[red bold]Regressions detected:[/] "
-            f"{', '.join(comparison['regressions'])}"
-        )
+        console.print(Text.assemble(
+            "\n", ("Regressions detected:", "red bold"), " ",
+            terminal_text(", ".join(comparison["regressions"])),
+        ))
 
 
 # ─── soup eval leaderboard ───
@@ -921,7 +947,7 @@ def compare(
 def leaderboard(
     sort_by: Optional[str] = typer.Option(
         None, "--sort-by", "-s",
-        help="Sort by specific benchmark (default: average)",
+        help="Sort the table, JSON and CSV rows by one benchmark (default: average)",
     ),
     fmt: str = typer.Option(
         "table", "--format", "-f",
@@ -930,6 +956,7 @@ def leaderboard(
 ):
     """Show local leaderboard across all evaluated models."""
     from soup_cli.eval.leaderboard import (
+        _average,
         build_leaderboard_from_tracker,
         export_leaderboard,
     )
@@ -939,7 +966,7 @@ def leaderboard(
     try:
         lb = build_leaderboard_from_tracker(tracker)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1) from None
 
     if not lb.entries:
@@ -950,7 +977,7 @@ def leaderboard(
         raise typer.Exit(1)
 
     if fmt in ("json", "csv"):
-        output = export_leaderboard(lb, fmt=fmt)
+        output = export_leaderboard(lb, fmt=fmt, sort_by=sort_by)
         # Machine-readable JSON/CSV: raw stdout, not console.print — Rich folds
         # rows/lines at the console width and parses ``[...]`` as markup when
         # piped, corrupting the output (issue #1468).
@@ -970,17 +997,20 @@ def leaderboard(
     table.add_column("#", style="dim", width=3)
     table.add_column("Model", style="bold")
     for bench in benchmarks:
-        table.add_column(bench, justify="right")
+        table.add_column(terminal_text(bench), justify="right")
     table.add_column("Avg", justify="right", style="green")
 
-    for rank, (model_name, scores, avg) in enumerate(sorted_models, 1):
-        row = [str(rank), _short_model_name(model_name)]
+    # Avg is the mean of the row's scores, not the --sort-by key the rows are ranked by (#3272).
+    for rank, (model_name, scores, _) in enumerate(sorted_models, 1):
+        row: list[str | Text] = [
+            str(rank), terminal_text(_short_model_name(model_name, markup=False)),
+        ]
         for bench in benchmarks:
             if bench in scores:
                 row.append(f"{scores[bench]:.4f}")
             else:
                 row.append("-")
-        row.append(f"{avg:.4f}")
+        row.append(f"{_average(scores):.4f}")
         table.add_row(*row)
 
     console.print(table)
@@ -1020,20 +1050,23 @@ def human(
     try:
         prompts = load_prompts(Path(prompts_file))
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(terminal_text(exc, "red"))
         raise typer.Exit(1)
 
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
+            console.print(terminal_text(f"Model not found: {mpath}", "red"))
             raise typer.Exit(1)
 
+    warn_stopped_inputs(model_a, model_b)
+
     console.print(Panel(
-        f"[bold]Human Evaluation[/]\n"
-        f"Prompts: {len(prompts)}\n"
-        f"Model A: {for_terminal(model_a)}\n"
-        f"Model B: {for_terminal(model_b)}",
+        Text.assemble(
+            ("Human Evaluation", "bold"),
+            f"\nPrompts: {len(prompts)}\nModel A: ", terminal_text(model_a),
+            "\nModel B: ", terminal_text(model_b),
+        ),
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -1053,10 +1086,14 @@ def human(
         resp_b = gen_b(prompt_text)
 
         # Display for human judgment
-        console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
-        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
-        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
+        heading = console.render_str(
+            f"--- Prompt {idx + 1}/{len(prompts)} ---", markup=False, emoji=False,
+        )
+        heading.stylize_before("bold")
+        console.print(Text.assemble("\n", heading))
+        console.print(Panel(terminal_text(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(terminal_text(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(terminal_text(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -1087,7 +1124,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
+    console.print(Text.assemble("\n", terminal_text(f"Results saved to {output}", "green")))
 
 
 # ─── Helper functions ───
@@ -1284,7 +1321,7 @@ def _display_elo_ratings(results: object) -> None:
         reverse=True,
     ):
         table.add_row(
-            _short_model_name(name),
+            terminal_text(_short_model_name(name, markup=False)),
             f"{rating.rating:.0f}",
             str(rating.wins),
             str(rating.losses),
@@ -1294,12 +1331,11 @@ def _display_elo_ratings(results: object) -> None:
     console.print(table)
 
 
-def _short_model_name(path: str) -> str:
-    """Shorten model path for display."""
+def _short_model_name(path: str, *, markup: bool = True) -> str:
+    """Shorten model path, optionally preparing it for Rich markup."""
     parts = Path(path).parts
-    if len(parts) > 2:
-        return for_terminal("/".join(parts[-2:]))
-    return for_terminal(path)
+    name = "/".join(parts[-2:]) if len(parts) > 2 else path
+    return for_terminal(name) if markup else name
 
 
 # ─── soup eval gate (v0.26.0 Part B) ───
@@ -1352,14 +1388,12 @@ def gate_cmd(
 
     try:
         eval_suite = load_suite(suite)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     if write_baseline:
-        import os
-
-        from soup_cli.utils.paths import check_report_output_path, quote_path
+        from soup_cli.utils.paths import check_report_output_path, quote_path, same_directory_entry
 
         try:
             check_report_output_path(write_baseline, "--write-baseline")
@@ -1373,9 +1407,8 @@ def gate_cmd(
                 inputs.append((f"task {task.name!r} --tasks", task.tasks))
             elif task.type == "judge" and task.prompts:
                 inputs.append((f"task {task.name!r} --prompts", task.prompts))
-        output_identity = os.path.normcase(os.path.realpath(write_baseline))
         for field, input_path in inputs:
-            if output_identity == os.path.normcase(os.path.realpath(input_path)):
+            if same_directory_entry(write_baseline, input_path):
                 message = (
                     f"--write-baseline {quote_path(write_baseline)} aliases "
                     f"{field} {quote_path(input_path)}; choose a different --write-baseline"
@@ -1388,8 +1421,8 @@ def gate_cmd(
             baseline,
             warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
-    except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot resolve baseline:[/] {exc}")
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Cannot resolve baseline:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
@@ -1408,6 +1441,7 @@ def gate_cmd(
     else:
         from soup_cli.eval.quant_check import make_model_generator
 
+        warn_stopped_inputs(model)
         try:
             generate_fn = make_model_generator(model)
         except (OSError, ValueError, ImportError) as exc:
@@ -1584,6 +1618,8 @@ def quant_check_cmd(
         )
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    warn_stopped_inputs(before_path, after_path)
+
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
     from soup_cli.eval.quant_check import make_model_generator
@@ -1680,12 +1716,13 @@ def _print_gate_result(result) -> None:
             f"{row.score:.3f}" if row.score is not None
             else "[red]ERROR[/]"
         )
-        verdict = (
-            "[green]PASS[/]" if row.passed
-            else (f"[red]FAIL ({row.error})[/]" if row.error else "[red]FAIL[/]")
-        )
+        if row.passed:
+            verdict = Text("PASS", style="green")
+        else:
+            detail = f"FAIL ({row.error})" if row.error else "FAIL"
+            verdict = terminal_text(detail, style="red")
         table.add_row(
-            row.name,
+            terminal_text(row.name),
             score_text,
             f"{row.threshold:.3f}",
             f"{row.baseline:.3f}" if row.baseline is not None else "-",

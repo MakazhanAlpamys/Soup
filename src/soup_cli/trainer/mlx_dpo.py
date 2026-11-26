@@ -42,7 +42,9 @@ from soup_cli.trainer.mlx_sft import (
     MLXSFTTrainerWrapper,
     _clipping_optimizer,
     build_mlx_adapter_config,
+    mlx_adapter_base,
 )
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -627,7 +629,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 f"{meta.get('task')!r}, not {task!r}; start a fresh run or resume "
                 "with the matching task"
             )
-        if str(meta.get("model")) != str(self.config.base):
+        if mlx_adapter_base(str(meta.get("model"))) != mlx_adapter_base(str(self.config.base)):
             raise ValueError(
                 f"MLX {name}: {checkpoint_path} belongs to base {meta.get('model')!r}, "
                 f"not {self.config.base!r}"
@@ -657,7 +659,9 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         data_seed = seed if tcfg.data_seed is None else int(tcfg.data_seed)
         mx.random.seed(seed)
 
-        output_dir = Path(cfg.output)
+        output_dir = Path(training_output_dir(
+            cfg.output, getattr(cfg, "experiment_name", None), backend="mlx",
+        ))
         output_dir.mkdir(parents=True, exist_ok=True)
         batch_size = self._resolve_batch_size()
         accum = max(1, int(tcfg.gradient_accumulation_steps))
@@ -920,7 +924,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
             json.dumps(
                 {
                     "fine_tune_type": "lora",
-                    "model": str(cfg.base),
+                    "model": mlx_adapter_base(str(cfg.base)),
                     "num_layers": len(getattr(self.model, "layers", [])),
                     "batch_size": batch_size,
                     "iters": iters,

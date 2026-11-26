@@ -13,13 +13,16 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Callable, Iterable
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
+from soup_cli.experiment.reward_columns import finite_reward
 from soup_cli.experiment.row_kinds import check_loss_summary_kind, check_metric_row_kind
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
-from soup_cli.utils.crash import redact_secrets
+from soup_cli.utils.crash import REDACTION_FAILED, redact_secrets
 from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
 from soup_cli.utils.terminal import for_terminal, strip_control
 
@@ -77,7 +80,8 @@ CREATE TABLE IF NOT EXISTS runs (
     log_path        TEXT,
     exit_code       INTEGER,
     loss_summary_kind TEXT,
-    error_message   TEXT
+    error_message   TEXT,
+    cost_history_eligible INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -92,8 +96,10 @@ CREATE TABLE IF NOT EXISTS metrics (
     grad_norm REAL,
     speed     REAL,
     gpu_mem   TEXT,
+    timestamp TEXT NOT NULL,
     kind      TEXT,
-    timestamp TEXT NOT NULL
+    reward REAL,
+    reward_std REAL
 );
 
 CREATE TABLE IF NOT EXISTS eval_results (
@@ -241,6 +247,9 @@ class ExperimentTracker:
             ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
             ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
             ("runs", "error_message", "ALTER TABLE runs ADD COLUMN error_message TEXT"),
+            # NULL on old rows means the launch conditions were not recorded.
+            ("runs", "cost_history_eligible",
+             "ALTER TABLE runs ADD COLUMN cost_history_eligible INTEGER"),
             # Deliberately nullable with no default: a row written before this
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
@@ -254,6 +263,15 @@ class ExperimentTracker:
             ("metrics", "kind", "ALTER TABLE metrics ADD COLUMN kind TEXT"),
             ("runs", "loss_summary_kind",
              "ALTER TABLE runs ADD COLUMN loss_summary_kind TEXT"),
+            # A reinforcement-style run's per-step training reward and its spread
+            # (experiment/reward_columns.py). Nullable with no default and never
+            # backfilled, like the columns above: NULL is "not measured". Fresh
+            # tables follow the upgrade order from 0.77.2: timestamp, kind, then these
+            # two fields. Existing tables keep their order, which can differ for
+            # older upgrades and databases created by v0.78.0. get_metrics reads
+            # columns by name, so both orders work without rebuilding any table.
+            ("metrics", "reward", "ALTER TABLE metrics ADD COLUMN reward REAL"),
+            ("metrics", "reward_std", "ALTER TABLE metrics ADD COLUMN reward_std REAL"),
         ):
             existing = {
                 row[1]
@@ -283,6 +301,8 @@ class ExperimentTracker:
         gpu_info: dict,
         experiment_name: Optional[str] = None,
         run_id: Optional[str] = None,
+        *,
+        cost_history_eligible: bool | None = None,
     ) -> str:
         """Insert a new run and return its run_id."""
         run_id = run_id or generate_run_id()
@@ -300,11 +320,11 @@ class ExperimentTracker:
                 """UPDATE runs SET status = 'running', config_json = ?, device = ?,
                    device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?,
                    base_revision = NULL, base_revision_source = NULL, training_data_sha256 = NULL,
-                   code_commit = NULL, code_dirty = NULL
+                   code_commit = NULL, code_dirty = NULL, cost_history_eligible = ?
                    WHERE run_id = ?""",
                 (
                     config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
-                    run_id,
+                    cost_history_eligible, run_id,
                 ),
             )
             conn.commit()
@@ -312,11 +332,12 @@ class ExperimentTracker:
         conn.execute(
             """INSERT INTO runs
                (run_id, experiment_name, created_at, status, config_json,
-                device, device_name, gpu_memory, base_model, task)
-               VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)""",
+                device, device_name, gpu_memory, base_model, task, cost_history_eligible)
+               VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, experiment_name, now, config_json,
                 device, device_name, gpu_memory, base_model, task,
+                cost_history_eligible,
             ),
         )
         conn.commit()
@@ -395,7 +416,7 @@ class ExperimentTracker:
         conn = self._get_conn()
         conn.execute(
             """UPDATE runs SET status = ?, exit_code = ? WHERE run_id = ?
-               AND status NOT IN ('completed', 'failed')""",
+               AND status NOT IN ('completed', 'failed', 'stopped')""",
             (status, exit_code, run_id),
         )
         conn.commit()
@@ -456,6 +477,8 @@ class ExperimentTracker:
         val_loss: Optional[float] = None,
         val_reward: Optional[float] = None,
         kind: Optional[str] = None,
+        reward: Optional[float] = None,
+        reward_std: Optional[float] = None,
     ) -> None:
         """Log a single metrics row for the given run.
 
@@ -473,19 +496,48 @@ class ExperimentTracker:
         (``experiment.row_kinds``). A writer states it; None is what a row written
         before the column existed reads as. Any other value raises ``ValueError``
         before the row is written.
+
+        ``reward`` and ``reward_std`` are a reinforcement-style run's training reward for
+        the step and its spread (``experiment.reward_columns``); NULL for every other
+        row. Anything that is not a finite number -- a ``bool``, a string, NaN, an
+        infinity -- is stored as NULL and the row is kept: SQLite would store ``True``
+        as 1.0 and an infinity as is. The held-out reward is ``val_reward``, not this.
         """
         kind = check_metric_row_kind(kind)
+        reward = finite_reward(reward)
+        reward_std = finite_reward(reward_std)
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO metrics
                (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
-                gpu_mem, kind, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                gpu_mem, kind, timestamp, reward, reward_std)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
-             gpu_mem, kind, now),
+             gpu_mem, kind, now, reward, reward_std),
         )
         conn.commit()
+
+    def get_reward_summary(self, run_id: str) -> Optional[dict]:
+        """The training reward of a run: ``{"first", "last", "steps"}``, or None.
+
+        ``first`` / ``last`` are the reward of the earliest and latest step that logged
+        one (rows with a NULL reward are skipped, ties at a step go by arrival), and
+        ``steps`` counts those rows. None for a run with no reward row: every non-RL run.
+        This reads ``metrics.reward`` only; unlike ``get_metric_series`` it never falls
+        back to an evaluation benchmark that happens to be named ``reward``.
+        """
+        conn = self._get_conn()
+        values = [
+            row[0] for row in conn.execute(
+                "SELECT reward FROM metrics WHERE run_id = ? AND reward IS NOT NULL "
+                "ORDER BY step, id",
+                (run_id,),
+            ).fetchall()
+        ]
+        if not values:
+            return None
+        return {"first": values[0], "last": values[-1], "steps": len(values)}
 
     def finish_run(
         self,
@@ -496,8 +548,10 @@ class ExperimentTracker:
         duration_secs: float,
         output_dir: str,
         loss_summary_kind: Optional[str] = None,
+        *,
+        status: Literal["completed", "stopped"] = "completed",
     ) -> None:
-        """Mark run as completed and fill summary fields.
+        """Record a completed or user-stopped run and fill summary fields.
 
         ``initial_loss`` / ``final_loss`` are ``None`` for a run that observed no
         loss; the columns are NULL then, not 0.0, so a reader can tell "no
@@ -547,12 +601,13 @@ class ExperimentTracker:
                 cost_label = None
         conn.execute(
             """UPDATE runs SET
-               status = 'completed',
+               status = ?,
                initial_loss = ?, final_loss = ?,
                total_steps = ?, duration_secs = ?, output_dir = ?,
                cost_usd = ?, cost_gpu_label = ?, loss_summary_kind = ?
                WHERE run_id = ?""",
             (
+                status,
                 initial_loss, final_loss, total_steps, duration_secs, output_dir,
                 cost_usd, cost_label, loss_summary_kind, run_id,
             ),
@@ -571,7 +626,11 @@ class ExperimentTracker:
         """
         conn = self._get_conn()
         if error is not None:
-            error = redact_secrets(error)
+            try:
+                error = redact_secrets(error)
+            except Exception:
+                # a fault in redaction must not skip the failure record or mask the error
+                error = REDACTION_FAILED
             if len(error) > _MAX_ERROR_MESSAGE_CHARS:
                 error = error[:_MAX_ERROR_MESSAGE_CHARS] + "...(truncated)"
         conn.execute(
@@ -586,8 +645,8 @@ class ExperimentTracker:
         Only MCP-spawned runs carry a pid; a run recorded without one is left
         untouched because its liveness cannot be checked here. A dead pid is
         persisted as _STATUS_TERMINATED with exit_code None (unknown) through
-        finish_execution, whose guard keeps a richer 'completed'/'failed'
-        terminal status intact and makes the rewrite idempotent.
+        finish_execution, whose guard keeps a richer terminal status intact and
+        makes the rewrite idempotent.
         """
         pid = run.get("pid")
         if (
@@ -602,13 +661,21 @@ class ExperimentTracker:
             run["exit_code"] = None
         return run
 
-    def list_runs(self, limit: int = 50) -> list[dict]:
-        """Return list of runs ordered by created_at desc."""
+    def list_runs(
+        self,
+        limit: int = 50,
+        *,
+        select_runs: Callable[[Iterable[dict]], list[dict]] | None = None,
+    ) -> list[dict]:
+        """List newest runs, letting a selector apply the limit after filtering."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
+        sql_limit = limit if select_runs is None or limit == 0 else -1
+        with closing(conn.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (sql_limit,)
+        )) as cursor:
+            rows = map(dict, cursor)
+            selected = list(rows) if select_runs is None else select_runs(rows)
+        return [self._reconcile_orphaned_run(run) for run in selected]
 
     def list_active_execution_runs(self) -> list[dict]:
         """Return every 'launching' or 'running' run, newest first, with no limit.
@@ -631,7 +698,9 @@ class ExperimentTracker:
             "SELECT * FROM runs WHERE run_id = ?", (run_id,)
         ).fetchone()
 
-        if row is None:
+        # An empty id is not a prefix: its pattern is "%", which names every run,
+        # so with a single run `soup runs delete ""` would delete it.
+        if row is None and run_id:
             rows = conn.execute(
                 "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
                 "ORDER BY created_at DESC",
@@ -657,6 +726,8 @@ class ExperimentTracker:
         ).fetchone()
         if exact is not None:
             return 1
+        if not run_id:
+            return 0  # an empty id names no run (see get_run)
         (count,) = conn.execute(
             "SELECT COUNT(*) FROM runs WHERE run_id LIKE ? ESCAPE '\\'",
             (_run_id_prefix_pattern(run_id),),

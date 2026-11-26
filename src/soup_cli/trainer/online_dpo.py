@@ -50,6 +50,7 @@ from soup_cli.trainer.online_dpo_ranking import (
     make_ranked_pairs_trainer,
     report_unranked_pairs,
 )
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -60,6 +61,7 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -281,9 +283,7 @@ class OnlineDPOTrainerWrapper:
         train_ds = Dataset.from_list(prompt_rows)
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Warmup from ratio (#1431) ---
@@ -308,8 +308,7 @@ class OnlineDPOTrainerWrapper:
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,

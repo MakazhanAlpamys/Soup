@@ -1,9 +1,11 @@
 """`soup merge --low-memory` must produce exactly what the regular merge produces."""
 
 import json
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -202,25 +204,48 @@ def _add_support_files(base: Path) -> None:
     shutil.copyfile(first_shard, base / "consolidated.safetensors")
 
 
-def _fake_hub_download(repo: Path, snapshot: Path):
-    """A ``snapshot_download`` stand-in that applies the patterns as the Hub does."""
+def _copy_matching(repo: Path, snapshot: Path, kwargs: dict) -> None:
     from fnmatch import fnmatch
 
+    allow = kwargs.get("allow_patterns") or ["*"]
+    ignore = kwargs.get("ignore_patterns") or []
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for entry in sorted(repo.iterdir()):
+        if not entry.is_file():
+            continue
+        if not any(fnmatch(entry.name, pattern) for pattern in allow):
+            continue
+        if any(fnmatch(entry.name, pattern) for pattern in ignore):
+            continue
+        shutil.copyfile(entry, snapshot / entry.name)
+
+
+def _fake_hub_download(repo: Path, snapshot: Path, calls: Optional[list] = None):
+    """A ``snapshot_download`` stand-in that applies the patterns as the Hub does.
+
+    Calls add to one snapshot, as calls for one commit do in the Hub cache.
+    """
+
     def download(repo_id, **kwargs):
-        allow = kwargs.get("allow_patterns") or ["*"]
-        ignore = kwargs.get("ignore_patterns") or []
-        snapshot.mkdir()
-        for entry in sorted(repo.iterdir()):
-            if not entry.is_file():
-                continue
-            if not any(fnmatch(entry.name, pattern) for pattern in allow):
-                continue
-            if any(fnmatch(entry.name, pattern) for pattern in ignore):
-                continue
-            shutil.copyfile(entry, snapshot / entry.name)
+        if calls is not None:
+            calls.append(kwargs)
+        _copy_matching(repo, snapshot, kwargs)
         return str(snapshot)
 
     return download
+
+
+def _with_renamed_shards(base: Path, repo: Path, prefix: str) -> None:
+    """``repo``: ``base`` with its shards renamed ``<prefix>-part<N>`` in files and index."""
+    repo.mkdir()
+    shutil.copyfile(base / "config.json", repo / "config.json")
+    index = json.loads((base / "model.safetensors.index.json").read_text())
+    renamed = {}
+    for number, name in enumerate(sorted(set(index["weight_map"].values())), start=1):
+        renamed[name] = f"{prefix}-part{number}.safetensors"
+        shutil.copyfile(base / name, repo / renamed[name])
+    index["weight_map"] = {key: renamed[name] for key, name in index["weight_map"].items()}
+    (repo / "model.safetensors.index.json").write_text(json.dumps(index))
 
 
 def _support_names(output: Path) -> set:
@@ -236,14 +261,14 @@ def test_download_patterns_cover_every_copied_suffix(trust):
     """Adding a suffix to _COPIED_SUFFIXES cannot leave the Hub download behind."""
     from fnmatch import fnmatch
 
-    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, hub_download_patterns
+    from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, hub_support_patterns
 
-    allow, ignore = hub_download_patterns(trust)
+    allow = hub_support_patterns(trust)
     for suffix in _COPIED_SUFFIXES:
         assert any(fnmatch(f"file{suffix}", pattern) for pattern in allow), suffix
-    assert any(fnmatch("model-00001-of-00002.safetensors", pattern) for pattern in allow)
+    assert any(fnmatch("model.safetensors.index.json", pattern) for pattern in allow)
     assert any(fnmatch("modeling_my.py", pattern) for pattern in allow) is trust
-    assert not any(fnmatch("model.safetensors", pattern) for pattern in ignore)
+    assert not any(fnmatch("model-00001-of-00002.safetensors", pattern) for pattern in allow)
 
 
 @pytest.mark.parametrize(
@@ -256,15 +281,20 @@ def test_download_patterns_cover_every_copied_suffix(trust):
         "mistral/consolidated-00002-of-00003.safetensors",
     ],
 )
-def test_consolidated_copies_are_ignored_at_any_depth(name):
+def test_consolidated_copies_are_ignored_at_any_depth(name, tmp_path):
     """A single top-level pattern is anchored: the shared Hub patterns also cover a
     nested or sharded consolidated copy, which the Hub download would otherwise fetch."""
     from fnmatch import fnmatch
 
-    from soup_cli.utils.checkpoint_files import HUB_FALLBACK_IGNORE_PATTERNS
-    from soup_cli.utils.lowmem_merge import hub_download_patterns
+    from soup_cli.utils.checkpoint_files import (
+        HUB_FALLBACK_ALLOW_PATTERNS,
+        HUB_FALLBACK_IGNORE_PATTERNS,
+    )
+    from soup_cli.utils.lowmem_merge import hub_weight_patterns
 
-    _, ignore = hub_download_patterns(False)
+    (tmp_path / "config.json").write_text("{}")
+    allow, ignore = hub_weight_patterns(tmp_path)  # no index: the fallback rule
+    assert allow == list(HUB_FALLBACK_ALLOW_PATTERNS)
     assert ignore == list(HUB_FALLBACK_IGNORE_PATTERNS)
     assert any(fnmatch(name, pattern) for pattern in ignore), name
     assert not any(fnmatch("model-00001-of-00003.safetensors", pattern) for pattern in ignore)
@@ -272,7 +302,7 @@ def test_consolidated_copies_are_ignored_at_any_depth(name):
 
 
 def test_the_trust_rule_is_written_once():
-    """``hub_download_patterns`` and ``_support_files`` take ``.py`` from the same helper."""
+    """``hub_support_patterns`` and ``_support_files`` take ``.py`` from the same helper."""
     from soup_cli.utils.lowmem_merge import _COPIED_SUFFIXES, _copied_suffixes
 
     assert _copied_suffixes(False) == _COPIED_SUFFIXES
@@ -337,16 +367,15 @@ class TestCli:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
-        from soup_cli.utils.lowmem_merge import hub_download_patterns
+        from soup_cli.utils.lowmem_merge import hub_support_patterns
 
         base, adapter, _ = checkpoints
         monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
         monkeypatch.chdir(base.parent)
-        fetched = {}
+        calls = []
 
         def fake_download(repo_id, **kwargs):
-            fetched["repo_id"] = repo_id
-            fetched.update(kwargs)
+            calls.append(dict(kwargs, repo_id=repo_id))
             return str(base)
 
         monkeypatch.setattr("soup_cli.utils.hubs.snapshot_download", fake_download)
@@ -360,12 +389,13 @@ class TestCli:
         )
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert fetched["repo_id"] == "org/tiny-llama"
-        allow_patterns, ignore_patterns = hub_download_patterns(False)
-        assert fetched["allow_patterns"] == allow_patterns
-        assert fetched["ignore_patterns"] == ignore_patterns
-        assert "*.safetensors" in allow_patterns and "*.json" in allow_patterns
-        assert "*.py" not in allow_patterns
+        # The snapshot already holds every shard the index names: no second call.
+        assert len(calls) == 1, calls
+        assert calls[0]["repo_id"] == "org/tiny-llama"
+        allow_patterns = hub_support_patterns(False)
+        assert calls[0]["allow_patterns"] == allow_patterns
+        assert "*.json" in allow_patterns and "*.py" not in allow_patterns
+        assert not any(pattern.endswith(".safetensors") for pattern in allow_patterns)
         expected = _regular_merge(base, adapter, torch.float16)
         actual = _read_all(base.parent / "merged_out")
         assert all(torch.equal(actual[key], value) for key, value in expected.items())
@@ -410,6 +440,7 @@ class TestCli:
         assert ("modeling_my.py" in {p.name for p in snapshot.iterdir()}) is trust
 
     def test_consolidated_weights_are_not_downloaded(self, checkpoints, monkeypatch):
+        """The control for #2856: an index next to an unindexed consolidated copy."""
         import transformers
         from typer.testing import CliRunner
 
@@ -420,8 +451,9 @@ class TestCli:
         monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
         monkeypatch.chdir(base.parent)
         snapshot = base.parent / "snapshot"
+        calls = []
         monkeypatch.setattr(
-            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot)
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(base, snapshot, calls)
         )
 
         result = CliRunner().invoke(
@@ -433,7 +465,10 @@ class TestCli:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         downloaded = {p.name for p in snapshot.iterdir()}
         assert "consolidated.safetensors" not in downloaded
-        assert any(name.endswith(".safetensors") for name in downloaded)
+        shards = sorted(p.name for p in base.glob("model-*-of-*.safetensors"))
+        assert shards and set(shards) <= downloaded
+        weight_patterns = [p for p in calls[-1]["allow_patterns"] if p.endswith(".safetensors")]
+        assert sorted(weight_patterns) == shards  # by name, not by a glob
         expected = _regular_merge(base, adapter, torch.float16)
         actual = _read_all(base.parent / "merged_out")
         assert all(torch.equal(actual[key], value) for key, value in expected.items())
@@ -471,6 +506,165 @@ class TestCli:
         assert "not downloaded from the Hub" in output
         assert not any(p.name.endswith(".safetensors") for p in snapshot.iterdir())
         assert not (base.parent / "merged_out").exists()
+
+    def test_a_cached_unindexed_shard_still_fetches_model_safetensors(
+        self, checkpoints, monkeypatch, tmp_path
+    ):
+        """#2900 review: with no index the merge reads only ``model.safetensors``, so a
+        snapshot that already holds an unindexed shard still needs the second call."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        single = _tiny_base(tmp_path / "single", shard_size="10MB")
+        repo = base.parent / "repo"
+        repo.mkdir()
+        shutil.copyfile(single / "config.json", repo / "config.json")
+        shutil.copyfile(single / "model.safetensors", repo / "model.safetensors")
+        shard = "model-00001-of-00002.safetensors"
+        shutil.copyfile(sorted(base.glob("model-*-of-*.safetensors"))[0], repo / shard)
+        snapshot = base.parent / "snapshot"
+        snapshot.mkdir()
+        shutil.copyfile(repo / shard, snapshot / shard)
+        calls = []
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(repo, snapshot, calls)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/single-and-shards",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert len(calls) == 2, calls
+        assert (snapshot / "model.safetensors").is_file()
+        expected = _regular_merge(single, adapter, torch.float16)
+        actual = _read_all(base.parent / "merged_out")
+        assert actual.keys() == expected.keys()
+        assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
+    def test_a_hub_base_gets_the_consolidated_shards_its_index_names(
+        self, checkpoints, monkeypatch
+    ):
+        """#2856: the index decides, through the Hub route as through the local one."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        repo = base.parent / "repo"
+        _with_renamed_shards(base, repo, "consolidated")
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download",
+            _fake_hub_download(repo, base.parent / "snapshot"),
+        )
+
+        from_hub = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/indexed-consolidated",
+             "--output", "from_hub", "--low-memory"],
+        )
+        from_local = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", str(repo),
+             "--output", "from_local", "--low-memory"],
+        )
+
+        assert from_hub.exit_code == 0, (from_hub.output, repr(from_hub.exception))
+        assert from_local.exit_code == 0, (from_local.output, repr(from_local.exception))
+        expected = _regular_merge(base, adapter, torch.float16)
+        for output in ("from_hub", "from_local"):
+            actual = _read_all(base.parent / output)
+            assert actual.keys() == expected.keys()
+            assert all(torch.equal(actual[key], value) for key, value in expected.items())
+
+    @pytest.mark.parametrize(
+        "listed", ["consolidated*.safetensors", "original/consolidated.safetensors"]
+    )
+    def test_index_names_are_checked_before_they_are_downloaded(
+        self, checkpoints, monkeypatch, listed
+    ):
+        """A glob or a path in the index is refused, never used as a download pattern."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        repo = base.parent / "repo"
+        repo.mkdir()
+        shutil.copyfile(base / "config.json", repo / "config.json")
+        shutil.copyfile(sorted(base.glob("*.safetensors"))[0], repo / "consolidated.safetensors")
+        index = {"weight_map": {"model.embed_tokens.weight": listed}}
+        (repo / "model.safetensors.index.json").write_text(json.dumps(index))
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        snapshot = base.parent / "snapshot"
+        monkeypatch.setattr(
+            "soup_cli.utils.hubs.snapshot_download", _fake_hub_download(repo, snapshot)
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/odd-index",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        output = " ".join(strip_ansi(result.output).split())
+        assert "not a plain .safetensors file name" in output
+        assert not any(p.name.endswith(".safetensors") for p in snapshot.iterdir())
+
+    def test_a_legacy_adapter_keeps_both_calls_on_one_commit(self, checkpoints, monkeypatch):
+        """#2856: with no recorded revision, the weights come from the first call's commit,
+        even when the default branch moves between the two calls."""
+        import transformers
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        base, adapter, _ = checkpoints
+        first, moved = "a" * 40, "b" * 40
+        commits = {first: base.parent / "commit-first", moved: base.parent / "commit-moved"}
+        _with_renamed_shards(base, commits[first], "weights")
+        # The new head of the branch has the same index but no shards yet.
+        commits[moved].mkdir()
+        for name in ("config.json", "model.safetensors.index.json"):
+            shutil.copyfile(commits[first] / name, commits[moved] / name)
+        snapshots = base.parent / "hub" / "models--org--moving" / "snapshots"
+        calls = []
+
+        def download(repo_id, **kwargs):
+            calls.append(kwargs)
+            commit = kwargs.get("revision") or (first if len(calls) == 1 else moved)
+            _copy_matching(commits[commit], snapshots / commit, kwargs)
+            return str(snapshots / commit)
+
+        monkeypatch.setattr(transformers, "AutoTokenizer", _StubTokenizer)
+        monkeypatch.chdir(base.parent)
+        monkeypatch.setattr("soup_cli.utils.hubs.snapshot_download", download)
+
+        result = CliRunner().invoke(
+            app,
+            ["merge", "--adapter", str(adapter), "--base", "org/moving",
+             "--output", "merged_out", "--low-memory"],
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert [call.get("revision") for call in calls] == [None, first]
+        expected = _regular_merge(base, adapter, torch.float16)
+        actual = _read_all(base.parent / "merged_out")
+        assert actual.keys() == expected.keys()
+        assert all(torch.equal(actual[key], value) for key, value in expected.items())
 
     def test_tokenizer_failure_leaves_no_output(self, run, checkpoints, monkeypatch):
         import transformers
@@ -600,6 +794,118 @@ class TestAdapterCoverage:
         with pytest.raises(LowMemoryMergeError, match=field):
             merge_low_memory(base, adapter, output, "float16")
         assert not output.exists()
+
+    @pytest.mark.parametrize("init", ["pissa", "olora"])
+    def test_an_init_that_rewrites_the_base_is_refused(self, tmp_path, init):
+        """PiSSA / OLoRA (``lora.init_strategy``) subtract ``scaling * B0 @ A0`` from
+        the base at init (#2722). Adding the trained ``B @ A`` to the original base wrote
+        weights ~46% off the trained model with exit 0; refuse instead."""
+        from soup_cli.utils import stream_inference
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+
+        base = _tiny_base(tmp_path / "base")
+        adapter = _tiny_adapter(base, tmp_path / "adapter", init_lora_weights=init)
+        before = sorted(path.name for path in tmp_path.iterdir())
+        with pytest.raises(LowMemoryMergeError, match=re.escape(f"init_lora_weights={init!r}")):
+            merge_low_memory(base, adapter, tmp_path / "merged", "float32")
+        assert sorted(path.name for path in tmp_path.iterdir()) == before
+        assert stream_inference.is_plain_lora_init(init) is False
+
+    @pytest.mark.parametrize(
+        "init", ["pissa_niter_4", "corda", "loftq", "lora_ga", "EVA", 1, ["gaussian"]]
+    )
+    def test_every_other_init_is_refused_by_value(self, checkpoints, tmp_path, init):
+        """CorDA, LoftQ, LoRA-GA and PiSSA with fast SVD rewrite the base at init as well.
+        peft compares ``eva`` with ``==`` (``peft/tuners/lora/layer.py:303`` in v0.21.2), so
+        ``"EVA"`` is an error there, and a non-string is not an init at all. Each is refused
+        by value before anything is written (#2722)."""
+        from soup_cli.utils import stream_inference
+        from soup_cli.utils.lowmem_merge import LowMemoryMergeError, merge_low_memory
+
+        base, adapter, output = checkpoints
+        _rewrite_adapter_config(adapter, init_lora_weights=init)
+        before = sorted(path.name for path in tmp_path.iterdir())
+        with pytest.raises(LowMemoryMergeError, match=re.escape(f"init_lora_weights={init!r}")):
+            merge_low_memory(base, adapter, output, "float16")
+        assert sorted(path.name for path in tmp_path.iterdir()) == before
+        assert stream_inference.is_plain_lora_init(init) is False
+
+    @pytest.mark.parametrize(
+        "init",
+        [
+            None, True, False,
+            0, 0.0,  # peft reads a false value as no init (layer.py:311)
+            "gaussian", "Gaussian", "GAUSSIAN", "mica", "MICA",  # peft lower-cases these two
+            "eva", "orthogonal",  # and compares these two exactly
+        ],
+    )
+    def test_an_init_that_leaves_the_base_alone_is_accepted(self, checkpoints, init):
+        """peft lower-cases ``gaussian`` and ``mica`` (``peft/tuners/lora/layer.py:339`` and
+        ``:297`` in v0.21.2) and compares ``eva`` and ``orthogonal`` exactly; none of them
+        touches the base weight (``:297-299``, ``:303-307``, ``:464-470``), so an adapter saved
+        with one is valid on the original base and is not refused (#2722)."""
+        from soup_cli.utils import stream_inference
+        from soup_cli.utils.lowmem_merge import load_adapter
+
+        _, adapter, _ = checkpoints
+        _rewrite_adapter_config(adapter, init_lora_weights=init)
+        config, pairs = load_adapter(adapter)
+        assert config["init_lora_weights"] == init
+        assert pairs
+        assert stream_inference.is_plain_lora_init(init) is True
+
+    @pytest.mark.parametrize("init", [False, "gaussian", "Gaussian"])
+    def test_a_default_init_still_matches_the_regular_merge(self, tmp_path, init):
+        from soup_cli.utils.lowmem_merge import merge_low_memory
+
+        base = _tiny_base(tmp_path / "base")
+        adapter = _tiny_adapter(base, tmp_path / "adapter", init_lora_weights=init)
+        merge_low_memory(base, adapter, tmp_path / "merged", "float32")
+        expected = _regular_merge(base, adapter, torch.float32)
+        actual = _read_all(tmp_path / "merged")
+        assert all(torch.equal(value, expected[key]) for key, value in actual.items())
+
+    def test_a_real_orthogonal_adapter_matches_the_regular_merge(self, tmp_path):
+        """``orthogonal`` replaces ``lora_A`` and ``lora_B`` and leaves the base weight alone
+        (``peft/tuners/lora/layer.py:305-307``, ``orthogonal_init`` at ``:603-617`` in
+        v0.21.2), so the low-memory merge of one is the regular merge (#2722). peft needs an
+        even rank for it."""
+        from soup_cli.utils.lowmem_merge import merge_low_memory
+
+        base = _tiny_base(tmp_path / "base")
+        adapter = _tiny_adapter(base, tmp_path / "adapter", r=4, init_lora_weights="orthogonal")
+        saved = json.loads((adapter / "adapter_config.json").read_text(encoding="utf-8"))
+        assert saved["init_lora_weights"] == "orthogonal"
+
+        merge_low_memory(base, adapter, tmp_path / "merged", "float32")
+
+        expected = _regular_merge(base, adapter, torch.float32)
+        actual = _read_all(tmp_path / "merged")
+        original = _read_all(base)
+        assert actual.keys() == expected.keys()
+        assert all(torch.equal(value, expected[key]) for key, value in actual.items())
+        assert any(not torch.equal(value, original[key]) for key, value in actual.items())
+
+    def test_both_adapter_loaders_call_the_same_function(self, checkpoints, monkeypatch):
+        """One rule for both adapter loaders, so they cannot drift (#2722): with
+        ``stream_inference.is_plain_lora_init`` swapped for one that refuses everything, the
+        low-memory merge and the streamed loader both refuse the default ``True``."""
+        from soup_cli.utils import lowmem_merge, stream_inference
+
+        seen = []
+
+        def refuse_everything(value):
+            seen.append(value)
+            return False
+
+        monkeypatch.setattr(stream_inference, "is_plain_lora_init", refuse_everything)
+        _, adapter, _ = checkpoints
+        _rewrite_adapter_config(adapter, init_lora_weights=True)
+        with pytest.raises(lowmem_merge.LowMemoryMergeError, match="init_lora_weights=True"):
+            lowmem_merge.load_adapter(adapter)
+        with pytest.raises(ValueError, match="init_lora_weights=True"):
+            stream_inference._check_adapter_kind({"peft_type": "LORA", "init_lora_weights": True})
+        assert seen == [True, True]
 
     @pytest.mark.parametrize("changes", [{"peft_type": "IA3"}, {"bias": "all"}])
     def test_other_adapter_types_are_refused(self, checkpoints, changes):

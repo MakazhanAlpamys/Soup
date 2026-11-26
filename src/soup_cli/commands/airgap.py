@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import List, Optional
 
@@ -66,8 +67,10 @@ def _resolve_repro_receipt(explicit: Optional[str], model_dir: str) -> Optional[
 
 
 def airgap_bundle(
-    output: str = typer.Option(..., "--output", "-o",
-                               help="Output tarball path (cwd-contained)"),
+    output: str = typer.Option(
+        ..., "--output", "-o",
+        help="Output path for the uncompressed tar archive (cwd-contained)",
+    ),
     model: str = typer.Option(..., "--model", help="Path to model directory"),
     dataset: Optional[List[str]] = typer.Option(
         None, "--dataset",
@@ -110,7 +113,14 @@ def airgap_bundle(
     if bundle_size_cap <= 0:
         console.print("[red]--bundle-size-cap must be > 0[/]")
         raise typer.Exit(2)
+    # #3045: nan and inf pass ``<= 0``, and int() would raise on them below.
+    if not math.isfinite(bundle_size_cap):
+        console.print("[red]--bundle-size-cap must be a finite number > 0[/]")
+        raise typer.Exit(2)
     cap_bytes_float = float(bundle_size_cap) * 1024 * 1024 * 1024
+    if not math.isfinite(cap_bytes_float):
+        console.print("[red]--bundle-size-cap is too large to count in bytes[/]")
+        raise typer.Exit(2)
     # Convert to int; allow fractional cap to address sub-GiB tests.
     cap_bytes = int(cap_bytes_float)
     if cap_bytes < 1:

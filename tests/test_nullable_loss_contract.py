@@ -1,8 +1,8 @@
 """A run that measured no loss reports NULL, not an invented zero.
 
-Soup Zero ran a patched 0.73.3 wheel (``0.73.3.post1.dev20261027+zero.loss1``,
-SoupZero #230) for one contract: initial/final loss of a completed run are
-nullable, and a callback event that measured nothing writes no metric row. This
+A downstream application ran a patched 0.73.3 wheel for one contract: initial/final
+loss of a completed run are nullable, and a callback event that measured nothing
+writes no metric row. This
 file holds the part of that contract that fits what ``main`` already promises:
 
 * ``runs.initial_loss`` / ``runs.final_loss`` are NULL for a run whose trainer
@@ -16,7 +16,7 @@ file holds the part of that contract that fits what ``main`` already promises:
   throughput is kept (#2810) as one ``kind = "summary"`` row with ``loss``, ``lr`` and
   ``grad_norm`` NULL;
 * every metric row has a positive, strictly increasing integer ``id``, the row
-  identity Soup Zero's ``row_id`` / ``after_row_id`` metric API is built on;
+  identity a downstream ``row_id`` / ``after_row_id`` metric API is built on;
 * two nullable, add-only ``kind`` columns say what a stored number is, so a reader
   need not guess: ``runs.loss_summary_kind`` (``per_step`` / ``mean`` /
   ``unavailable``) and ``metrics.kind`` (``train`` / ``eval`` / ``summary``). Their
@@ -289,7 +289,7 @@ def test_a_logged_zero_is_still_a_zero(tracker):
 
 
 def test_metric_rows_have_increasing_positive_integer_ids_even_at_one_step(tracker):
-    """The row identity Soup Zero's ``row_id`` / ``after_row_id`` filters are built on.
+    """The row identity a downstream ``row_id`` / ``after_row_id`` filters are built on.
 
     Two rows at the same step (a late real measurement) and a row with NULL loss
     must all be kept, in recorded order, each with its own id.
@@ -696,7 +696,7 @@ def test_a_learning_rate_only_event_is_still_recorded(session):
 
 
 def test_the_kind_value_sets_are_exactly_these_names():
-    """Soup Zero's pin tests compare against these strings; renaming one is a break."""
+    """Downstream pin tests compare against these strings; renaming one is a break."""
     assert row_kinds.LOSS_SUMMARY_KINDS == ("per_step", "mean", "unavailable")
     assert (row_kinds.LOSS_SUMMARY_PER_STEP, row_kinds.LOSS_SUMMARY_MEAN,
             row_kinds.LOSS_SUMMARY_UNAVAILABLE) == ("per_step", "mean", "unavailable")

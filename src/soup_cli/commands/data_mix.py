@@ -23,6 +23,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
+from soup_cli.utils.numeric import float_with_overflow_check
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
@@ -115,13 +116,40 @@ def mix(
         raise typer.Exit(code=2)
 
     if apply_recipe is not None:
+        import yaml
+
+        from soup_cli.utils.yaml_limits import set_yaml_error_filename
+
         try:
             data_block = load_mix_recipe(apply_recipe)
-        except (ValueError, FileNotFoundError, TypeError) as exc:
-            # Most messages name the path with repr(), but a YAML error quotes the
-            # source line as it is in the file, and PyYAML accepts U+202E there.
+        except (ValueError, FileNotFoundError, TypeError, yaml.YAMLError) as exc:
+            if isinstance(exc, yaml.YAMLError):
+                set_yaml_error_filename(exc, apply_recipe)
             console.print(f"[red]apply failed: {for_terminal(exc)}[/red]", emoji=False)
             raise typer.Exit(code=2) from exc
+
+        train_value = data_block.get("train")
+        interleave = data_block.get("interleave", {})
+        probs = interleave.get("probs", []) if hasattr(interleave, "get") else []
+        try:
+            if not isinstance(probs, list):
+                raise ValueError("expected a list of weights")
+            weights = []
+            for weight in probs:
+                if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                    raise ValueError("weights must be numbers")
+                value = float_with_overflow_check(weight, "weight")
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError("weights must be finite and non-negative")
+                weights.append(f"{value:.6f}")
+        except ValueError as exc:
+            console.print(
+                f"[red]apply failed: invalid data.interleave.probs in {for_terminal(apply_recipe)}"
+                f" ({for_terminal(exc)})[/red]",
+                emoji=False,
+            )
+            raise typer.Exit(code=2) from exc
+
         console.print(
             Panel.fit(
                 Text.from_markup(
@@ -131,19 +159,12 @@ def mix(
                 )
             )
         )
-        # Round-trip via the renderer so the user sees the canonical shape.
-        train_value = data_block.get("train") if hasattr(data_block, "get") else None
-        interleave = (
-            data_block.get("interleave", {}) if hasattr(data_block, "get") else {}
-        )
-        probs = interleave.get("probs", []) if hasattr(interleave, "get") else []
         console.print("data:")
         console.print("  interleave:")
         console.print("    strategy: probs")
         console.print("    probs:")
-        for p in probs:
-            console.print(f"      - {float(p):.6f}")
-        import yaml
+        for weight in weights:
+            console.print(f"      - {weight}")
 
         if isinstance(train_value, str):
             # Quote the legacy single-string shape as YAML, like the list below.

@@ -10,14 +10,18 @@
 > 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
 > every further 512 tokens costs about 1 GB more (see
 > [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
-> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
-> `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
-> `kto` still hold one copy of the output head per step) — see
-> [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> Works for `sft`, `dpo`, `orpo`, `simpo`, `kto`, `bco`, and `ipo`.
+> DPO and IPO use a frozen reference adapter on the streamed base. KTO and BCO
+> use that base with adapters disabled for the reference pass. On untied
+> checkpoints these four tasks hold a private copy of the output head for backward. See [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
+> Select `dpo`, `orpo`, `simpo`, `bco`, or `ipo` with `task: preference` and
+> `training.preference_loss`, or use the loss as the task name. Use a concrete
+> `batch_size`. `stream_vram_probe`, `stream_loss_chunk`, and `stream_recompute`
+> other than `on` remain SFT-only. Streaming refuses `preference_loss_weights`.
 
 **Contents:**
 
+- [Machine-readable training preflight](#machine-readable-training-preflight)
 - [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
@@ -63,6 +67,32 @@ Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
 `backend: transformers` rather than `backend: unsloth`. The vision and audio setup
 paths do not use Unsloth; requesting it is refused at config load instead of
 silently falling back to transformers. Text SFT continues to support Unsloth.
+
+## Machine-readable training preflight
+
+**PREVIEW.** Run a local preflight with an explicit dry run:
+
+```sh
+soup train --config soup.yaml --dry-run --result-json
+```
+
+Once the command options parse, stdout contains one UTF-8 `soup.command_result` v1 JSON
+object and a newline. Human-readable diagnostics go to stderr. The preflight validates the
+configuration and data before training. Cloud, distributed launch, live LR search and
+execution-only options are refused with exit 2. Other covered outcomes keep their existing
+CLI exit codes. An interrupt returns 130. A zero exit before readiness has result status
+`failed` with reason `soup.train.preflight_incomplete`.
+
+The result records observed row counts and supported resolved settings. When evaluated,
+`vram.available_gb` reports total device capacity in decimal GB, and the analytical peak
+and required capacity describe the estimate used for the fit decision. Unavailable or
+unresolved fields are null. Disk usage and training wall time have no estimate on this path.
+For a supported single local data file, the result includes a SHA-256 only when bounded
+observations before and after loading agree. That hash describes source bytes. The config
+digest remains null until preflight binds the effective config to execution.
+
+The preview schema is packaged as `soup_cli/schemas/command-result-v1.json`. A parser error
+before command dispatch uses the standard usage diagnostic and exit code.
 
 ## Validation split & evaluation (`training.eval_steps`)
 
@@ -123,7 +153,10 @@ advantages are normalised within each group, so it stays near zero, can be
 negative, and does not measure held-out quality. It is not recorded or shown as
 a loss: a `grpo` run's `val_loss` series is empty, and `Val loss` does not
 appear. The per-task choice lives in `VALIDATION_METRICS` in
-`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`.
+`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`. The
+per-step training reward (`reward`, `reward_std`) is stored in the metrics table's
+`reward` / `reward_std` columns, which are separate from `val_reward`; see
+`docs/backends-and-ops.md` for the logged keys and what NULL means.
 TRL needs whole groups of
 `num_generations` completions in an evaluation batch, so `grpo` evaluates at the
 largest multiple of `num_generations` that fits in the train batch, and says so
@@ -252,6 +285,42 @@ move the last digits. For bit-exact reruns you also need
 
 ---
 
+## Checkpoints (`training.save_strategy`)
+
+By default a run writes `<output>/checkpoint-N` folders as it trains: one every
+`training.save_steps` steps (default 100), and one more at the **last step**, because
+transformers saves there whenever the strategy is `steps`. The last three are kept
+(`save_total_limit: 3`). The final adapter or model is written separately, after training.
+
+```yaml
+training:
+  save_strategy: "no"      # steps (default) | epoch | no  -- quote it, see below
+```
+
+| `save_strategy` | Writes `checkpoint-N` | Use it for |
+|---|---|---|
+| `steps` (default) | every `save_steps` steps and at the last step | long runs you may need to resume |
+| `epoch` | at the end of every epoch | runs where an epoch is the natural unit |
+| `no` | never | short or throwaway runs, e.g. a loop that trains many of them and would pay the checkpoint size on every one |
+
+- **The final adapter is always saved**, whatever the strategy: `adapter_model.safetensors`
+  (or the full model) and the tokenizer are written after `train()`, as before.
+- **`no` leaves nothing to resume from.** `soup train --resume`, `--push-as`
+  (it pushes each `checkpoint-N`) and `soup runs` checkpoint pruning have no checkpoint to
+  work with. A Ctrl-C still asks the trainer to write one, because that save is requested
+  explicitly.
+- **Quote the value.** YAML reads an unquoted `no` as a boolean, so `save_strategy: no` is
+  refused with a message that says to write `save_strategy: "no"`.
+- **`save_steps` and `save_strategy` go together.** `save_steps` only counts under
+  `save_strategy: steps`. A non-default `save_steps` beside `epoch` or `no` is refused at load
+  rather than ignored.
+- **Backend and task limits.** MLX uses `save_steps` as an iteration interval.
+  Adapter training writes numbered adapter files. Native MLX full SFT writes
+  standalone model snapshots at optimizer boundaries in zero-padded directories
+  such as `checkpoint-0000200`. MLX and `task: unlearn` both refuse `epoch` and `no`.
+  Unlearning writes no intermediate checkpoints. PPO accepts `steps` and `no` because
+  its trainer does not emit epoch-end callbacks.
+
 ## Rewind — which row spiked the loss (`soup rewind`)
 
 While an SFT run trains, Soup writes `<output>/rewind.jsonl`: one line per micro-batch
@@ -295,7 +364,11 @@ Scope: task `sft` on the transformers and MLX backends, single process, on the p
 text path. The recorder turns itself off, with one warning naming the reason, for
 resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
 dataset, and anything else it cannot attribute row by row. Previews are shown only when
-the dataset on disk still matches the one the run trained on.
+the dataset on disk still matches the one the run trained on. A run with
+`training.curriculum: true` numbers its rows in the order it trained on, shortest first,
+not in file order (the MLX backend does not sort, so there the numbers follow the file),
+and `soup rewind` shows the text of each row, so the number need not be looked up in the
+file.
 
 **What it costs.** Writing one line per micro-batch measured under 0.1 ms per
 micro-batch, which is negligible against any real step, and a run's peak memory was
@@ -332,6 +405,9 @@ a rank of 0 the SFT trainer skips `get_peft_model` entirely: `soup train` prints
 `Full fine-tuning: N parameter tensor(s) trainable (lora.r=0, no adapter)`
 instead of `LoRA applied`, and the output directory holds a complete model, not
 an adapter to merge.
+
+`lora.r` is an integer field: `false` is not another spelling of zero. Use the
+explicit integer `r: 0` when plain full fine-tuning is intended.
 
 Requirements, each rejected at config load with the reason named:
 `task: sft`, `backend: transformers` (or the native MLX Llama path below), `modality: text`, and
@@ -462,14 +538,23 @@ master weights (see [Process Reward Model](#process-reward-model-prm)):
 | task | quantization | notes |
 |---|---|---|
 | `distill` | `none` only | student and frozen teacher both load unquantised |
-| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune unless `classifier_lora: true` |
+| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune on fp32 master weights unless `classifier_lora: true` |
 | `prm` | `none` only | always a full fine-tune; a `lora` block is refused (`lora.r: 0` is allowed) |
 | `moe_lora_routing` | `none` only | base frozen, only the router trains |
 | `unlearn` | `none` only | policy and reference copy both load unquantised |
-| `asr` | `none` only | full fine-tune unless `asr_lora: true` |
+| `asr` | `none` only | full fine-tune on fp32 master weights unless `asr_lora: true` |
 
 For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
 pre-flight describe the run that actually happens (#795).
+
+The classifier family and `asr` load an fp32 base for their default full fine-tune, whatever
+dtype the checkpoint was saved in (#2941): a bf16 decoder base, or the fp16 `whisper-large-v3`
+and `-large-v3-turbo`, used to train in that dtype with no fp32 master copy, and an AdamW step
+of about `lr` left most weights unchanged. With `classifier_lora: true` / `asr_lora: true` the
+frozen base keeps its checkpoint dtype, except on a CUDA card without bf16 hardware, where it
+loads in fp16 (v0.77.2 loaded the checkpoint's own dtype there); under bf16/fp16 mixed
+precision the classification head that the adapter trains (`modules_to_save`) is upcast to
+fp32 like the LoRA weights.
 
 An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **is refused at config load as of
 v0.77**, naming the task: delete the line or set `quantization: none` (for `load_in_8bit: true`,
@@ -615,6 +700,18 @@ soup iterative-dpo \
 soup train --config grpo.yaml
 ```
 
+MiniLLM on-policy training and evaluation now sample from the prompt and generated
+history, excluding the target answer. This changes the on-policy term of existing
+`minillm_on_policy: true` runs, which previously continued the gold answer and could
+read padding logits. Earlier dialogue stays in the prompt; prompt ids are
+left-truncated to `data.max_length`, keeping the generation suffix, and padded
+separately from the unchanged CE rows. The fixed rollout length and EOS behavior
+are unchanged. Only `minillm_on_policy: true` now refuses train or validation rows
+with no usable prompt, including previously accepted assistant-only rows and rows
+whose prompt contains only system turns: supply explicit prompt and response rows.
+The error names the split and row number.
+The offline path keeps its existing row handling and objective.
+
 `training.echo_trap_tokenizer_aware` (also available as the real
 `--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
 whitespace tokens to the active tokenizer's integer ids. This catches subword
@@ -637,7 +734,38 @@ inflated separation (~3×10⁴ at a 50% first step) as the baseline and classify
 later, healthier steps as HACK — detector logs and `mitigation_log.jsonl`
 files from runs before this version are not comparable.
 
+### Mid-epoch RL checkpoints
+
+`training.rl_checkpoint_save_every_steps` saves the adapter, the optimizer state and a manifest under `<output>/rl-checkpoints/step-N/`; the `pid_lagrangian` rollback below restores from them. The optimizer state (`optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory (the adapter is loaded under the same containment). A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup. An optimizer whose state holds objects other than tensors and plain containers is no longer saved: a rollback then restores the adapter only, and the log says so at each save. A save refuses, by name in the log, a checkpoint directory that resolves outside the run's output directory, any link inside the checkpoint directory, and a checkpoint path that is a file instead of a directory; it writes nothing in those cases and training goes on.
+
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
+
+For replicated DDP with a PEFT policy, RL checkpoint callbacks share rank 0's save status
+and retained checkpoint steps. With `pid_lagrangian`, each rank computes its vote using its
+own detector history, smoothing windows and drift guard. The maximum finite vote drives
+one PID decision on rank 0; every rank receives the controller state, rollback target,
+counters and stop decision and applies the coefficient to its own trainer. A detector that
+deliberately returns `None` contributes a healthy `0.0` signal, as in a single-process run;
+this includes InfoRM steps with too few scores or a two-valued 0/1 reward. Missing buffers,
+genuinely absent vote inputs and non-finite votes stop the run on all ranks. The elevated
+PID beta and integral are retained after rollback.
+
+Recovery requires the policy adapter on every rank and the optimizer state when the
+manifest declares it present and optimizer recovery is enabled. A declared adapter-only
+checkpoint can restore the adapter on every rank. Missing, unreadable, invalid or oversized
+manifests, a declared but missing optimizer file, and asymmetric restore failures stop the
+run before the next update. Manifests are read even when optimizer recovery is disabled.
+Exchanges validate both global step and phase; a mismatch aborts with a named error.
+Communication failures propagate to the launcher; a lost process uses the process-group
+timeout rather than an additional callback timeout. All ranks need access to the same
+checkpoint storage.
+
+Collectives run only with an initialized process group of more than one rank. Single-process
+behavior and the `RANK`/`LOCAL_RANK` fallback without a group are unchanged. FSDP and
+DeepSpeed behavior is unchanged: each rank still keeps its own list of saved steps, as
+before; collective recovery for sharded state is not qualified. The agreement on controller
+decisions and recovery stops covers `pid_lagrangian` only. `kl_control` and independently
+halting detectors remain rank-local.
 
 The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 
@@ -1152,7 +1280,7 @@ Where they come from depends on which trainer is built:
 | `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
 | `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
 | `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
-| `bco` mixed with anything | Rejected at config load (data format incompatible). |
+| `bco` mixed with anything | Loads, then refused at the start of trainer setup, after the data has loaded and before the model does (`validate_weight_compat`): BCO takes the same rows as DPO, but its trainer splits each one into unpaired completion and label rows, which the paired losses cannot read. Run BCO as its own `task: bco` stage. |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
 only* — the margin / odds-ratio objective — without the likelihood (NLL) term
@@ -1496,6 +1624,9 @@ frozen reference.
 Same input format as DPO; rows are split internally to TRL's BCO
 unpaired schema (`{prompt, completion, label}`).
 
+The streamed BCO T4 checks use `batch_size: 2` with both labels and
+`gradient_accumulation_steps: 1`; other batch shapes have no CUDA measurement.
+
 **When the prompt is cut, for all six preference tasks (transformers
 backend).** TRL 0.29 no longer exposes `max_prompt_length`, so `soup train`
 enforces `data.max_length` itself
@@ -1586,8 +1717,10 @@ training:
   preference_loss_weights: {simpo: 0.7, orpo: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
+Schema validates 2-5 entries summing to 1. A `bco` blend with a paired loss
+passes that check and is refused when the trainer is set up (see the table in
+[Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
 and `orpo` trains; which reference and which tokens the terms use depends on
 the loss with the largest weight
 (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
@@ -1628,6 +1761,12 @@ the row until the next valid measurement and breaks the warning streak. More tha
 a diagnostic heuristic, not a quality threshold: it neither stops training nor
 changes rewards or gradients. Evaluation/summary logs do not count as new
 measurements. MLX's existing logging is unchanged.
+
+Use `soup runs show <run_id>` to chart the mean score over the logging window
+that ends at each step. GRPO also charts the recorded spread, the mean of the
+per-batch standard deviations over that window. Runs with only a mean score,
+such as PPO or online DPO with a scorer, get one score chart. Pass `--no-plot`
+for run details without the charts.
 
 ```bash
 # Create a reasoning config
@@ -2138,6 +2277,10 @@ On Apple Silicon, `backend: mlx` runs SimPO natively with the same objective; se
 
 ## IPO Training (Regularized Preference)
 
+On an FP16 card, the gradient scaler can skip the first IPO updates and lower
+its scale until gradients are finite. This can happen with resident IPO too.
+See the [one-step and backoff checks on a Tesla T4](../benchmarks/ipo-streaming-t4.md).
+
 IPO is a theoretically grounded DPO variant with stronger regularization:
 
 ```yaml
@@ -2608,6 +2751,15 @@ The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights 
 Linear weights. (v0.71.23)
 
 ## Training source identity
+
+Single-process native MLX `soup train` also records the actual Hugging Face base
+commit in its `runs` row and final `soup_run.json`, retaining the configured base
+ID. Its first RoPE config read and native model/weights/tokenizer load share that
+commit. An imported non-HF or unqualified provider records no Hub revision and
+prints why, preserving its existing load flow. Local/cache-path hints and offline
+or failed metadata lookup retain their existing nullable semantics. This does not
+bind MLX sweeps or independent inference/chat/serve/merge/export consumers; see
+[Recorded base identity](backends-and-ops.md#recorded-base-identity).
 
 `soup train` captures `training_data_sha256` before loading or transforming a
 supported single local raw text-training file. The digest is SHA-256 of the

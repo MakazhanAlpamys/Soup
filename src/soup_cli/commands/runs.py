@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
 
@@ -42,7 +43,9 @@ def _code_state(run: dict) -> str:
     return "dirty" if dirty else "clean"
 
 
-def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
+def _filter_runs_by_cwd(
+    runs: Iterable[dict], cwd: str, limit: int = -1
+) -> list[dict]:
     """Return only runs whose output_dir is under ``cwd``.
 
     Runs with no ``output_dir`` are dropped. Comparisons use
@@ -59,6 +62,8 @@ def _filter_runs_by_cwd(runs: list[dict], cwd: str) -> list[dict]:
             cand = os.path.realpath(out)
             if os.path.commonpath([cand, cwd_real]) == cwd_real:
                 kept.append(run)
+                if len(kept) == limit:
+                    break
         except (ValueError, OSError):
             # Different drives on Windows / unreadable path — skip.
             continue
@@ -90,9 +95,13 @@ def list_runs(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
-    runs = tracker.list_runs(limit=limit)
     if cwd_only:
-        runs = _filter_runs_by_cwd(runs, os.getcwd())
+        cwd = os.getcwd()
+        runs = tracker.list_runs(
+            limit=limit, select_runs=lambda rows: _filter_runs_by_cwd(rows, cwd, limit)
+        )
+    else:
+        runs = tracker.list_runs(limit=limit)
 
     if not runs:
         console.print("[dim]No runs found. Train a model with:[/] [bold]soup train[/]")
@@ -165,9 +174,9 @@ def list_runs(
 @app.command()
 def show(
     run_id: str = typer.Argument(..., help="Run ID (or prefix) to show"),
-    plot: bool = typer.Option(True, "--plot/--no-plot", help="Show loss curve"),
+    plot: bool = typer.Option(True, "--plot/--no-plot", help="Show training curves"),
 ):
-    """Show detailed info about a specific run, including loss curve."""
+    """Show run details and available loss and training score curves."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     tracker = ExperimentTracker()
@@ -187,6 +196,8 @@ def show(
         status_str = "[green]completed[/]"
     elif status == "failed":
         status_str = "[red]failed[/]"
+    elif status == "stopped":
+        status_str = "[yellow]stopped[/]"
     elif status == "terminated":
         status_str = "[red]terminated[/]"
     elif status == "launching":
@@ -201,6 +212,10 @@ def show(
         hours = int(secs // 3600)
         minutes = int((secs % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+    # A reinforcement-style run's training reward, shown under its loss; no line for a run
+    # that logged none (every SFT-style run), so their output is what it always was.
+    reward = _fmt_reward(tracker.get_reward_summary(run["run_id"]))
 
     # Build info panel — config-derived fields go through for_terminal and the
     # panel text is parsed with emoji codes off: escape() alone leaves ":name:"
@@ -232,6 +247,7 @@ def show(
         f"GPU Memory: {for_terminal(run.get('gpu_memory') or '-')}",
         "",
         f"Loss:       {_fmt_loss(run)}",
+        *([f"Reward:     {reward}"] if reward else []),
         f"Steps:      {run.get('total_steps') or '-'}",
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
@@ -267,11 +283,11 @@ def show(
             )
         console.print(eval_table)
 
-    # Loss curve
     if plot:
         metrics = tracker.get_metrics(run["run_id"])
         if metrics:
             _plot_loss_curve(metrics)
+            _plot_training_score_curves(metrics)
 
 
 @app.command(short_help="Compare two local training runs side by side.")
@@ -325,6 +341,16 @@ def compare(
         ("Duration", _fmt_duration(r1.get("duration_secs")),
          _fmt_duration(r2.get("duration_secs"))),
     ]
+    # The training reward of a reinforcement-style run, under the loss rows. Added only when
+    # one of the two runs has logged a reward (the other shows "-"): two SFT-style runs get
+    # the table they always got.
+    rewards = [tracker.get_reward_summary(run["run_id"]) for run in (r1, r2)]
+    if any(rewards):
+        at = next(i for i, row in enumerate(rows) if row[0] == "Final Loss") + 1
+        rows[at:at] = [
+            ("Initial Reward", *(_fmt_float(r["first"] if r else None) for r in rewards)),
+            ("Final Reward", *(_fmt_float(r["last"] if r else None) for r in rewards)),
+        ]
 
     # Keep the familiar summary, then compare the complete stored config below.
     c1, c2 = _stored_run_config(r1), _stored_run_config(r2)
@@ -657,6 +683,20 @@ def _fmt_loss(run: dict) -> str:
     return "-"
 
 
+def _fmt_reward(summary: Optional[dict]) -> Optional[str]:
+    """The ``Reward:`` value of ``soup runs show``: ``first -> last (N steps)``.
+
+    None for a run with no logged reward, so the line is left out for every non-RL run.
+    """
+    if not summary:
+        return None
+    count = summary["steps"]
+    noun = "step" if count == 1 else "steps"
+    if count == 1:
+        return f"{summary['last']:.4f} ({count} {noun})"
+    return f"{summary['first']:.4f} -> {summary['last']:.4f} ({count} {noun})"
+
+
 def _fmt_float(val: Optional[float]) -> str:
     """Format a float or return '-'."""
     if val is not None:
@@ -741,7 +781,11 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
     losses = [m["loss"] for m in valid]
 
     if not steps:
-        console.print("[dim]No loss data to plot.[/]")
+        if any(m.get("reward") is not None for m in metrics):
+            # PPO rows hold a reward and no loss: say so rather than imply nothing was logged.
+            console.print("[dim]No loss data to plot: this run recorded a reward and no loss.[/]")
+        else:
+            console.print("[dim]No loss data to plot.[/]")
         return
 
     from soup_cli.utils.plotext_compat import render_line
@@ -756,6 +800,39 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         xlabel="Step",
         ylabel="Loss",
     )
+
+
+def _plot_training_score_curves(metrics: list[dict]) -> None:
+    """Plot score summaries over their logging windows, ending at each step."""
+    try:
+        import plotext as plt
+    except ImportError:
+        # The loss curve already prints the installation hint.
+        return
+
+    from soup_cli.experiment.reward_columns import finite_reward
+    from soup_cli.utils.plotext_compat import render_line
+
+    train = [
+        row for row in metrics
+        if row.get("kind") == "train" and finite_reward(row.get("reward")) is not None
+    ]
+    for key, label, title in (
+        ("reward", "Mean score", "Training mean score"),
+        ("reward_std", "Recorded spread", "Training recorded spread"),
+    ):
+        steps = []
+        values = []
+        for row in train:
+            value = finite_reward(row.get(key))
+            if value is not None:
+                steps.append(row["step"])
+                values.append(value)
+        if steps:
+            render_line(
+                plt, steps, values, console=console, label=label, title=title,
+                xlabel="Step", ylabel=label,
+            )
 
 
 @app.command(name="curriculum-curve")
@@ -828,7 +905,7 @@ def curriculum_curve(
 
     rows = []
     max_lines = 100_000
-    with open(real, "r", encoding="utf-8") as fh:
+    with open(real, "r", encoding="utf-8-sig") as fh:
         for lineno, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:

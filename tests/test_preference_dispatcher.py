@@ -18,6 +18,169 @@ from pydantic import ValidationError
 
 from soup_cli.config.schema import SoupConfig
 
+
+class TestPreferenceStreaming:
+    @staticmethod
+    def config(loss=None, *, task="preference", **training):
+        return SoupConfig(
+            base="some-model",
+            task=task,
+            data={"train": "./data.jsonl", "format": "dpo"},
+            training={
+                "stream_layers": True,
+                "quantization": "none",
+                "batch_size": 1,
+                **({"preference_loss": loss} if task == "preference" and loss is not None else {}),
+                **training,
+            },
+        )
+
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco", "ipo"])
+    @pytest.mark.parametrize(
+        "training",
+        [{}, {"quantization": "4bit"}, {"batch_size": 2, "gradient_accumulation_steps": 2}],
+    )
+    def test_scalar_streaming_is_accepted(self, loss, training):
+        cfg = self.config(loss, **training)
+        assert cfg.task == "preference"
+        assert cfg.training.preference_loss == loss
+        assert cfg.training.stream_layers is True
+
+    def test_missing_scalar_loss_names_the_field_and_choices(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "soup.yaml").write_text(
+            "base: some-model\ntask: preference\ndata:\n  train: data.jsonl\n  format: dpo\n"
+            "training:\n  stream_layers: true\n  quantization: none\n  batch_size: 1\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "data.jsonl").write_text(
+            '{"prompt":"Compare","chosen":"Yes","rejected":"No"}\n', encoding="utf-8",
+        )
+
+        result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+        output = " ".join(strip_ansi(result.output).split())
+        assert result.exit_code == 1, (output, result.exception)
+        assert output.endswith(
+            "Config validation error: training.stream_layers with task='preference' "
+            "requires a single training.preference_loss. "
+            "Choose one of bco, dpo, ipo, orpo, simpo."
+        )
+
+    def test_missing_loss_without_streaming_names_both_loss_fields(self):
+        with pytest.raises(ValidationError) as caught:
+            self.config(stream_layers=False)
+        assert caught.value.errors()[0]["msg"] == (
+            "Value error, task='preference' requires either training.preference_loss "
+            "(in {dpo, simpo, orpo, ipo, bco}) or "
+            "training.preference_loss_weights (multi-objective dict)."
+        )
+
+    def test_weighted_losses_are_refused_by_name(self):
+        with pytest.raises(ValidationError) as caught:
+            self.config(preference_loss_weights={"dpo": 0.5, "orpo": 0.5})
+        assert caught.value.errors()[0]["msg"] == (
+            "Value error, training.stream_layers cannot be combined with "
+            "training.preference_loss_weights: weighted preference losses do not "
+            "stream yet. Use a single training.preference_loss of dpo, orpo, "
+            "simpo, bco or ipo, or set stream_layers=false."
+        )
+
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco", "ipo"])
+    @pytest.mark.parametrize(
+        "training,refusal",
+        [
+            ({"stream_vram_probe": True}, "training.stream_vram_probe supports task='sft'"),
+            ({"batch_size": "auto"}, "training.stream_layers cannot use batch_size='auto'"),
+            ({"stream_loss_chunk": 16}, "training.stream_loss_chunk supports task='sft'"),
+            ({"stream_recompute": "off"}, "training.stream_recompute='off' supports task='sft'"),
+            ({"stream_recompute": "auto"}, "training.stream_recompute='auto'"),
+            ({"quantization": "8bit"}, "training.stream_layers supports quantization"),
+            ({"lora": {"r": 0}}, "training.stream_layers requires LoRA"),
+            ({"lora": {"use_dora": True}}, "training.stream_layers is incompatible"),
+        ],
+    )
+    def test_legacy_refusals_keep_the_same_messages(self, loss, training, refusal):
+        with pytest.raises(ValidationError) as legacy:
+            self.config(task=loss, **training)
+        with pytest.raises(ValidationError) as dispatched:
+            self.config(loss, **training)
+        legacy_message = legacy.value.errors()[0]["msg"]
+        assert refusal in legacy_message
+        assert dispatched.value.errors()[0]["msg"] == legacy_message
+
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "bco", "ipo"])
+    def test_real_dispatcher_trains_a_streamed_cpu_model(self, tmp_path, monkeypatch, loss):
+        import math
+        import socket
+
+        from safetensors.torch import load_file
+
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+        from tests.test_v07204 import (
+            _TASK_ROWS,
+            _stream_cfg,
+            _tiny_llama_dir,
+            _wrapper_for,
+            _write_tiny_tokenizer,
+        )
+
+        def refuse_network(*args, **kwargs):
+            pytest.fail("The local streamed fixture must not use DNS or the network")
+
+        monkeypatch.setattr(socket, "getaddrinfo", refuse_network)
+        monkeypatch.setattr(socket.socket, "connect", refuse_network)
+        weights, _, _ = _tiny_llama_dir(tmp_path)
+        _write_tiny_tokenizer(weights)
+        monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+        monkeypatch.chdir(tmp_path)
+        cfg = _stream_cfg(
+            weights, tmp_path / "out", task="preference", preference_loss=loss,
+            warmup_ratio=0.0, batch_size=2 if loss == "bco" else 1,
+        )
+        original = cfg.model_dump()
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu", fsdp_config={"use_cpu": True})
+        try:
+            wrapper.setup({"train": _TASK_ROWS[loss](8)})
+            inner = wrapper._inner
+            assert isinstance(inner, _wrapper_for(loss))
+            assert inner.config.task == loss
+            assert inner.config.training.preference_loss is None
+            assert inner.config.training.preference_loss_weights is None
+            assert inner.config.training.stream_layers is True
+            assert inner.config.training.model_dump(exclude={"preference_loss"}) == (
+                cfg.training.model_dump(exclude={"preference_loss"})
+            )
+            runtime = inner._stream_runtime
+            assert runtime is not None
+            assert str(wrapper.trainer.accelerator.device) == "cpu"
+            assert any(parameter.is_meta for parameter in inner.model.parameters())
+            if loss == "dpo":
+                assert wrapper.trainer.ref_model is None
+            wrapper.trainer.args.max_steps = 1
+            result = wrapper.train()
+            assert result["total_steps"] == 1
+            losses = [
+                entry["loss"] for entry in wrapper.trainer.state.log_history if "loss" in entry
+            ]
+            assert losses and all(math.isfinite(value) for value in losses)
+            assert runtime.pool.loads > 0
+            adapter = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
+            assert adapter and all(tensor.numel() > 0 for tensor in adapter.values())
+            assert any(
+                tensor.count_nonzero().item() > 0
+                for name, tensor in adapter.items() if "lora_B" in name
+            )
+        finally:
+            if wrapper._inner is not None:
+                wrapper._inner._close_stream_runtime()
+        assert cfg.model_dump() == original
+
 # ─── Schema Tests ───────────────────────────────────────────────────────────
 
 
@@ -84,16 +247,35 @@ class TestPreferenceTaskField:
 
 
 class TestResolvePreferenceLoss:
-    def test_resolve_preference_task_returns_loss(self):
+    def test_resolver_and_schema_import_without_trainers_or_heavy_dependencies(self):
+        import subprocess
+        import sys
+
+        subprocess.run(
+            [sys.executable, "-c", """
+import sys
+from soup_cli.utils.preference import resolve_preference_loss
+assert 'soup_cli.config.schema' not in sys.modules
+from soup_cli.config.schema import SoupConfig
+assert 'soup_cli.trainer.preference' not in sys.modules
+assert not {'torch', 'transformers', 'peft', 'trl', 'datasets', 'mlx'} & sys.modules.keys()
+from soup_cli.trainer.preference import resolve_preference_loss as legacy_resolver
+assert legacy_resolver is resolve_preference_loss
+"""],
+            check=True, capture_output=True, text=True,
+        )
+
+    @pytest.mark.parametrize("loss", ["dpo", "orpo", "simpo", "ipo", "bco"])
+    def test_resolve_preference_task_returns_loss(self, loss):
         from soup_cli.trainer.preference import resolve_preference_loss
 
         cfg = SoupConfig(
             base="some-model",
             task="preference",
             data={"train": "./data.jsonl", "format": "dpo"},
-            training={"preference_loss": "simpo"},
+            training={"preference_loss": loss},
         )
-        assert resolve_preference_loss(cfg) == "simpo"
+        assert resolve_preference_loss(cfg) == loss
 
     @pytest.mark.parametrize(
         "task,expected",

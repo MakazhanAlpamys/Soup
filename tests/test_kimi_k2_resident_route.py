@@ -1012,6 +1012,9 @@ def test_resident_tokenizer_load_mirrors_the_streamed_route(
     raw = {k: v for k, v in _MINIMAL_K2.items() if k != "auto_map"}
     base = Path(_write_config(tmp_path, raw)).as_posix()
     sentinel = object()
+    # The hint names tiktoken only when the package is absent (kimi_k2_tokenizer_hint), so
+    # pin that here: the assertion below must not depend on what the machine has installed.
+    monkeypatch.setattr(kimi_k2, "_tiktoken_available", lambda: False)
     monkeypatch.setattr(kimi_k2, "load_resident_model_config", lambda *a, **k: sentinel)
     seen = _spy_tokenizer_load(monkeypatch)
     printed = _record_console_prints(monkeypatch, module)
@@ -1279,8 +1282,8 @@ def test_published_names_coverage_fails_when_the_file_is_mutated():
 # dequantised folder)), and the two models must then compute the same logits and loss.
 #
 # Buffers are included: e_score_correction_bias is float32 in both loads (the loader keeps
-# stored buffer dtypes), so the bit-for-bit claim covers the whole state dict. Parameters
-# are bfloat16 in both, which is why the comparison also checks dtypes.
+# stored buffer dtypes), so the bit-for-bit claim covers the whole state dict. The comparison
+# also checks parameter dtypes, including the router under the installed precision policy.
 
 
 def _resident_fp8_vs_reference(fp8_dir, deq_dir):
@@ -1326,6 +1329,41 @@ def test_resident_fp8_load_is_bit_for_bit_the_dequantised_materialisation(tiny_k
     assert torch.equal(got_out.loss, want_out.loss)
 
 
+@pytest.mark.parametrize("strict_router", [False, True], ids=["legacy", "strict"])
+def test_resident_fp8_follows_installed_router_precision(
+    monkeypatch, tmp_path, tiny_k2_built, strict_router
+):
+    import torch
+    from safetensors.torch import load_file, save_file
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3PreTrainedModel
+
+    policy = {"e_score_correction_bias"}
+    if strict_router:
+        policy.add("model.layers.*.mlp.gate.weight")
+    monkeypatch.setattr(DeepseekV3PreTrainedModel, "_keep_in_fp32_modules_strict", policy)
+
+    from soup_cli.utils.kimi_k2 import load_resident_model
+
+    fp8_dir, _ = tiny_k2_built["fp8"]
+    source = load_file(os.path.join(fp8_dir, "model.safetensors"))
+    router_key = "model.layers.1.mlp.gate.weight"
+    router = source[router_key].float() + 0.000013
+    assert not torch.equal(router, router.bfloat16().float())
+    source[router_key] = router
+    save_file(source, str(tmp_path / "model.safetensors"), metadata={"format": "pt"})
+    shutil.copyfile(os.path.join(fp8_dir, "config.json"), tmp_path / "config.json")
+
+    model = load_resident_model(str(tmp_path), model_kwargs={"dtype": torch.bfloat16})
+    gate = model.model.layers[1].mlp.gate
+    expected_dtype = torch.float32 if strict_router else torch.bfloat16
+    assert gate.weight.dtype == expected_dtype
+    assert torch.equal(gate.weight, router.to(expected_dtype))
+    assert gate.e_score_correction_bias.dtype == torch.float32
+    assert torch.equal(
+        gate.e_score_correction_bias, source["model.layers.1.mlp.gate.e_score_correction_bias"]
+    )
+
+
 def test_resident_fp8_load_bit_exactness_catches_a_flipped_scale(tmp_path, tiny_k2_built):
     """The mandatory mutation check for item c: flip one FP8 block scale in the
     checkpoint and the bit-for-bit comparison must fail — i.e. the parity cell above
@@ -1342,7 +1380,8 @@ def test_resident_fp8_load_bit_exactness_catches_a_flipped_scale(tmp_path, tiny_
     shutil.copyfile(os.path.join(fp8_dir, "config.json"), mutated / "config.json")
 
     got, want = _resident_fp8_vs_reference(str(mutated), deq_dir)
-    with pytest.raises(AssertionError):
+    changed_weight = re.escape(victim.removesuffix("_scale_inv"))
+    with pytest.raises(AssertionError, match=rf"^{changed_weight}\b"):
         _assert_state_bit_identical(got, want)
 
 

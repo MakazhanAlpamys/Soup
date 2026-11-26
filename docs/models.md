@@ -19,6 +19,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |
 | **Qwen 3.5 / 3.6 / 3.8** | Qwen3.5-0.8B…397B-A17B, Qwen3.6-27B/35B-A3B, Qwen3.8-27B | 0.8B–397B | 262K context, native vision, MoE |
+| **Qwen 3.5 MoE Base** | Qwen3.5-35B-A3B-Base | 35B | Text continued pre-training |
 | **Qwen 3** | Qwen3-8B, Qwen3-14B, Qwen3-32B, Qwen3-235B-A22B | 0.6B–235B | Reasoning, code, MoE |
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
@@ -124,6 +125,41 @@ The native decoder and LoRA path are checked with the public configuration on
 meta and a tiny random model on CPU. Full 4B GRPO training, NF4 execution,
 GPU memory use and reward quality need separate validation.
 
+`soup recipes use qwen3.5-9b-pretrain` selects `Qwen/Qwen3.5-9B-Base` for continued
+pre-training on plaintext rows in `./data/corpus.jsonl`. Its values are the shipped
+`qwen3.5-4b-pretrain` row's, inherited and not tuned for 9B: one epoch, `lr: 1e-4`,
+`batch_size: auto`, eight accumulation steps, LoRA rank 32 / alpha 64 on
+`target_modules: auto`, 4-bit quantization and a 4096-token limit. The config's native
+text architecture and LoRA attachment are checked on the meta device, with a tiny random
+decoder's forward/backward pass checked on CPU. Full-weight training, NF4 execution, a
+real pre-training run and memory fit are not checked.
+
+`soup recipes use qwen3.5-0.8b-pretrain` selects `Qwen/Qwen3.5-0.8B-Base` for
+continued pre-training on plaintext rows in `./data/corpus.jsonl`. It inherits the
+2B and 4B recipes' starting settings. CPU checks cover the recipe and its config.
+Full-weight training, NF4 execution, real pre-training and memory fit remain unverified.
+
+`soup recipes use qwen3.5-2b-pretrain` selects `Qwen/Qwen3.5-2B-Base` for continued
+pre-training on plaintext rows in `./data/corpus.jsonl`. Its values are the shipped
+`qwen3.5-4b-pretrain` row's, inherited and not tuned for 2B: one epoch, `lr: 1e-4`,
+`batch_size: auto`, eight accumulation steps, LoRA rank 32 / alpha 64 on
+`target_modules: auto`, 4-bit quantization and a 4096-token limit. The config's native
+text architecture and LoRA attachment are checked on the meta device, with a tiny random
+decoder's forward/backward pass checked on CPU. Full-weight training, NF4 execution, a
+real pre-training run and memory fit are not checked.
+
+`soup recipes use qwen3.5-35b-a3b-pretrain` selects
+`Qwen/Qwen3.5-35B-A3B-Base`'s language decoder for plaintext rows in
+`./data/corpus.jsonl`. It inherits the `qwen3.5-4b-pretrain` settings:
+one epoch, `lr: 1e-4`, `batch_size: auto`, eight accumulation steps,
+LoRA rank 32 / alpha 64, 4-bit quantization and a 4096-token limit.
+It adds `moe_lora: true` and zero LoRA dropout for the fused experts.
+The parsed recipe inherits `moe_aux_loss_coeff: 0.01`, matching the value written
+in the 35B-A3B SFT row. These are inherited starting values. The pretrain setup
+attaches LoRA to a tiny floating-point CPU model with both native attention block
+kinds, and both fused expert projections receive finite gradients. Training the
+published checkpoint, NF4 execution and memory fit remain unverified.
+
 `soup recipes use qwen3.5-27b-dpo` selects `Qwen/Qwen3.5-27B`'s language
 decoder for the same text preference layout. It inherits the 9B DPO recipe's
 4096-token limit, learning rate, epochs, LoRA and quantization settings. It uses
@@ -180,6 +216,20 @@ was verified at `dc4d348443bc740c68e2d77492492c11606384d5`; offline tests use
 a tiny random native hybrid text MoE with expert LoRA. They do not qualify full
 122B weights, tokenizer/rollout behavior, full GRPO training, NF4 execution,
 distributed training, GPU memory fit or reward quality.
+
+`soup recipes use qwen3.5-397b-a17b-dpo` selects the 397B-A17B language
+decoder for `prompt`, `chosen`, `rejected` preference rows. It keeps the 397B
+SFT sibling's one epoch, batch size 1, 32 accumulation steps, LoRA rank 32 /
+alpha 64, 4-bit quantization and gradient checkpointing. The learning rate
+`5e-6`, `dpo_beta: 0.1` and preference layout follow the shipped MoE DPO
+recipes. Fused expert LoRA is enabled with zero dropout; the SFT-only
+auxiliary-loss setting is omitted because DPO does not apply it. These are
+inherited starting values, not tuned settings or a hardware recommendation.
+The pinned public configuration builds the full text architecture and attaches
+LoRA on meta; a tiny random native MoE with both attention block kinds passes
+a CPU forward/backward check, including fused expert gradients. Full 397B
+weights, NF4 execution, distributed training, GPU memory fit and model quality
+remain unverified.
 
 `soup recipes use qwen3.5-397b-a17b-grpo` selects the 397B-A17B language MoE
 for the same text reasoning rows: the reference answer is the final assistant

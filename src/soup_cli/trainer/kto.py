@@ -10,6 +10,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
@@ -22,6 +23,7 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -158,9 +160,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             eval_ds = Dataset.from_list(dataset["val"])
 
         # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
+        output_dir = Path(training_output_dir(cfg.output, cfg.experiment_name))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Calculate warmup steps from ratio (#1431) ---
@@ -196,8 +196,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             optim=tcfg.optimizer,
             lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
-            save_steps=tcfg.save_steps,
-            save_total_limit=3,
+            **save_kwargs(tcfg),
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,

@@ -1253,52 +1253,73 @@ class TestStatsHistogramWindows:
         assert result.exit_code == 0
         assert "p50" in result.output
 
-    def test_utf8_redirect_logic_on_cp1251_stdout(self):
-        """Verify plotext renders when stdout is redirected from cp1251 to utf-8."""
+    def test_utf8_redirect_logic_on_cp1251_stdout(self, tmp_path, monkeypatch):
+        """The stats command uses UTF-8 while rendering and restores Windows stdout."""
         import io
+        import json
+        import sys
+        from types import ModuleType
+
+        from rich.console import Console
+
+        from soup_cli.commands import data
+        from soup_cli.utils import plotext_compat
+
+        path = tmp_path / "data.jsonl"
+        path.write_text(
+            json.dumps({"instruction": "Question", "input": "", "output": "Answer"}) + "\n",
+            encoding="utf-8",
+        )
+        stdout_during_render = []
+
+        def render_histogram(*args, **kwargs):
+            stdout_during_render.append(sys.stdout.encoding)
+
+        monkeypatch.setitem(sys.modules, "plotext", ModuleType("plotext"))
+        monkeypatch.setattr(data, "console", Console(file=io.StringIO()))
+        monkeypatch.setattr(plotext_compat, "render_histogram", render_histogram)
+        with io.TextIOWrapper(io.BytesIO(), encoding="cp1251") as windows_stdout:
+            with monkeypatch.context() as env:
+                env.setattr(sys, "platform", "win32")
+                env.setattr(sys, "stdout", windows_stdout)
+                data.stats(str(path))
+                assert sys.stdout is windows_stdout
+
+        assert stdout_during_render == ["utf-8"]
+
+    def test_real_plotext_histogram_reaches_a_cp1251_stdout_as_utf8(self, tmp_path, monkeypatch):
+        """Canary: a real plotext render is written to a cp1251 stdout without an encode error.
+
+        The row above stubs plotext; this one lets plotext draw its box/block glyphs, which
+        cp1251 cannot encode, through the real console and the real UTF-8 redirect.
+        """
+        import io
+        import json
         import sys
 
-        try:
-            import plotext as plt
-        except ImportError:
-            pytest.skip("plotext not installed")
+        pytest.importorskip("plotext")
+        from soup_cli.commands import data
 
-        # Simulate a cp1251 stdout (like Windows default)
-        raw_buffer = io.BytesIO()
-        fake_cp1251 = io.TextIOWrapper(raw_buffer, encoding="cp1251")
+        path = tmp_path / "data.jsonl"
+        rows = [
+            {"instruction": "Q" * (10 * index), "input": "", "output": "A" * (5 * index)}
+            for index in range(1, 9)
+        ]
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+        out_path = tmp_path / "stdout.bin"
 
-        original_stdout = sys.stdout
-        sys.stdout = fake_cp1251
+        with open(out_path, "wb") as raw:
+            windows_stdout = io.TextIOWrapper(raw, encoding="cp1251")
+            with monkeypatch.context() as env:
+                env.setattr(sys, "platform", "win32")
+                env.setattr(sys, "stdout", windows_stdout)
+                data.stats(str(path))
+        rendered = out_path.read_bytes().decode("utf-8")
 
-        # Apply the same redirect logic as data.py stats command
-        needs_redirect = (
-            hasattr(sys.stdout, "encoding")
-            and (sys.stdout.encoding or "").lower().replace("-", "") != "utf8"
-        )
-        assert needs_redirect, "Should detect cp1251 needs redirect"
-
-        sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace",
-        )
-
-        try:
-            from rich.console import Console
-
-            from soup_cli.utils.plotext_compat import render_histogram
-
-            render_histogram(
-                plt,
-                [10, 20, 30, 40, 50],
-                console=Console(file=sys.stdout),
-                bins=3,
-                title="Test",
-                xlabel="Value",
-                ylabel="Count",
-                theme="dark",
-            )
-            # If we got here, no UnicodeEncodeError — success
-        finally:
-            sys.stdout = original_stdout
+        assert "Histogram skipped" not in rendered
+        assert "Text Length Distribution (chars)" in rendered
+        with pytest.raises(UnicodeEncodeError):
+            rendered.encode("cp1251")
 
 
 # --- BUG-015: soup ui --help missing auth token docs (v0.14.2) ---

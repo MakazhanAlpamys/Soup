@@ -1,4 +1,4 @@
-"""Judge JSONL validates row shape and prompt type before that row's generation."""
+"""Judge JSONL validates row shape, prompt, and category before generation."""
 
 from __future__ import annotations
 
@@ -18,12 +18,18 @@ from tests.conftest import strip_ansi
 
 BAD_ROWS = [None, 1, True, [], "text"]
 BAD_PROMPTS = [None, 1, True, [], {}]
+BAD_CATEGORIES = [None, 1, True, [], {}]
 INVALID = [
     *((row, "row", type(row).__name__) for row in BAD_ROWS),
     *(({"prompt": value}, "prompt", type(value).__name__) for value in BAD_PROMPTS),
+    *(({"prompt": "valid", "category": value}, "category", type(value).__name__)
+      for value in BAD_CATEGORIES),
 ]
-IDS = ["null-row", "number-row", "bool-row", "array-row", "string-row",
-       "null-prompt", "number-prompt", "bool-prompt", "array-prompt", "object-prompt"]
+IDS = [
+    "null-row", "number-row", "bool-row", "array-row", "string-row",
+    "null-prompt", "number-prompt", "bool-prompt", "array-prompt", "object-prompt",
+    "null-category", "number-category", "bool-category", "array-category", "object-category",
+]
 
 
 @pytest.fixture
@@ -57,8 +63,35 @@ def write_input(row: object) -> None:
 
 def expected_message(field: str, kind: str, line: int = 3) -> str:
     location = f"judge task 'judge-control' file 'prompts.jsonl' line {line}"
-    detail = "row must be an object" if field == "row" else "field 'prompt' must be a string"
+    if field == "row":
+        detail = "row must be an object"
+    else:
+        detail = f"field '{field}' must be a string"
     return f"{location}: {detail}, got {kind}"
+
+
+@pytest.mark.parametrize(
+    "category",
+    BAD_CATEGORIES,
+    ids=["null", "number", "bool", "array", "object"],
+)
+def test_helper_refuses_invalid_category_before_generation(
+    category: object, calls: dict[str, list],
+) -> None:
+    Path("prompts.jsonl").write_text(
+        '{"prompt":"valid"}\n'
+        + json.dumps({"prompt": "invalid", "category": category}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(
+            task(),
+            lambda prompt: calls["generate"].append(prompt) or "synthetic",
+        )
+    assert str(caught.value) == expected_message(
+        "category", type(category).__name__, line=2,
+    )
+    assert calls == {"generate": [], "judge": []}
 
 
 @pytest.mark.parametrize("row,field,kind", INVALID, ids=IDS)
@@ -70,6 +103,12 @@ def test_helper_refuses_invalid_row_before_generation(
         gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
     assert str(caught.value) == expected_message(field, kind)
     assert calls == {"generate": [], "judge": []}
+
+
+def write_suite() -> None:
+    Path("gate.yaml").write_text(yaml.safe_dump({
+        "suite": "judge-control", "tasks": [task().model_dump(exclude_none=True)],
+    }), encoding="utf-8")
 
 
 @pytest.mark.parametrize("row,field,kind", INVALID, ids=IDS)
@@ -86,12 +125,6 @@ def test_run_gate_keeps_invalid_row_unscored(
     assert scored.score is None and scored.delta is None and not scored.passed
     assert scored.error == expected_message(field, kind)
     assert calls == {"generate": [], "judge": []}
-
-
-def write_suite() -> None:
-    Path("gate.yaml").write_text(yaml.safe_dump({
-        "suite": "judge-control", "tasks": [task().model_dump(exclude_none=True)],
-    }), encoding="utf-8")
 
 
 @pytest.mark.parametrize("row,field,kind", INVALID, ids=IDS)
@@ -123,6 +156,22 @@ def test_valid_missing_and_empty_prompts_are_preserved(
     assert calls["generate"] == [prompt] and len(calls["judge"]) == 1
 
 
+def test_valid_multi_row_file_preserves_order_and_score(calls: dict[str, list]) -> None:
+    rows = [
+        '{"prompt": "first", "category": "safety"}',
+        '{"prompt": "second"}',
+        '{"prompt": "third", "category": "helpfulness"}',
+        '{"prompt": "fourth"}',
+    ]
+    Path("prompts.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    score = gate._run_judge_task(
+        task(), lambda value: calls["generate"].append(value) or "synthetic",
+    )
+    assert score == 1.0
+    assert calls["generate"] == ["first", "second", "third", "fourth"]
+    assert len(calls["judge"]) == 4
+
+
 def test_valid_row_before_bad_row_does_not_forward_bad_value(calls: dict[str, list]) -> None:
     Path("prompts.jsonl").write_text(
         '{"prompt":"valid"}\n\n{"prompt":17}\n', encoding="utf-8",
@@ -130,7 +179,17 @@ def test_valid_row_before_bad_row_does_not_forward_bad_value(calls: dict[str, li
     with pytest.raises(ValueError) as caught:
         gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
     assert str(caught.value) == expected_message("prompt", "int")
-    assert calls == {"generate": ["valid"], "judge": []}
+    assert calls == {"generate": [], "judge": []}
+
+
+def test_bad_row_at_end_of_longer_file_makes_zero_generations(calls: dict[str, list]) -> None:
+    lines = [f'{{"prompt":"valid_{i}"}}' for i in range(20)]
+    lines.append('{"prompt":17}')
+    Path("prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(task(), lambda prompt: calls["generate"].append(prompt) or "synthetic")
+    assert str(caught.value) == expected_message("prompt", "int", line=21)
+    assert calls == {"generate": [], "judge": []}
 
 
 def test_cli_invalid_input_does_not_replace_baseline(calls: dict[str, list]) -> None:

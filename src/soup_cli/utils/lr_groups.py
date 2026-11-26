@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Set, Tuple
 
+from soup_cli.utils.numeric import float_with_overflow_check
 from soup_cli.utils.safe_regex import check_config_regex
 
 MAX_LR_GROUPS = 32
@@ -143,7 +144,7 @@ def _validate_lr(raw: object, pattern: str) -> float:
             f"lr_groups[{pattern!r}].lr must be a number, "
             f"got {type(raw).__name__}"
         )
-    lr_value = float(raw)
+    lr_value = float_with_overflow_check(raw, f"lr_groups[{pattern!r}].lr")
     if not math.isfinite(lr_value):
         raise ValueError(
             f"lr_groups[{pattern!r}].lr must be finite, got {lr_value}"

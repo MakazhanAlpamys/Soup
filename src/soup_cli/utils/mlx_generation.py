@@ -6,6 +6,8 @@ import inspect
 import json
 import math
 import os
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +39,41 @@ def _same_base(left: str, right: str) -> bool:
     return left == right
 
 
+def _resolve_adapter_base(stored: str, base: str | None) -> tuple[str, str, bool]:
+    """Keep the selected spelling alongside the resolved legacy local identity."""
+    path = Path(stored)
+    legacy = not path.is_absolute() and (
+        stored.startswith(("./", "../", ".\\", "..\\")) or path.is_dir()
+    )
+    if legacy and base is not None and Path(base).is_absolute():
+        if not Path(base).is_dir():
+            raise ValueError(
+                f"Native MLX legacy relative base {stored!r}: "
+                "--base must name an existing absolute local directory"
+            )
+        return base, os.path.realpath(base), True
+    if base is not None and not _same_base(base, stored):
+        raise ValueError("--base does not match the native MLX metadata model identity")
+    if legacy:
+        if not path.is_dir():
+            raise ValueError(
+                f"Native MLX legacy relative base {stored!r} is not a directory in cwd; "
+                "pass --base with the absolute path to the original local base directory"
+            )
+        return stored, os.path.realpath(stored), True
+    return stored, stored, False
+
+
 #: Bounds on native adapter metadata; a file past them is refused.
 _MAX_ADAPTER_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_ADAPTER_RANK = 4096
 _MAX_ADAPTER_LAYERS = 2**16
 _MAX_ADAPTER_KEYS = 1024
 _MAX_ADAPTER_KEY_LEN = 256
+
+
+class NativePromptError(ValueError):
+    """A tokenized prompt is empty or exceeds the caller's input limit."""
 
 
 def _finite(value: Any) -> bool:
@@ -86,12 +117,15 @@ def _validate_adapter_rope_scaling(config: dict[str, Any]) -> None:
         )
 
 
-def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
-    """Validate metadata before loading optional dependencies or allocating a model."""
+def read_native_adapter(
+    path: Path, base: str | None = None, *, announce: bool = True,
+    validate_base: Callable[[str], None] | None = None,
+) -> dict | None:
+    """Validate metadata and the selected base spelling before announcing or loading it."""
     if (path / "added_tokens.safetensors").exists():
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
-            "with expanded vocabularies (#1986)"
+            "with expanded vocabularies (#3089)"
         )
     config_path = path / "adapter_config.json"
     if not config_path.exists():
@@ -110,12 +144,11 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Expected native MLX metadata with a model identity, not a PEFT adapter")
     if not config["model"].strip() or "base_model_name_or_path" in config:
         raise ValueError("Ambiguous or empty native MLX metadata model identity")
-    if base is not None and not _same_base(base, config["model"]):
-        raise ValueError("--base does not match the native MLX metadata model identity")
+    selected_base, resolved_base, legacy = _resolve_adapter_base(config["model"], base)
     if config.get("vocab_expansion"):
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
-            "with expanded vocabularies (#1986)"
+            "with expanded vocabularies (#3089)"
         )
     if config.get("fine_tune_type") != "lora" or config.get("use_dora", False):
         raise ValueError("Native MLX generation currently supports ordinary linear LoRA only")
@@ -151,6 +184,19 @@ def read_native_adapter(path: Path, base: str | None = None) -> dict | None:
         raise ValueError("Native MLX metadata requires unique resolved target keys")
     if not (path / "adapters.safetensors").is_file():
         raise ValueError("Native MLX adapter is missing adapters.safetensors")
+    if validate_base is not None:
+        validate_base(selected_base)
+    if legacy:
+        if announce:
+            from rich.console import Console
+
+            from soup_cli.utils.terminal import for_terminal
+
+            Console().print(for_terminal(
+                f"Native MLX legacy relative base {config['model']!r} "
+                f"resolved to {resolved_base!r}; the original training cwd is unknown."
+            ))
+        config["model"] = resolved_base
     return config
 
 
@@ -168,7 +214,7 @@ def reject_native_adapter(model: str) -> None:
 
 def load_native_model(
     model_path: str, base_model: str | None = None, *, trust_remote_code: bool = False,
-    return_config: bool = False,
+    require_dense: bool = False, return_config: bool = False,
 ) -> tuple[Any, Any] | tuple[Any, Any, dict]:
     """Load a base and strictly apply every saved ordinary linear LoRA tensor."""
     path = Path(model_path)
@@ -249,6 +295,13 @@ def load_native_model(
         tokenizer_config={"trust_remote_code": trust_remote_code},
         return_config=True, **trust, **model_config_arg,
     )
+    if require_dense and (
+        base_config.get("quantization") or base_config.get("quantization_config")
+        or any(isinstance(module, (nn.QuantizedLinear,
+                                  getattr(nn, "QuantizedEmbedding", nn.QuantizedLinear)))
+               for _, module in model.named_modules())
+    ):
+        raise ValueError("Native MLX serving currently supports dense checkpoints only")
     # MLX-LM 0.31.3 replaces tokenizer EOS with model EOS; retain both as newer
     # versions do. Use the declared ID, never a guessed control-token string.
     if tokenizer.eos_token_id is not None:
@@ -334,12 +387,35 @@ def load_native_model(
     return (model, tokenizer, base_config) if return_config else (model, tokenizer)
 
 
-def generate_native(
+@dataclass(frozen=True)
+class NativeGenerationChunk:
+    """One detokenized increment, with actual engine token counts."""
+
+    text: str
+    prompt_tokens: int
+    completion_tokens: int
+    finish_reason: str | None = None
+
+
+def stream_native(
     model: Any, tokenizer: Any, messages: list[dict], *, max_tokens: int = 256,
-    temperature: float = 0.7,
-) -> tuple[str, int]:
-    """Return completion text and sampled token count (including a terminating EOS)."""
+    temperature: float = 0.7, top_p: float = 0.9, stop: tuple[str, ...] = (),
+    max_prompt_tokens: int | None = None, seed: int | None = None,
+) -> Iterator[NativeGenerationChunk]:
+    """Stream native text once, retaining only a possible stop-string prefix.
+
+    Closing the iterator closes the engine and its request-local KV cache. Counts
+    include a sampled EOS or a token containing a stop string, even when hidden.
+    """
     validate_native_options(temperature=temperature, max_tokens=max_tokens, device=None, hub="hf")
+    if not math.isfinite(top_p) or not 0 < top_p <= 1:
+        raise ValueError(
+            "MLX top_p must be finite and in (0, 1]; zero disables native nucleus filtering"
+        )
+    if len(stop) > 4 or any(
+        not isinstance(item, str) or not 1 <= len(item) <= 256 for item in stop
+    ):
+        raise ValueError("MLX stop accepts at most four nonempty strings of at most 256 characters")
     from contextlib import closing
 
     from mlx_lm import stream_generate
@@ -351,14 +427,56 @@ def generate_native(
     rendered, templated = _render_chat_prompt(messages, tokenizer, fallback_on_error=False)
     prompt = tokenizer.encode(rendered, add_special_tokens=not templated)
     if not prompt:
-        raise ValueError("MLX generation requires a nonempty tokenized prompt")
-    text = []
+        raise NativePromptError("MLX generation requires a nonempty tokenized prompt")
+    if max_prompt_tokens is not None and len(prompt) > max_prompt_tokens:
+        raise NativePromptError("MLX prompt exceeds the input token limit")
+    if seed is not None:
+        import mlx.core as mx
+
+        mx.random.seed(seed)
+    pending = ""
     count = 0
     with closing(stream_generate(
         model, tokenizer, prompt=prompt, max_tokens=max_tokens,
-        sampler=make_sampler(temp=temperature, top_p=0.9 if temperature > 0 else 1.0),
+        sampler=make_sampler(temp=temperature, top_p=top_p if temperature > 0 else 1.0),
     )) as responses:
         for response in responses:
-            text.append(response.text)
+            pending += response.text
             count = response.generation_tokens
+            positions = [pending.index(item) for item in stop if item in pending]
+            if positions:
+                yield NativeGenerationChunk(pending[:min(positions)], len(prompt), count, "stop")
+                return
+            reason = getattr(response, "finish_reason", None)
+            if reason in {"stop", "length"}:
+                yield NativeGenerationChunk(pending, len(prompt), count, reason)
+                return
+            # Never expose a prefix which a later token could complete as a stop.
+            retained = max((
+                length for item in stop for length in range(1, len(item))
+                if pending.endswith(item[:length])
+            ), default=0)
+            emitted = pending[:-retained] if retained else pending
+            pending = pending[-retained:] if retained else ""
+            yield NativeGenerationChunk(emitted, len(prompt), count)
+    yield NativeGenerationChunk(
+        pending, len(prompt), count, "length" if count >= max_tokens else "stop",
+    )
+
+
+def generate_native(
+    model: Any, tokenizer: Any, messages: list[dict], *, max_tokens: int = 256,
+    temperature: float = 0.7,
+) -> tuple[str, int]:
+    """Return completion text and sampled token count (including a terminating EOS)."""
+    from contextlib import closing
+
+    text = []
+    count = 0
+    with closing(stream_native(
+        model, tokenizer, messages, max_tokens=max_tokens, temperature=temperature,
+    )) as chunks:
+        for chunk in chunks:
+            text.append(chunk.text)
+            count = chunk.completion_tokens
     return "".join(text).strip(), count

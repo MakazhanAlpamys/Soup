@@ -18,11 +18,11 @@ drift -- every entry must name a real field, and every dotted field name in
 ``trainer/mlx_sft.py``'s own warning list must appear here. It cannot originate
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
-Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), ``task=dpo``, ``task=orpo``, ``task=simpo``, ``task=kto``,
-``task=grpo`` and ``task=unlearn`` on ``backend=mlx``, plus multimodal vision and audio on
-``backend=transformers`` (#1156). Other combinations report nothing rather than guessing,
-which is the honest default for a table that has not been reviewed for them.
+Reviewed combinations include SFT on MLX and Unsloth (#1124), DPO, ORPO, SimPO,
+KTO, GRPO and unlearn on MLX, and SFT on Transformers for text, vision and audio
+(#1156, #1815). :func:`is_reviewed` tells doctor whether a combination has a
+reviewed table, including tables with no ignored settings. The shipped-recipe
+test tracks the combinations still waiting for a review.
 """
 
 from __future__ import annotations
@@ -84,12 +84,6 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "training.use_galore",
         IGNORED,
         "GaLore has no MLX implementation",
-        trainer_reads=True,
-    ),
-    SupportEntry(
-        "training.use_ring_attention",
-        IGNORED,
-        "Ring Attention has no MLX path",
         trainer_reads=True,
     ),
     SupportEntry(
@@ -202,7 +196,6 @@ _MLX_KTO: tuple[SupportEntry, ...] = _MLX_DPO
 #: refused at config load for this task, and load-time refusals have no rows.
 _MLX_GRPO_FIELDS = frozenset({
     "training.use_galore",
-    "training.use_ring_attention",
     "training.moe_lora",
     "training.use_fsdp2_compile",
 })
@@ -233,7 +226,49 @@ _MLX_NON_TEXT_SFT = tuple(
 ) + _MLX_SELECTIVE_NON_TEXT
 
 
+def _other_task_knob(field_name: str, trainer: str, task: str) -> SupportEntry:
+    """A knob another task's trainer reads, accepted on ``task: sft`` and never read."""
+    return SupportEntry(
+        field_name,
+        IGNORED,
+        f"used by {trainer} (task: {task}); SFT does not read it",
+        issue=1815,
+        trainer_reads=False,
+    )
+
+
+# #1815: these other-task knobs are accepted on Transformers text SFT.
+# The review covered the SFT setup path and its helpers, shared training CLI,
+# data loading, and monitoring. Globally unconsumed settings are tracked separately.
+_TRANSFORMERS_TEXT_SFT: tuple[SupportEntry, ...] = (
+    _other_task_knob("training.dpo_beta", "trainer/dpo.py and trainer/online_dpo.py",
+                     "dpo and online_dpo"),
+    _other_task_knob("training.kto_beta", "trainer/kto.py", "kto"),
+    _other_task_knob("training.orpo_beta", "trainer/orpo.py", "orpo"),
+    _other_task_knob("training.simpo_gamma", "trainer/simpo.py", "simpo"),
+    _other_task_knob("training.cpo_alpha", "trainer/simpo.py", "simpo"),
+    _other_task_knob("training.ipo_tau", "trainer/ipo.py", "ipo"),
+    _other_task_knob("training.bco_beta", "trainer/bco.py", "bco"),
+    _other_task_knob("training.grpo_beta", "trainer/grpo.py", "grpo"),
+    _other_task_knob("training.num_generations", "trainer/grpo.py", "grpo"),
+    _other_task_knob("training.reward_fn", "trainer/grpo.py and trainer/ppo.py",
+                     "grpo and ppo"),
+    _other_task_knob("training.verifiable_domain", "trainer/grpo.py and trainer/ppo.py",
+                     "grpo and ppo"),
+    _other_task_knob("training.ppo_epochs", "trainer/ppo.py", "ppo"),
+    _other_task_knob("training.ppo_clip_ratio", "trainer/ppo.py", "ppo"),
+    _other_task_knob("training.ppo_kl_penalty", "trainer/ppo.py", "ppo"),
+    _other_task_knob("training.reward_model", "trainer/ppo.py and trainer/online_dpo.py",
+                     "ppo and online_dpo"),
+    _other_task_knob("training.embedding_loss", "trainer/embedding.py", "embedding"),
+    _other_task_knob("training.embedding_margin", "trainer/embedding.py", "embedding"),
+    _other_task_knob("training.embedding_pooling", "trainer/embedding.py", "embedding"),
+    _other_task_knob("training.embedding_temperature", "trainer/embedding.py", "embedding"),
+)
+
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
+#: An empty table is reviewed and has no known gaps. A missing key may use the text fallback.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
     ("sft", "mlx", "vision"): _MLX_NON_TEXT_SFT,
@@ -245,14 +280,17 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("grpo", "mlx", "text"): _MLX_GRPO,
     ("unlearn", "mlx", "text"): _MLX_UNLEARN,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
+    ("sft", "transformers", "text"): _TRANSFORMERS_TEXT_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
 }
 
 _TRANSFORMERS_SFT_MODULES = (
     "soup_cli/trainer/sft.py",
+    "soup_cli/trainer/save_args.py",
     "soup_cli/trainer/loss_summary.py",
     "soup_cli/trainer/stream_setup.py",
+    "soup_cli/trainer/packed_lora_setup.py",
     "soup_cli/trainer/rewind_hf.py",
     "soup_cli/trainer/raft.py",
 )
@@ -332,6 +370,7 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     # here because listing sft.py would cause the drift guard to inspect transformers-only
     # precision reads; an AST test in test_issue1124 guards _setup_unsloth instead.
     ("sft", "unsloth", "text"): ("soup_cli/utils/unsloth.py",),
+    ("sft", "transformers", "text"): _TRANSFORMERS_SFT_MODULES,
     ("sft", "transformers", "vision"): _TRANSFORMERS_SFT_MODULES,
     ("sft", "transformers", "audio"): _TRANSFORMERS_SFT_MODULES,
 }
@@ -339,17 +378,31 @@ for _modality in ("vision", "audio"):
     TRAINER_MODULES[("sft", "mlx", _modality)] = TRAINER_MODULES[("sft", "mlx", "text")]
 
 
+def _registry_key(task: str, backend: str, modality: str) -> tuple[str, str, str] | None:
+    """The REGISTRY key that covers this combination, or None when it is not reviewed."""
+    if (task, backend, modality) in REGISTRY:
+        return (task, backend, modality)
+    # An explicit modality table takes precedence over the shared text policy.
+    if backend in ("mlx", "unsloth") and (task, backend, DEFAULT_MODALITY) in REGISTRY:
+        return (task, backend, DEFAULT_MODALITY)
+    return None
+
+
+def is_reviewed(task: str, backend: str, modality: str = DEFAULT_MODALITY) -> bool:
+    """Whether this combination's table was reviewed (#1815).
+
+    ``unsupported_for`` returns ``()`` both for a reviewed combination that
+    ignores nothing and for one nobody reviewed; this tells them apart.
+    """
+    return _registry_key(task, backend, modality) is not None
+
+
 def unsupported_for(
     task: str, backend: str, modality: str = DEFAULT_MODALITY
 ) -> tuple[SupportEntry, ...]:
     """Every declared gap for a task/backend/modality combination, or ``()`` if unreviewed."""
-    if (task, backend, modality) in REGISTRY:
-        return REGISTRY[(task, backend, modality)]
-    # MLX and Unsloth have no modality-specific trainers; their SFT gaps
-    # apply to any modality setting.
-    if backend in ("mlx", "unsloth"):
-        return REGISTRY.get((task, backend, DEFAULT_MODALITY), ())
-    return ()
+    key = _registry_key(task, backend, modality)
+    return REGISTRY[key] if key is not None else ()
 
 
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:

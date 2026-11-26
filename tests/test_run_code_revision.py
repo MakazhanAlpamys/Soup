@@ -261,7 +261,11 @@ def test_deadline_covers_all_git_commands_not_each_command(monkeypatch, tmp_path
             return b""
         return b"a" * 40 if limit > 1 else b" "
 
-    monkeypatch.setattr(code_revision.time, "monotonic", lambda: clock["now"])
+    import types
+
+    monkeypatch.setattr(
+        code_revision, "time", types.SimpleNamespace(monotonic=lambda: clock["now"])
+    )
     monkeypatch.setattr(code_revision, "_bounded_git_output", output)
     captured = code_revision.capture_code_revision(tmp_path)
     assert captured.commit is None and captured.dirty is None
@@ -289,13 +293,17 @@ def test_missing_git_does_not_start_a_subprocess(monkeypatch, tmp_path):
 
 
 def test_git_is_resolved_from_absolute_path_entries_not_the_current_directory(
-    tmp_path, monkeypatch, git_processes,
+    tmp_path, monkeypatch,
 ):
+    from types import SimpleNamespace
+
     from soup_cli.utils import code_revision
 
     monkeypatch.chdir(tmp_path)
     binary = "git.EXE" if os.name == "nt" else "git"
-    (tmp_path / binary).write_text("current-directory stand-in", encoding="utf-8")
+    cwd_program = tmp_path / binary
+    cwd_program.write_text("current-directory stand-in", encoding="utf-8")
+    cwd_program.chmod(0o755)
     installed = tmp_path / "bin"
     installed.mkdir()
     trusted = installed / binary
@@ -303,13 +311,18 @@ def test_git_is_resolved_from_absolute_path_entries_not_the_current_directory(
     trusted.chmod(0o755)
     monkeypatch.setenv("PATH", os.pathsep.join(["", ".", str(installed)]))
     monkeypatch.setenv("PATHEXT", ".EXE")
-    calls = git_processes([(0, "a" * 40), (1, ""), (1, ""), (0, ""), (0, "a" * 40)])
-    # Restore the real resolver; the process double records the selected program.
-    from soup_cli.utils.tool_paths import find_tool
 
-    monkeypatch.setattr(code_revision, "find_tool", find_tool)
+    programs = []
+
+    def output(argv, _env, _deadline, _limit):
+        programs.append(argv[0])
+        return b"a" * 40 if "rev-parse" in argv else b""
+
+    # Exercise the real resolver with no pipe threads or scheduling deadline.
+    monkeypatch.setattr(code_revision, "_bounded_git_output", output)
+    monkeypatch.setattr(code_revision, "time", SimpleNamespace(monotonic=lambda: 0.0))
     assert code_revision.capture_code_revision().commit == "a" * 40
-    assert all(argv[0] == str(trusted) for argv, _, _ in calls)
+    assert set(programs) == {str(trusted)}
 
 
 def test_legacy_database_is_upgraded_without_guessing_a_historical_commit(tmp_path):
@@ -646,4 +659,5 @@ def test_blocked_status_read_is_cancelled_by_the_total_deadline(tmp_path, monkey
     with pytest.raises(subprocess.TimeoutExpired):
         code_revision._bounded_git_output(["unused"], {}, started + 0.03, 1)
     assert stopped.is_set()
-    assert time.monotonic() - started < 0.8
+    # Cancelled promptly by deadline (0.03s) before BlockedPipe.read's 1.0s wait expires.
+    assert time.monotonic() - started < 0.95

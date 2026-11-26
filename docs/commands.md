@@ -97,7 +97,7 @@ soup serve --model <m> --backend vllm --max-model-len 8192  Cap the vLLM sequenc
 soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
 soup serve --model <m> --trace-log ./serve.jsonl  Per-request JSONL log + rotation + secret redaction
 soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into local-RL SQLite + POST /v1/thumbs (transformers)
-soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (transformers; q8_0 needs hqq; fp8 = vLLM+Hopper only) (v0.71.14)
+soup serve --model <m> --kv-cache-type bf16|f16|q8_0  KV-cache type on Transformers (q8_0 needs hqq) (v0.71.14)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file
@@ -169,6 +169,7 @@ soup profile --config soup.yaml --json       Profile JSON on stdout; diagnostics
 soup profile --model Qwen/Qwen2.5-7B-Instruct --gpu rtx5070 --method qlora  Will a model fit, without a soup.yaml
 soup cost --config soup.yaml                 Estimate training cost in USD across providers
 soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup cost --config soup.yaml --gpu H100 --history  Estimate duration and cost from comparable local single-GPU SFT runs, with an observed range
 soup cost --config soup.yaml --json          Cost JSON on stdout; diagnostics on stderr
 soup prune-layer-cache --model org/base [--yes]   List stale layer-stream cache slots; --yes removes them
 soup adapters list ./output/                 Scan for LoRA adapters
@@ -178,19 +179,22 @@ soup adapters audit <adapter> --config soup.yaml [--json]   Compare a finished r
 soup adapters branches                        List snapshotted branches
 soup adapters checkout <name>                   Restore a snapshotted branch's config
 soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
-soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs)
-soup loop status                              Counters + status + pre_wired flag
-soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--tool-auth-token T]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
+soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>] [--base-model <m>] [--trace-dir <dir>] [--verify ship|eval-gate] [--canary-max-wait 24h] [--canary-on-timeout errors-only|rollback|wait] [--min-new-pairs N] [--min-new-edits N] [--min-new-rated N] [--feedback-log <file>] [--train-method sft|dpo|kto] [--sft-target-modules all-linear|auto|a,b] [--sft-lora-r N] [--sft-lora-alpha N] [--sft-lr X] [--sft-epochs N] [--sft-batch-size N] [--sft-grad-accum N] [--sft-seed N] [--sft-quantization 4bit|none|auto] [--paraphraser-endpoint <url> --paraphraser-model <name>]  Create .soup/loop.yaml (data flywheel; --train-method = what the loop trains, sft by default for a new loop (corrected answers and answers rated good; a loop.yaml without the field keeps dpo); the --sft-* flags set the sft training recipe (LoRA target modules, r 1-1024, alpha 1-4096, lr above 0 and at most 1, epochs 1-100, micro-batch 1-1024 (built-in 2), gradient accumulation 1-1024 (built-in 4), seed 0-4294967295 (built-in 42), written into every sft config so none is inherited, quantization 4bit, none or auto = none if the base fits in free VRAM when training starts (parameters x 2 bytes x 5), else 4bit), each stored in loop.yaml only when given and refused (exit 2) for a loop that does not train sft; the built-in recipe is all-linear, LoRA r 64 / alpha 128, lr 2e-4, 8 epochs, quantization auto; kto and sft learn from the thumbs, ratings and edits in --feedback-log, default .soup-loops/feedback.jsonl; an edit wins over thumbs and ratings for every method; --verify = the check before rollout, a soup ship verdict by default; --canary-max-wait / --canary-on-timeout = how long a canary may wait for the ratings its quality verdict needs (30 per side), default 24h, and what then happens: errors-only (the request-error verdict decides; the default; a canary that got no answers at all is withdrawn as `timeout_no_answers` unless `--canary-on-timeout errors-only` is given explicitly, which promotes with no evidence), rollback (withdraw it) or wait (no limit); --min-new-pairs = train only once N rows of that dataset (preference pairs for dpo) are new since the last training run, default 1; an sft loop with a feedback log trains at --min-new-edits N new edits (default 8) or --min-new-rated N new rated answers (default 30), whichever comes first; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs; --base-model = what the train stage starts from; --trace-dir = the `serve --trace-log` directory to harvest, default .soup-loops/traces; --paraphraser-endpoint / --paraphraser-model = the OpenAI-compatible chat model (this machine or LAN, both or neither, stored in loop.yaml) that writes the paraphrases of the corrected prompts the loop's verdict asks the new version: the pre-wired train stage writes them once per edit to .soup-loops/paraphrases.jsonl before it trains, never as training data; without the flags it asks the loop's own serve endpoint with the tool token and `X-Soup-Internal: loop-check`, which `soup serve` answers without a trace line, thumbs, canary routing or canary statistics, and with neither reachable it writes none and says so in the iteration's notes)
+soup loop status                              Counters + status + pre_wired flag + a daemon row (running (pid N) / not running / stale pid file) + for an sft loop an sft_recipe row (the effective recipe and which keys come from loop.yaml) + a waiting row while the loop waits for corrections (Waiting: 4/5 trainable corrections ...) + new_data_since, the cursor of the version in production
+soup loop prune [--yes] [--keep-runs N] [--keep-log-lines N]  Dry-run a safe artifact-retention plan; --yes applies it, and pruning is refused while a detached loop daemon is running
+soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans] [--tool-auth-token T]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing); --detach writes .soup/loop.pid (JSON: pid, started_at, log), appends the child's output to .soup/loop.log (rotated at 10 MB, one old file kept as .soup/loop.log.1), and is refused (exit 2) while that pid is alive
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
+soup loop set <key> <value>                  Change one setting of an existing loop without `init --force`: base_model, trace_dir or verify
 soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR
+soup loop rollback                           Return to the production version before the last promotion, and the data cursor to its cursor (with none yet, withdraw a running canary)
 soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
 soup serve --model m --adapters chat=./c --adapters code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 179 ready-made recipes
+soup recipes list                             List all 184 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
@@ -216,7 +220,7 @@ soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
 soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
 soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
 soup runs                                     List training runs
-soup runs show <run_id>                       Run details + loss graph + cost (shows an Error: line for failed runs, and distinguishes terminated/launching from running; #767)
+soup runs show <run_id>                       Run details, loss, mean score and recorded spread where available, and cost (shows an Error: line for failed runs, and distinguishes terminated/launching from running; #767)
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
 soup runs clean [<run_id>] [--all]              Clean redundant checkpoint files
@@ -229,11 +233,17 @@ soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed
 soup ship ... --progress jsonl  Emit versioned completion events on stderr; keep the verdict on stdout (#1759)
 soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via LLM-as-a-judge
 soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via swap-debiased judge win-rate (base=0.5) (v0.71.31)
+soup ship ... --task-mode reward --reward-fn accuracy  Leg-1 scored by a reward function (a number from 0 to 1 per row; `accuracy`, `format`, `verifiable:math`, `verifiable:json_schema` or a `.py` file, which is EXECUTED as Python code and recorded in the evidence by name and sha256); the mean decides with the same strict rule; the exact decimal mean makes ties stay ties; a descriptive paired summary (mean difference, bootstrap interval with its seed, `underpowered`) is reported and decides nothing; `eval.ship.reward_fn` sets it in the config
+soup ship ... --task-mode judge_score|pairwise --judge-model <url> --judge-reference  Show the judge each task's `expected` answer as a reference; refused for metric and reward modes, --evidence, regex rows and a missing / non-string / blank `expected` (#2520)
 soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
 soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
 soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
+soup ship ... --output v.json  `schema_version: 2` verdict JSON: `task_win.rows` (better / worse / same), `task_win.truncated` (answers cut off at the token cap, plus the `truncation_growth` warning), `task_win.generation_failures`, `judged` (adapter, checkpoint step); a warning never changes the verdict or exit code, a side whose every generation failed is refused (exit 1); `--emit-evidence` carries the same blocks, which soup-cli 0.77.x refuses as `unsupported field(s)`
+soup ship ... --output v.json  A live `--task-mode metric` / `judge_score` / `reward` run also writes `v.task-rows.jsonl` (only with `--output`): one JSON line per task (prompt, expected, both answers, both scores in [0, 1], truncated / failed flags, better / worse / same); the mean of each score column is `task_win.base` / `task_win.tuned` (exactly for `metric`, within 1e-12 for `judge_score`, whose number stays the judge's own); `task_rows` in the verdict names it; the file holds your prompts and answers and is never in the verdict, the evidence or the `--push` comment; a failed write exits 1 for a SHIP and keeps 2 for a DON'T SHIP
 soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance.config_sha and numerics family, --emit-evidence STAMPS both (v0.71.39 / #367); live-loads base/tuned at training.quantization when it is 4bit/8bit, else full precision (#367)
 soup ship ... --push owner/repo#N  Post the verdict as a GitHub PR comment (best-effort; never flips the exit code) (v0.71.39)
+soup ship --base <m> --base-adapter <prod-lora> --adapter <new-lora> --task-eval t.jsonl  Compare the candidate (base + new adapter) with the version in production (base + previous adapter); live only, refuses --tuned/--evidence/--emit-evidence/--baseline/--require-provenance and lm-eval benchmarks
+soup ship ... --gate loop-v2 --corrections c.jsonl --held-out h.jsonl  Continual-learning verdict: SHIP only if the new version learned the corrections (one-sided exact sign test, >= 5 changed edits), is not significantly worse on the held-out edits and the suites hold; the task win is information only; live only (refuses --evidence/--emit-evidence/--require-provenance)
 soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-min spread; gate at max(threshold, floor); leg-1 measured in every --task-mode (judge modes cost N judge passes, floor labelled decode+judge) (v0.73.2)
 soup ship ... --chat-template-kwargs '{"enable_thinking":false}'  Pass template variables equally to base/tuned live generation; JSON object, live-only (#1758)
 soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)
@@ -290,7 +300,7 @@ soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity 
 soup adapters check <adapter> [--json]        Is the adapter trained? Total/per-layer ||dW||_F, live fraction, all-zero lora_B, leaked .inner. keys; ends in alive or inactive: <reason> (exit 0 / 2; 1 = usage error)
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
-soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
+soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--rank <N>] [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank fast path; mixed-rank concat with LoRA/rsLoRA scaling; optional SVD rank cap; scan + same-base gated) (v0.71.34)
 soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
 soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
@@ -395,6 +405,15 @@ soup --version                                Show version (prints the same text
 soup --verbose <command>                      Full traceback on errors
 ```
 
+### Estimating training time from local runs
+
+Pass `soup cost --history --gpu <label>` to use the median seconds per
+optimizer step from at least three comparable single-GPU text SFT runs. The
+reported range comes from the fastest and slowest of those runs. A matching run
+must have recorded that it started without resuming on one CUDA device. If
+there are too few matches or the step count cannot be estimated from rows and a
+fixed batch size, Soup gives its model-based estimate and explains the fallback.
+
 ### Choosing the device for `soup infer`, `soup chat` and `soup diff`
 
 `--device` decides where these commands load the model. Without it, the
@@ -497,8 +516,8 @@ printed to stderr; it is 16-128 urlsafe-base64 characters, the same shape
 }
 ```
 
-The registry is identical across transports — same tools, same schemas, same
-`--allow-mutating` / `--allow-execute` gating. Only the wire changes.
+All transports advertise the same tool descriptors and input schemas.
+`--allow-mutating` enables planning on every transport. `--allow-execute` is stdio-only.
 
 **Security:**
 - **The token is required and there is no opt-out.** A loopback listener is
@@ -519,12 +538,47 @@ The registry is identical across transports — same tools, same schemas, same
 The network transports need `mcp >= 1.10.0` — streamable HTTP landed in 1.8.0
 and rebinding protection in 1.10.0 — which is the floor `soup-cli[mcp]` pins.
 
-The server exposes 14 read-only tools — `advise`, `data_inspect`,
+The server makes 15 ungated tools callable by default — `advise`, `data_inspect`,
 `data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
 `runs_list`, `runs_show`, `registry_list`, `registry_show`, `profile`,
-`diagnose_evidence`, `ship_evidence` — each returning JSON. Two **plan-only**
+`diagnose_evidence`, `ship_evidence` and `engine_describe` — each returning JSON. Two **plan-only**
 mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 (`"args": ["mcp", "serve", "--allow-mutating"]`); when `--allow-mutating` alone is active, they only render the exact command that would run — they never execute training or export.
+
+The `runs_list` and `runs_show` tools return status, metrics, base model
+and artifact information. Local absolute model and artifact paths use
+project-relative or shortened display names. For failure handling, use
+`has_error` and `exit_code`. If you used `config_json` or `error_message`
+from a run response, use `soup runs show RUN_ID` locally to see the recorded
+configuration and full error. Process and execution bookkeeping fields
+(`pid`, `command_digest` and `log_path`) stay in the local tracker.
+
+### Engine tool manifest
+
+Call `engine_describe` with omitted arguments or an empty object. It returns
+one JSON object with `contract_version: 1`, the display `soup_version`, the
+startup `transport` (`stdio`, `sse` or `http`), effective `gates` (`mutating` and
+`execute`), and a name-sorted `tools` array of `{name, level}` objects. Input with
+extra keys returns `soup.engine.invalid_arguments` as an MCP tool error.
+
+There are 15 enabled tools by default, 17 with `--allow-mutating`, and 19 with
+stdio `--allow-execute`. Execution implies mutation permission. The manifest
+reports startup permissions. Enabled tools still enforce their own argument,
+authorization and confirmation checks. `tools/list` advertises all 19
+descriptors, including the stubs that refuse calls when their gate is disabled.
+
+Clients can negotiate capabilities with `contract_version`. Compatible added
+tools and optional fields fit version 1. An incompatible change to the manifest,
+tool level or availability requires a new version.
+
+Every tool in `tools/list` carries MCP hints about **side effects**.
+`readOnlyHint: true` means the tool does not modify its environment.
+The server applies the **gate level** stored on each registry entry and
+reports enabled tools and their levels in `engine_describe`. There are 15
+ungated read-level tools, two plan tools (`--allow-mutating`), and two
+execute tools (`--allow-execute` over stdio).
+
+Nine tools advertise `readOnlyHint: true`: `advise`, `data_inspect`, `data_validate`, `recipes_search`, `recipes_show`, `profile`, `diagnose_evidence`, `ship_evidence` and `engine_describe`. Six read-level tools can write benign state and advertise `readOnlyHint: false, destructiveHint: false` and no `idempotentHint` (a repeat call is not promised to change nothing; for example a registry read re-applies file permissions): `runs_list`, `runs_show`, `registry_list` and `registry_show` (opening the local database creates or migrates it, and reading a run rewrites a stale `running` row whose process is gone), `data_doctor` (it can fill the Hugging Face tokenizer cache) and `data_score` (the optional presidio engine can download a spaCy model); those last two also advertise `openWorldHint: true`, and `profile` advertises `openWorldHint: false` (it never downloads). `train_start` and `export` advertise `readOnlyHint: false, destructiveHint: false` (they run nothing; under `--allow-execute` `train_start` writes a new run directory under `.soup/mcp-runs/` and both issue a one-time token; neither deletes or overwrites a user file or a live plan, and issuing a token only drops expired plan tokens held in memory as housekeeping); `train_execute` and `export_execute` advertise `readOnlyHint: false, destructiveHint: true`.
 
 `--allow-execute` implies `--allow-mutating` and enables full background subprocess execution via two execution tools (`train_execute` and `export_execute`). Execution requires a server-issued one-time confirmation token returned during the planning phase (`train_start` or `export`). The token state is kept in-memory with a 5-minute TTL and is consumed before subprocess invocation.
 
@@ -547,13 +601,19 @@ Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
 | `3` | `EXIT_USAGE_ERROR` | USAGE / INPUT / CONFIG ERROR | Bad or invalid CLI flag; missing or unparseable input file; empty series |
 | `1` | `EXIT_RUNTIME_ERROR` | RUNTIME ERROR | Unexpected crash, environment incompatibility, or live inference error |
 
-The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, `soup data lint`, and `soup recipes verify`.
+The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup eval retention`, `soup lock check`, `soup expect`, `soup data validate`, `soup data lint`, `soup data leakage`, and `soup recipes verify`.
 
 `soup eval checklist` requires `--evidence`. `soup eval behavior` also requires
 `--evidence` unless `--base-model` selects the live path; the `elephant` and
 `syceval` batteries cannot be scored live and exit `3` with `--base-model`. Omitting the required
 evidence exits `3` and names the JSON input to provide; it never reports a neutral
 pass for a gate that measured nothing.
+
+`soup airgap-bundle` uses its own exit codes outside the gate and verdict scheme.
+It exits `0` after writing the bundle. Exit `1` covers missing paths and
+non-directory paths supplied via `--model`, `--dataset`, `--wheel`, or `--kernel`.
+It exits `2` for an invalid plan, an invalid size cap, or a bundle that exceeds
+the cap.
 
 ### Gate Verdict Drift vs. Operational Drift
 

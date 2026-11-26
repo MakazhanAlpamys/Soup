@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -20,8 +21,10 @@ import sys
 from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
+from soup_cli import __version__
 from soup_cli.mcp_server.execution import (
     ExecutionError,
     ExecutionManager,
@@ -68,6 +71,149 @@ class ToolSpec:
     handler: Callable[[dict], dict]
     mutating: bool = False
     annotations: dict | None = None
+    level: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Tool level (the gate class) and MCP annotations (the side effects). Two separate
+# things, both decided in ONE place: :func:`level_fields`.
+# ---------------------------------------------------------------------------
+
+#: LEVEL is the gate class of a tool. ``read`` always runs; ``plan`` is gated by
+#: ``--allow-mutating`` and only renders the command that would run; ``execute`` is gated
+#: by ``--allow-execute``. The level decides ``ToolSpec.mutating``. It is not a statement
+#: about side effects: a ``read`` tool can still write benign state (see below).
+LEVEL_READ = "read"
+LEVEL_PLAN = "plan"
+LEVEL_EXECUTE = "execute"
+LEVELS = (LEVEL_READ, LEVEL_PLAN, LEVEL_EXECUTE)
+ENGINE_DESCRIBE = "engine_describe"
+TOOL_CONTRACT_VERSION = 1
+
+# ANNOTATIONS are MCP hints about side effects, with MCP's meaning: ``readOnlyHint`` true
+# is a promise that the tool does not modify its environment, so it is set only for a tool
+# whose code path writes nothing (no database opened for write, no schema migration, no
+# reconcile-on-read, no cache download). ``destructiveHint`` and ``idempotentHint`` are
+# meaningful only when ``readOnlyHint`` is false.
+#
+# * A read-level tool that writes nothing:        readOnlyHint true.
+# * A read-level tool that can write benign state (``writes=True``): readOnlyHint false,
+#   destructiveHint false (additive state: a database file, a migrated column, a cache
+#   entry). ``idempotentHint`` is left unset for all six: a repeat call is not guaranteed to
+#   change nothing (``RegistryStore`` re-applies ``os.chmod`` on every construction on
+#   POSIX, a stale run row is reconciled on read, the doctor and the scorer can fetch a
+#   cache entry), so no repeat-call guarantee is declared. Pass ``idempotent=True`` only
+#   when repeating the call provably changes nothing further.
+# * The plan level is NOT read-only even though a plan runs nothing: under
+#   ``--allow-execute`` ``train_start`` creates ``.soup/mcp-runs/<run_id>/config.yaml`` (a run
+#   directory this call creates, the file opened ``O_EXCL``) and both plan tools issue a
+#   one-time token. Everything they do is additive, so destructiveHint is false.
+#   idempotentHint is left unset on purpose: its default (false) is the true answer, since
+#   every ``train_start`` under ``--allow-execute`` makes a new run directory.
+# * The execute level is what ``train_execute`` / ``export_execute`` always carried.
+#
+# These are hints for the client, never enforcement: the gates are what refuse a call.
+_READ_ONLY = MappingProxyType({"readOnlyHint": True})
+_READ_WRITES_BENIGN = MappingProxyType({"readOnlyHint": False, "destructiveHint": False})
+_PLAN = MappingProxyType({"readOnlyHint": False, "destructiveHint": False})
+_EXECUTE = MappingProxyType({"readOnlyHint": False, "destructiveHint": True})
+
+
+def annotations_for(
+    level: str,
+    *,
+    writes: bool = False,
+    idempotent: bool | None = None,
+    open_world: bool | None = None,
+) -> dict:
+    """The MCP annotations for a tool, as a fresh dict (specs never share one).
+
+    ``writes`` is for a read-level tool whose code path can write benign state; it is
+    refused for ``plan`` and ``execute``, which are never read-only. ``idempotent`` and
+    ``open_world`` add ``idempotentHint`` / ``openWorldHint`` and are for a tool whose code
+    settles them: leave them ``None`` (the hint is then omitted, and MCP's own default
+    applies) when it does not. ``idempotent`` is refused on a read-only tool, where MCP
+    gives the hint no meaning.
+    """
+    if not isinstance(level, str) or level not in LEVELS:
+        raise ValueError(f"unknown tool level {level!r}; accepted: " + ", ".join(sorted(LEVELS)))
+    if level == LEVEL_READ:
+        annotations = dict(_READ_WRITES_BENIGN if writes else _READ_ONLY)
+    else:
+        if writes:
+            raise ValueError(
+                f"'writes' applies to read-level tools only; a {level!r} tool is never read-only"
+            )
+        annotations = dict(_PLAN if level == LEVEL_PLAN else _EXECUTE)
+    if idempotent is not None:
+        if annotations["readOnlyHint"]:
+            raise ValueError("idempotentHint is meaningful only when readOnlyHint is false")
+        annotations["idempotentHint"] = idempotent
+    if open_world is not None:
+        annotations["openWorldHint"] = open_world
+    return annotations
+
+
+def level_fields(
+    level: str,
+    *,
+    writes: bool = False,
+    idempotent: bool | None = None,
+    open_world: bool | None = None,
+) -> dict[str, Any]:
+    """The :class:`ToolSpec` fields a level decides: ``level``, ``mutating``, ``annotations``.
+
+    Splatted into every spec (``ToolSpec(..., **level_fields(LEVEL_READ))``) so the gate
+    class, the ``mutating`` flag the gate reads and the annotations a client reads come
+    from one call and cannot be written down three different ways.
+    """
+    return {
+        "level": level,
+        "mutating": level != LEVEL_READ,
+        "annotations": annotations_for(
+            level, writes=writes, idempotent=idempotent, open_world=open_world
+        ),
+    }
+
+
+def _require_level_and_hints(specs: Iterable[ToolSpec]) -> list[ToolSpec]:
+    """Refuse a tool table holding a tool that does not state its level and its hints.
+
+    Every spec must have: a ``level`` that is one of :data:`LEVELS`, agreeing with its
+    ``mutating`` flag (the gate reads the flag; only ``read`` is ungated); a boolean
+    ``readOnlyHint``, true for no level but ``read``; and a boolean ``destructiveHint``
+    whenever ``readOnlyHint`` is false. A programming error, so it raises ``ValueError``
+    when the table is built rather than a tool-level error.
+    """
+    checked = list(specs)
+    for spec in checked:
+        if spec.level not in LEVELS:
+            raise ValueError(
+                f"tool {spec.name!r} has no level; give it one of "
+                + ", ".join(sorted(LEVELS))
+                + " through level_fields()"
+            )
+        if spec.mutating is not (spec.level != LEVEL_READ):
+            raise ValueError(
+                f"tool {spec.name!r} is at level {spec.level!r} but mutating={spec.mutating!r}"
+            )
+        annotations = spec.annotations
+        read_only = annotations.get("readOnlyHint") if isinstance(annotations, Mapping) else None
+        if not isinstance(read_only, bool):
+            raise ValueError(
+                f"tool {spec.name!r} has no MCP annotations; give it some through "
+                "level_fields()"
+            )
+        if read_only and spec.level != LEVEL_READ:
+            raise ValueError(
+                f"tool {spec.name!r} is at level {spec.level!r} but advertises "
+                "readOnlyHint true; only 'read' tools may"
+            )
+        if not read_only and not isinstance(annotations.get("destructiveHint"), bool):
+            raise ValueError(
+                f"tool {spec.name!r} advertises readOnlyHint false without destructiveHint"
+            )
+    return checked
 
 
 def sanitize(obj: Any) -> Any:
@@ -185,6 +331,13 @@ def _opt_int(args: dict, key: str, default: int, *, lo: int, hi: int) -> int:
     # bypasses the core's own bounds check (code-review MEDIUM).
     if not lo <= val <= hi:
         raise McpToolError(f"'{key}' must be between {lo} and {hi}")
+    return val
+
+
+def _opt_bool(args: dict, key: str) -> bool:
+    val = args.get(key, False)
+    if not isinstance(val, bool):
+        raise McpToolError(f"'{key}' must be a boolean")
     return val
 
 
@@ -391,17 +544,66 @@ def tool_recipes_show(args: dict) -> dict:
     }
 
 
+_RUN_SUMMARY_FIELDS = (
+    "run_id",
+    "experiment_name",
+    "created_at",
+    "status",
+    "task",
+    "run_kind",
+    "device",
+    "device_name",
+    "gpu_memory",
+    "initial_loss",
+    "final_loss",
+    "loss_summary_kind",
+    "total_steps",
+    "duration_secs",
+    "output_dir",
+    "base_model",
+    "base_revision",
+    "base_revision_source",
+    "training_data_sha256",
+    "code_commit",
+    "code_dirty",
+    "cost_usd",
+    "cost_gpu_label",
+    "cost_history_eligible",
+    "exit_code",
+)
+
+
+def _run_summary(row: dict) -> dict:
+    """Select the run fields offered by the MCP tools."""
+    from soup_cli.utils.paths import sanitize_run_output_dir
+
+    summary = {name: row[name] for name in _RUN_SUMMARY_FIELDS if name in row}
+    if "output_dir" in summary:
+        summary["output_dir"] = sanitize_run_output_dir(summary["output_dir"])
+    base_model = summary.get("base_model")
+    if isinstance(base_model, str) and (
+        base_model.startswith(("/", "\\")) or ntpath.splitdrive(base_model)[0]
+    ):
+        summary["base_model"] = sanitize_run_output_dir(base_model)
+    summary["has_error"] = bool(row.get("error_message"))
+    return summary
+
+
 def tool_runs_list(args: dict) -> dict:
     """`soup runs` — recent experiment runs."""
     from soup_cli.experiment.tracker import ExperimentTracker
 
     limit = _opt_int(args, "limit", 50, lo=1, hi=500)
-    runs = ExperimentTracker().list_runs(limit=limit)
-    return {"runs": runs, "count": len(runs)}
+    tracker = ExperimentTracker()
+    try:
+        runs = tracker.list_runs(limit=limit)
+    finally:
+        tracker.close()
+    return {"runs": [_run_summary(run) for run in runs], "count": len(runs)}
 
 
 def tool_runs_show(args: dict) -> dict:
-    """`soup runs show` — one run's full record."""
+    """`soup runs show` — one run's summary."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
 
     run_id = _require_str(args, "run_id")
@@ -413,9 +615,9 @@ def tool_runs_show(args: dict) -> dict:
             if tracker.count_run_id_matches(run_id) > 1:
                 raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
             raise McpToolError("run not found")
+        return _run_summary(run)
     finally:
         tracker.close()
-    return run
 
 
 def tool_registry_list(args: dict) -> dict:
@@ -523,6 +725,7 @@ def tool_diagnose_evidence(args: dict) -> dict:
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
     base = _opt_str(args, "base") or ""
     adapter = _opt_str(args, "adapter") or ""
+    require_all_modes = _opt_bool(args, "require_all_modes")
 
     raw_scores = payload.get("scores", {})
     if not isinstance(raw_scores, dict):
@@ -552,7 +755,12 @@ def tool_diagnose_evidence(args: dict) -> dict:
             raise McpToolError(f"evidence.scores.{mode} is invalid ({type(exc).__name__})") from exc
     try:
         report = build_report(
-            run_id=run_id, base=base, adapter=adapter, scores=scores, soup_version=__version__
+            run_id=run_id,
+            base=base,
+            adapter=adapter,
+            scores=scores,
+            soup_version=__version__,
+            missing_as_not_run=require_all_modes,
         )
     except (ValueError, TypeError) as exc:
         raise McpToolError(f"diagnose failed ({type(exc).__name__})") from exc
@@ -683,6 +891,9 @@ NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
     "eval.ship.general_suite": "read by soup ship, not soup train",
     "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
     "eval.ship.baseline": "read by soup ship, not soup train",
+    "eval.ship.reward_fn": (
+        "a reward name or a .py path read (and executed) by soup ship, not soup train"
+    ),
 }
 
 # ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each
@@ -882,6 +1093,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_advise,
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="data_inspect",
@@ -894,6 +1106,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_inspect,
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="data_validate",
@@ -919,6 +1132,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_validate,
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="data_score",
@@ -934,6 +1148,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_score,
+            # Optional presidio-analyzer ([data-pro]) is started per row; its default engine
+            # downloads a missing spaCy model (writes the environment, reaches the network).
+            **level_fields(LEVEL_READ, writes=True, open_world=True),
         ),
         ToolSpec(
             name="data_doctor",
@@ -961,6 +1178,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_data_doctor,
+            # AutoTokenizer.from_pretrained downloads the tokenizer of a client-chosen model id
+            # into the Hugging Face cache.
+            **level_fields(LEVEL_READ, writes=True, open_world=True),
         ),
         ToolSpec(
             name="recipes_search",
@@ -976,6 +1196,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_recipes_search,
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="recipes_show",
@@ -988,22 +1209,28 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_recipes_show,
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="runs_list",
             title="List runs",
-            description="Recent experiment runs from the local tracker.",
+            description="Summaries of recent experiment runs.",
             input_schema={
                 "type": "object",
                 "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 500}},
                 "additionalProperties": False,
             },
             handler=tool_runs_list,
+            # ExperimentTracker() creates ~/.soup/experiments.db and migrates its schema;
+            # reading a run also rewrites a stale 'running' row whose process is gone
+            # to 'terminated'. No idempotentHint: a repeat call is not promised to change
+            # nothing (the reconcile step may write again).
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="runs_show",
             title="Show run",
-            description="One run's full record (config, metrics summary). Accepts an id prefix.",
+            description="Run status, metrics and error indication. Accepts an id prefix.",
             input_schema={
                 "type": "object",
                 "properties": {"run_id": {"type": "string"}},
@@ -1011,6 +1238,11 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_runs_show,
+            # ExperimentTracker() creates ~/.soup/experiments.db and migrates its schema;
+            # reading a run also rewrites a stale 'running' row whose process is gone
+            # to 'terminated'. No idempotentHint: a repeat call is not promised to change
+            # nothing (the reconcile step may write again).
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="registry_list",
@@ -1028,6 +1260,11 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_registry_list,
+            # RegistryStore() creates ~/.soup/registry.db, migrates its schema, switches
+            # it to WAL and tightens its file permissions; the read itself writes nothing.
+            # No idempotentHint: every construction re-applies os.chmod (POSIX), so a repeat
+            # call still changes file metadata.
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="registry_show",
@@ -1040,6 +1277,11 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_registry_show,
+            # RegistryStore() creates ~/.soup/registry.db, migrates its schema, switches
+            # it to WAL and tightens its file permissions; the read itself writes nothing.
+            # No idempotentHint: every construction re-applies os.chmod (POSIX), so a repeat
+            # call still changes file metadata.
+            **level_fields(LEVEL_READ, writes=True),
         ),
         ToolSpec(
             name="profile",
@@ -1061,6 +1303,9 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_profile,
+            # allow_network=False: reads the model's local directory and the Hugging Face
+            # cache, never downloads, writes nothing.
+            **level_fields(LEVEL_READ, open_world=False),
         ),
         ToolSpec(
             name="diagnose_evidence",
@@ -1081,11 +1326,19 @@ def _readonly_specs() -> list[ToolSpec]:
                     },
                     "base": {"type": "string"},
                     "adapter": {"type": "string"},
+                    "require_all_modes": {
+                        "type": "boolean",
+                        "description": (
+                            "A mode missing from the evidence is NOT_RUN instead of a "
+                            "neutral OK (default false)."
+                        ),
+                    },
                 },
                 "required": ["run_id", "evidence"],
                 "additionalProperties": False,
             },
             handler=tool_diagnose_evidence,
+            **level_fields(LEVEL_READ),
         ),
         ToolSpec(
             name="ship_evidence",
@@ -1111,6 +1364,7 @@ def _readonly_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             handler=tool_ship_evidence,
+            **level_fields(LEVEL_READ),
         ),
     ]
 
@@ -1190,7 +1444,7 @@ def _mutating_specs(
             description=description,
             input_schema=schema,
             handler=real if allow_mutating else _refuse_mutating(name),
-            mutating=True,
+            **level_fields(LEVEL_PLAN),
         )
         for name, title, description, schema, real in entries
     ]
@@ -1214,31 +1468,80 @@ def _mutating_specs(
                     if allow_execute and execution is not None
                     else _refuse_execute(name)
                 ),
-                mutating=True,
-                annotations={"readOnlyHint": False, "destructiveHint": True},
+                **level_fields(LEVEL_EXECUTE),
             )
         )
     return specs
 
 
+def _engine_describe_spec(
+    specs: Iterable[ToolSpec], *, allow_mutating: bool, allow_execute: bool, transport: str | None,
+) -> ToolSpec:
+    enabled: dict[str | None, bool] = {
+        LEVEL_READ: True,
+        LEVEL_PLAN: allow_mutating,
+        LEVEL_EXECUTE: allow_execute,
+    }
+    entries = [(spec.name, spec.level) for spec in specs if enabled.get(spec.level, False)]
+    entries.append((ENGINE_DESCRIBE, LEVEL_READ))
+    tools = tuple(sorted(entries))
+
+    def describe(arguments: dict) -> dict:
+        if not isinstance(arguments, dict) or arguments:
+            raise McpToolError("soup.engine.invalid_arguments: expected an empty object.")
+        result = {
+            "contract_version": TOOL_CONTRACT_VERSION,
+            "soup_version": __version__,
+            "gates": {"mutating": allow_mutating, "execute": allow_execute},
+            "tools": [{"name": name, "level": level} for name, level in tools],
+        }
+        if transport is not None:
+            result["transport"] = transport
+        return result
+
+    return ToolSpec(
+        name=ENGINE_DESCRIBE,
+        title="Describe Soup engine",
+        description="Report Soup's tool contract, effective startup gates and enabled tools.",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        handler=describe,
+        **level_fields(LEVEL_READ),
+    )
+
+
 def build_registry(
-    *, allow_mutating: bool, allow_execute: bool = False, execution: ExecutionManager | None = None
+    *,
+    allow_mutating: bool,
+    allow_execute: bool = False,
+    execution: ExecutionManager | None = None,
+    transport: str | None = None,
 ) -> list[ToolSpec]:
     """Assemble the MCP tool table.
 
-    The read-only tools are always present and executable. The mutating tools
+    The read-level tools are always present and executable (a few of them can write benign
+    state, which their annotations say; the level is the gate class). The mutating tools
     are always listed but refuse unless ``allow_mutating`` is set (and are
     plan-only even then). ``allow_execute`` gates the execution tools
     (``train_execute`` / ``export_execute``) and implies ``allow_mutating``.
+
+    Every tool in the table states its level and its MCP annotations through
+    :func:`level_fields`; a table holding one that does not is refused with ``ValueError``
+    (:func:`_require_level_and_hints`).
     """
+    if transport not in (None, "stdio", "sse", "http"):
+        raise ValueError("Expected a supported MCP transport.")
     allow_mutating = allow_mutating or allow_execute
     if allow_execute and execution is None:
         execution = ExecutionManager()
-    return _readonly_specs() + _mutating_specs(
-        allow_mutating=allow_mutating,
-        allow_execute=allow_execute,
-        execution=execution,
+    specs = _readonly_specs() + _mutating_specs(
+        allow_mutating=allow_mutating, allow_execute=allow_execute, execution=execution,
     )
+    if any(spec.name == ENGINE_DESCRIBE for spec in specs):
+        raise ValueError(f"{ENGINE_DESCRIBE!r} is reserved for engine discovery.")
+    specs.append(_engine_describe_spec(
+        specs, allow_mutating=allow_mutating, allow_execute=allow_execute, transport=transport,
+    ))
+    return _require_level_and_hints(specs)
 
 
 def call_tool(
@@ -1300,7 +1603,10 @@ def call_tool(
         # stdout. Serialization stays inside the try in the server so a
         # non-serializable result also becomes a sanitized error.
         with redirect_stdout(sys.stderr):
-            result = spec.handler(arguments or {})
+            if name == ENGINE_DESCRIBE:
+                result = spec.handler({} if arguments is None else arguments)
+            else:
+                result = spec.handler(arguments or {})
         return sanitize(result)
     except McpToolError as exc:
         # sanitize the message too, so the C0/ESC guarantee is structural rather than a

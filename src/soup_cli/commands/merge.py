@@ -187,14 +187,14 @@ def merge(
 
     if (adapter_path / "added_tokens.safetensors").exists():
         console.print(
-            "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+            "[red]soup merge does not support adapters with expanded vocabularies (#3089).[/]"
         )
         raise typer.Exit(1)
     try:
         cfg_data = json.loads(adapter_config_path.read_text(encoding="utf-8"))
         if isinstance(cfg_data, dict) and cfg_data.get("vocab_expansion"):
             console.print(
-                "[red]soup merge does not support adapters with expanded vocabularies (#1988).[/]"
+                "[red]soup merge does not support adapters with expanded vocabularies (#3089).[/]"
             )
             raise typer.Exit(1)
     except (OSError, ValueError):
@@ -349,13 +349,14 @@ def _merge_low_memory(
     trust_remote_code: bool,
 ) -> None:
     try:
-        from transformers import AutoTokenizer
-
-        from soup_cli.utils.lowmem_merge import (
+        from soup_cli.utils.lowmem_merge import (  # noqa: I001
             LowMemoryMergeError,
-            hub_download_patterns,
+            hub_snapshot_revision,
+            hub_support_patterns,
+            hub_weight_patterns,
             merge_low_memory,
         )
+        from transformers import AutoTokenizer
         from soup_cli.utils.trust_remote import (
             model_requires_trust_remote_code,
             resolve_trust_remote_code,
@@ -382,16 +383,28 @@ def _merge_low_memory(
             from soup_cli.utils.hubs import snapshot_download
 
             console.print(f"[dim]Fetching base weights: {for_terminal(base)}...[/]")
-            allow_patterns, ignore_patterns = hub_download_patterns(trc)
+            # #2856: the index and support files first, then the weights the local
+            # rule reads from them, both from one commit.
+            support = hub_support_patterns(trc)
+            revision = revision_kwargs.get("revision")
             base_dir = Path(
                 snapshot_download(
-                    base,
-                    cache_dir=None,
-                    allow_patterns=allow_patterns,
-                    ignore_patterns=ignore_patterns,
-                    revision=revision_kwargs.get("revision"),
+                    base, cache_dir=None, allow_patterns=support, revision=revision
                 )
             )
+            revision = revision or hub_snapshot_revision(base_dir)
+            weights = hub_weight_patterns(base_dir)
+            if weights is not None:
+                allow_patterns, ignore_patterns = weights
+                base_dir = Path(
+                    snapshot_download(
+                        base,
+                        cache_dir=None,
+                        allow_patterns=[*allow_patterns, *support],
+                        ignore_patterns=ignore_patterns or None,
+                        revision=revision,
+                    )
+                )
 
         def save_tokenizer(staging: Path) -> None:
             console.print("[dim]Saving tokenizer...[/]")

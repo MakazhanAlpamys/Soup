@@ -22,15 +22,20 @@ from soup_cli.config.backend_support import (
 )
 from soup_cli.config.loader import load_config, load_config_from_string
 from tests.conftest import strip_ansi
+from tests.test_doctor_reviewed_combinations import SFT_TEXT_KNOBS
 
 _FORMAT = {"text": "alpaca", "vision": "llava", "audio": "chatml"}
 
-# How to switch each declared row on. A row not listed is tried as
-# ``<field>: true``; one that needs a sibling setting or a non-boolean value is
-# listed. If the loader refuses the setting, the row can never reach doctor and
-# has to go (#2238).
+# Active values for rows whose schema expects something other than a boolean.
+_ROW_VALUES = {
+    "training.neftune_alpha": 5.0,
+    **SFT_TEXT_KNOBS,
+}
+
+# Rows needing sibling settings. Other rows keep the default ``<field>: true``
+# unless listed above. If the loader refuses a valid setting, the doctor row
+# cannot be reached (#2238).
 _ROW_SETTINGS = {
-    "training.neftune_alpha": {"training.neftune_alpha": 5.0},
     "data.mask_history": {
         "data.mask_history": True,
         "data.train_on_responses_only": True,
@@ -174,7 +179,8 @@ def test_rejected_doctor_rows_are_reachable_at_runtime_not_refused_by_schema(key
 )
 def test_every_row_left_in_a_table_can_reach_doctor(key, field):
     config = _config(*key)
-    for dotted, value in _ROW_SETTINGS.get(field, {field: True}).items():
+    settings = _ROW_SETTINGS.get(field, {field: _ROW_VALUES.get(field, True)})
+    for dotted, value in settings.items():
         section, name = dotted.split(".")
         config.setdefault(section, {})[name] = value
     cfg = _load(config)
@@ -211,7 +217,8 @@ def test_every_mlx_support_row_is_reachable(task, field, value):
 
 @pytest.mark.parametrize(
     ("task", "expected_count"),
-    [("sft", 8), ("dpo", 5), ("orpo", 5), ("simpo", 5), ("kto", 5)],
+    # #2044: use_ring_attention is refused at load, so it has no doctor row.
+    [("sft", 7), ("dpo", 4), ("orpo", 4), ("simpo", 4), ("kto", 4)],
 )
 def test_mlx_doctor_all_clear_counts_only_reachable_settings(
     task, expected_count, tmp_path, capsys, monkeypatch

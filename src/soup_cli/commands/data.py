@@ -6,14 +6,21 @@ import json
 import ntpath
 import os
 import random
+import sys
+from contextlib import contextmanager
+from csv import Error as CsvError
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import NoReturn, Optional
+from time import monotonic
+from typing import Annotated, Any, Iterator, NoReturn, Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.commands._common import refuse_output_over_input
+from soup_cli import __version__
+from soup_cli.commands._common import refuse_nan, refuse_output_over_input
 from soup_cli.data.loader import (
     SkippedRows,
     SkipTally,
@@ -22,11 +29,24 @@ from soup_cli.data.loader import (
     non_object_row_issue,
 )
 from soup_cli.data.validator import validate_and_stats
+from soup_cli.utils.command_result import (
+    CommandResult,
+    DataValidateResult,
+    ResultReason,
+    encode_command_result,
+)
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_OK,
+    EXIT_RUNTIME_ERROR,
+    EXIT_USAGE_ERROR,
+    GateCommand,
+)
 from soup_cli.utils.paths import ensure_distinct_paths, is_under_cwd
+from soup_cli.utils.redaction import url_without_userinfo
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import for_terminal, terminal_text
 
 console = Console()
 
@@ -44,10 +64,11 @@ def inspect(
     """Inspect a dataset: show stats and sample rows."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
+        console.print(terminal_text(f"File not found: {file_path}", "red"))
         raise typer.Exit(1)
 
-    console.print(f"[dim]Inspecting {for_terminal(file_path)}...[/]\n")
+    console.print(terminal_text(f"Inspecting {file_path}...", "dim"))
+    console.print()
     data = load_raw_data(file_path)
     result = validate_and_stats(data)
 
@@ -56,7 +77,7 @@ def inspect(
     stats_table.add_column("Metric", style="bold")
     stats_table.add_column("Value")
     stats_table.add_row("Total samples", str(result["total"]))
-    stats_table.add_row("Columns", ", ".join(for_terminal(col) for col in result["columns"]))
+    stats_table.add_row("Columns", terminal_text(", ".join(map(str, result["columns"]))))
     stats_table.add_row("Avg length (chars)", str(result["avg_length"]))
     stats_table.add_row("Min length", str(result["min_length"]))
     stats_table.add_row("Max length", str(result["max_length"]))
@@ -75,10 +96,10 @@ def inspect(
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(for_terminal(col), max_width=60)
+            sample_table.add_column(terminal_text(col), max_width=60)
         for row in data[: min(rows, len(data))]:
             values = [
-                for_terminal(str(row.get(col, ""))[:60])
+                terminal_text(str(row.get(col, ""))[:60])
                 for col in result["columns"][:5]
             ]
             sample_table.add_row(*values)
@@ -97,32 +118,153 @@ def validate(
         "--min-valid-fraction",
         min=0.0,
         max=1.0,
+        callback=refuse_nan,
         help="Exit 2 when the fraction of valid rows is below this value",
     ),
+    result_json: Annotated[
+        bool, typer.Option("--result-json", help="Emit a machine-readable result (preview)")
+    ] = False,
 ):
     """Validate a dataset, returning exit 3 for input errors and 2 for unusable data."""
+    if not result_json:
+        outcome = _validate_data(path, fmt, min_valid_fraction, output=console, preview=False)
+        if outcome.exit_code != EXIT_OK:
+            raise typer.Exit(outcome.exit_code)
+        return
+
+    output = Console(stderr=True)
+    started_at = datetime.now(UTC)
+    started = monotonic()
+
+    def encode(outcome: _DataValidationOutcome) -> bytes:
+        status = {
+            EXIT_OK: "ok",
+            EXIT_RUNTIME_ERROR: "failed",
+            EXIT_GATE_FAILED: "blocked",
+            EXIT_USAGE_ERROR: "refused",
+            130: "cancelled",
+        }[outcome.exit_code]
+        decision = None
+        if outcome.data is not None:
+            decision = "valid" if outcome.exit_code == EXIT_OK else "invalid"
+        return encode_command_result(CommandResult(
+            schema="soup.command_result",
+            schema_version=1,
+            soup_version=__version__,
+            command="data.validate",
+            phase="validate",
+            status=status,
+            exit_code=outcome.exit_code,
+            started_at=started_at,
+            duration_s=monotonic() - started,
+            decision=decision,
+            reasons=[outcome.reason] if outcome.reason is not None else [],
+            warnings=outcome.warnings,
+            data=outcome.data,
+        ))
+
+    try:
+        outcome = _validate_data(path, fmt, min_valid_fraction, output=output, preview=True)
+        encoded = encode(outcome)
+    except KeyboardInterrupt:
+        output.print("[yellow]Interrupted.[/]")
+        outcome = _DataValidationOutcome(130, ResultReason(
+            code="soup.cli.interrupted",
+            message="Dataset validation was interrupted.",
+            fix="Run validation again when intended.",
+        ))
+        encoded = encode(outcome)
+    except Exception as exc:
+        error_type = for_terminal(type(exc).__name__, single_line=True)
+        output.print(f"[red]Dataset validation failed unexpectedly ({error_type}).[/]")
+        outcome = _DataValidationOutcome(EXIT_RUNTIME_ERROR, ResultReason(
+            code="soup.cli.execution_failed",
+            message="The command could not complete.",
+            fix="Check the local diagnostic and correct the environment or input.",
+        ))
+        encoded = encode(outcome)
+
+    # A write failure is a transport failure. Never attempt a second document.
+    sys.stdout.buffer.write(encoded)
+    if outcome.exit_code != EXIT_OK:
+        raise typer.Exit(outcome.exit_code)
+
+
+@dataclass
+class _DataValidationOutcome:
+    exit_code: int
+    reason: ResultReason | None = None
+    warnings: list[ResultReason] = field(default_factory=list)
+    data: DataValidateResult | None = None
+
+
+def _validate_data(
+    path: str, fmt: str, min_valid_fraction: float, *, output: Console, preview: bool,
+) -> _DataValidationOutcome:
     file_path = Path(path)
-    if not file_path.exists():
-        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
-        raise typer.Exit(EXIT_USAGE_ERROR)
+
+    def load_failure(exc: Exception) -> _DataValidationOutcome:
+        output.print("[red]Could not load dataset. Check the file type and installed readers.[/]")
+        if isinstance(exc, ImportError) and file_path.suffix.lower() == ".parquet":
+            output.print("Install pyarrow to read parquet files: pip install pyarrow")
+        return _DataValidationOutcome(EXIT_RUNTIME_ERROR, ResultReason(
+            code="soup.data.load_failed",
+            message="Dataset rows could not be loaded.",
+            fix="Check the local file, its type, and the installed readers.",
+        ))
+
+    try:
+        source_exists = file_path.exists()
+    except OSError as exc:
+        if not preview:
+            raise
+        return load_failure(exc)
+    if not source_exists:
+        location = "" if preview else f": {for_terminal(file_path)}"
+        output.print(f"[red]File not found{location}[/]")
+        return _DataValidationOutcome(EXIT_USAGE_ERROR, ResultReason(
+            code="soup.data.source_missing",
+            message="Dataset file was not found.",
+            fix="Supply an existing local dataset file.",
+        ))
 
     if fmt != "auto":
         from soup_cli.data.formats import VALID_FORMATS
 
         if fmt not in VALID_FORMATS:
-            console.print(
-                f"[red]Unknown --format: {for_terminal(repr(fmt))}[/]\n"
+            label = "" if preview else f": {for_terminal(repr(fmt))}"
+            output.print(
+                f"[red]Unknown --format{label}[/]\n"
                 f"Accepted: auto, {', '.join(VALID_FORMATS)}"
             )
-            raise typer.Exit(EXIT_USAGE_ERROR)
+            return _DataValidationOutcome(EXIT_USAGE_ERROR, ResultReason(
+                code="soup.data.format_unsupported",
+                message="The requested dataset format is unsupported.",
+                fix="Select a supported format or auto.",
+            ))
 
     load_issues = SkippedRows()
-    data = load_raw_data(file_path, issues=load_issues)
+    try:
+        data = load_raw_data(
+            file_path, issues=load_issues, diagnostics=output if preview else None,
+        )
+    except (OSError, ValueError, ImportError, CsvError) as exc:
+        if not preview:
+            raise
+        return load_failure(exc)
     # #1887: every row the loader skipped (not an object, or not JSON) is an
     # invalid row for the N/M line, for --min-valid-fraction and for the exit
     # code. The statistics below still describe the retained objects.
     skipped = load_issues.total
     none_remain = f"no object rows remain: {skipped} row(s) skipped (listed above)"
+    warnings: list[ResultReason] = []
+    if preview and skipped:
+        warnings.append(ResultReason(
+            code="soup.data.rows_skipped",
+            message="The loader skipped invalid rows.",
+            fix="Check the local diagnostics and repair the rejected rows.",
+            details={"skipped": skipped, "total": len(data) + skipped},
+        ))
 
     # Auto-detect format if not specified
     if fmt == "auto":
@@ -130,15 +272,25 @@ def validate(
 
         try:
             fmt = detect_format(data)
-            console.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
+            output.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
         except ValueError as exc:
             message = str(exc)
             if not data and skipped:
                 message = f"{none_remain}; cannot detect a format. Pass --format to validate."
-            console.print(f"[red]{for_terminal(message)}[/]")
-            raise typer.Exit(EXIT_USAGE_ERROR)
+            output.print(f"[red]{for_terminal(message)}[/]")
+            return _DataValidationOutcome(EXIT_USAGE_ERROR, ResultReason(
+                code="soup.data.format_undetected",
+                message="Dataset format could not be detected.",
+                fix="Supply the correct explicit format and check the file.",
+            ), warnings=warnings)
 
     result = validate_and_stats(data, expected_format=fmt)
+    if preview and result["issues"] and (data or not skipped):
+        warnings.append(ResultReason(
+            code="soup.data.validation_warnings",
+            message="The validator reported dataset issues.",
+            fix="Check the local diagnostics and correct the dataset as needed.",
+        ))
     if not data and skipped:
         result["issues"] = [none_remain if i == "Dataset is empty" else i
                             for i in result["issues"]]
@@ -150,26 +302,43 @@ def validate(
     result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
-        console.print("[yellow]Issues found:[/]")
+        output.print("[yellow]Issues found:[/]")
         for issue in result["issues"]:
-            console.print(f"  [yellow]![/] {for_terminal(issue)}")
+            output.print(f"  [yellow]![/] {for_terminal(issue)}")
     else:
-        console.print("[bold green]Dataset is valid![/]")
+        output.print("[bold green]Dataset is valid![/]")
 
     valid = result["valid_rows"]
     total = result["total"] + skipped
-    console.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
+    valid_fraction = valid / total if total else None
+    output.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
+    payload = None
+    if preview:
+        payload = DataValidateResult(
+            format=fmt, total=total, valid=valid, invalid=total - valid,
+            valid_fraction=valid_fraction,
+        )
 
     if total > 0 and valid == 0:
-        console.print("[red]Validation failed: no usable rows remain.[/]")
-        raise typer.Exit(EXIT_GATE_FAILED)
+        output.print("[red]Validation failed: no usable rows remain.[/]")
+        return _DataValidationOutcome(EXIT_GATE_FAILED, ResultReason(
+            code="soup.data.no_usable_rows",
+            message="No usable dataset rows remain.",
+            fix="Supply usable rows in the selected format.",
+        ), warnings=warnings, data=payload)
 
-    if total > 0 and valid / total < min_valid_fraction:
-        console.print(
-            f"[red]Validation failed: valid fraction {valid / total:.3f} is below "
+    if valid_fraction is not None and valid_fraction < min_valid_fraction:
+        output.print(
+            f"[red]Validation failed: valid fraction {valid_fraction:.3f} is below "
             f"--min-valid-fraction {min_valid_fraction:.3f}.[/]"
         )
-        raise typer.Exit(EXIT_GATE_FAILED)
+        return _DataValidationOutcome(EXIT_GATE_FAILED, ResultReason(
+            code="soup.data.valid_fraction_below_minimum",
+            message="The valid row fraction is below the requested minimum.",
+            fix="Repair malformed rows and rerun validation.",
+            details={"actual": valid_fraction, "minimum": min_valid_fraction},
+        ), warnings=warnings, data=payload)
+    return _DataValidationOutcome(EXIT_OK, warnings=warnings, data=payload)
 
 
 @app.command()
@@ -197,6 +366,11 @@ def convert(
         console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
     refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
 
     if to not in CONVERTIBLE_FORMATS:
         console.print(
@@ -246,6 +420,11 @@ def convert(
     if output is None:
         output = str(file_path.stem) + f"_{to}.jsonl"
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
 
     _write_jsonl(out_path, converted)
 
@@ -273,6 +452,11 @@ def merge(
         [("--output", output)],
         console=console,
     )
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
     all_data: list[dict] = []
 
     for file_str in files:
@@ -292,6 +476,12 @@ def merge(
         random.shuffle(all_data)
 
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
+
     _write_jsonl(out_path, all_data)
 
     console.print(
@@ -526,6 +716,11 @@ def filter_data(
         console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
     refuse_output_over_input([("the input", path)], [("--output", output)], console=console)
+    if output is not None and not is_under_cwd(output):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(Path(output))}[/]"
+        )
+        raise typer.Exit(1)
 
     if perplexity is None and coherence is None and not score_only:
         console.print(
@@ -583,6 +778,11 @@ def filter_data(
         if output is None:
             output = str(file_path.stem) + "_scored.jsonl"
         out_path = Path(output)
+        if not is_under_cwd(out_path):
+            console.print(
+                f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+            )
+            raise typer.Exit(1)
         _write_jsonl(out_path, scored_data)
         console.print(
             f"[green]Scored {len(scored_data)} rows.[/]\n"
@@ -609,6 +809,11 @@ def filter_data(
     if output is None:
         output = str(file_path.stem) + "_filtered.jsonl"
     out_path = Path(output)
+    if not is_under_cwd(out_path):
+        console.print(
+            f"[red]Output path is outside the working directory: {for_terminal(out_path)}[/]"
+        )
+        raise typer.Exit(1)
     _write_jsonl(out_path, kept)
 
     console.print(
@@ -723,16 +928,11 @@ def stats(
 
 def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
     """Show image statistics if dataset contains image fields."""
-    if not data:
+    if not any("image" in row for row in data):
         return
 
     if image_dir is None:
         image_dir = Path.cwd()
-
-    # Check if this is a vision dataset
-    sample = data[0]
-    if "image" not in sample:
-        return
 
     total = len(data)
     has_image = sum(1 for row in data if row.get("image"))
@@ -788,6 +988,8 @@ def _write_jsonl(path: Path, data: list[dict]) -> None:
 
 def _sample_random(data: list[dict], num: int, seed: int | None = None) -> list[dict]:
     """Random sampling without replacement."""
+    if num <= 0:
+        return []
     rng = random.Random(seed)
     num = min(num, len(data))
     return rng.sample(data, num)
@@ -800,6 +1002,8 @@ def _sample_diverse(
 
     Falls back to random sampling if sklearn is not available.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -870,6 +1074,8 @@ def _sample_hard(data: list[dict], num: int) -> list[dict]:
 
     Longer texts tend to be more complex / challenging.
     """
+    if num <= 0:
+        return []
     num = min(num, len(data))
     if num >= len(data):
         return list(data)
@@ -894,11 +1100,11 @@ def sample_data(
     ),
     num: int = typer.Option(
         None, "--n", "-n",
-        help="Number of samples to select",
+        help="Number of samples to select (positive integer)",
     ),
     pct: float = typer.Option(
         None, "--pct",
-        help="Percentage of dataset to sample (0-100)",
+        help="Percentage of dataset to sample in (0, 100]",
     ),
     strategy: str = typer.Option(
         "random", "--strategy", "-s",
@@ -919,6 +1125,17 @@ def sample_data(
     if num is None and pct is None:
         console.print("[red]Specify either --n (count) or --pct (percentage).[/]")
         raise typer.Exit(1)
+
+    if num is not None and num <= 0:
+        console.print("[red]--n must be a positive integer.[/]")
+        raise typer.Exit(1)
+
+    if pct is not None:
+        import math as _math
+
+        if not _math.isfinite(pct) or not (0.0 < pct <= 100.0):
+            console.print("[red]--pct must be a finite number in (0, 100].[/]")
+            raise typer.Exit(1)
 
     if strategy not in ("random", "diverse", "hard"):
         console.print(
@@ -1032,6 +1249,14 @@ def split_data(
         console.print("[red]--val and --test must be non-negative.[/]")
         raise typer.Exit(1)
 
+    if (val or 0) == 0 and (test or 0) == 0:
+        console.print("[red]Specify at least one positive split (--val or --test).[/]")
+        raise typer.Exit(1)
+
+    if not absolute and ((val or 0) + (test or 0) >= 100):
+        console.print("[red]Split percentages must sum to less than 100.[/]")
+        raise typer.Exit(1)
+
     if stratify and stratify_semantic:
         console.print("[red]Cannot use --stratify and --stratify-semantic together. Pick one.[/]")
         raise typer.Exit(1)
@@ -1070,6 +1295,16 @@ def split_data(
                 f"[red]Split sizes ({val_count} + {test_count}) >= dataset size ({total}).[/]"
             )
             raise typer.Exit(1)
+        for option, percentage, count, split_name in (
+            ("--val", val, val_count, "validation"),
+            ("--test", test, test_count, "test"),
+        ):
+            if percentage and count == 0:
+                console.print(
+                    f"[yellow]Warning: {option} {percentage}% rounds to 0 rows; "
+                    f"no {split_name} split file will be written. Use a larger percentage "
+                    "or --absolute with a valid count.[/]"
+                )
 
     # Perform split
     if stratify:
@@ -1190,7 +1425,13 @@ def _stratified_split(
     data: list, val_count: int, test_count: int,
     stratify_keys: str | list[str], seed: int | None = None,
 ) -> tuple:
-    """Stratified split preserving category distribution."""
+    """Stratified split preserving category distribution.
+
+    A separate ``random.Random(seed)`` supplies the tie ranks for both passes.
+    With an explicit seed it shares the start of the stream used to shuffle
+    the first group, but does not advance the row RNG, so the shuffle within
+    each group matches v0.78.0. With ``seed=None``, both RNGs stay unseeded.
+    """
     # Group by stratify keys
     groups: dict[str, list[int]] = {}
     for idx, row in enumerate(data):
@@ -1201,23 +1442,24 @@ def _stratified_split(
         groups.setdefault(key, []).append(idx)
 
     rng = random.Random(seed)
-    total = len(data)
+    group_keys = list(groups)
+    group_capacities = [len(groups[key]) for key in group_keys]
+    tie_rank = list(range(len(group_keys)))
+    random.Random(seed).shuffle(tie_rank)
+    holdout_counts = _largest_remainder_allocation(
+        val_count + test_count, group_capacities, tie_rank
+    )
+    group_test_counts = _largest_remainder_allocation(test_count, holdout_counts, tie_rank)
 
     train_indices = []
     val_indices = []
     test_indices = []
 
-    for key, indices in groups.items():
+    for group_index, key in enumerate(group_keys):
+        indices = groups[key]
         rng.shuffle(indices)
-        group_size = len(indices)
-        group_frac = group_size / total
-
-        group_val = round(val_count * group_frac) if val_count else 0
-        group_test = round(test_count * group_frac) if test_count else 0
-
-        # Ensure we don't take more than available
-        group_val = min(group_val, group_size)
-        group_test = min(group_test, group_size - group_val)
+        group_test = group_test_counts[group_index]
+        group_val = holdout_counts[group_index] - group_test
 
         test_indices.extend(indices[:group_test])
         val_indices.extend(indices[group_test:group_test + group_val])
@@ -1228,6 +1470,42 @@ def _stratified_split(
     test_data = [data[idx] for idx in test_indices]
 
     return train_data, val_data, test_data
+
+
+def _largest_remainder_allocation(
+    count: int, capacities: list[int], tie_rank: list[int]
+) -> list[int]:
+    """Allocate ``count`` proportionally, using ``tie_rank`` only for equal remainders."""
+    allocation = [0] * len(capacities)
+    total_capacity = sum(capacities)
+    target = min(max(count, 0), total_capacity)
+    if target == 0 or total_capacity == 0:
+        return allocation
+
+    numerators = [target * capacity for capacity in capacities]
+    allocation = [
+        min(numerator // total_capacity, capacity)
+        for numerator, capacity in zip(numerators, capacities, strict=True)
+    ]
+    remaining = target - sum(allocation)
+    remainders = [numerator % total_capacity for numerator in numerators]
+    remainder_order = sorted(
+        range(len(capacities)),
+        key=lambda index: (-remainders[index], tie_rank[index]),
+    )
+    while remaining:
+        progressed = False
+        for index in remainder_order:
+            if allocation[index] < capacities[index]:
+                allocation[index] += 1
+                remaining -= 1
+                progressed = True
+                if remaining == 0:
+                    break
+        if not progressed:
+            break
+
+    return allocation
 
 
 # ---------------------------------------------------------------------------
@@ -1665,10 +1943,14 @@ def download_dataset(
 
         try:
             src_fmt = detect_format(data)
-        except ValueError:
-            src_fmt = None
+        except ValueError as exc:
+            console.print(
+                f"[red]{for_terminal(exc)}[/]\n"
+                "Omit --format to write the downloaded rows unchanged."
+            )
+            raise typer.Exit(1) from exc
 
-        if src_fmt and src_fmt != fmt:
+        if src_fmt != fmt:
             converted = []
             for row in data:
                 messages = format_to_messages(row, src_fmt)
@@ -1676,10 +1958,18 @@ def download_dataset(
                     result = messages_to_format(messages, fmt)
                     if result is not None:
                         converted.append(result)
-            if converted:
-                data = converted
+            if not converted:
+                console.print("[red]All rows failed to convert.[/]")
+                raise typer.Exit(1)
+            left_out = len(data) - len(converted)
+            data = converted
+            console.print(
+                f"[dim]Converted {len(data)} rows to {for_terminal(fmt)} format.[/]"
+            )
+            if left_out:
                 console.print(
-                    f"[dim]Converted {len(data)} rows to {for_terminal(fmt)} format.[/]"
+                    f"[yellow]{left_out} rows were left out because they do "
+                    f"not convert to {for_terminal(fmt)}.[/]"
                 )
 
     # Apply samples limit if data came from non-streaming path
@@ -1929,7 +2219,7 @@ class _AugmentProvider:
 
 _AUGMENT_DEFAULT_MODELS = {
     "ollama": "llama3.1",
-    "anthropic": "claude-3-5-haiku-20241022",
+    "anthropic": "claude-haiku-5-5",
     "vllm": "local",
 }
 
@@ -2327,7 +2617,7 @@ def review_cmd(
 
     shown = 0
     non_objects = SkipTally("lines skipped (JSON values that are not objects)")
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for line_number, line in enumerate(fh, start=1):
             if shown >= sample:
                 break
@@ -2425,6 +2715,7 @@ def push_dataset_cmd(
     """Upload a local JSONL dataset to a model hub as a dataset repo."""
     from soup_cli.utils.hf import (
         get_hf_api,
+        hf_login_command,
         resolve_endpoint,
         resolve_token,
         validate_repo_id,
@@ -2473,7 +2764,7 @@ def push_dataset_cmd(
     if token is None:
         console.print(
             "[red]No HuggingFace token found.[/]\n"
-            "Set HF_TOKEN env var or run: [bold]huggingface-cli login[/]"
+            f"Set HF_TOKEN env var or run: [bold]{hf_login_command()}[/]"
         )
         raise typer.Exit(1)
 
@@ -2651,6 +2942,118 @@ def _mask_labels_for_cache_row(
     )
 
 
+@contextmanager
+def _preprocess_publish_lock(target: Path) -> Iterator[None]:
+    """Serialize commit/rollback across processes; keep the lock inode stable."""
+    import errno
+    import stat
+    from time import sleep
+
+    from soup_cli.utils.paths import open_no_follow
+
+    lock_path = target.with_name(".lock_" + target.name)
+    descriptor = open_no_follow(
+        lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0),
+        check_parent=True, refuse_hardlink=True,
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("preprocess publication lock must be a regular file")
+        deadline = monotonic() + 30.0
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise
+                if monotonic() >= deadline:
+                    raise TimeoutError("preprocess cache publication is busy; retry") from exc
+                sleep(0.02)
+        yield
+    finally:
+        # Closing releases either OS lock. Unlinking would let waiters lock different inodes.
+        os.close(descriptor)
+
+
+def _publish_preprocess_cache(
+    dataset: Any, target: Path, metadata: dict, *, overwrite: bool,
+) -> bool:
+    """Publish complete Arrow/metadata, restoring the previous directory on install failure."""
+    import shutil
+    import tempfile
+
+    from datasets import load_from_disk
+
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".tmp_" + target.name + ".", dir=target.parent))
+    try:
+        dataset.save_to_disk(str(staging))
+        metadata_path = staging / "metadata.json"
+        with open(metadata_path, "w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2)
+        with open(metadata_path, encoding="utf-8") as handle:
+            if json.load(handle) != metadata:
+                raise ValueError("preprocess staged metadata does not match")
+        # No validation mmap may outlive this check: Windows must be able to move the shards.
+        validated = load_from_disk(str(staging), keep_in_memory=True)
+        if len(validated) != metadata["row_count"] or validated.features != dataset.features:
+            raise ValueError("preprocess staged Arrow does not match")
+        del validated
+
+        with _preprocess_publish_lock(target):
+            enforce_under_cwd_and_no_symlink(str(target), "preprocess target")
+            if target.exists() and not target.is_dir():
+                raise ValueError("preprocess target must be a directory")
+            if target.exists() and not overwrite:
+                console.print(
+                    f"[yellow]Target already exists:[/] {for_terminal(target)}\n"
+                    "[dim]Re-run with --yes to overwrite.[/]"
+                )
+                return False
+            backup = None
+            if target.exists():
+                backup = Path(tempfile.mkdtemp(
+                    prefix=".backup_" + target.name + ".", dir=target.parent,
+                ))
+                backup.rmdir()
+                os.replace(str(target), str(backup))
+            try:
+                os.replace(str(staging), str(target))
+            except BaseException:
+                if backup is not None:
+                    try:
+                        os.replace(str(backup), str(target))
+                    except OSError:
+                        console.print(
+                            "[red]Could not restore the previous cache; it is retained at[/] "
+                            f"{for_terminal(backup)}", soft_wrap=True,
+                        )
+                        raise
+                raise
+            if backup is not None:
+                try:
+                    shutil.rmtree(backup)
+                except OSError:
+                    console.print(
+                        "[yellow]New cache is complete; could not remove previous cache at[/] "
+                        f"{for_terminal(backup)}", soft_wrap=True,
+                    )
+        return True
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2673,8 +3076,6 @@ def preprocess_dataset(
 
     Rows capped at 10M to defend against pathological dataset sizes.
     """
-    import json as _json
-
     from soup_cli.config.loader import load_config
     from soup_cli.data.chat_templates import resolve_chat_template
     from soup_cli.utils.data_pipeline import (
@@ -2915,25 +3316,6 @@ def preprocess_dataset(
         raise typer.Exit(1)
 
     ds = Dataset.from_list(rendered_rows)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # v0.53.7 M-H: atomic write via temp dir + os.replace so a partial
-    # write (e.g. SIGKILL mid-save) does not leave a corrupt dataset at
-    # ``target``. save_to_disk overwrites silently; we route through a
-    # sibling temp dir to defend against that too.
-    import shutil as _shutil
-
-    tmp_dir = target.parent / (".tmp_" + target.name)
-    if tmp_dir.exists():
-        _shutil.rmtree(tmp_dir, ignore_errors=True)
-    try:
-        ds.save_to_disk(str(tmp_dir))
-        if target.exists():
-            _shutil.rmtree(target, ignore_errors=True)
-        os.replace(str(tmp_dir), str(target))
-    except Exception:
-        _shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise
-
     from soup_cli import __version__ as _soup_version
     from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
 
@@ -2952,9 +3334,8 @@ def preprocess_dataset(
         "dataset_key": json.loads(dataset_path),
         "soup_version": _soup_version,
     }
-    metadata_path = target / "metadata.json"
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        _json.dump(metadata, f, indent=2)
+    if not _publish_preprocess_cache(ds, target, metadata, overwrite=yes):
+        raise typer.Exit(0)
 
     console.print(
         f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {for_terminal(target)}"
@@ -3984,12 +4365,13 @@ def best_of_n(
             },
         )
 
+    judge_label = url_without_userinfo(judge) if judge else "offline artifact"
     console.print(
         Panel(
             f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
             f"Prompts:      [bold]{len(prompt_records)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
-            f"Judge:        [bold]{_escape(judge) if judge else 'offline artifact'}[/]\n"
+            f"Judge:        [bold]{for_terminal(judge_label)}[/]\n"
             f"Checkpoint:   [bold]"
             f"{_escape(os.path.relpath(checkpoint_path)) if checkpoint_path else '-'}[/]",
             title="soup data best-of-n — plan",
