@@ -3500,7 +3500,19 @@ class TrainingConfig(BaseModel):
     # Performance — Liger Kernel (fused operations)
     use_liger: bool = Field(
         default=False,
-        description="Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup)",
+        description=(
+            "Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup). "
+            "With stream_layers: experimental Llama text SFT RMSNorm by default, optional "
+            "SwiGLU via liger_components; no performance guarantee."
+        ),
+    )
+    liger_components: Optional[list[Literal["rms_norm", "swiglu"]]] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Streaming Liger components; requires use_liger=true and stream_layers=true. "
+            "Unset selects rms_norm only. RoPE and fused losses are not supported here."
+        ),
     )
     # #792 — the Fast-LoRA kernels (utils/fast_lora*.py) behind one switch
     fast_lora: bool = Field(
@@ -8304,6 +8316,9 @@ class SoupConfig(BaseModel):
             conflicts.append("fp8_attention")
         if tcfg.nvfp4:
             conflicts.append("nvfp4")
+        # `use_liger` is no longer refused here: streamed Liger installs instance-local
+        # forwards on the streamed layers (utils/liger_streaming.py), gated by
+        # `_validate_streaming_liger`. The rest of this note still holds for flash-attn.
         # #1692 — `use_liger` / `use_flash_attn` are read only by the RESIDENT
         # setup (`sft.py::_setup_transformers`): Liger patches the MLP forward
         # there, and flash-attn is handed to `from_pretrained` as
@@ -8318,8 +8333,6 @@ class SoupConfig(BaseModel):
         # a streamed run will not fit, so silently dropping them is the worst outcome:
         # refuse until each is wired and shown to engage on a streamed model.
         # CCE is refused separately above (#1206).
-        if tcfg.use_liger:
-            conflicts.append("use_liger")
         if tcfg.use_flash_attn:
             conflicts.append("use_flash_attn")
         if conflicts:
@@ -8348,6 +8361,43 @@ class SoupConfig(BaseModel):
                     f"{'it' if len(dropped) == 1 else 'them'}."
                 )
             raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_streaming_liger(self) -> "SoupConfig":
+        """``training.liger_components`` and streamed ``use_liger``: each refusal names
+        the field. Resident ``use_liger`` is untouched."""
+        tcfg = self.training
+        if tcfg.liger_components is not None:
+            if not (tcfg.use_liger and tcfg.stream_layers):
+                raise ValueError(
+                    "training.liger_components requires training.use_liger=true and "
+                    "training.stream_layers=true"
+                )
+            if len(set(tcfg.liger_components)) != len(tcfg.liger_components):
+                raise ValueError("training.liger_components must not contain duplicate entries")
+        if not (tcfg.use_liger and tcfg.stream_layers):
+            return self
+        if self.task != "sft" or self.backend != "transformers" or self.modality != "text":
+            raise ValueError(
+                "training.use_liger with training.stream_layers requires task='sft', "
+                "backend='transformers' and modality='text'"
+            )
+        if tcfg.use_cut_ce:
+            raise ValueError(
+                "training.use_liger with training.stream_layers cannot be combined with "
+                "training.use_cut_ce"
+            )
+        if tcfg.l2l:
+            raise ValueError(
+                "training.l2l cannot be combined with training.use_liger: streamed Liger "
+                "is not wired into the L2L window step. Set use_liger=false or l2l=false."
+            )
+        if not isinstance(tcfg.gradient_checkpointing, bool):
+            raise ValueError(
+                "training.use_liger with training.stream_layers supports boolean "
+                "training.gradient_checkpointing only"
+            )
         return self
 
     @model_validator(mode="after")

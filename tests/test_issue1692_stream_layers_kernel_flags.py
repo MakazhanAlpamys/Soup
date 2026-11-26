@@ -44,6 +44,8 @@ LAYER_STREAM_MODULES = sorted((ROOT / "src" / "soup_cli" / "utils").glob("layer_
 
 TRAIN = "tests/fixtures/sample_train.jsonl"
 RESIDENT = ("use_liger", "use_flash_attn")
+# use_liger is wired under streaming (utils/liger_streaming.py); only this one is refused.
+REFUSED_UNDER_STREAMING = ("use_flash_attn",)
 
 
 def _cfg(**training) -> SoupConfig:
@@ -76,21 +78,26 @@ def _raw_message(training: dict) -> str:
 class TestTheSwitchesAreRefusedUnderStreaming:
     """The acceptance criterion: refused at load, naming the field."""
 
-    @pytest.mark.parametrize("field", RESIDENT)
+    @pytest.mark.parametrize("field", REFUSED_UNDER_STREAMING)
     def test_streaming_refuses_each_switch(self, field: str) -> None:
         message = _message({"stream_layers": True, field: True})
         assert "stream_layers is mutually exclusive with" in message
         assert field in message
 
-    def test_both_switches_are_named_together(self) -> None:
-        """One conflict list, so a config setting both names both rather than the first."""
+    def test_use_liger_is_no_longer_refused_under_streaming(self) -> None:
+        """Streamed Liger is wired: the switch loads, and is not named as a conflict."""
+        cfg = _cfg(stream_layers=True, use_liger=True)
+        assert cfg.training.use_liger is True and cfg.training.stream_layers is True
+
+    def test_use_liger_is_not_named_beside_a_refused_switch(self) -> None:
         message = _message({"stream_layers": True, "use_liger": True, "use_flash_attn": True})
-        assert "use_liger, use_flash_attn" in message
+        assert "use_flash_attn" in message
+        assert "use_liger" not in message
 
     def test_the_message_says_they_are_never_reached(self) -> None:
         """"Mutually exclusive" alone would read as a conflict. It is a dead switch:
         the streamed model is built without them, so say which and why."""
-        message = _message({"stream_layers": True, "use_liger": True})
+        message = _message({"stream_layers": True, "use_flash_attn": True})
         assert "never reached at all" in message
         assert "from_config" in message
         assert "resident setup" in message
@@ -103,25 +110,18 @@ class TestTheSwitchesAreRefusedUnderStreaming:
         "use_liger and use_flash_attn are ... reads them", naming a switch that is not
         set. Asserted on the raw message so the tail is the real tail.
         """
-        one = _raw_message({"stream_layers": True, "use_liger": True})
-        assert " use_liger is never reached at all" in one
+        one = _raw_message({"stream_layers": True, "use_flash_attn": True})
+        assert " use_flash_attn is never reached at all" in one
         assert one.endswith("the only thing that reads it.")
 
-        both = _raw_message(
-            {"stream_layers": True, "use_liger": True, "use_flash_attn": True}
-        )
-        assert " use_liger and use_flash_attn are never reached at all" in both
-        assert both.endswith("the only thing that reads them.")
-
-    @pytest.mark.parametrize("field", RESIDENT)
+    @pytest.mark.parametrize("field", REFUSED_UNDER_STREAMING)
     def test_only_the_switches_that_are_set_are_named(self, field: str) -> None:
         """A message naming a switch the config did not set reads as if it were refused
         for a reason that does not apply, so only name what is actually there."""
         message = _raw_message({"stream_layers": True, field: True})
         tail = message.split("the same layers. ", 1)[-1]
         assert tail.startswith(field)
-        other = "use_flash_attn" if field == "use_liger" else "use_liger"
-        assert other not in tail
+        assert "use_liger" not in tail
 
     @pytest.mark.parametrize("field", ["packing", "multipack", "nvfp4", "fp8_attention"])
     def test_a_pre_existing_conflict_message_ends_exactly_as_before(self, field: str) -> None:
@@ -142,9 +142,9 @@ class TestTheSwitchesAreRefusedUnderStreaming:
 
     def test_a_kernel_switch_joins_the_other_conflicts_rather_than_replacing_them(self) -> None:
         message = _message(
-            {"stream_layers": True, "use_liger": True, "packing": True, "nvfp4": True}
+            {"stream_layers": True, "use_flash_attn": True, "packing": True, "nvfp4": True}
         )
-        assert all(name in message for name in ("packing", "nvfp4", "use_liger"))
+        assert all(name in message for name in ("packing", "nvfp4", "use_flash_attn"))
 
 
 class TestWhatMustKeepLoading:
@@ -217,9 +217,10 @@ class TestTheStreamedSetupReallyCannotReadThem:
     the switch engaging on a streamed model.
     """
 
-    def test_the_stream_setup_module_reads_neither_switch(self) -> None:
+    def test_the_stream_setup_module_reads_use_liger_but_not_flash_attn(self) -> None:
         code = _code_without_comments(STREAM_SETUP.read_text(encoding="utf-8"))
-        for field in RESIDENT:
+        assert "use_liger" in code
+        for field in REFUSED_UNDER_STREAMING:
             assert field not in code, (
                 f"{STREAM_SETUP.name} now names {field}: the streamed path may read it, "
                 "so #1692's refusal needs the conflict removed and a test that shows the "
@@ -230,7 +231,7 @@ class TestTheStreamedSetupReallyCannotReadThem:
         assert LAYER_STREAM_MODULES, "the glob found no layer_stream module to check"
         for path in LAYER_STREAM_MODULES:
             code = _code_without_comments(path.read_text(encoding="utf-8"))
-            for field in RESIDENT:
+            for field in REFUSED_UNDER_STREAMING:
                 assert field not in code, f"{path.name} names {field}; see #1692"
 
     def test_the_resident_setup_still_reads_them(self) -> None:

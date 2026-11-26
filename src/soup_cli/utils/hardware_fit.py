@@ -667,8 +667,13 @@ def hardware_fit_input_or_reason(
         return distill
     # Only the SFT-family trainer applies the fused losses (``trainer/sft.py``,
     # inherited by tts); on any other task the flags change nothing.
+    # A streamed run keeps the HF/TRL loss and the streamed head: its Liger only
+    # swaps RMSNorm/SwiGLU forwards, so ``use_liger`` is no fused-loss flag there.
+    fused_flags = ("use_cut_ce",) if getattr(tcfg, "stream_layers", False) else (
+        "use_cut_ce", "use_liger"
+    )
     fused_loss = (
-        tuple(flag for flag in ("use_cut_ce", "use_liger") if getattr(tcfg, flag, False))
+        tuple(flag for flag in fused_flags if getattr(tcfg, flag, False))
         if task in SFT_KERNEL_AWARE_TASKS
         else ()
     )

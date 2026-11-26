@@ -267,7 +267,8 @@ Sections:
 | `training.galore_scale` | `float` | `0.25` | `> 0` | GaLore gradient scaling factor |
 | `training.moe_lora` | `bool` | `false` |  | Enable MoE-aware LoRA (ScatterMoE) — applies LoRA to expert FFN layers |
 | `training.moe_aux_loss_coeff` | `float` | `0.01` | `>= 0` | Auxiliary load-balancing loss coefficient for MoE models |
-| `training.use_liger` | `bool` | `false` |  | Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup) |
+| `training.use_liger` | `bool` | `false` |  | Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup). With stream_layers: experimental Llama text SFT RMSNorm by default, optional SwiGLU via liger_components; no performance guarantee. |
+| `training.liger_components` | `list[str] \| null` | `null` | min length 1 | Streaming Liger components; requires use_liger=true and stream_layers=true. Unset selects rms_norm only. RoPE and fused losses are not supported here. |
 | `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
 | `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |

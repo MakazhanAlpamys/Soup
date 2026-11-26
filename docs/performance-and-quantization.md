@@ -1094,7 +1094,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
-- `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
+- `use_flash_attn` → **not reached at all** under streaming (#1692): it is handed to `from_pretrained` as `attn_implementation` by the *resident* setup, and a streamed model is built by `from_config` with no attention argument. It is refused rather than dropped. On every task outside `{sft, tts}` it is already refused at config load (#806). `use_liger` is accepted under streaming on Llama text SFT only; see [Liger inside streamed SFT](#liger-inside-streamed-sft-experimental).
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
@@ -1192,6 +1192,44 @@ output: ./output
 - **The prediction is not equally trustworthy at every sequence length.** Measured on a 4 GB RTX 3050 with SmolLM2-135M streamed in bf16 at batch 1, the formula over-predicts by 8% at seq 4352 (safe) and then **under-predicts — 0.934x the real peak at seq 5120 and 0.787x at 6144**. The grid it was fitted on only ever varied batch size, at seq 256 and 512, so long-context streaming is exactly where it has the least evidence behind it. If you are streaming at multi-thousand-token sequences, turn on `stream_vram_probe`. Record: [`benchmarks/gate-v0.73.1-measured-vram-fit.md`](../benchmarks/gate-v0.73.1-measured-vram-fit.md).
 - **The pre-flight reports the whole card on a capped or shared GPU** — `torch.cuda.mem_get_info()` is a device-level driver query and cannot see `set_per_process_memory_fraction`, a MIG slice, or another process on the same card. Set `training.stream_vram_override` to what your process may actually use; the check then refuses configurations that would exceed *that*, which is also how you rehearse a 4 GB card on a 16 GB one.
 - **Slower than you expected** — layer streaming trades time for memory. If the model already fits resident on your card, do not enable it.
+
+### Liger inside streamed SFT (experimental)
+
+On the **Llama text SFT / transformers** path, `use_liger` together with `stream_layers`
+installs instance-local Liger RMSNorm and/or SwiGLU forwards on the streamed model, after the
+streaming wrappers exist and before the measured VRAM probe. It does not use the resident
+model's global Liger patch.
+
+```yaml
+training:
+  stream_layers: true
+  stream_source: ram           # or disk (NVMe)
+  batch_size: 1
+  quantization: none           # or 4bit (NF4)
+  use_liger: true
+  liger_components: [rms_norm] # default when unset; or [swiglu], [rms_norm, swiglu]
+```
+
+Requires CUDA, working Triton/Liger imports and `liger-kernel==0.8.1` (other versions are
+refused until requalified: `pip install "liger-kernel==0.8.1"`). A missing dependency, a
+CPU/MPS device or a non-Llama architecture stops setup before base weights are resolved or
+sharded. `liger_components` is valid only with `use_liger` and `stream_layers`; an empty,
+duplicate or unknown selection is refused. Without `stream_layers`, `use_liger` behaves as
+before and `liger_components` is refused.
+
+| Streamed operation | Implementation and boundary |
+| --- | --- |
+| RMSNorm | Decoder and final norms; Liger forward (a compatibility forward for width 4096), HF-ordered ATen backward |
+| SwiGLU | Liger fused BF16 forward and HF-ordered ATen backward; PEFT and dense/NF4 projections stay intact |
+| RoPE | HF implementation retained; selecting Liger RoPE is refused |
+| Cross entropy / fused linear cross entropy | HF/TRL loss and streamed head retained; neither Liger loss is enabled |
+
+Refused at config load, naming both fields: `fast_lora`, `use_cut_ce`, `l2l`, a non-SFT task,
+a non-transformers backend, a non-text modality and a non-boolean `gradient_checkpointing`.
+Each decoder always uses Soup's non-reentrant checkpoint under streaming. Parameter identity,
+PEFT names, periodic checkpoints and adapter reloads are preserved. SwiGLU requires a SiLU
+MLP, `pretraining_tp=1`, and no prior global Liger patch in the process. This integration
+keeps explicit rounding boundaries; it makes no speed or memory claim.
 
 ### Layer-to-layer execution (`training.l2l`, BETA)
 

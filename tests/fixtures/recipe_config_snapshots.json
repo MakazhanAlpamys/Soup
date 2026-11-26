@@ -147,6 +147,7 @@
     "training.l2l_auto_k": false,
     "training.l2l_spill_dir": null,
     "training.label_names": null,
+    "training.liger_components": null,
     "training.lisa_enabled": false,
     "training.lisa_interval_steps": 20,
     "training.lisa_num_layers": 2,

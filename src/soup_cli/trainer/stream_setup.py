@@ -1093,6 +1093,17 @@ class StreamingSetupMixin:
             **base_revision_kwargs(cfg.base),
         )
 
+        if getattr(tcfg, "use_liger", False):
+            # Before the tokenizer, the weight resolve and the shard write: a
+            # missing dependency, a CPU/MPS device or a non-Llama model stops here.
+            from soup_cli.utils.liger_streaming import (
+                validate_streaming_liger_environment,
+                validate_streaming_liger_model_config,
+            )
+
+            validate_streaming_liger_model_config(model_config, tcfg.liger_components)
+            validate_streaming_liger_environment(str(self.device))
+
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         try:
             # config=: without it AutoTokenizer reads the config again, with the user's
@@ -1726,6 +1737,26 @@ class StreamingSetupMixin:
         )
         self.model = model
         self._stream_runtime = runtime
+        self._streaming_liger_patches = {}
+        if getattr(tcfg, "use_liger", False):
+            from soup_cli.utils.liger_streaming import apply_streaming_liger
+
+            try:
+                self._streaming_liger_patches = apply_streaming_liger(
+                    model, tcfg.liger_components
+                )
+            except BaseException:
+                # Training's cleanup context has not started yet.
+                self._close_stream_runtime()
+                raise
+            # Do not set _liger_applied / use_liger_kernel: HF/TRL would apply the
+            # global patches and the fused loss on top of this instance-local graph.
+            console.print(
+                "[green]Streaming Liger installed (experimental):[/] "
+                + ", ".join(
+                    f"{name}={count}" for name, count in self._streaming_liger_patches.items()
+                )
+            )
         # #792 — on the materialised adapters, before the probe measures a step.
         from soup_cli.utils.peft_wiring import apply_fast_lora_patches, fast_lora_summary
 
