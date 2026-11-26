@@ -1215,9 +1215,9 @@ refused until requalified: `pip install "liger-kernel==0.8.1"`). A missing depen
 CPU/MPS device or a non-Llama architecture stops setup before base weights are resolved or
 sharded. `liger_components` is valid only with `use_liger` and `stream_layers`; an empty,
 duplicate or unknown selection is refused. Without `stream_layers`, `use_liger` behaves as
-before and `liger_components` is refused. `use_liger` with `stream_layers` also refuses `stream_recompute: off` and `auto`: the
-streamed RMSNorm saves its weight for autograd and relies on the checkpoint recompute to restore
-it, so keep the default `stream_recompute: on`.
+before and `liger_components` is refused. `use_liger` with `stream_layers` also refuses
+`stream_recompute: off` and `auto`: the streamed RMSNorm saves its weight for autograd and
+relies on the checkpoint recompute to restore it, so keep the default `stream_recompute: on`.
 
 | Streamed operation | Implementation and boundary |
 | --- | --- |
