@@ -1026,6 +1026,7 @@ class StreamingSetupMixin:
             check_source_quantization,
             is_serialized_nf4_config,
             quantization_config_of,
+            resolve_fp8_double_quant,
         )
         from soup_cli.utils.layer_shard import (
             PER_EXPERT_LAYOUT_ARCHS,
@@ -1168,7 +1169,22 @@ class StreamingSetupMixin:
         # claim breaks. Read the flag once here (resolving the tri-state unset to
         # the shipped default) and thread it into both the sharder (its cache
         # already keys on double_quant) and the skeleton.
-        double_quant = tcfg.double_quant_on
+        # An FP8 block base sharded as NF4 resolves unset to OFF and refuses an explicit
+        # true (resolve_fp8_double_quant); every other run reads the shipped default.
+        if fp8_block is not None and quant == QUANT_NF4:
+            double_quant = resolve_fp8_double_quant(
+                getattr(tcfg, "bnb_4bit_use_double_quant", None),
+                fp8_block=fp8_block,
+                quant_nf4=True,
+            )
+            if getattr(tcfg, "stream_nf4_scale_cache", False):
+                raise ValueError(
+                    "training.stream_nf4_scale_cache caches the expanded nested scales of "
+                    "double quantisation, and an FP8 block-quantised base is sharded "
+                    "without it; unset stream_nf4_scale_cache for this base."
+                )
+        else:
+            double_quant = tcfg.double_quant_on
 
         shard_dir = resolve_shard_dir(cfg.base)
         # R4: extra NVMe roots, validated once here (the ~9 s disk probe runs per volume only

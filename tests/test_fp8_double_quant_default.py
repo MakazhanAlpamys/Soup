@@ -1,0 +1,87 @@
+"""An FP8 block-quantised base sharded as NF4 uses double-quant OFF unless told otherwise."""
+
+from __future__ import annotations
+
+import types
+
+import pytest
+
+from soup_cli.utils.fp8_block import resolve_fp8_double_quant
+
+BLOCK = (128, 128)
+DEEPSEEK_FP8 = {
+    "quant_method": "fp8",
+    "fmt": "e4m3",
+    "activation_scheme": "dynamic",
+    "weight_block_size": [128, 128],
+}
+
+
+@pytest.mark.parametrize(
+    ("requested", "fp8_block", "quant_nf4", "expected"),
+    [
+        pytest.param(None, BLOCK, True, False, id="fp8-nf4-unset-is-off"),
+        pytest.param(False, BLOCK, True, False, id="fp8-nf4-false-is-off"),
+        pytest.param(None, None, True, True, id="plain-nf4-unset-keeps-on"),
+        pytest.param(True, None, True, True, id="plain-nf4-true-stays-on"),
+        pytest.param(False, None, True, False, id="plain-nf4-false-stays-off"),
+        pytest.param(None, BLOCK, False, True, id="fp8-without-nf4-keeps-the-default"),
+        pytest.param(True, BLOCK, False, True, id="fp8-without-nf4-true-is-not-refused"),
+    ],
+)
+def test_the_resolution_table(requested, fp8_block, quant_nf4, expected):
+    assert (
+        resolve_fp8_double_quant(requested, fp8_block=fp8_block, quant_nf4=quant_nf4)
+        is expected
+    )
+
+
+def test_an_explicit_true_is_refused_for_an_fp8_nf4_source():
+    with pytest.raises(
+        ValueError,
+        match=r"training\.bnb_4bit_use_double_quant=true is not supported for an FP8 "
+        r"block-quantised base sharded as NF4",
+    ):
+        resolve_fp8_double_quant(True, fp8_block=BLOCK, quant_nf4=True)
+
+
+def _drive(tmp_path, monkeypatch, *, requested, quantization="4bit", **overrides):
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    shard_calls: list = []
+    model_cfg = types.SimpleNamespace(
+        model_type="deepseek_v3", hidden_size=4, num_hidden_layers=1, vocab_size=8,
+        intermediate_size=8, quantization_config=DEEPSEEK_FP8,
+    )
+    tcfg_overrides = {
+        "quantization": quantization,
+        "bnb_4bit_use_double_quant": requested,
+        "double_quant_on": requested is not False,
+        **overrides,
+    }
+    _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch, arch="deepseek_v3", model_cfg=model_cfg,
+        shard_calls=shard_calls, tcfg_overrides=tcfg_overrides,
+    )
+    return shard_calls
+
+
+@pytest.mark.parametrize("requested", [None, False])
+def test_the_setup_shards_an_fp8_nf4_base_without_double_quant(tmp_path, monkeypatch, requested):
+    calls = _drive(tmp_path, monkeypatch, requested=requested)
+    assert [call["double_quant"] for call in calls] == [False]
+
+
+def test_the_setup_refuses_double_quant_true_for_an_fp8_nf4_base(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="sharded as NF4: with double-quant on"):
+        _drive(tmp_path, monkeypatch, requested=True)
+
+
+def test_the_setup_refuses_the_scale_cache_for_an_fp8_nf4_base(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="an FP8 block-quantised base is sharded without it"):
+        _drive(tmp_path, monkeypatch, requested=None, stream_nf4_scale_cache=True)
+
+
+def test_an_fp8_base_that_is_not_nf4_keeps_the_shipped_default(tmp_path, monkeypatch):
+    calls = _drive(tmp_path, monkeypatch, requested=None, quantization="none")
+    assert [call["double_quant"] for call in calls] == [True]
