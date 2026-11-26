@@ -276,3 +276,93 @@ def test_capture_refuses_invalid_decoder_calls(
     with pytest.raises(error_type) as caught:
         capture_layer_call(CausalLM(), torch.zeros(1, SEQ, dtype=torch.long), draws=False)
     assert str(caught.value) == message
+
+
+@pytest.mark.parametrize(
+    "text_attrs",
+    [
+        pytest.param({}, id="missing"),
+        pytest.param({"layer_types": None}, id="none"),
+        pytest.param({"layer_types": []}, id="empty-list"),
+        pytest.param({"layer_types": "full_attention"}, id="non-list"),
+        pytest.param({"layer_types": ["linear_attention", 1]}, id="non-string-item"),
+    ],
+)
+def test_capture_refuses_qwen35_without_layer_types(text_attrs: dict[str, Any]) -> None:
+    import torch
+    from torch import nn
+
+    from soup_cli.utils.l2l_step import capture_layer_call
+
+    forwards: list[Any] = []
+    text_config = SimpleNamespace(**text_attrs)
+
+    class CausalLM(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = SimpleNamespace(model_type="qwen3_5", get_text_config=lambda: text_config)
+            self.layers = nn.ModuleList([nn.Identity(), nn.Identity()])
+            self.lm_head = nn.Identity()
+            self.loss_function = object()
+
+        def forward(self, input_ids: torch.Tensor) -> None:
+            forwards.append(input_ids)
+
+    with pytest.raises(ValueError) as caught:
+        capture_layer_call(CausalLM(), torch.zeros(1, SEQ, dtype=torch.long), draws=False)
+    assert str(caught.value) == (
+        "qwen3_5 config.layer_types must be a non-empty list of layer-type strings, "
+        "one per decoder layer: the decoder has 2"
+    )
+    assert forwards == []
+
+
+def _two_layer_qwen35(*, fail_after_first_layer: bool) -> Any:
+    import torch
+    from torch import nn
+
+    text_config = SimpleNamespace(layer_types=["linear_attention", "full_attention"])
+
+    class CausalLM(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = SimpleNamespace(model_type="qwen3_5", get_text_config=lambda: text_config)
+            self.layers = nn.ModuleList([nn.Identity(), nn.Identity()])
+            self.lm_head = nn.Identity()
+            self.loss_function = object()
+
+        def forward(self, input_ids: torch.Tensor) -> None:
+            self.layers[0](input_ids)
+            if fail_after_first_layer:
+                raise RuntimeError("forward failed")
+            self.layers[1](input_ids)
+
+    return CausalLM()
+
+
+def _pending_pre_hooks(model: Any) -> int:
+    # Torch keeps forward pre-hooks in a private dict; removing a handle drops its entry.
+    return sum(len(layer._forward_pre_hooks) for layer in model.layers)
+
+
+def test_capture_removes_its_hooks_after_a_normal_capture() -> None:
+    import torch
+
+    from soup_cli.utils.l2l_step import capture_layer_call
+
+    model = _two_layer_qwen35(fail_after_first_layer=False)
+    call = capture_layer_call(model, torch.zeros(1, SEQ, dtype=torch.long), draws=False)
+    assert call.layer_types == ("linear_attention", "full_attention")
+    assert _pending_pre_hooks(model) == 0
+
+
+def test_capture_removes_its_hooks_when_the_forward_raises() -> None:
+    import torch
+
+    from soup_cli.utils.l2l_step import capture_layer_call
+
+    model = _two_layer_qwen35(fail_after_first_layer=True)
+    with pytest.raises(RuntimeError) as caught:
+        capture_layer_call(model, torch.zeros(1, SEQ, dtype=torch.long), draws=False)
+    assert str(caught.value) == "forward failed"
+    assert _pending_pre_hooks(model) == 0

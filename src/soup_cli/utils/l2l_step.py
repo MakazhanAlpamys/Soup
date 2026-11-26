@@ -326,12 +326,18 @@ def _layer_types(causal: Any, n_layers: int) -> Tuple[str, ...]:
     if getattr(config, "model_type", "") not in _QWEN35_ARCHS:
         return ()
     text = config.get_text_config() if hasattr(config, "get_text_config") else config
-    types = tuple(getattr(text, "layer_types", None) or ())
-    if types and len(types) < n_layers:
+    types = getattr(text, "layer_types", None)
+    listed = isinstance(types, (list, tuple)) and bool(types)
+    if not listed or not all(isinstance(kind, str) for kind in types):
+        raise ValueError(
+            f"{config.model_type} config.layer_types must be a non-empty list of layer-type "
+            f"strings, one per decoder layer: the decoder has {n_layers}"
+        )
+    if len(types) < n_layers:
         raise ValueError(
             f"config.layer_types names {len(types)} layers, the decoder has {n_layers}"
         )
-    return types[:n_layers]
+    return tuple(types[:n_layers])
 
 
 class RoutingGuard:
