@@ -83,10 +83,13 @@ def test_nf4_autocast_master_gradients_and_fp32_input_fallback(
             dense.in_features, dense.out_features, bias=dense.bias is not None,
             compute_dtype=compute_dtype, compress_statistics=True, quant_type="nf4",
         )
-        base.weight = bnb.nn.Params4bit(
-            dense.weight.detach().to(dtype), requires_grad=False,
-            compress_statistics=True, quant_type="nf4",
-        ).to("cpu")
+        try:
+            base.weight = bnb.nn.Params4bit(
+                dense.weight.detach().to(dtype), requires_grad=False,
+                compress_statistics=True, quant_type="nf4",
+            ).to("cpu")
+        except (RuntimeError, NotImplementedError, ImportError) as error:
+            pytest.skip(f"CPU 4-bit quantisation unavailable: {error}")
         if dense.bias is not None:
             base.bias = torch.nn.Parameter(dense.bias.detach().to(dtype), requires_grad=False)
         projection.base_layer = base
@@ -120,11 +123,23 @@ def test_nf4_autocast_master_gradients_and_fp32_input_fallback(
         assert not custom
     else:
         assert custom and all(node.amp_dtype == dtype for node in custom)
+    # The fp32-input rows delegate to PEFT, so they are bitwise equal. For the
+    # half-input rows the base forward here is dequantise + F.linear, while PEFT
+    # runs bitsandbytes' MatMul4Bit on a transposed operand; the two are not
+    # guaranteed to round identically, and one forward ulp cascades into every
+    # gradient. Those rows compare within 16 ulp of the tensor's largest value.
+    exact = input_dtype == "float32"
+    bound = 0.0 if exact else 16 * torch.finfo(dtype).eps
+
+    def assert_within(left, right):
+        assert torch.isfinite(right).all()
+        scale = left.abs().max().clamp_min(torch.finfo(left.dtype).tiny)
+        assert (left.float() - right.float()).abs().max() <= bound * scale.float()
+
     for left, right in zip(results[0][0], results[1][0], strict=True):
-        torch.testing.assert_close(left, right, rtol=0, atol=0)
+        assert_within(left, right)
     for name, gradient in results[0][1].items():
-        assert torch.isfinite(results[1][1][name]).all()
-        torch.testing.assert_close(gradient, results[1][1][name], rtol=0, atol=0)
+        assert_within(gradient, results[1][1][name])
 
 
 @pytest.mark.parametrize("path", ["single", "qkv", "mlp"])

@@ -80,25 +80,29 @@ def _projection_compute_dtype(
     return fallback if dtype is None else dtype
 
 
-def _scaled_lora_add(
-    out: Any, hidden: Any, lora_b: Any, scaling: float, *, peft_order: bool = False
-) -> Any:
-    """Add a LoRA update with PEFT's promote, add, then cast semantics.
-
-    ``peft_order`` multiplies the finished update by the scaling before the
-    addition, as PEFT does under autocast, instead of folding it into ``add``'s
-    ``alpha``. The two differ in the last rounding bit for low-precision dtypes.
-    """
+def _scaled_lora_add(out: Any, hidden: Any, lora_b: Any, scaling: float) -> Any:
+    """Add a LoRA update with PEFT's promote, add, then cast semantics."""
     import torch
 
     lora_term = torch.matmul(hidden, lora_b.t())
     promoted = torch.promote_types(out.dtype, lora_term.dtype)
-    if peft_order:
-        lora_term = lora_term * float(scaling)
-        return (out.to(promoted) + lora_term.to(promoted)).to(out.dtype)
     return torch.add(
         out.to(promoted), lora_term.to(promoted), alpha=float(scaling)
     ).to(out.dtype)
+
+
+def _peft_ordered_lora_add(out: Any, hidden: Any, lora_b: Any, scaling: float) -> Any:
+    """Autocast variant of ``_scaled_lora_add``: scale the update, then add.
+
+    PEFT multiplies the finished update by the scaling before the addition,
+    whereas ``add``'s ``alpha`` folds it in; the two differ in the last rounding
+    bit for low-precision dtypes.
+    """
+    import torch
+
+    lora_term = torch.matmul(hidden, lora_b.t()) * float(scaling)
+    promoted = torch.promote_types(out.dtype, lora_term.dtype)
+    return (out.to(promoted) + lora_term.to(promoted)).to(out.dtype)
 
 
 def _flatten(tensor: Any) -> Any:
@@ -546,9 +550,10 @@ def _single_projection_function() -> Any:
             # this sum. matmul + add keeps one code path that also covers the
             # ``[B, S, H]`` inputs transformers hands to real projections, and
             # the add's ``alpha`` still folds the scaling into the term.
-            out = _scaled_lora_add(
-                out, h, lora_b, ctx.scaling, peft_order=ctx.amp_dtype is not None
-            )
+            if ctx.amp_dtype is not None:
+                out = _peft_ordered_lora_add(out, h, lora_b, ctx.scaling)
+            else:
+                out = _scaled_lora_add(out, h, lora_b, ctx.scaling)
             return out
 
         @staticmethod

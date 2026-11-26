@@ -109,15 +109,21 @@ def test_mixed_adapter_dtypes_delegate_to_peft(torch_peft, path):
     from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv
 
     model = (_Attention if path == "qkv" else _Mlp).build(torch)
+    # Both halves of one projection go to float64 so PEFT's own forward runs
+    # cleanly; its siblings stay float32, which is the mix the guard refuses.
     first = next(n for n, _p in model.named_parameters() if "lora_A" in n)
-    parameter = dict(model.named_parameters())[first]
-    parameter.data = parameter.data.double()
+    prefix = first.split("lora_A")[0]
+    for name, parameter in model.named_parameters():
+        if name.startswith(prefix) and "lora_" in name:
+            parameter.data = parameter.data.double()
     patched = (patch_fast_lora_qkv if path == "qkv" else patch_fast_lora_mlp)(model)
     assert patched == 1
     x = torch.randn(2, 5, 16, requires_grad=True)
     output = model(x)
     output = output[0] if isinstance(output, tuple) else output
     assert not any(name.startswith("_FastLora") for name in _grad_fn_names(output))
+    output.sum().backward()
+    assert x.grad is not None
 
 
 @pytest.mark.parametrize("path", ["qkv", "mlp"])
@@ -158,14 +164,14 @@ def test_nf4_autocast_fallback_decision(torch_peft):
 
 def test_scaled_lora_add_peft_order_rounds_the_scaled_update(torch_peft):
     torch = torch_peft
-    from soup_cli.utils.fast_lora import _scaled_lora_add
+    from soup_cli.utils.fast_lora import _peft_ordered_lora_add, _scaled_lora_add
 
     out = torch.randn(64, 32).to(torch.bfloat16)
     hidden = torch.randn(64, 4).to(torch.bfloat16)
     lora_b = torch.randn(32, 4).to(torch.bfloat16)
     scaling = 7 / 3
     folded = _scaled_lora_add(out, hidden, lora_b, scaling)
-    peft_order = _scaled_lora_add(out, hidden, lora_b, scaling, peft_order=True)
+    peft_order = _peft_ordered_lora_add(out, hidden, lora_b, scaling)
     expected = out + torch.matmul(hidden, lora_b.t()) * scaling
     assert torch.equal(peft_order, expected)
     assert peft_order.dtype == folded.dtype == torch.bfloat16

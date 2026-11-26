@@ -25,6 +25,7 @@ from soup_cli.utils.fast_lora import (
     _flatten,
     _is_supported_lora_projection,
     _nf4_autocast_requires_fallback,
+    _peft_ordered_lora_add,
     _projection_autocast_dtype,
     _projection_compute_dtype,
     _projection_state,
@@ -210,12 +211,12 @@ def _mlp_function() -> Any:
                 if has_g:
                     rank = ag.shape[0]
                     hg = h_gu[..., cursor : cursor + rank]
-                    g = _scaled_lora_add(g, hg, bgl, sg, peft_order=amp)
+                    g = (_peft_ordered_lora_add if amp else _scaled_lora_add)(g, hg, bgl, sg)
                     cursor += rank
                 if has_u:
                     rank = au.shape[0]
                     hu = h_gu[..., cursor : cursor + rank]
-                    u = _scaled_lora_add(u, hu, bul, su, peft_order=amp)
+                    u = (_peft_ordered_lora_add if amp else _scaled_lora_add)(u, hu, bul, su)
             else:
                 h_gu = x.new_empty((*x.shape[:-1], 0))
 
@@ -235,7 +236,7 @@ def _mlp_function() -> Any:
             del base_m, base_y, dense_d
             if has_d:
                 hd = functional.linear(_as_dtype(m, ad.dtype), ad)
-                y = _scaled_lora_add(y, hd, bdl, sd, peft_order=amp)
+                y = (_peft_ordered_lora_add if amp else _scaled_lora_add)(y, hd, bdl, sd)
 
             ctx.has_adapters = (has_g, has_u, has_d)
             ctx.gu_ranks = (ag.shape[0] if has_g else 0, au.shape[0] if has_u else 0)

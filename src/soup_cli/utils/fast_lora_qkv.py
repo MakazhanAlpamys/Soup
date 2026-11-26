@@ -32,6 +32,7 @@ from soup_cli.utils.fast_lora import (
     _flatten,
     _is_supported_lora_projection,
     _nf4_autocast_requires_fallback,
+    _peft_ordered_lora_add,
     _projection_autocast_dtype,
     _projection_compute_dtype,
     _projection_state,
@@ -129,7 +130,8 @@ def _qkv_function() -> Any:
                     a, b, scaling = adapters[i]
                     rank = a.shape[0]
                     hi = h[..., cursor : cursor + rank]
-                    outs[i] = _scaled_lora_add(outs[i], hi, b, scaling, peft_order=amp)
+                    add = _peft_ordered_lora_add if amp else _scaled_lora_add
+                    outs[i] = add(outs[i], hi, b, scaling)
                     cursor += rank
             else:
                 h = x.new_empty((*x.shape[:-1], 0))
