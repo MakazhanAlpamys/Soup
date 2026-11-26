@@ -1187,6 +1187,7 @@ _K2_RESERVED_TOKENS = 256
 _K2_VOCAB_MAX_BYTES = 64 * 1024**2
 _K2_VOCAB_MAX_LINES = 1_000_000
 _K2_TOKENIZER_CONFIG_MAX_BYTES = 16 * 1024**2
+_K2_CHAT_TEMPLATE_MAX_BYTES = 16 * 1024**2
 
 
 def _check_tokenizer_file_containment(directory_real: str, path: Path) -> None:
@@ -1199,13 +1200,31 @@ def _check_tokenizer_file_containment(directory_real: str, path: Path) -> None:
         raise ValueError(f"{path}: resolves outside the model folder")
 
 
-def _read_tiktoken_ranks(path: Path) -> dict[bytes, int]:
+def _open_contained(directory_real: str, path: Path) -> Any:
+    """Open ``path`` for binary reading and prove the handle is the contained file.
+
+    The containment check before the open does not bind the open to that resolved file if the
+    folder changes in between, so the opened handle is compared with the file the path
+    resolves to now, and that file is checked for containment again.
+    """
+    handle = path.open("rb")
+    try:
+        _check_tokenizer_file_containment(directory_real, path)
+        if not os.path.samestat(os.fstat(handle.fileno()), os.stat(os.path.realpath(path))):
+            raise ValueError(f"{path}: changed while it was being opened")
+    except (ValueError, OSError):
+        handle.close()
+        raise
+    return handle
+
+
+def _read_tiktoken_ranks(path: Path, directory_real: str) -> dict[bytes, int]:
     """Read the base64 token and rank pairs from ``tiktoken.model``."""
     if os.path.getsize(path) > _K2_VOCAB_MAX_BYTES:
         raise ValueError(f"{path}:1: file exceeds the 64 MiB size limit")
     ranks: dict[bytes, int] = {}
     rank_lines: dict[int, int] = {}
-    with path.open("rb") as handle:
+    with _open_contained(directory_real, path) as handle:
         for number, line in enumerate(handle, start=1):
             if number > _K2_VOCAB_MAX_LINES:
                 raise ValueError(f"{path}:{number}: file exceeds the 1000000-line limit")
@@ -1241,15 +1260,30 @@ def _read_tiktoken_ranks(path: Path) -> dict[bytes, int]:
     return ranks
 
 
+def _read_chat_template(path: Path, directory_real: str) -> str:
+    """Read ``chat_template.jinja`` with a size limit and a diagnostic that names the file."""
+    size_error = f"{path}: file exceeds the 16 MiB size limit"
+    if os.path.getsize(path) > _K2_CHAT_TEMPLATE_MAX_BYTES:
+        raise ValueError(size_error)
+    with _open_contained(directory_real, path) as handle:
+        raw = handle.read(_K2_CHAT_TEMPLATE_MAX_BYTES + 1)
+    if len(raw) > _K2_CHAT_TEMPLATE_MAX_BYTES:
+        raise ValueError(size_error)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path}: not valid UTF-8") from exc
+
+
 def _read_kimi_k2_tokenizer_config(
-    path: Path, first: int
+    path: Path, first: int, directory_real: str
 ) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     size_error = f"{path}: file exceeds the 16 MiB size limit"
     if not path.is_file():
         raise FileNotFoundError(f"{path}: file not found")
     if os.path.getsize(path) > _K2_TOKENIZER_CONFIG_MAX_BYTES:
         raise ValueError(size_error)
-    with path.open("rb") as handle:
+    with _open_contained(directory_real, path) as handle:
         raw = handle.read(_K2_TOKENIZER_CONFIG_MAX_BYTES + 1)
     if len(raw) > _K2_TOKENIZER_CONFIG_MAX_BYTES:
         raise ValueError(size_error)
@@ -1265,6 +1299,7 @@ def _read_kimi_k2_tokenizer_config(
 
     end = first + _K2_RESERVED_TOKENS
     declared: dict[int, dict[str, Any]] = {}
+    declared_keys: dict[int, str] = {}
     for key, entry in decoder.items():
         if not key.isascii() or not key.isdecimal():
             raise ValueError(f"{path}: special-token id {key!r} is not a decimal integer")
@@ -1279,7 +1314,15 @@ def _read_kimi_k2_tokenizer_config(
             raise ValueError(f"{path}: special-token entry {index} must be an object")
         if not isinstance(entry.get("content"), str):
             raise ValueError(f"{path}: special-token entry {index} must have string content")
+        if not isinstance(entry.get("special", True), bool):
+            raise ValueError(f"{path}: special-token entry {index} special must be a boolean")
+        if index in declared:
+            raise ValueError(
+                f"{path}: duplicate special-token id {index} "
+                f"(keys {declared_keys[index]!r} and {key!r})"
+            )
         declared[index] = entry
+        declared_keys[index] = key
     return config, declared
 
 
@@ -1308,17 +1351,17 @@ def load_kimi_k2_tokenizer(model_dir: str, *, trust_remote_code: bool = False) -
     _check_tokenizer_file_containment(directory_real, vocab_file)
     if not vocab_file.is_file():
         raise FileNotFoundError(f"tiktoken.model not found in {model_dir}")
-    ranks = _read_tiktoken_ranks(vocab_file)
+    ranks = _read_tiktoken_ranks(vocab_file, directory_real)
     first = len(ranks)
 
     config_file = directory / "tokenizer_config.json"
     _check_tokenizer_file_containment(directory_real, config_file)
-    config, declared = _read_kimi_k2_tokenizer_config(config_file, first)
+    config, declared = _read_kimi_k2_tokenizer_config(config_file, first, directory_real)
     template_path = directory / "chat_template.jinja"
     chat_template = config.get("chat_template")
     if template_path.is_file():
         _check_tokenizer_file_containment(directory_real, template_path)
-        chat_template = template_path.read_text(encoding="utf-8")
+        chat_template = _read_chat_template(template_path, directory_real)
 
     try:
         from tokenizers import AddedToken
@@ -1341,16 +1384,31 @@ def load_kimi_k2_tokenizer(model_dir: str, *, trust_remote_code: bool = False) -
 
     tokenizer = _Converter(vocab_file=str(vocab_file), pattern=_K2_SPLIT_PATTERN).converted()
     reserved = []
+    expected_ids: dict[str, int] = {}
     for index in range(first, first + _K2_RESERVED_TOKENS):
         entry = declared.get(index)
+        content = entry["content"] if entry else f"<|reserved_token_{index}|>"
+        if content in expected_ids:
+            raise ValueError(
+                f"{config_file}: token content {content!r} is declared for both ids "
+                f"{expected_ids[content]} and {index}"
+            )
+        expected_ids[content] = index
         reserved.append(
             AddedToken(
-                entry["content"] if entry else f"<|reserved_token_{index}|>",
+                content,
                 normalized=False,
                 special=entry.get("special", True) if entry else True,
             )
         )
     tokenizer.add_tokens(reserved)
+    for content, index in expected_ids.items():
+        actual = tokenizer.token_to_id(content)
+        if actual != index:
+            raise ValueError(
+                f"{config_file}: special token {content!r} received id {actual}, "
+                f"declared id {index}"
+            )
     return PreTrainedTokenizerFast(
         tokenizer_object=tokenizer,
         bos_token=config.get("bos_token"),

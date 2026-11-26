@@ -213,6 +213,123 @@ def test_checks_tokenizer_file_size_before_opening(
     assert str(error.value) == f"{path}{message}"
 
 
+def test_checks_chat_template_size_before_opening(tiny_folder, monkeypatch):
+    path = tiny_folder / "chat_template.jinja"
+    getsize = os.path.getsize
+    path_open = Path.open
+
+    def reported_size(candidate):
+        return 16 * 1024**2 + 1 if Path(candidate) == path else getsize(candidate)
+
+    def guarded_open(candidate, *args, **kwargs):
+        assert candidate != path, f"{path} was opened before its size was checked"
+        return path_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "getsize", reported_size)
+    monkeypatch.setattr(Path, "open", guarded_open)
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{path}: file exceeds the 16 MiB size limit"
+
+
+def test_refuses_chat_template_longer_than_limit_when_size_lies(tiny_folder, monkeypatch):
+    path = tiny_folder / "chat_template.jinja"
+    path.write_bytes(b"a" * (16 * 1024**2 + 1))
+    getsize = os.path.getsize
+    monkeypatch.setattr(os.path, "getsize", lambda c: 1 if Path(c) == path else getsize(c))
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{path}: file exceeds the 16 MiB size limit"
+
+
+def test_refuses_chat_template_that_is_not_utf8(tiny_folder):
+    path = tiny_folder / "chat_template.jinja"
+    path.write_bytes(b"\xff\xfe{{ messages }}")
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{path}: not valid UTF-8"
+
+
+def test_refuses_file_swapped_after_the_containment_check(tiny_folder, monkeypatch):
+    path = tiny_folder / "chat_template.jinja"
+    other = tiny_folder / "other.jinja"
+    other.write_text("swapped", encoding="utf-8")
+    real_stat = os.stat
+    resolved = Path(os.path.realpath(path))
+
+    def stat_of_another_file(candidate, *args, **kwargs):
+        if Path(candidate) == resolved:
+            return real_stat(other, *args, **kwargs)
+        return real_stat(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_of_another_file)
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{path}: changed while it was being opened"
+
+
+def test_refuses_duplicate_normalized_special_token_ids(tiny_folder):
+    config_file = tiny_folder / "tokenizer_config.json"
+    entry = _special("[BOS]")
+    config_file.write_text(
+        json.dumps({"added_tokens_decoder": {"300": entry, "0300": entry}}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == (
+        f"{config_file}: duplicate special-token id 300 (keys '300' and '0300')"
+    )
+
+
+@pytest.mark.parametrize("special", ["true", 1, None])
+def test_refuses_non_boolean_special_flag(tiny_folder, special):
+    config_file = tiny_folder / "tokenizer_config.json"
+    entry = {"content": "[BOS]", "special": special}
+    config_file.write_text(json.dumps({"added_tokens_decoder": {"300": entry}}), encoding="utf-8")
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{config_file}: special-token entry 300 special must be a boolean"
+
+
+def test_refuses_same_content_declared_for_two_ids(tiny_folder, tokenizer_dependencies):
+    config_file = tiny_folder / "tokenizer_config.json"
+    decoder = {"300": _special("[BOS]"), "301": _special("[BOS]")}
+    config_file.write_text(json.dumps({"added_tokens_decoder": decoder}), encoding="utf-8")
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == (
+        f"{config_file}: token content '[BOS]' is declared for both ids 300 and 301"
+    )
+
+
+def test_refuses_token_that_did_not_receive_its_declared_id(
+    tiny_folder, tokenizer_dependencies, monkeypatch
+):
+    from transformers.convert_slow_tokenizer import TikTokenConverter
+
+    real_converted = TikTokenConverter.converted
+
+    class _DropsAddedTokens:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def add_tokens(self, tokens):
+            return 0
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(
+        TikTokenConverter, "converted", lambda self: _DropsAddedTokens(real_converted(self))
+    )
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == (
+        f"{tiny_folder / 'tokenizer_config.json'}: special token '[BOS]' received id None, "
+        "declared id 300"
+    )
+
+
 def test_refuses_more_than_one_million_vocab_lines(tiny_folder):
     vocab_file = tiny_folder / "tiktoken.model"
     vocab_file.write_bytes(b"YQ== 0\n" + b"\n" * 1_000_000)
@@ -270,16 +387,14 @@ def test_refuses_invalid_tokenizer_config(tiny_folder, contents, message):
     assert str(error.value) == f"{config_file}: {message}"
 
 
+@pytest.mark.requires_symlink
 @pytest.mark.parametrize(
     "filename", ["tiktoken.model", "tokenizer_config.json", "chat_template.jinja"],
 )
 def test_refuses_tokenizer_file_link_outside_model_folder(tiny_folder, filename):
     path = tiny_folder / filename
     outside = path.replace(tiny_folder.parent / filename)
-    try:
-        os.symlink(outside, path)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"cannot create a symlink: {exc}")
+    os.symlink(outside, path)
     with pytest.raises(ValueError) as error:
         load_kimi_k2_tokenizer(str(tiny_folder))
     assert str(error.value) == f"{path}: resolves outside the model folder"
