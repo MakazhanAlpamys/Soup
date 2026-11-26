@@ -646,10 +646,27 @@ def test_doctor_missing_train_extra_suggests_extra(monkeypatch):
         "accelerate",
     ):
         monkeypatch.setitem(sys.modules, name, None)
+    # No real GPU probe: the summary must not depend on the box running the test.
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: None)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     out = _strip_ansi(result.output)
     assert 'pip install "soup-cli[train]"' in out
+    # #3266 - the GPU panel and the summary say PyTorch is optional for core commands.
+    flat = _plain(out.replace(chr(0x2502), " "))
+    assert "Backend: not checked (PyTorch not installed)" in flat
+    assert (
+        "The GPU check needs PyTorch, and so does training with the transformers or "
+        "unsloth backend. Core commands and MLX training run without it." in flat
+    )
+    # MLX training does not need PyTorch, so the panel must not say training does.
+    assert "training and GPU features need it" not in flat
+    assert 'For training: pip install "soup-cli[train]"' in flat
+    assert (
+        'Training stack not installed (optional for core commands): pip install "soup-cli[train]"'
+        in flat
+    )
+    assert "unknown (torch not installed)" not in flat
     assert "torch>=2.6.0" not in out
     assert "transformers>=5.16.1" not in out
     assert "peft>=0.20.0" not in out
@@ -693,7 +710,10 @@ def test_doctor_missing_train_extra_message_unchanged_when_none_installed(monkey
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     out = _strip_ansi(result.output)
-    assert 'Training stack not installed: pip install "soup-cli[train]"' in out
+    assert (
+        'Training stack not installed (optional for core commands): pip install "soup-cli[train]"'
+        in _plain(out)
+    )
     assert "Training stack incomplete" not in out
     assert "All checks passed!" not in out
 
@@ -884,6 +904,14 @@ def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
     out = _strip_ansi(result.output)
     assert "pip install torch --index-url https://download.pytorch.org/whl/" in out
     assert 'pip install "soup-cli[train]"' in out
+    # #3266 - the new wording heads the entry; the two-step lines still follow it.
+    flat = _plain(out)
+    head = (
+        "Training stack not installed (optional for core commands): "
+        "pip install torch --index-url"
+    )
+    assert head in flat
+    assert 'pip install "soup-cli[train]"' in flat[flat.index(head) :]
     # The broken single-step form must be gone.
     assert '["soup-cli[train]" --index-url' not in out and '[train]" --index-url' not in out
 
