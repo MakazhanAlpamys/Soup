@@ -2175,7 +2175,7 @@ When fine-tuned adapters are merged into base weights or converted for deploymen
   $$\text{shift\_logits} = \text{logits}[:, :-1, :], \quad \text{shift\_labels} = \text{input\_ids}[:, 1:]$$
   Padding tokens are masked out so mean NLL is weighted by real tokens across the base, reference, and exported models.
 
-  The NLL closer-to-base check (`|exported_nll - base_nll| < |exported_nll - ref_nll|`) applies only when `|base_nll - ref_nll| > 1e-4`. Requiring an adapter NLL shift above `1e-4` prevents floating-point rounding noise on near-identical NLLs from causing false `DELTA_LOST` failures when the adapter had no measurable effect on prompt likelihood. `--allow-stub` skips NLL computation and always fails the gate (stubs exercise CLI rendering only and do not verify real model fidelity).
+  The NLL closer-to-base check (`|exported_nll - base_nll| < |exported_nll - ref_nll|`) applies only when `|base_nll - ref_nll| > 1e-4`. Requiring an adapter NLL shift above `1e-4` prevents floating-point rounding noise on near-identical NLLs from causing false `DELTA_LOST` failures when the adapter had no measurable effect on prompt likelihood. `--allow-stub` permits a fallback to deterministic stubs when live model loading is unavailable (stubs exercise CLI rendering only and do not verify real model fidelity). A live check still computes NLL when `--allow-stub` is present, and a non-finite live NLL still exits `1`; an actual stub fallback skips NLL computation and exits `2`.
 
 ### Prompts File Format
 
@@ -2195,6 +2195,6 @@ Only Hugging Face safetensors (`.safetensors` or `.bin`) directories are support
 | Code | Status | Meaning |
 |---|---|---|
 | `0` | `PASS` | Adapter delta is preserved across active prompts and NLL (when `|base_nll - ref_nll| > 1e-4`), and agreement meets `--min-agreement`. |
-| `1` | Runtime error | Model loading or evaluation failed (unless `--allow-stub` is supplied). |
-| `2` | Gate failed | `DELTA_LOST` (generation or NLL reverted closer to base), `LOW_AGREEMENT` (agreement fell below `--min-agreement`), `NO_EVIDENCE` (no active adapter prompts found), or `--allow-stub`. |
+| `1` | Runtime error | Model loading or live evaluation failed (unless `--allow-stub` triggers a stub fallback), or a computed NLL is non-finite (`NaN`/`Inf`, even with `--allow-stub`). |
+| `2` | Gate failed | `DELTA_LOST` (generation or NLL reverted closer to base), `LOW_AGREEMENT` (agreement fell below `--min-agreement`), `NO_EVIDENCE` (no active adapter prompts found), or an actual `--allow-stub` stub fallback. |
 | `3` | Usage error | Missing `--prompts`, path outside current working directory, unsupported artifact format, malformed prompt row, or invalid arguments. |
