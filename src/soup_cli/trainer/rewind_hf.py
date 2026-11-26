@@ -236,7 +236,7 @@ def make_rewind_trainer_class(base_cls: type) -> type:
     attached, so the subclass is safe to instantiate even when the recorder is
     later disabled.
     """
-    from torch.utils.data import Sampler
+    from torch.utils.data import RandomSampler, Sampler
 
     class IndexRecordingSampler(Sampler):
         """Wrap any ``Sampler[int]``; report every index before yielding it.
@@ -302,6 +302,30 @@ def make_rewind_trainer_class(base_cls: type) -> type:
             state = getattr(self, _STATE_ATTR, None)
             if state is None or sampler is None:
                 return sampler
+            # Accelerate recognizes RandomSampler by type before it prepares the DataLoader.
+            # Preserve its seedable sampler when the recorder would hide that type.
+            if isinstance(sampler, RandomSampler):
+                from accelerate.data_loader import SeedableRandomSampler
+
+                loader_config = getattr(self.accelerator, "dataloader_config", None)
+                use_seedable = getattr(
+                    loader_config,
+                    "use_seedable_sampler",
+                    getattr(self.accelerator, "use_seedable_sampler", False),
+                )
+                if use_seedable and not isinstance(sampler, SeedableRandomSampler):
+                    seed_kwargs = (
+                        {"data_seed": loader_config.data_seed}
+                        if hasattr(loader_config, "data_seed")
+                        else {}
+                    )
+                    sampler = SeedableRandomSampler(
+                        sampler.data_source,
+                        replacement=sampler.replacement,
+                        num_samples=sampler._num_samples,
+                        generator=sampler.generator,
+                        **seed_kwargs,
+                    )
             return IndexRecordingSampler(sampler, state)
 
         def compute_loss(  # type: ignore[override]
