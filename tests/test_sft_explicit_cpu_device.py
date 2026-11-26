@@ -56,6 +56,10 @@ def _captured_kwargs(tmp_path, monkeypatch, device):
     wrapper = sft.SFTTrainerWrapper(cfg, device=device)
     # The tiny checkpoint always loads on the CPU, whatever device the wrapper names.
     monkeypatch.setattr(sft, "resolve_device_map", lambda _device: {"": "cpu"})
+    # trl subclasses TrainingArguments when it is first imported: import it before
+    # the recorder replaces the class, or the import itself fails.
+    import trl.trainer.sft_trainer  # noqa: F401
+
     monkeypatch.setattr("transformers.TrainingArguments", _recorder)
     rows = [
         {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]}
