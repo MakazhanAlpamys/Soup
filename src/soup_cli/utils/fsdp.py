@@ -63,6 +63,22 @@ FSDP_CONFIGS = {
 }
 
 
+_SKIP_WARNING = (
+    "FSDP2: tied-embedding joint sharding was skipped on this Accelerate/Torch version; "
+    "training continues with Accelerate's default placement."
+)
+
+
+class _UnsupportedAccelerateError(Exception):
+    """Accelerate's private preparation boundary is not the one this code knows."""
+
+
+def _warn_skipped() -> None:
+    from rich.console import Console
+
+    Console().print(f"[yellow]{_SKIP_WARNING}[/]", soft_wrap=True)
+
+
 def prepare_fsdp2_tied_embeddings(trainer: Any) -> bool:
     """Keep frozen tied input/output weights in the same public FSDP2 group.
 
@@ -82,7 +98,11 @@ def prepare_fsdp2_tied_embeddings(trainer: Any) -> bool:
     if not _has_frozen_tied_embeddings(model):
         return False
     if getattr(plugin, "cpu_ram_efficient_loading", False):
-        _defer_fsdp2_tied_embeddings(accelerator)
+        try:
+            _defer_fsdp2_tied_embeddings(accelerator)
+        except _UnsupportedAccelerateError:
+            _warn_skipped()
+            return False
         return True
     return _shard_fsdp2_tied_embeddings(accelerator, model)
 
@@ -110,7 +130,12 @@ def _shard_fsdp2_tied_embeddings(accelerator: Any, model: Any) -> bool:
         return False
     mesh = getattr(accelerator, "torch_device_mesh", None)
     if mesh is not None:
-        mesh = mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)]
+        dim_names = getattr(getattr(accelerator, "parallelism_config", None),
+                            "fsdp_dim_names", None)
+        if not dim_names:
+            _warn_skipped()
+            return False
+        mesh = mesh[tuple(dim_names)]
     fully_shard(
         [embed, head],
         mesh=mesh,
@@ -127,10 +152,7 @@ def _clone_with_globals(function: Any, replacements: dict[str, Any]) -> Any:
         name in function.__code__.co_names and name in function.__globals__
         for name in replacements
     ):
-        raise RuntimeError(
-            "Unsupported Accelerate FSDP2 preparation API for RAM-efficient tied weights. "
-            "Disable cpu_ram_efficient_loading or use the validated Accelerate 1.14 stack."
-        )
+        raise _UnsupportedAccelerateError("unsupported FSDP2 preparation callable")
     bindings = {**function.__globals__, **replacements}
     clone = FunctionType(function.__code__, bindings, function.__name__,
                          function.__defaults__, function.__closure__)
@@ -146,7 +168,10 @@ def _defer_fsdp2_tied_embeddings(accelerator: Any) -> None:
     upstream preparation function, then bind its caller to this accelerator
     only. Other accelerators and Accelerate module globals remain untouched.
     """
-    from accelerate.utils import fsdp_utils
+    try:
+        from accelerate.utils import fsdp_utils
+    except ImportError as error:
+        raise _UnsupportedAccelerateError("accelerate.utils.fsdp_utils is missing") from error
 
     prepare = getattr(getattr(accelerator, "_prepare_fsdp2", None), "__func__", None)
     upstream = getattr(prepare, "__globals__", {}).get("fsdp2_prepare_model")
@@ -154,10 +179,7 @@ def _defer_fsdp2_tied_embeddings(accelerator: Any) -> None:
     if factory is None or factory is not getattr(
         fsdp_utils, "fsdp2_prepare_auto_wrap_policy", None,
     ):
-        raise RuntimeError(
-            "Unsupported Accelerate FSDP2 auto-wrap-policy boundary. "
-            "Disable cpu_ram_efficient_loading or use the validated Accelerate 1.14 stack."
-        )
+        raise _UnsupportedAccelerateError("unknown FSDP2 auto-wrap-policy boundary")
 
     def prepare_policy(plugin: Any, model: Any) -> Any:
         if plugin is accelerator.state.fsdp_plugin:

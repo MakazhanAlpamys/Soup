@@ -169,6 +169,28 @@ def _prepare_two_cpu_ranks(rank, rendezvous, ram_efficient, precision):
         dist.destroy_process_group()
 
 
+def _skip_without_internals():
+    """Skip in the parent when the Accelerate/Torch internals the children use are absent."""
+    try:
+        from accelerate import Accelerator
+        from accelerate.utils import fsdp_utils
+        from accelerate.utils.dataclasses import DynamoBackend  # noqa: F401
+        from torch.distributed.device_mesh import init_device_mesh  # noqa: F401
+        from torch.distributed.fsdp import FSDPModule  # noqa: F401
+        from torch.distributed.tensor import DTensor  # noqa: F401
+    except ImportError as error:
+        pytest.skip(f"Accelerate/Torch FSDP2 internals unavailable: {error}")
+    needed = (
+        hasattr(Accelerator, "_get_named_parameters"),
+        hasattr(Accelerator, "_prepare_fsdp2"),
+        hasattr(fsdp_utils, "fsdp2_prepare_model"),
+        hasattr(fsdp_utils, "fsdp2_load_full_state_dict"),
+        hasattr(fsdp_utils, "fsdp2_prepare_auto_wrap_policy"),
+    )
+    if not all(needed):
+        pytest.skip("this Accelerate version lacks the FSDP2 preparation internals")
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("ram_efficient", [False, True])
 @pytest.mark.parametrize("precision", ["no", "bf16"])
@@ -180,6 +202,7 @@ def test_real_two_rank_preparation_preserves_full_weights(tmp_path, ram_efficien
 
     if not dist.is_available() or not dist.is_gloo_available():
         pytest.skip("two-CPU-rank setup regression requires Torch distributed/Gloo")
+    _skip_without_internals()
     rendezvous = (tmp_path / "rendezvous").as_uri()
     context = mp.spawn(_prepare_two_cpu_ranks, (rendezvous, ram_efficient, precision),
                        nprocs=2, join=False)
@@ -195,21 +218,99 @@ def test_real_two_rank_preparation_preserves_full_weights(tmp_path, ram_efficien
             process.join(timeout=5)
 
 
-def test_unknown_accelerate_boundary_fails_before_mutating_weights():
+def _tied_model(frozen=True):
     import torch.nn as nn
-
-    from soup_cli.utils.fsdp import prepare_fsdp2_tied_embeddings
 
     embed = nn.Embedding(8, 4)
     head = nn.Linear(4, 8, bias=False)
     head.weight = embed.weight
-    embed.requires_grad_(False)
-    original_weight = embed.weight
+    embed.weight.requires_grad_(not frozen)
     model = SimpleNamespace(get_input_embeddings=lambda: embed, get_output_embeddings=lambda: head)
+    return embed, head, model
+
+
+def _squash(text):
+    return " ".join(text.split())
+
+
+def test_unknown_accelerate_boundary_warns_and_leaves_weights_alone(capsys):
+    from soup_cli.utils.fsdp import _SKIP_WARNING, prepare_fsdp2_tied_embeddings
+
+    embed, head, model = _tied_model()
+    original_weight = embed.weight
     plugin = SimpleNamespace(fsdp_version=2, cpu_ram_efficient_loading=True)
     accelerator = SimpleNamespace(state=SimpleNamespace(fsdp_plugin=plugin),
                                   _prepare_fsdp2=lambda *args: None)
-    with pytest.raises(RuntimeError, match="Unsupported Accelerate"):
-        prepare_fsdp2_tied_embeddings(SimpleNamespace(model=model, accelerator=accelerator))
+    assert prepare_fsdp2_tied_embeddings(
+        SimpleNamespace(model=model, accelerator=accelerator)) is False
+    out = _squash(capsys.readouterr().out)
+    assert _squash(_SKIP_WARNING) in out
+    assert _SKIP_WARNING == (
+        "FSDP2: tied-embedding joint sharding was skipped on this Accelerate/Torch version; "
+        "training continues with Accelerate's default placement."
+    )
     assert embed.weight is head.weight is original_weight
     assert not hasattr(accelerator, "_soup_fsdp2_tied_embeddings")
+
+
+def test_mesh_without_parallelism_config_warns_and_noops(monkeypatch, capsys):
+    from torch.distributed import fsdp
+
+    from soup_cli.utils.fsdp import _SKIP_WARNING, prepare_fsdp2_tied_embeddings
+
+    _embed, _head, model = _tied_model()
+    plugin = SimpleNamespace(fsdp_version=2, cpu_ram_efficient_loading=False)
+    accelerator = SimpleNamespace(state=SimpleNamespace(fsdp_plugin=plugin),
+                                  torch_device_mesh=object())
+    monkeypatch.setattr(fsdp, "fully_shard", lambda *a, **k: pytest.fail("unexpected placement"))
+    assert prepare_fsdp2_tied_embeddings(
+        SimpleNamespace(model=model, accelerator=accelerator)) is False
+    assert _squash(_SKIP_WARNING) in _squash(capsys.readouterr().out)
+
+
+def test_eager_path_skips_modules_that_are_already_fsdp(monkeypatch):
+    from torch.distributed import fsdp
+
+    from soup_cli.utils.fsdp import prepare_fsdp2_tied_embeddings
+
+    embed, head, model = _tied_model()
+
+    class _Marker(fsdp.FSDPModule):
+        def __init__(self):  # no real FSDP state: only the isinstance check is exercised
+            pass
+
+    embed.__class__ = type("PlacedEmbedding", (_Marker, type(embed)), {})
+    plugin = SimpleNamespace(fsdp_version=2, cpu_ram_efficient_loading=False)
+    accelerator = SimpleNamespace(state=SimpleNamespace(fsdp_plugin=plugin))
+    monkeypatch.setattr(fsdp, "fully_shard", lambda *a, **k: pytest.fail("placed twice"))
+    assert not prepare_fsdp2_tied_embeddings(SimpleNamespace(model=model, accelerator=accelerator))
+    assert head.weight is embed.weight
+
+
+@pytest.mark.parametrize("candidate", ["not_a_function", "missing_name"])
+def test_clone_with_globals_rejects_unsupported_callables(candidate):
+    from soup_cli.utils.fsdp import _clone_with_globals, _UnsupportedAccelerateError
+
+    def upstream():
+        return other()  # noqa: F821
+
+    def other():
+        return 1
+
+    function = {"not_a_function": len, "missing_name": upstream}[candidate]
+    replacements = {"other": lambda: 2} if candidate == "not_a_function" else {"absent": 1}
+    with pytest.raises(_UnsupportedAccelerateError):
+        _clone_with_globals(function, replacements)
+
+
+def test_clone_with_globals_rebinds_only_the_clone():
+    from soup_cli.utils.fsdp import _clone_with_globals
+
+    def helper():
+        return 1
+
+    def upstream():
+        return helper()
+
+    clone = _clone_with_globals(upstream, {"helper": lambda: 2})
+    assert clone() == 2 and upstream() == 1
