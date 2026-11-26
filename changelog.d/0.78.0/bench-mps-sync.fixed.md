@@ -1,1 +1,0 @@
-- `soup bench train` now synchronizes MPS at the boundaries of the timed training steps, as it already did for CUDA (and for `cuda:N` devices), and records the training precision (`bf16` / `fp16`) in the report provenance. (#PENDING by @nurseit14)
