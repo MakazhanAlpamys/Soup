@@ -16,6 +16,9 @@ Requires: torch >= 2.2.0, accelerate >= 0.27.0
 from __future__ import annotations
 
 import copy
+from functools import update_wrapper
+from types import FunctionType, MethodType
+from typing import Any
 
 # FSDP2 Full Shard: shards params + gradients + optimizer states (like ZeRO-3)
 FSDP_FULL_SHARD = {
@@ -58,6 +61,115 @@ FSDP_CONFIGS = {
     "shard_grad": FSDP_SHARD_GRAD_OP,
     "full_offload": FSDP_FULL_SHARD_OFFLOAD,
 }
+
+
+def prepare_fsdp2_tied_embeddings(trainer: Any) -> bool:
+    """Keep frozen tied input/output weights in the same public FSDP2 group.
+
+    Accelerate 1.14 can carve the embedding into a tail group while the tied
+    head remains in the root. Torch 2.13 rejects that at its first forward.
+    RAM-efficient loading must capture the full weights before joint placement.
+    In that mode install an instance-local preparation hook at Accelerate's
+    post-capture auto-wrap boundary; other modes keep the measured eager path.
+    """
+    accelerator = getattr(trainer, "accelerator", None)
+    plugin = getattr(getattr(accelerator, "state", None), "fsdp_plugin", None)
+    if getattr(plugin, "fsdp_version", None) != 2:
+        return False
+    if getattr(accelerator, "_soup_fsdp2_tied_embeddings", False):
+        return False
+    model = trainer.model
+    if not _has_frozen_tied_embeddings(model):
+        return False
+    if getattr(plugin, "cpu_ram_efficient_loading", False):
+        _defer_fsdp2_tied_embeddings(accelerator)
+        return True
+    return _shard_fsdp2_tied_embeddings(accelerator, model)
+
+
+def _has_frozen_tied_embeddings(model: Any) -> bool:
+    embed = getattr(model, "get_input_embeddings", lambda: None)()
+    head = getattr(model, "get_output_embeddings", lambda: None)()
+    weight = getattr(embed, "weight", None)
+    if weight is None or weight is not getattr(head, "weight", None):
+        return False
+    return not any(parameter.requires_grad for module in (embed, head)
+                   for parameter in module.parameters())
+
+
+def _shard_fsdp2_tied_embeddings(accelerator: Any, model: Any) -> bool:
+    if not _has_frozen_tied_embeddings(model):
+        return False
+    embed = model.get_input_embeddings()
+    head = model.get_output_embeddings()
+    plugin = accelerator.state.fsdp_plugin
+
+    from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
+
+    if isinstance(embed, FSDPModule) or isinstance(head, FSDPModule):
+        return False
+    mesh = getattr(accelerator, "torch_device_mesh", None)
+    if mesh is not None:
+        mesh = mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)]
+    fully_shard(
+        [embed, head],
+        mesh=mesh,
+        mp_policy=getattr(plugin, "mixed_precision_policy", None) or MixedPrecisionPolicy(),
+        offload_policy=getattr(plugin, "cpu_offload", None),
+        reshard_after_forward=False,
+    )
+    return True
+
+
+def _clone_with_globals(function: Any, replacements: dict[str, Any]) -> Any:
+    """Reuse upstream code with local bindings, without patching its module."""
+    if not isinstance(function, FunctionType) or not all(
+        name in function.__code__.co_names and name in function.__globals__
+        for name in replacements
+    ):
+        raise RuntimeError(
+            "Unsupported Accelerate FSDP2 preparation API for RAM-efficient tied weights. "
+            "Disable cpu_ram_efficient_loading or use the validated Accelerate 1.14 stack."
+        )
+    bindings = {**function.__globals__, **replacements}
+    clone = FunctionType(function.__code__, bindings, function.__name__,
+                         function.__defaults__, function.__closure__)
+    clone.__kwdefaults__ = function.__kwdefaults__
+    return update_wrapper(clone, function)
+
+
+def _defer_fsdp2_tied_embeddings(accelerator: Any) -> None:
+    """Place tied modules after full-state capture and meta conversion.
+
+    Accelerate 1.14's auto-wrap-policy factory is called after both operations
+    and before any child sharding. Rebind that factory in a copy of the exact
+    upstream preparation function, then bind its caller to this accelerator
+    only. Other accelerators and Accelerate module globals remain untouched.
+    """
+    from accelerate.utils import fsdp_utils
+
+    prepare = getattr(getattr(accelerator, "_prepare_fsdp2", None), "__func__", None)
+    upstream = getattr(prepare, "__globals__", {}).get("fsdp2_prepare_model")
+    factory = getattr(upstream, "__globals__", {}).get("fsdp2_prepare_auto_wrap_policy")
+    if factory is None or factory is not getattr(
+        fsdp_utils, "fsdp2_prepare_auto_wrap_policy", None,
+    ):
+        raise RuntimeError(
+            "Unsupported Accelerate FSDP2 auto-wrap-policy boundary. "
+            "Disable cpu_ram_efficient_loading or use the validated Accelerate 1.14 stack."
+        )
+
+    def prepare_policy(plugin: Any, model: Any) -> Any:
+        if plugin is accelerator.state.fsdp_plugin:
+            _shard_fsdp2_tied_embeddings(accelerator, model)
+        return factory(plugin, model)
+
+    local_prepare_model = _clone_with_globals(
+        upstream, {"fsdp2_prepare_auto_wrap_policy": prepare_policy},
+    )
+    local_prepare = _clone_with_globals(prepare, {"fsdp2_prepare_model": local_prepare_model})
+    accelerator._prepare_fsdp2 = MethodType(local_prepare, accelerator)
+    accelerator._soup_fsdp2_tied_embeddings = True
 
 
 def get_fsdp_config(preset: str) -> dict:

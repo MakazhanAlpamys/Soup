@@ -1272,6 +1272,10 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         from soup_cli.utils.peft_wiring import attach_compile_prefix_callback
 
         attach_compile_prefix_callback(self.trainer, tcfg, self._output_dir, console)
+        from soup_cli.utils.fsdp import prepare_fsdp2_tied_embeddings
+
+        if prepare_fsdp2_tied_embeddings(self.trainer):
+            console.print("[green]FSDP2:[/] joint sharding configured for tied embeddings")
         if self._quest_metadata is not None:
             from soup_cli.utils.quest import QuestMetadataCallback
 
