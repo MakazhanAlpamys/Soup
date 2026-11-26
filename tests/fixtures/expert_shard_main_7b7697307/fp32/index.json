@@ -14,12 +14,12 @@
   "soup_version": "0.78.0",
   "large_keys": [],
   "format_version": 5,
-  "source_fingerprint": "fdaee503d9b8adf15fe54a29423e01cda1f5f4bee8675755dcee3a66d08a7952",
+  "source_fingerprint": "25599a35714e4b8638a0d11872e09b70c7e12ce69a0b2e7a493b6f1e1dbcc4a6",
   "source_files": [
     [
       "model.safetensors",
       8272,
-      1795620640510462000
+      1795701947150142600
     ]
   ],
   "quant": "none",

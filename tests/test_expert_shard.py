@@ -770,6 +770,22 @@ def test_a_float32_cache_written_before_the_split_reads_back_identically():
         assert owner.numel() > 0
 
 
+def _assert_quant_state_equal(key, rebuilt, reference):
+    """Compare a rebuilt NF4 ``QuantState`` with a fresh one, one named field at a time."""
+    import torch
+
+    assert rebuilt.blocksize == reference.blocksize, f"{key}: blocksize"
+    assert rebuilt.quant_type == reference.quant_type, f"{key}: quant_type"
+    assert rebuilt.dtype == reference.dtype, f"{key}: dtype"
+    assert tuple(rebuilt.shape) == tuple(reference.shape), f"{key}: shape"
+    assert torch.equal(rebuilt.code, reference.code), f"{key}: NF4 code table"
+    assert torch.equal(rebuilt.absmax, reference.absmax), f"{key}: absmax"
+    assert torch.equal(rebuilt.offset, reference.offset), f"{key}: nested offset"
+    assert rebuilt.state2.blocksize == reference.state2.blocksize, f"{key}: nested blocksize"
+    assert torch.equal(rebuilt.state2.code, reference.state2.code), f"{key}: nested code table"
+    assert torch.equal(rebuilt.state2.absmax, reference.state2.absmax), f"{key}: nested absmax"
+
+
 def test_a_nested_nf4_cache_written_before_the_split_reads_back_identically():
     """Real bitsandbytes NF4 with the default double quantisation, written by the old sharder."""
     pytest.importorskip(
@@ -797,13 +813,16 @@ def test_a_nested_nf4_cache_written_before_the_split_reads_back_identically():
                     packed, state = quantize_4bit(
                         value, blocksize=64, quant_type="nf4", compress_statistics=True
                     )
-                    assert torch.equal(host[key], packed)
                     rebuilt = rebuild_quant_state(
                         key, host, index.expert_quant_specs[part], codes
                     )
+                    assert torch.equal(host[key], packed), f"{key}: packed NF4 bytes differ"
+                    _assert_quant_state_equal(key, rebuilt, state)
+                    # Same packed bytes through the same bitsandbytes call: only the state
+                    # (checked exactly above) can make the dequantised values differ.
                     assert torch.equal(
-                        dequantize_4bit(host[key], rebuilt), dequantize_4bit(packed, state)
-                    )
+                        dequantize_4bit(host[key], rebuilt), dequantize_4bit(host[key], state)
+                    ), f"{key}: dequantised values differ for identical packed bytes"
         finally:
             reader.close()
         assert owner.numel() > 0
