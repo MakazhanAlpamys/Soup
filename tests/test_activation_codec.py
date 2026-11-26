@@ -250,3 +250,18 @@ def test_decode_with_a_scale_of_the_wrong_shape_is_refused():
     _x, payload, scale = _encoded("int8")
     with pytest.raises(ValueError, match="scale shape"):
         activation_codec.decode(payload, scale[:, :2], "int8", torch.bfloat16, 10)
+
+
+def test_store_compress_of_the_identity_has_no_scale_and_is_always_finite():
+    x = torch.tensor([[1.0, float("nan")]]).to(torch.bfloat16)
+    payload, scale, finite = activation_codec.store_compress(x, "bf16")
+    assert payload is x and scale is None
+    assert finite.dtype == torch.bool and finite.shape == () and bool(finite)
+
+
+def test_store_compress_of_a_lossy_codec_flags_a_non_finite_row():
+    x = torch.ones(2, 4).to(torch.bfloat16)
+    x[1, 0] = float("inf")
+    _payload, scale, finite = activation_codec.store_compress(x, "int8")
+    assert scale is not None and not bool(finite)
+    assert bool(activation_codec.store_compress(torch.ones(2, 4), "int8")[2])

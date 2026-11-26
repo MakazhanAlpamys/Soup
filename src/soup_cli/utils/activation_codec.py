@@ -198,8 +198,14 @@ def round_trip(x: Any, codec: str) -> Any:
 
 
 def store_compress(x: Any, codec: str) -> Tuple[Any, Any, Any]:
-    """Encode without a host sync, returning a device-local finite flag as well."""
+    """Encode without a host sync, returning a device-local finite flag as well.
+
+    The identity codec stores the bytes unchanged, so it has no scale and nothing to refuse:
+    it returns ``(x, None, True)`` with the flag as a device-local boolean scalar.
+    """
     import torch
 
     payload, scale = encode(x, codec, check_finite=False)
+    if scale is None:
+        return payload, None, torch.ones((), dtype=torch.bool, device=payload.device)
     return payload, scale, torch.isfinite(scale).all()
