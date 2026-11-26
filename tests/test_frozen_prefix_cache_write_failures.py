@@ -228,7 +228,7 @@ def test_a_nearly_full_volume_stops_writing_and_keeps_reading(
 
     assert cache.writing is False
     assert len(notices) == 1
-    assert "5.0 GB reserve" in notices[0] and "larger of 2 GiB and 5%" in notices[0]
+    assert "5.4 GB reserve" in notices[0] and "larger of 2 GiB and 5%" in notices[0]
     assert disk_state(cache.directory) == before
     assert_value(cache, metadata, old)  # existing entries are still served
     assert_value(cache, other, unrelated)
