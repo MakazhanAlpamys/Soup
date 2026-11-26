@@ -89,6 +89,28 @@ With `[dev]` installed, run the full suite:
 python -m pytest tests/ -v --tb=short
 ```
 
+For a focused local check, run `python scripts/select_tests.py` from the repository
+root and copy the pytest command it prints. It considers staged, unstaged, and
+non-ignored untracked changes against `HEAD`. Use `--base <commit>` to include
+committed changes, or pass specific repository-relative files to choose the input.
+The selector follows static imports and string references to Soup modules. It
+uses test names when the import graph finds no tests, with a stop list for
+generic stems. If transitive links select more than 300 files, the selector uses
+the complete set of direct imports and their test-helper links. The status reports
+which scope ran.
+Shared files (including a changed `conftest.py`), deletions, and uncertain or still
+too-large selections request the full suite. Focused commands use `--no-cov`
+because coverage is measured on the full suite.
+
+Both modes exit 0 and print only the command on stdout. On stderr,
+`SOUP_TEST_SELECTION ` prefixes one JSON object with `mode` (`focused` or `full`),
+`reason` (null for focused), `scope` (`transitive` or `direct` for focused,
+null for full), and `unknown_dynamic_imports` (the number of unresolved calls
+seen while scanning, or zero if planning stopped before scanning). Unresolved
+`import_module` and `__import__` calls do not supply links. Invalid arguments exit
+2 without a command. Run the full suite before merging to cover dynamic dispatch
+and subprocesses. Use `--shell posix` in Git Bash on Windows.
+
 Run the linter in either environment:
 
 ```bash
