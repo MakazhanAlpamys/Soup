@@ -106,6 +106,13 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
+        # Refuse unsupported L2L options before any model load, as the SFT wrapper does.
+        self._l2l_recipe = None
+        if tcfg.l2l:
+            from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
+
+            self._l2l_recipe = resolve_l2l_recipe(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
         # v0.72.4 — layer streaming replaces the model-load path entirely (meta
         # skeleton, never a resident load), so it dispatches ahead of the backend
@@ -221,13 +228,21 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         )
 
         # --- Trainer ---
-        self.trainer = DPOTrainer(
-            model=self.model,
-            args=dpo_config,
-            train_dataset=train_ds,
-            eval_dataset=eval_ds,
-            processing_class=self.tokenizer,
-        )
+        trainer_kwargs = {
+            "model": self.model,
+            "args": dpo_config,
+            "train_dataset": train_ds,
+            "eval_dataset": eval_ds,
+            "processing_class": self.tokenizer,
+        }
+        if tcfg.l2l:
+            from soup_cli.trainer.l2l_dpo import dpo_window_loss
+
+            self.trainer = self._build_l2l_trainer(
+                DPOTrainer, trainer_kwargs, dpo_config, loss=dpo_window_loss(args=dpo_config)
+            )
+        else:
+            self.trainer = DPOTrainer(**trainer_kwargs)
         if not config_accepts(DPOConfig, "max_prompt_length"):
             # TRL 0.29 removed the prompt cap and its new DPO tokenizer leaves
             # max_length enforcement to callers. Cap the prepared token ids so
@@ -255,6 +270,10 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
 
             materialize_meta_adapter_copy(self.model)
+        if tcfg.l2l:
+            from soup_cli.trainer.l2l_dpo import refuse_unsupported_dpo
+
+            refuse_unsupported_dpo(self.trainer)
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -443,6 +462,15 @@ class DPOTrainerWrapper(StreamingSetupMixin):
     ) -> dict:
         """Run DPO training and return results summary."""
         start = time.time()
+
+        l2l_recipe = getattr(self, "_l2l_recipe", None)
+        if l2l_recipe is not None:
+            from soup_cli.utils.l2l_recipe import validate_resume, write_recipe
+
+            # A rejected resume must not overwrite the recipe the checkpoint was trained with.
+            if resume_from_checkpoint is not None:
+                validate_resume(self._output_dir, l2l_recipe)
+            write_recipe(self._output_dir, l2l_recipe)
 
         # Add callback for live display and experiment tracking
         if display:

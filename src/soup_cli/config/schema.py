@@ -104,7 +104,7 @@ _MAX_LORA_PATTERN_KEY_SHOWN = 80
 
 # Tasks that training.l2l accepts. A task joins the tuple when its L2L window loss
 # (trainer/l2l_trainer.py WindowLoss) ships; the refusal below reads the tuple.
-L2L_SUPPORTED_TASKS = ("sft",)
+L2L_SUPPORTED_TASKS = ("sft", "dpo")
 
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
@@ -4024,7 +4024,7 @@ class TrainingConfig(BaseModel):
     l2l: bool = Field(
         default=False,
         description=(
-            "BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each "
+            "BETA. Layer-to-layer (L2L) execution for sft and dpo with stream_layers: each "
             "streamed decoder layer is loaded once per optimizer step and runs all "
             "k micro-batches, then the optimizer takes one step on the adapters. k is "
             "gradient_accumulation_steps. Needs stream_layers=true and a Llama or "
@@ -8350,6 +8350,26 @@ class SoupConfig(BaseModel):
             raise ValueError(message)
         return self
 
+    @staticmethod
+    def _refuse_dpo_l2l_unsupported(tcfg: Any) -> None:
+        """training.l2l with task='dpo' reproduces TRL's sigmoid DPO against a frozen ``ref``
+        adapter at a fixed beta. Refuse what changes that between steps or draws random numbers
+        in the reference forward, which the layer-major walk cannot replay. A regenerated
+        reference (dpo_ref_regen_epochs) is refused for every DPO run by the variants check.
+        lora.dropout is not refused: TRL's DPOTrainer zeroes every nn.Dropout when it is built
+        (``disable_dropout=True``), so no LoRA dropout mask is drawn in either forward."""
+        if tcfg.dpo_beta_schedule is not None or tcfg.dpo_beta_end is not None:
+            raise ValueError(
+                "training.l2l with task='dpo' keeps beta fixed: remove "
+                "training.dpo_beta_schedule and training.dpo_beta_end."
+            )
+        if tcfg.neftune_alpha is not None:
+            raise ValueError(
+                "training.l2l with task='dpo' does not support training.neftune_alpha: the "
+                "reference forward draws NEFTune noise between the policy forwards, an "
+                "order the layer-major walk does not reproduce."
+            )
+
     @model_validator(mode="after")
     def _validate_l2l_compat(self) -> "SoupConfig":
         """``training.l2l`` and its options: each refusal names the field and the gate.
@@ -8383,6 +8403,8 @@ class SoupConfig(BaseModel):
                 f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
                 f"got task={self.task!r}."
             )
+        if self.task == "dpo":
+            self._refuse_dpo_l2l_unsupported(tcfg)
         if self.backend != "transformers" or self.modality != "text":
             raise ValueError(
                 "training.l2l requires backend='transformers' and modality='text'; "

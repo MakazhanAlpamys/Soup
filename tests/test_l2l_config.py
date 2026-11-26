@@ -56,7 +56,7 @@ def test_l2l_without_stream_layers_names_the_field_and_the_gate():
 
 
 def test_l2l_for_a_task_other_than_sft_names_the_task_gate():
-    pattern = r"training\.l2l supports task in \['sft'\]; got task='ipo'"
+    pattern = r"training\.l2l supports task in \['sft', 'dpo'\]; got task='ipo'"
     with pytest.raises(ValueError, match=pattern):
         load_config_from_string(_yaml(task="ipo", l2l=True))
 

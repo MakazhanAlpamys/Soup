@@ -1207,17 +1207,46 @@ training:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
+| `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` or `task: dpo` on the transformers text path. A bool only (`1` and `yes` are refused). |
 | `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
 | `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
 | `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
 
-- **Scope.** Llama and Mistral models on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model is refused with `L2L on a MoE model needs per-expert streaming parity (not yet in this version)`. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
+- **Scope.** Llama and Mistral models on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model is refused with `L2L on a MoE model needs per-expert streaming parity (not yet in this version)`. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft` and `dpo`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
 - **Recipe and resume.** The run writes `l2l_recipe.json` (requested and effective k, codec) to its output directory. A resume whose k or codec differs from the checkpoint's is refused, because a different k moves the optimizer-step boundaries.
 - **k = 1** behaves like plain streaming.
+
+#### L2L for DPO
+
+`training.l2l: true` accepts `task: dpo` next to `sft`. The layer is still loaded once per
+optimizer step. A window loss replaces the cross-entropy head: it reproduces the loss of the
+installed TRL `DPOTrainer`, and the Hugging Face loop divides each micro-batch's loss by
+`len(window)`, the same as gradient accumulation does for DPO. The reference log-probabilities
+come from the frozen `ref` adapter, run without gradients through the same loaded layer, so the
+reference pass adds no layer load.
+
+Only DPO is ready. `orpo`, `simpo` and `kto` have a window loss in the code, but they did not pass
+the readiness rule (their runs are not verified to match gradient accumulation), so the config
+refuses them under `training.l2l`: `training.l2l supports task in ['sft', 'dpo']; got task='kto'.`
+
+Refused when the config is read, besides the SFT refusals above:
+
+- `task: dpo` with `dpo_beta_schedule` or `dpo_beta_end`. The L2L loss keeps beta fixed.
+- `task: dpo` with `neftune_alpha`. The reference forward draws NEFTune noise between the policy
+  forwards, an order the layer-major walk does not reproduce.
+- `dpo_ref_regen_epochs` on any DPO run, with or without L2L.
+
+`lora.dropout` above 0 is accepted, because TRL zeroes every `nn.Dropout` when it builds the DPO
+trainer.
+
+Refused when the trainer is built: a trainer whose loss is not plain sigmoid DPO against the `ref`
+adapter (`loss_type` other than `sigmoid`, `loss_weights` other than `[1.0]`, a `ref_model`,
+`precompute_ref_log_probs` on, `ld_alpha`, an `f_divergence_type` other than `reverse_kl`,
+`label_smoothing` other than 0, `use_weighting` on). A trainer that lacks one of these attributes
+is refused too, so a TRL that renames it stops the run instead of passing unchecked.
 
 ### Preference losses over streaming (v0.72.4)
 

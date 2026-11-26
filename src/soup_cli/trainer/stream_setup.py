@@ -1949,11 +1949,12 @@ class StreamingSetupMixin:
         self._stream_loss_chunk_hook = None
 
     def _build_l2l_trainer(
-        self, base_cls: Any, trainer_kwargs: dict, training_args: Any
+        self, base_cls: Any, trainer_kwargs: dict, training_args: Any, loss: Any = None
     ) -> Any:
         """Build the trainer that runs each accumulation window as one L2L step.
 
-        Only SFT has an L2L window loss. The window length is HF's accumulation count,
+        ``loss`` is the task's ``WindowLoss``; ``None`` is SFT. The window length is HF's
+        accumulation count,
         which this builder checks against the recipe and never changes. An activation
         codec the launch has not opened is refused here as well as in
         ``resolve_l2l_recipe``, so a caller that skips the recipe cannot reach the trainer.
@@ -1989,7 +1990,7 @@ class StreamingSetupMixin:
         warning = unready_task_warning(getattr(self.config, "task", None))
         if warning is not None:
             console.print(f"[yellow]Warning:[/] {warning}")
-        recipe = self._l2l_recipe
+        recipe = getattr(self, "_l2l_recipe", None)
         effective_k = (
             recipe.effective_k if recipe is not None
             else int(training_args.gradient_accumulation_steps)
@@ -2004,6 +2005,7 @@ class StreamingSetupMixin:
             trainer,
             self._stream_runtime,
             dtype=getattr(torch, resolve_stream_dtype(str(self.device))),
+            loss=loss,
             activation_codec=codec,
             spill_dir=tcfg.l2l_spill_dir,
             weight_dirs=self._stream_weight_dirs,
