@@ -159,7 +159,9 @@ def test_the_other_refusals_of_l2l_stand():
     from soup_cli.config.loader import load_config_from_string
 
     with pytest.raises(ValueError, match=r"training\.l2l cannot be combined with .*prefix_tree"):
-        load_config_from_string(_yaml(prefix_tree=True))
+        load_config_from_string(
+            _yaml(prefix_tree=True, lora={"r": 4, "alpha": 8, "dropout": 0.0})
+        )
 
 
 def test_l2l_without_the_chunk_is_unchanged():

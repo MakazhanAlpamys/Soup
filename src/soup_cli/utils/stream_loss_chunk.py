@@ -292,18 +292,23 @@ class ChunkedHeadLoss:
                 f"rebuilt chunk by chunk from the head alone. Remove {field}."
             )
         trainable = [name for name, param in head.named_parameters() if param.requires_grad]
-        if impl == IMPL_CCE and getattr(head, "pool", None) is not None:
-            # A streamed head: the kernel reads the base weight out of the shared slot and
-            # nothing else, so an adapter on the head would get no gradient.
+        if impl == IMPL_CCE:
+            # The kernel reads the head's base ``weight`` and nothing else (for a streamed
+            # head, the view in the shared slot), so any other trainable parameter on the
+            # head module, an adapter above all, would get no gradient. A plain trainable
+            # ``weight`` (a resident head fine-tuned in full) is what the kernel trains.
+            streamed = getattr(head, "pool", None) is not None
             adapter = [
-                name for name, param in head.named_parameters() if param.requires_grad
+                name
+                for name, param in head.named_parameters()
+                if param.requires_grad and (streamed or name != "weight")
             ]
             if adapter:
                 raise ValueError(
-                    "training.use_cut_ce cannot train the streamed output head: the kernel "
-                    "reads only its base weight, so these parameters would get no gradient: "
-                    f"{', '.join(sorted(adapter))}. Remove 'lm_head' from the LoRA targets "
-                    "or set use_cut_ce=false."
+                    "training.use_cut_ce cannot train an adapter on the output head: the "
+                    "kernel reads only the head's base weight, so these parameters would "
+                    f"get no gradient: {', '.join(sorted(adapter))}. Remove the head from "
+                    "the LoRA targets or set use_cut_ce=false."
                 )
         if trainable and impl == IMPL_CHUNKED:
             raise ValueError(

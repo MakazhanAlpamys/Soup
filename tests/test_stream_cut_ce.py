@@ -74,7 +74,8 @@ def test_streamed_cce_refuses_prefix_tree():
 
 
 def test_prefix_tree_without_streaming_keeps_resident_cce():
-    assert _config(use_cut_ce=True, prefix_tree=True).training.prefix_tree
+    cfg = _config(use_cut_ce=True, prefix_tree=True, lora={"dropout": 0.0})
+    assert cfg.training.prefix_tree
 
 
 def test_supported_controls():
@@ -327,6 +328,58 @@ def test_the_setup_installs_the_cce_hook_and_charges_a_chunk(tmp_path, monkeypat
 # --- the streamed untied head and the refusals at setup ------------------------------
 
 
+_HEAD_ADAPTER_MESSAGE = (
+    "training.use_cut_ce cannot train an adapter on the output head: the kernel reads only "
+    "the head's base weight, so these parameters would get no gradient: {names}. Remove the "
+    "head from the LoRA targets or set use_cut_ce=false."
+)
+
+
+def _lora_on_head(model):
+    """LoRA on the output head of a resident tiny Llama; returns the causal LM."""
+    pytest.importorskip("peft")
+    from peft import LoraConfig, get_peft_model
+
+    peft_model = get_peft_model(
+        model, LoraConfig(r=2, lora_alpha=4, target_modules=["lm_head"], task_type="CAUSAL_LM")
+    )
+    return peft_model.get_base_model()
+
+
+@pytest.mark.parametrize("tie", [False, True])
+def test_a_resident_or_tied_head_with_an_adapter_is_refused(tie, fake_cce):
+    from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss
+
+    causal = _lora_on_head(_tiny_causal_lm(tie))
+    with pytest.raises(ValueError) as caught:
+        ChunkedHeadLoss(causal, None, "cce")
+    message = str(caught.value)
+    assert message.startswith(_HEAD_ADAPTER_MESSAGE.split("{names}")[0])
+    assert "lora_A" in message and "lora_B" in message
+
+
+def test_a_regex_target_reaching_the_head_is_refused(fake_cce):
+    pytest.importorskip("peft")
+    from peft import LoraConfig, get_peft_model
+
+    from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss
+
+    model = get_peft_model(
+        _tiny_causal_lm(),
+        LoraConfig(r=2, lora_alpha=4, target_modules=r".*lm_head", task_type="CAUSAL_LM"),
+    )
+    with pytest.raises(ValueError, match="cannot train an adapter on the output head"):
+        ChunkedHeadLoss(model.get_base_model(), None, "cce")
+
+
+def test_a_fully_trained_plain_head_weight_is_still_allowed(fake_cce):
+    from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss
+
+    model = _tiny_causal_lm()
+    model.get_output_embeddings().weight.requires_grad_(True)
+    ChunkedHeadLoss(model, None, "cce").remove()  # no ValueError
+
+
 def test_cce_through_the_streamed_untied_head(streamed, fake_cce):  # noqa: F811
     """Forward and backward through the pool-backed lm_head: the loss and the adapter
     gradients equal the unhooked labelled step."""
@@ -388,15 +441,15 @@ def test_a_trainable_parameter_on_the_streamed_head_is_refused(streamed, fake_cc
     model, _runtime = streamed
     causal = causal_lm_of(model)
     head = causal.get_output_embeddings()
-    head.register_parameter("lora_probe", torch.nn.Parameter(torch.zeros(1)))
+    assert head.pool is not None  # a real streamed head; its named_modules yield `inner` only
+    head.inner.register_parameter("lora_probe", torch.nn.Parameter(torch.zeros(1)))
     try:
+        assert "inner.lora_probe" in dict(head.named_parameters())  # the premise
         with pytest.raises(ValueError) as caught:
             ChunkedHeadLoss(causal, None, "cce")
     finally:
-        del head._parameters["lora_probe"]
-    message = str(caught.value)
-    assert message.startswith("training.use_cut_ce cannot train the streamed output head")
-    assert "lora_probe" in message and "Remove 'lm_head' from the LoRA targets" in message
+        del head.inner._parameters["lora_probe"]
+    assert str(caught.value) == _HEAD_ADAPTER_MESSAGE.format(names="inner.lora_probe")
 
 
 def test_setup_refuses_an_lm_head_lora_target_under_cce(tmp_path, monkeypatch, fake_cce):
