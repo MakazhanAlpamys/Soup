@@ -41,6 +41,7 @@ def _captured_kwargs(tmp_path, monkeypatch, device):
                 "data:",
                 "  train: x.jsonl",
                 "  max_length: 64",
+                "  chat_template: chatml",
                 "training:",
                 "  epochs: 1",
                 "  batch_size: 2",
