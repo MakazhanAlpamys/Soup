@@ -1,1 +1,0 @@
-- Add the large-vocabulary loss under layer streaming: `training.use_cut_ce` now runs Cut Cross-Entropy on the streamed output head (SFT) instead of being refused, and `training.stream_loss_chunk` now works with `training.l2l`, where the L2L window computes the same chunked loss. (by @nurseit14)
