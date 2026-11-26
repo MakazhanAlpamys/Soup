@@ -18,6 +18,7 @@ from soup_cli.config.loader import load_config
 from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.sweep_config import load_sweep_yaml
 from soup_cli.utils.terminal import for_terminal, strip_control
+from soup_cli.utils.training_output import training_output_dir
 
 console = Console()
 
@@ -575,6 +576,21 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
 
     # Override experiment name
     config_dict["experiment_name"] = run_name
+
+    # #3393 — the MLX trainers and unlearning write directly to the
+    # configured output (see training_output_dir); they never nest under
+    # experiment_name the way the other backends do. Every arm of a sweep
+    # therefore shared one flat directory, and a later arm replaced the
+    # earlier arm's adapters.safetensors and soup_run.json. Route the flat
+    # backends through a per-arm subdirectory so each arm's layout matches
+    # the output/<experiment_name> directory the other backends produce.
+    if config_dict["output"] == training_output_dir(
+        config_dict["output"],
+        run_name,
+        backend=config_dict.get("backend", ""),
+        task=config_dict.get("task", ""),
+    ):
+        config_dict["output"] = str(Path(config_dict["output"]) / run_name)
 
     # Before the heavy imports, so this refusal is reachable -- and testable --
     # without the training stack. `sweep()` pre-checks the grid too; this stays
