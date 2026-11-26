@@ -153,13 +153,144 @@ def test_refuses_missing_vocabulary(tiny_folder):
     assert str(error.value) == f"tiktoken.model not found in {tiny_folder}"
 
 
-@pytest.mark.parametrize("line", ["YQ== invalid\n", "%%%% 0\n"])
-def test_refuses_malformed_rank_line(tiny_folder, tokenizer_dependencies, line):
+@pytest.mark.parametrize(
+    "line",
+    ["YQ== invalid\n", "%%%% 0\n", "YQ== +0\n", "YQ== 0_0\n"],
+    ids=["non-integer-rank", "invalid-base64", "signed-positive-rank", "underscore-in-rank"],
+)
+def test_refuses_malformed_rank_line(tiny_folder, line):
     vocab_file = tiny_folder / "tiktoken.model"
     vocab_file.write_text(line, encoding="utf-8")
     with pytest.raises(ValueError) as error:
         load_kimi_k2_tokenizer(str(tiny_folder))
     assert str(error.value) == f"{vocab_file}:1: not a 'base64-token rank' line"
+
+
+@pytest.mark.parametrize(
+    ("lines", "message"),
+    [
+        (b"YQ== 0\nYQ== 1\n", "2: duplicate token (first seen on line 1)"),
+        (b"YQ== 0\nYg== 0\n", "2: duplicate rank 0 (first seen on line 1)"),
+        (b"YQ== -1\n", "1: negative rank -1"),
+        (b"YQ== 0\nYg== 2\n", "2: rank 2 is outside the contiguous range 0..1"),
+        (b"", "1: no token ranks found"),
+    ],
+    ids=["duplicate-token", "duplicate-rank", "negative-rank", "gap", "empty"],
+)
+def test_refuses_invalid_rank_table(tiny_folder, lines, message):
+    vocab_file = tiny_folder / "tiktoken.model"
+    vocab_file.write_bytes(lines)
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{vocab_file}:{message}"
+
+
+@pytest.mark.parametrize(
+    ("filename", "limit", "message"),
+    [
+        ("tiktoken.model", 64, ":1: file exceeds the 64 MiB size limit"),
+        ("tokenizer_config.json", 16, ": file exceeds the 16 MiB size limit"),
+    ],
+)
+def test_checks_tokenizer_file_size_before_opening(
+    tiny_folder, monkeypatch, filename, limit, message,
+):
+    path = tiny_folder / filename
+    getsize = os.path.getsize
+    path_open = Path.open
+
+    def reported_size(candidate):
+        return limit * 1024**2 + 1 if Path(candidate) == path else getsize(candidate)
+
+    def guarded_open(candidate, *args, **kwargs):
+        assert candidate != path, f"{path} was opened before its size was checked"
+        return path_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "getsize", reported_size)
+    monkeypatch.setattr(Path, "open", guarded_open)
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{path}{message}"
+
+
+def test_refuses_more_than_one_million_vocab_lines(tiny_folder):
+    vocab_file = tiny_folder / "tiktoken.model"
+    vocab_file.write_bytes(b"YQ== 0\n" + b"\n" * 1_000_000)
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{vocab_file}:1000001: file exceeds the 1000000-line limit"
+
+
+def test_refuses_missing_tokenizer_config(tiny_folder):
+    config_file = tiny_folder / "tokenizer_config.json"
+    config_file.unlink()
+    with pytest.raises(FileNotFoundError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{config_file}: file not found"
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("{", "invalid JSON"),
+        ("[]", "expected a JSON object"),
+        ('{"added_tokens_decoder": []}', "added_tokens_decoder must be an object"),
+        (
+            '{"added_tokens_decoder": {"+300": {}}}',
+            "special-token id '+300' is not a decimal integer",
+        ),
+        ('{"added_tokens_decoder": {"300": []}}', "special-token entry 300 must be an object"),
+        (
+            '{"added_tokens_decoder": {"300": {}}}',
+            "special-token entry 300 must have string content",
+        ),
+        (
+            '{"added_tokens_decoder": {"300": {"content": 300}}}',
+            "special-token entry 300 must have string content",
+        ),
+        (
+            '{"added_tokens_decoder": {"299": {"content": "[BOS]", "special": true}}}',
+            "special-token id 299 is outside the reserved range [300, 556)",
+        ),
+        (
+            '{"added_tokens_decoder": {"556": {"content": "[BOS]", "special": true}}}',
+            "special-token id 556 is outside the reserved range [300, 556)",
+        ),
+    ],
+    ids=[
+        "invalid-json", "root-not-object", "decoder-not-object", "key-not-decimal",
+        "entry-not-object", "missing-content", "non-string-content", "id-below", "id-above",
+    ],
+)
+def test_refuses_invalid_tokenizer_config(tiny_folder, contents, message):
+    config_file = tiny_folder / "tokenizer_config.json"
+    config_file.write_text(contents, encoding="utf-8")
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{config_file}: {message}"
+
+
+@pytest.mark.parametrize(
+    "filename", ["tiktoken.model", "tokenizer_config.json", "chat_template.jinja"],
+)
+def test_refuses_tokenizer_file_link_outside_model_folder(tiny_folder, filename):
+    path = tiny_folder / filename
+    outside = path.replace(tiny_folder.parent / filename)
+    try:
+        os.symlink(outside, path)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink: {exc}")
+    with pytest.raises(ValueError) as error:
+        load_kimi_k2_tokenizer(str(tiny_folder))
+    assert str(error.value) == f"{path}: resolves outside the model folder"
+
+
+def test_expands_home_for_native_tokenizer(tiny_folder, tokenizer_dependencies, monkeypatch):
+    (tiny_folder / "config.json").write_text('{"model_type": "kimi_k2"}', encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tiny_folder.parent))
+    monkeypatch.setenv("USERPROFILE", str(tiny_folder.parent))
+    assert has_native_kimi_k2_tokenizer("~/k2")
+    assert load_kimi_k2_tokenizer("~/k2").encode("hello") == [259]
 
 
 @pytest.mark.parametrize("package", ["tokenizers", "transformers"])

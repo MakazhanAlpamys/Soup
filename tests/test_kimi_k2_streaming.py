@@ -1441,6 +1441,96 @@ def test_trust_remote_code_reaches_the_tokenizer_but_never_the_streamed_config(
     assert [call["config"] for call in calls["tokenizer"]] == [model_cfg]
 
 
+@pytest.fixture
+def local_k2_tokenizer_setup(tmp_path, monkeypatch):
+    import sys
+    from unittest.mock import Mock
+
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+    from soup_cli.utils import kimi_k2, layer_stream
+
+    directory = tmp_path / "k2"
+    base = _write_config(directory, {"model_type": "kimi_k2"})
+    (directory / "tiktoken.model").write_bytes(b"YQ== 0\n")
+    tokenizer = SimpleNamespace(pad_token=None, eos_token="</s>")
+    native = Mock(return_value=tokenizer)
+    auto = Mock(return_value=tokenizer)
+    model_config = _deepseek_setup_cfg()
+
+    def read_model_config(*_args, **_kwargs):
+        return json.loads((directory / "config.json").read_text(encoding="utf-8")), {}
+
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=auto),
+        PretrainedConfig=SimpleNamespace(get_config_dict=read_model_config),
+    ))
+    monkeypatch.setitem(
+        sys.modules, "peft", SimpleNamespace(TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"))
+    )
+    monkeypatch.setattr(kimi_k2, "load_stream_model_config", Mock(return_value=model_config))
+    monkeypatch.setattr(kimi_k2, "load_kimi_k2_tokenizer", native)
+    stop = RuntimeError("stop after tokenizer setup")
+    monkeypatch.setattr(layer_stream, "stream_arch_of", Mock(side_effect=stop))
+
+    class Setup(StreamingSetupMixin):
+        device = "cpu"
+
+    def run(*, trust_remote_code=False):
+        setup = Setup()
+        setup._trust_remote_code = trust_remote_code
+        cfg = SimpleNamespace(base=base, task="sft")
+        setup._setup_streaming_transformers(cfg, SimpleNamespace())
+
+    return SimpleNamespace(
+        base=base, model_config=model_config, native=native, auto=auto, run=run, stop=stop,
+    )
+
+
+def test_streamed_local_k2_uses_the_native_tokenizer_without_trust_remote_code(
+    local_k2_tokenizer_setup,
+):
+    setup = local_k2_tokenizer_setup
+    with pytest.raises(RuntimeError) as caught:
+        setup.run()
+    assert caught.value is setup.stop
+    setup.native.assert_called_once_with(setup.base)
+    setup.auto.assert_not_called()
+
+
+def test_streamed_local_k2_uses_autotokenizer_with_trust_remote_code(local_k2_tokenizer_setup):
+    setup = local_k2_tokenizer_setup
+    with pytest.raises(RuntimeError) as caught:
+        setup.run(trust_remote_code=True)
+    assert caught.value is setup.stop
+    setup.auto.assert_called_once_with(
+        setup.base, config=setup.model_config, trust_remote_code=True,
+    )
+    setup.native.assert_not_called()
+
+
+def test_streamed_native_tokenizer_error_includes_the_k2_hint(
+    local_k2_tokenizer_setup, monkeypatch,
+):
+    from soup_cli.utils import kimi_k2
+
+    setup = local_k2_tokenizer_setup
+    failure = ValueError("invalid tiktoken.model")
+    setup.native.side_effect = failure
+    monkeypatch.setattr(kimi_k2, "_tiktoken_available", lambda: True)
+
+    with pytest.raises(RuntimeError) as caught:
+        setup.run()
+    assert str(caught.value) == (
+        "invalid tiktoken.model\n"
+        "Layer streaming can load the native tokenizer from a local Kimi K2 folder with "
+        "tiktoken.model without --trust-remote-code. Other Kimi K2 tokenizer loads need "
+        "--trust-remote-code for tokenization_kimi.py. That flag reaches the tokenizer only: "
+        "the config and the model are transformers' own DeepseekV3 classes."
+    )
+    assert caught.value.__cause__ is failure
+    setup.auto.assert_not_called()
+
+
 def _sentinel_k2_repository(root, sentinel):
     """A local K2 base: the published config.json (its auto_map onto configuration_deepseek),
     a ``configuration_deepseek.py`` that writes ``sentinel`` when imported, and a tiny native

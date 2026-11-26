@@ -1016,6 +1016,7 @@ class StreamingSetupMixin:
 
         from soup_cli.utils.kimi_k2 import (
             has_native_kimi_k2_tokenizer,
+            kimi_k2_tokenizer_hint,
             load_kimi_k2_tokenizer,
             load_stream_model_config,
         )
@@ -1093,14 +1094,23 @@ class StreamingSetupMixin:
         )
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        if has_native_kimi_k2_tokenizer(cfg.base):
-            self.tokenizer = load_kimi_k2_tokenizer(
-                cfg.base, trust_remote_code=self._trust_remote_code
-            )
+        if not self._trust_remote_code and has_native_kimi_k2_tokenizer(cfg.base):
+            try:
+                self.tokenizer = load_kimi_k2_tokenizer(cfg.base)
+            except Exception as exc:
+                hint = None
+                with contextlib.suppress(Exception):
+                    hint = kimi_k2_tokenizer_hint(cfg.base, **base_revision_kwargs(cfg.base))
+                if hint:
+                    raise RuntimeError(f"{exc}\n{hint}") from exc
+                raise
         else:
             try:
-                # Pass the config already loaded with trust_remote_code=False so AutoTokenizer
-                # cannot re-read it with the user's tokenizer trust setting.
+                # config=: without it AutoTokenizer reads the config again, with the user's
+                # trust_remote_code, and for a repository with an auto_map (Kimi K2, Moonlight)
+                # imports and runs its configuration module (second review of #2107). The
+                # native config is what the tokenizer is resolved against; the flag still
+                # reaches the tokenizer's own code (K2's tokenization_kimi.py).
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     cfg.base, config=model_config, trust_remote_code=self._trust_remote_code,
                     **base_revision_kwargs(cfg.base),
