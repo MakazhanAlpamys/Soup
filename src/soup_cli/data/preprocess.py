@@ -169,7 +169,7 @@ def preprocessing_rows(config, task: str):
             except BaseException:
                 diagnostics = captured.get()
                 loader.console.print(
-                    strip_control(Text.from_ansi(diagnostics).plain),
+                    strip_control(Text.from_ansi(diagnostics).plain.rstrip("\n")),
                     end="\n" if diagnostics else "", markup=False, highlight=False,
                 )
                 raise
@@ -178,7 +178,7 @@ def preprocessing_rows(config, task: str):
                 return
             diagnostics = captured.get()
             loader.console.print(
-                strip_control(Text.from_ansi(diagnostics).plain),
+                strip_control(Text.from_ansi(diagnostics).plain.rstrip("\n")),
                 end="\n" if diagnostics else "", markup=False, highlight=False,
             )
             train_count = int(counts[0] * (1 - config.val_split))

@@ -562,4 +562,4 @@ def test_replayed_diagnostics_remove_rendering_escapes(tmp_path, monkeypatch, ca
     actual = capsys.readouterr().out
     assert "\x1b" not in actual
     assert actual.endswith("\n")
-    assert " ".join(actual.split()) == " ".join(strip_ansi(expected).split())
+    assert actual == strip_ansi(expected)
