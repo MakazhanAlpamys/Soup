@@ -841,6 +841,10 @@ def test_a_nested_nf4_cache_written_before_the_split_reads_back_identically():
                     )
                     assert torch.equal(host[key], stored[key]), f"{key}: packed NF4 bytes differ"
                     _assert_quant_state_equal(key, rebuilt, reference)
+                    assert rebuilt.code is codes[NF4_CODE_KEY], f"{key}: supplied NF4 code table"
+                    assert rebuilt.state2.code is codes[NF4_NESTED_CODE_KEY], (
+                        f"{key}: supplied nested NF4 code table"
+                    )
                     assert torch.equal(
                         dequantize_4bit(host[key], quant_state=rebuilt),
                         dequantize_4bit(stored[key], quant_state=reference),
