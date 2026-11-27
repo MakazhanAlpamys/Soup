@@ -305,6 +305,8 @@ def load_model_and_tokenizer(
     """
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
+    if adapter is not None and (not isinstance(adapter, str) or not adapter.strip()):
+        raise ValueError("adapter must be a non-empty string or None")
     import torch  # noqa: F401 — ensures torch present
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -343,10 +345,19 @@ def load_model_and_tokenizer(
         model_kwargs["device_map"] = _device_map_value(dev)
     model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
-        if not isinstance(adapter, str) or not adapter.strip():
-            raise ValueError("adapter must be a non-empty string or None")
         from peft import PeftModel
 
+        from soup_cli.utils.adapter_vocab import prepare_adapter_vocab
+
+        tokenizer = prepare_adapter_vocab(
+            model, adapter, model_id,
+            tokenizer=tokenizer if tokenizer_id != model_id else None,
+            base_tokenizer=tokenizer if tokenizer_id == model_id else None,
+            trust_remote_code=trust_remote_code, revision_kwargs=revision_kwargs,
+            quantization=quantization,
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
         model = PeftModel.from_pretrained(model, adapter)
     if quant_config is None:
         model = model.to(dev)
