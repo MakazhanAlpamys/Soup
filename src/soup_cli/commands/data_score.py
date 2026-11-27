@@ -8,7 +8,7 @@ JSONL with per-row scores or a flagged subset.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Mapping, Optional
+from typing import Any, Iterable, List, Mapping, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -39,13 +39,47 @@ def _check_text_rows(rows: List[Mapping[str, Any]], label: str) -> None:
         )
 
 
-def _read_rows(path: str) -> List[Mapping[str, Any]]:
+def _load_tolerant(path: str) -> Tuple[List[Mapping[str, Any]], int]:
+    """Read JSONL, warning for each skipped line as ``soup data clean`` does.
+
+    Returns the object rows and how many lines were skipped. Over the record
+    cap the reader raises ``JsonlLimitError`` (a ``ValueError``); it never
+    returns part of the file.
+    """
+    from soup_cli.data.loader import SkipTally
     from soup_cli.utils.data_score import load_jsonl_rows
 
+    tallies = {
+        "non_object": SkipTally(
+            "lines skipped (JSON values that are not objects)", diagnostics=console,
+        ),
+        "invalid_json": SkipTally("lines skipped (invalid JSON)", diagnostics=console),
+    }
     try:
-        rows = load_jsonl_rows(path)
+        rows = load_jsonl_rows(
+            path, on_skip=lambda kind, message: tallies[kind].add(message),
+        )
+    finally:
+        for tally in tallies.values():
+            tally.finish()
+    skipped = sum(tally.count for tally in tallies.values())
+    if not rows and skipped:
+        raise ValueError(f"no object rows remain: {skipped} row(s) skipped (listed above)")
+    return rows, skipped
+
+
+def _skipped_note(skipped: int) -> str:
+    """`` (N lines skipped)`` after a row count, or nothing when none were."""
+    if not skipped:
+        return ""
+    return f" ({skipped} line{'' if skipped == 1 else 's'} skipped)"
+
+
+def _read_rows(path: str) -> Tuple[List[Mapping[str, Any]], int]:
+    try:
+        rows, skipped = _load_tolerant(path)
         _check_text_rows(rows, "input")
-        return rows
+        return rows, skipped
     except (TypeError, ValueError, FileNotFoundError) as exc:
         _exit(str(exc))
         raise  # unreachable; satisfies type checker
@@ -89,7 +123,7 @@ def score(
         ngram_set,
     )
 
-    rows = _read_rows(input)
+    rows, skipped = _read_rows(input)
     bench_list: List[str] = []
     if benchmarks:
         for name in benchmarks.split(","):
@@ -141,6 +175,8 @@ def score(
     table.add_column("Metric", style="bold")
     table.add_column("Value")
     table.add_row("Total rows", str(report.total))
+    if skipped:
+        table.add_row("Skipped lines", str(skipped))
     table.add_row("PII flagged", str(report.pii_flagged))
     table.add_row("Abuse-keyword flagged", str(report.toxic_flagged))
     table.add_row("Edu mean", f"{report.educational_mean:.3f}")
@@ -192,7 +228,6 @@ def decontaminate(
         BENCHMARKS,
         decontaminate_rows,
         extract_row_text,
-        load_jsonl_rows,
     )
 
     refuse_output_over_input(
@@ -200,7 +235,7 @@ def decontaminate(
         [("--output", output)],
         console=console,
     )
-    rows = _read_rows(input)
+    rows, skipped = _read_rows(input)
     bench_list: List[str] = []
     if benchmarks:
         for name in benchmarks.split(","):
@@ -219,7 +254,7 @@ def decontaminate(
     benchmark_texts: List[str] = []
     if benchmark_file:
         try:
-            bench_rows = load_jsonl_rows(benchmark_file)
+            bench_rows, bench_skipped = _load_tolerant(benchmark_file)
         except (TypeError, ValueError, FileNotFoundError) as exc:
             _exit(f"--benchmark-file: {exc}")
         _check_text_rows(bench_rows, "benchmark")
@@ -233,7 +268,7 @@ def decontaminate(
         console.print(
             f"[cyan]Loaded {len(benchmark_texts)} operator-supplied "
             "benchmark texts from[/] "
-            f"{escape(benchmark_file)}"
+            f"{escape(benchmark_file)}{_skipped_note(bench_skipped)}"
         )
 
     if bench_list and not benchmark_file:
@@ -248,7 +283,7 @@ def decontaminate(
     path = _write_rows(kept, output)
     console.print(
         Panel(
-            f"Input:    [bold]{len(rows)}[/]\n"
+            f"Input:    [bold]{len(rows)}[/]{_skipped_note(skipped)}\n"
             f"Kept:     [bold]{len(kept)}[/]\n"
             f"Removed:  [bold]{len(removed)}[/]\n"
             f"Output:   [bold]{escape(path)}[/]",
@@ -274,7 +309,7 @@ def toxicity(
     from soup_cli.utils.data_score import extract_row_text, score_abuse_keywords
 
     refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
-    rows = _read_rows(input)
+    rows, skipped = _read_rows(input)
     out_rows = []
     for row in rows:
         try:
@@ -287,7 +322,7 @@ def toxicity(
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
-            f"Input:      [bold]{len(rows)}[/]\n"
+            f"Input:      [bold]{len(rows)}[/]{_skipped_note(skipped)}\n"
             f"Flagged:    [bold]{len(out_rows)}[/]\n"
             f"Threshold:  [bold]{threshold:.3f}[/]\n"
             f"Output:     [bold]{escape(path)}[/]",
@@ -309,7 +344,7 @@ def langdetect(
     from soup_cli.utils.data_score import detect_language, extract_row_text
 
     refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
-    rows = _read_rows(input)
+    rows, skipped = _read_rows(input)
     out_rows = []
     for row in rows:
         try:
@@ -321,7 +356,7 @@ def langdetect(
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
-            f"Input:   [bold]{len(rows)}[/]\n"
+            f"Input:   [bold]{len(rows)}[/]{_skipped_note(skipped)}\n"
             f"Output:  [bold]{escape(path)}[/]",
             title="[bold green]Lang Detect[/]",
         )
@@ -341,7 +376,7 @@ def pii(
     from soup_cli.utils.data_score import detect_pii, extract_row_text
 
     refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
-    rows = _read_rows(input)
+    rows, skipped = _read_rows(input)
     out_rows = []
     for row in rows:
         try:
@@ -354,7 +389,7 @@ def pii(
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
-            f"Input:    [bold]{len(rows)}[/]\n"
+            f"Input:    [bold]{len(rows)}[/]{_skipped_note(skipped)}\n"
             f"Flagged:  [bold]{len(out_rows)}[/]\n"
             f"Output:   [bold]{escape(path)}[/]",
             title="[bold green]PII[/]",
@@ -375,7 +410,7 @@ def educational(
     from soup_cli.utils.data_score import extract_row_text, score_educational_value
 
     refuse_output_over_input([("--input", input)], [("--output", output)], console=console)
-    rows = _read_rows(input)
+    rows, skipped = _read_rows(input)
     out_rows = []
     for row in rows:
         try:
@@ -387,7 +422,7 @@ def educational(
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
-            f"Input:   [bold]{len(rows)}[/]\n"
+            f"Input:   [bold]{len(rows)}[/]{_skipped_note(skipped)}\n"
             f"Output:  [bold]{escape(path)}[/]",
             title="[bold green]Educational[/]",
         )
