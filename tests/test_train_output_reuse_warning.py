@@ -29,6 +29,17 @@ def _output(result) -> str:
     return " ".join(strip_ansi(result.output).split())
 
 
+def _squash(text: str) -> str:
+    """Remove all whitespace, so a Rich line-wrap cannot split a token.
+
+    The module-level console freezes its width from COLUMNS at import time,
+    so a test cannot widen it afterwards; with a long tmp_path the notice
+    can still break mid-word on a narrow console. Comparing without
+    whitespace rejoins any such break.
+    """
+    return "".join(text.split())
+
+
 class _StubTrainer:
     """Stand in for the real trainer: record that it started, then finish."""
 
@@ -53,9 +64,6 @@ class _StubTrainer:
 
 @pytest.fixture
 def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # Pin the console wide: the notice names a tmp_path, and on a narrow
-    # console Rich breaks the path mid-word, so the notice assertion fails.
-    monkeypatch.setenv("COLUMNS", "500")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -98,8 +106,9 @@ def test_fresh_run_warns_about_existing_adapter_files(run) -> None:
         f"Warning: {dest} already has adapter_model.safetensors, "
         "adapter_config.json and tokenizer_config.json. This run may replace them."
     )
-    assert notice in output
-    assert output.index(notice) < output.index("stub trainer starting")
+    squashed = _squash(output)
+    assert _squash(notice) in squashed
+    assert squashed.index(_squash(notice)) < squashed.index("stubtrainerstarting")
 
 
 def test_clean_destination_stays_silent(run) -> None:
