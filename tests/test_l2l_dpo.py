@@ -265,7 +265,7 @@ def test_the_layer_load_counters_are_in_the_training_log(tmp_path, monkeypatch):
     for key in ("l2l_layer_loads", "l2l_large_loads"):
         assert logs[0][key] > 0
         assert all(later[key] > earlier[key] for earlier, later in zip(logs, logs[1:]))
-    assert "l2l_weight_restores" in logs[0]
+    assert all("l2l_weight_restores" not in row for row in logs)
 
 
 # --------------------------------------------------------------------------
@@ -566,7 +566,8 @@ def test_a_dpo_step_loads_each_layer_as_often_as_an_sft_step(streamed_dpo, k):
     assert sft.layer_loads > 0
     assert dpo.layer_loads == sft.layer_loads
     assert dpo.large_loads <= sft.large_loads
-    assert dpo.restores <= sft.restores
+    assert dpo.restores is None
+    assert sft.restores is None
 
 
 def test_a_dpo_trainer_window_loads_as_often_as_an_sft_window(streamed_dpo):
@@ -592,6 +593,9 @@ def test_a_dpo_trainer_window_loads_as_often_as_an_sft_window(streamed_dpo):
     state.loss = SFT_WINDOW_LOSS
     try:
         harness.zero_grads(wrapper.model)
+        # A cache miss primes layer 0 and the embedding before the step counters start.
+        # Give both windows that same capture after the warm walk.
+        state.calls_by_shape.clear()
         _warm_walk(wrapper.model, dpo_ids[0])
         _sft_losses, sft = run_window(
             state, wrapper.model, dpo_ids, dpo_ids, label_tokens(dpo_ids), device
@@ -601,7 +605,8 @@ def test_a_dpo_trainer_window_loads_as_often_as_an_sft_window(streamed_dpo):
     assert torch.isfinite(torch.stack(dpo_losses)).all()
     assert dpo.layer_loads == sft.layer_loads > 0
     assert dpo.large_loads <= sft.large_loads
-    assert dpo.restores <= sft.restores
+    assert dpo.restores is None
+    assert sft.restores is None
 
 
 # --------------------------------------------------------------------------
@@ -798,7 +803,7 @@ def test_the_tasks_that_are_not_ready_stay_refused_with_l2l(task):
 
     pattern = rf"training\.l2l supports task in \['sft', 'dpo'\]; got task='{task}'"
     with pytest.raises(ValueError, match=pattern):
-        load_config_from_string(_l2l_yaml(task=task))
+        load_config_from_string(_l2l_yaml(task=task, batch_size=2 if task == "kto" else 1))
 
 
 # --------------------------------------------------------------------------
