@@ -332,6 +332,14 @@ class ExpertShardReader:
         self.fetches += 1
         return out
 
+    def validate_identity(self) -> None:
+        """Refuse an in-place shard change before grouped forward or backward reads."""
+        from soup_cli.utils.safetensors_reader import identity_of
+
+        if identity_of(self._open()) != self._identity:
+            self.close()
+            raise ValueError(f"expert storage {os.path.basename(self.path)!r} changed on disk")
+
     def close(self) -> None:
         if self._handle is not None:
             self._handle.close()

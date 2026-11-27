@@ -106,6 +106,7 @@ SUPPORTED_STREAM_ARCHS = (
     "phi",
     "phi3",
     "deepseek_v3",
+    "olmoe",
 )
 
 # Model types whose text decoders reuse an admitted streaming family.  Each

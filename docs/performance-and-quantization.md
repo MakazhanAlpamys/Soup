@@ -1257,6 +1257,32 @@ L2L using the same GEMM on the same GPU and software stack. Set
   tiers. With `stream_source: auto`, staging can push the run to the NVMe disk tier.
 - **k = 1** behaves like plain streaming.
 
+#### Grouped compute for routed experts
+
+Set `training.stream_experts: {}` to opt in on a streamed SFT run with
+`training.l2l: true` and `training.stream_expert_layout: per_expert`. The pool
+leases up to four routed experts at a time, processes both projections, then
+scatters their outputs in expert order. Expert weights stay frozen. The backward
+reloads each hit expert for input and routing-weight gradients.
+
+- `grouped` uses eager GEMMs on CPU and grouped cuBLAS on Linux CUDA BF16.
+  `sequential` uses one expert at a time as a reference.
+- `triton` uses the CUDA grouped GEMM and fuses the SwiGLU activation.
+  CUDA grouped cuBLAS requires an explicit `cublas_library` and a PyTorch build
+  with BF16 split-K control. Grouped CUDA NF4 restore also requires Triton.
+- `fused_nf4` requires `training.quantization: 4bit`, `native_rows_from: null`,
+  and CUDA BF16. It decodes packed weights inside the GEMM and supports up to
+  512 routed rows per expert per call. The standard OLMoE projection geometry
+  uses WMMA on Linux compute capability 8.6 and native GEMM for at most 128
+  rows. Other supported 32-aligned geometries use Triton.
+
+The weight arena, live activations, and projection calls have separate byte
+ceilings under `training.stream_experts`. The call ceiling is checked against
+every routed group before its layer reads expert weights. OLMoE requires the
+grouped opt-in, `moe_aux_loss_coeff: 0`, and disabled router logits and two-read
+replay. CUDA arithmetic can differ by backend. The run records the settings in
+`l2l_recipe.json` and checks them against the source checkpoint on resume.
+
 ### Preference losses over streaming (v0.72.4)
 
 `dpo`, `orpo`, `simpo`, `kto`, `bco` and `ipo` use the shared streaming setup.

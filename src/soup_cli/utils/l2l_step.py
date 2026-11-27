@@ -59,7 +59,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 
 #: Architectures whose top-level forward this step re-implements. ``training.l2l`` admits them
 #: at launch under the rules in ``trainer.l2l_trainer.refuse_unsupported_l2l``.
-SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3")
+SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3", "olmoe")
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,8 @@ def model_parts(model: Any) -> Tuple[Any, Any]:
             f"the L2L step re-implements the top-level forward of {SUPPORTED_ARCHS} only; "
             f"got {arch!r}"
         )
+    if arch == "olmoe" and getattr(causal.config, "output_router_logits", False):
+        raise ValueError("training.l2l on OLMoE requires output_router_logits=false")
     for name in ("lm_head", "loss_function"):
         if getattr(causal, name, None) is None:
             raise ValueError(f"the causal LM has no {name!r}")
@@ -164,7 +166,7 @@ def label_tokens(micro_batches: Sequence[Any]) -> int:
 LossHead = Callable[[Any, Any, Any, int], Any]
 
 
-def sft_head(labels: Sequence[Any], n_items: int) -> LossHead:
+def sft_head(labels: Sequence[Any], n_items: Any) -> LossHead:
     """The SFT head: ``norm``, ``lm_head``, the model's ``loss_function`` over ``n_items``."""
 
     def head(causal: Any, owner: Any, hidden: Any, mb: int) -> Any:
@@ -1118,7 +1120,7 @@ class L2LStep:
         micro_batches: Sequence[Any],
         store: Any,
         *,
-        n_items: Optional[int] = None,
+        n_items: Any = None,
         labels: Optional[Sequence[Any]] = None,
         calls: Optional[Sequence[LayerCall]] = None,
         head: Optional[LossHead] = None,
@@ -1237,7 +1239,7 @@ class L2LStep:
         self,
         micro_batches: Sequence[Any],
         store: Any,
-        n_items: Optional[int],
+        n_items: Any,
         labels: Optional[Sequence[Any]],
         calls: Optional[Sequence[LayerCall]],
         guard: Optional[RoutingGuard],
@@ -1278,7 +1280,14 @@ class L2LStep:
                 labels = micro_batches
             elif len(labels) != k:
                 raise ValueError(f"{len(labels)} label tensors for {k} micro-batches")
-            total = label_tokens(micro_batches) if n_items is None else int(n_items)
+            pool = getattr(self.runtime, "expert_pool", None)
+            if n_items is None:
+                total = label_tokens(micro_batches)
+            elif getattr(pool, "group_compute", None) is not None:
+                # Match the native causal loss operand under the grouped training recipe.
+                total = n_items
+            else:
+                total = int(n_items)
             head = sft_head(labels, total)
 
         passes = as_passes(reference)

@@ -48,7 +48,7 @@ from typing import (
 
 from soup_cli import __version__
 from soup_cli.utils.deepseek_v3 import ROUTER_WEIGHT_KEY, router_weight_uses_fp32
-from soup_cli.utils.expert_shard import EXPERT_LAYOUT_VERSION
+from soup_cli.utils.expert_shard import _MAX_EXPERTS, EXPERT_LAYOUT_VERSION
 from soup_cli.utils.expert_stream import (
     EXPERT_LAYOUT_PER_EXPERT,
     expert_shard_name,
@@ -145,6 +145,7 @@ _PER_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp\.experts)\."
     r"(?P<expert>\d+)\.(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
 )
+_FUSED_EXPERT_KEYS = ("mlp.experts.gate_up_proj", "mlp.experts.down_proj")
 #: Architectures whose transformers module holds the routed experts as fused
 #: 3-D ``gate_up_proj`` [E, 2I, H] / ``down_proj`` [E, H, I] parameters while
 #: the checkpoint stores one 2-D tensor per expert and projection (the
@@ -183,7 +184,7 @@ def _fp32_layer_storage_keys(arch: str, *, fp32_router_weights: bool) -> Tuple[s
 
 #: Architectures admitted to ``expert_layout="per_expert"``: each one passed
 #: the resident-vs-streamed parity tests in ``tests/test_expert_stream.py``.
-_PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3",)
+_PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3", "olmoe")
 #: Public name for the trainer's early refusal (``training.stream_expert_layout``).
 PER_EXPERT_LAYOUT_ARCHS = _PER_EXPERT_LAYOUT_ARCHS
 _QWEN4_OQ_EXPERT_RE = re.compile(
@@ -1292,7 +1293,7 @@ def estimate_shard_cache_bytes(
     consumed = _fp8_consumed_keys(fp8_plan)
 
     itemsize = _ITEMSIZE[dtype]
-    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    stack_experts = arch in _STACKED_EXPERT_ARCHS or (arch == "olmoe" and bool(expert_layout))
     fp32_buffers = layer_buffer_keys(arch)
     drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
@@ -1328,6 +1329,7 @@ def estimate_shard_cache_bytes(
             layer_bytes[idx] += numel * _ITEMSIZE[stored]
             header_bytes += _charge_names((short,))
 
+    fused_routed: Dict[int, Dict[str, Tuple[int, ...]]] = {}
     for key, (_source_dtype, shape) in tensors.items():
         if key in consumed:
             continue
@@ -1348,10 +1350,23 @@ def estimate_shard_cache_bytes(
             projections[expert_match.group("projection")] = numel
             continue
         short = match.group(2)
+        if expert_layout and arch == "olmoe" and short in _FUSED_EXPERT_KEYS:
+            fused_routed.setdefault(idx, {})[short] = tuple(shape)
+            continue
         if arch == "deepseek_v3" and short == ROUTER_WEIGHT_KEY:
             router_numels[idx] = numel
         else:
             _charge_layer_tensor(idx, short, numel, fp32_buffers)
+
+    for idx, shapes in fused_routed.items():
+        if idx in routed:
+            raise ValueError(f"layer {idx} contains both fused and separate expert weights")
+        gate, down = _validate_fused_expert_shapes(shapes)
+        routed[idx] = {
+            expert: {"gate_proj": math.prod(gate[1:]), "up_proj": 0,
+                     "down_proj": math.prod(down[1:])}
+            for expert in range(gate[0])
+        }
 
     for idx, experts in routed.items():
         for expert, projections in experts.items():
@@ -2249,7 +2264,7 @@ def shard_checkpoint(
     # index stores that so the cache check below stays stable across ordinals.
     device_kind = str(device).split(":", 1)[0] if quantise else ""
     external_mode = "qwen4_ple" if arch == "qwen4_exp" else ""
-    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    stack_experts = arch in _STACKED_EXPERT_ARCHS or (arch == "olmoe" and bool(expert_layout))
     expert_label = _STACKED_EXPERT_ARCHS.get(arch, arch)
     # Fused routed experts are stacked at the stream dtype below and never quantised;
     # per_expert ones are NF4 under quant='nf4'. The disk pre-flight sizes by this too.
@@ -2441,7 +2456,13 @@ def shard_checkpoint(
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
             _notify_orphaned_stripes(resolved_out, stripe, notify)
 
-    if expert_layout and not any(_PER_EXPERT_RE.match(key) for key in where):
+    if expert_layout and not any(
+        _PER_EXPERT_RE.match(key) or (
+            arch == "olmoe" and key.startswith("model.layers.")
+            and key.endswith("." + _FUSED_EXPERT_KEYS[0])
+        )
+        for key in where
+    ):
         raise ValueError(
             f"expert_layout={expert_layout!r} found no per-expert routed weights "
             f"(model.layers.N.mlp.experts.E.*) in {weights_dir} to split"
@@ -2614,6 +2635,7 @@ def shard_checkpoint(
             prefix = f"model.layers.{idx}."
             blob = {}
             stacked_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            fused_experts: Dict[str, str] = {}
             per_expert_ids: List[int] = []
             oq_experts: Dict[str, str] = {}
             for key in where:
@@ -2636,6 +2658,9 @@ def shard_checkpoint(
                     stacked_experts.setdefault(projection, {})[expert] = key
                     continue
                 short = key[len(prefix):]
+                if expert_layout and arch == "olmoe" and short in _FUSED_EXPERT_KEYS:
+                    fused_experts[short] = key
+                    continue
                 # The same rule estimate_shard_cache_bytes sizes the disk pre-flight by.
                 stored, as_nf4 = _layer_tensor_storage(
                     short,
@@ -2676,6 +2701,8 @@ def shard_checkpoint(
                 if logical_key.startswith(prefix):
                     total_params += math.prod(spec.shape)
             if stacked_experts:
+                if fused_experts:
+                    raise ValueError(f"layer {idx} contains both fused and separate expert weights")
                 import torch
 
                 expected_projections = {"gate_proj", "up_proj", "down_proj"}
@@ -2802,7 +2829,7 @@ def shard_checkpoint(
                     f"Free space on that drive, or name another folder in {STRIPE_DIRS_ENV} "
                     f"(unset it to shard to one root).",
                 ) from exc
-            if per_expert_ids:
+            if per_expert_ids or fused_experts:
                 import torch
 
                 def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
@@ -2811,9 +2838,13 @@ def shard_checkpoint(
                         gate_up_one = torch.cat((gate, read("up_proj", expert)))
                         yield gate_up_one, read("down_proj", expert)
 
+                pairs = (
+                    _fused_expert_pairs(fused_experts, where, handles, dtype)
+                    if fused_experts else _expert_pairs()
+                )
                 info = write_expert_shard(
                     os.path.join(shard_dirs[root], expert_shard_name(idx)),
-                    _expert_pairs(),
+                    pairs,
                     quantise=experts_nf4,
                     double_quant=double_quant,
                     device=device,
@@ -2846,7 +2877,7 @@ def shard_checkpoint(
             # An experts file the new index will not name (an earlier per_expert
             # layout, or one now written to a stripe root) goes the same way.
             stale_experts = os.path.join(resolved_out, expert_shard_name(idx))
-            if (not per_expert_ids or root) and os.path.exists(stale_experts):
+            if (not (per_expert_ids or fused_experts) or root) and os.path.exists(stale_experts):
                 stale_root0_copies.append(stale_experts)
             del blob
 
@@ -3315,6 +3346,38 @@ def _read_raw_tensor(handle: Any, key: str) -> "Any":
         )
     view = handle.get_tensor(key)
     return _own(view, view.contiguous())
+
+
+def _validate_fused_expert_shapes(shapes: Mapping[str, tuple]) -> tuple[tuple, tuple]:
+    if set(shapes) != set(_FUSED_EXPERT_KEYS):
+        raise ValueError("fused expert source needs gate_up_proj and down_proj")
+    gate, down = (shapes[key] for key in _FUSED_EXPERT_KEYS)
+    if (
+        len(gate) != 3 or len(down) != 3 or gate[0] != down[0]
+        or not 1 <= gate[0] <= _MAX_EXPERTS or gate[1] != 2 * down[2] or gate[2] != down[1]
+        or min(*gate, *down) < 1
+    ):
+        raise ValueError("incompatible fused expert source shapes")
+    return gate, down
+
+
+def _fused_expert_pairs(
+    keys: Mapping[str, str], where: Mapping[str, tuple], handles: Mapping, dtype: str,
+) -> Iterator[tuple]:
+    """Slice the two checkpoint tensors one expert at a time."""
+    import torch
+
+    slices = {}
+    for part, key in keys.items():
+        path, source_key = where[key]
+        slices[part] = handles[path].get_slice(source_key)
+        _refuse_fp8(key, slices[part].get_dtype())
+    gate, _ = _validate_fused_expert_shapes({
+        part: tuple(view.get_shape()) for part, view in slices.items()
+    })
+    target = getattr(torch, dtype)
+    for expert in range(gate[0]):
+        yield tuple(slices[part][expert].to(dtype=target, copy=True) for part in _FUSED_EXPERT_KEYS)
 
 
 def _read_oq_tensor(

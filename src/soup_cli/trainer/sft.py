@@ -941,6 +941,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # the default val_split was withheld and never evaluated.
             **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
+        if getattr(tcfg, "stream_experts", None) is not None and str(self.device) == "cpu":
+            training_kwargs["use_cpu"] = True
 
         # Curriculum: the length sort above reaches the model only if the
         # sampler keeps it. The Trainer's default sampler is random, which

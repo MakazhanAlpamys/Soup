@@ -19,6 +19,7 @@ from typing import (
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationInfo,
     field_validator,
@@ -1341,6 +1342,62 @@ class EvalGateConfig(BaseModel):
         if self.enabled and not self.suite:
             raise ValueError(
                 "eval_gate.suite is required when eval_gate.enabled=true"
+            )
+        return self
+
+
+class ExpertStreamConfig(BaseModel):
+    """Bounds and backend for grouped computation of frozen routed experts."""
+
+    model_config = ConfigDict(extra="forbid")
+    backend: Literal["sequential", "grouped", "triton", "fused_nf4"] = Field(
+        default="grouped", description="Compute backend for the leased expert group.",
+    )
+    group_width: int = Field(
+        default=4, ge=1, le=4, strict=True, description="Maximum experts per lease.",
+    )
+    weight_budget_bytes: int = Field(
+        default=64 * 2**20, ge=1, strict=True, description="Expert weight arena ceiling in bytes.",
+    )
+    activation_budget_bytes: int = Field(
+        default=256 * 2**20, ge=1, strict=True, description="Live expert activations in bytes.",
+    )
+    call_budget_bytes: int = Field(
+        default=64 * 2**20, ge=1, strict=True, description="Projection call ceiling in bytes.",
+    )
+    cublas_library: Optional[str] = Field(
+        default=None, description="Absolute Linux cuBLAS library for CUDA grouped compute.",
+    )
+    native_rows_max: Literal[16, 128] = Field(
+        default=128, description="Native GEMM cutoff for small OLMoE row buckets.",
+    )
+    native_rows_from: Optional[int] = Field(
+        default=481, ge=129, lt=2**31, strict=True,
+        description="First large OLMoE row bucket using native GEMM. Null disables that fallback.",
+    )
+
+    @field_validator(
+        "group_width", "weight_budget_bytes", "activation_budget_bytes", "call_budget_bytes",
+        "native_rows_max", "native_rows_from", mode="before",
+    )
+    @classmethod
+    def _validate_integer(cls, value: Any, info: ValidationInfo) -> Any:
+        if type(value) is bool:
+            raise ValueError(
+                f"training.stream_experts.{info.field_name} must be an int, not a bool"
+            )
+        if type(value) is not int and not (value is None and info.field_name == "native_rows_from"):
+            raise ValueError(f"training.stream_experts.{info.field_name} must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_row_policy(self) -> "ExpertStreamConfig":
+        if self.backend == "fused_nf4" and (
+            self.native_rows_max != 128 or self.native_rows_from is not None
+        ):
+            raise ValueError(
+                "training.stream_experts.backend='fused_nf4' uses native_rows_max=128 "
+                "and requires training.stream_experts.native_rows_from=null"
             )
         return self
 
@@ -4118,6 +4175,13 @@ class TrainingConfig(BaseModel):
             "EXPERIMENTAL — under l2l_route_preserving_mbr, build the recompute graph in "
             "reverse micro-batch order so a single backward per MoE layer visits the "
             "micro-batches in L2L order. Excludes l2l_mbr_split_backward."
+        ),
+    )
+    stream_experts: Optional[ExpertStreamConfig] = Field(
+        default=None,
+        description=(
+            "Opt-in bounded grouped compute for frozen routed experts. "
+            "Requires training.l2l=true and stream_expert_layout='per_expert'."
         ),
     )
     stream_expert_gemm: Literal["native", "batch_invariant"] = Field(
@@ -8095,6 +8159,8 @@ class SoupConfig(BaseModel):
         """
         tcfg = self.training
         if not tcfg.stream_layers:
+            if tcfg.stream_experts is not None:
+                raise ValueError("training.stream_experts requires training.stream_layers=true")
             # Footgun: a non-default stream_* while streaming is off almost
             # certainly means the user forgot stream_layers=true. Only the
             # fields the config sets are named, not all twelve.
@@ -8442,6 +8508,24 @@ class SoupConfig(BaseModel):
         launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
         """
         tcfg = self.training
+        if tcfg.stream_experts is not None:
+            if not tcfg.l2l:
+                raise ValueError("training.stream_experts requires training.l2l=true")
+            if tcfg.stream_expert_layout != "per_expert":
+                raise ValueError(
+                    "training.stream_experts requires training.stream_expert_layout='per_expert'"
+                )
+            if self.task != "sft":
+                raise ValueError("training.stream_experts requires task='sft'")
+            if tcfg.stream_experts.backend == "fused_nf4" and tcfg.quantization != "4bit":
+                raise ValueError(
+                    "training.stream_experts.backend='fused_nf4' requires "
+                    "training.quantization=4bit"
+                )
+            if tcfg.stream_expert_gemm != "native":
+                raise ValueError(
+                    "training.stream_experts requires training.stream_expert_gemm='native'"
+                )
         if tcfg.stream_expert_gemm == "batch_invariant" and not (
             tcfg.l2l and tcfg.stream_expert_layout == "per_expert" and tcfg.l2l_route_preserving_mbr
         ):

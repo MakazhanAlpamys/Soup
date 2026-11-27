@@ -69,7 +69,7 @@ PUBLIC_ARCHS = ("llama", "mistral")
 #: Architectures ``training.l2l`` admits only with ``training.stream_expert_layout``
 #: set to ``EXPERT_LAYOUT_PER_EXPERT``: the DeepSeek-V3 step reads each routed expert from its
 #: own cache entry, which a fused layer cache does not have.
-PER_EXPERT_ARCHS = ("deepseek_v3",)
+PER_EXPERT_ARCHS = ("deepseek_v3", "olmoe")
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +118,19 @@ MAX_CACHED_SHAPES = 64
 
 
 def refuse_unsupported_l2l(
-    model_config: Any, *, n_gpu: int, fp16: bool = False, expert_layout: str = "fused"
+    model_config: Any, *, n_gpu: int, fp16: bool = False, expert_layout: str = "fused",
+    stream_experts: Any = None,
 ) -> None:
     """Refuse at launch what the schema cannot see: the model, the GPU count, fp16.
 
     ``expert_layout`` is ``training.stream_expert_layout``; DeepSeek-V3 needs ``per_expert``.
     """
     arch = str(getattr(model_config, "model_type", ""))
+    if arch == "olmoe":
+        if stream_experts is None:
+            raise ValueError("training.l2l on OLMoE requires training.stream_experts")
+        if getattr(model_config, "output_router_logits", False):
+            raise ValueError("training.l2l on OLMoE requires output_router_logits=false")
     if arch in PER_EXPERT_ARCHS:
         if expert_layout != EXPERT_LAYOUT_PER_EXPERT:
             raise ValueError(
@@ -399,7 +405,7 @@ class WindowLoss:
     #: what the layers walk; ``extras`` is handed to ``make_head``.
     read_window: Callable[..., Tuple[List[Any], Any]]
     #: ``(extras, divisor) -> LossHead``; the head returns the loss already scaled.
-    make_head: Callable[[Any, int], LossHead]
+    make_head: Callable[[Any, Any], LossHead]
     #: ``extras -> ReferencePass`` or a sequence of them, for a loss that needs gradient-free
     #: passes: a reference model (DPO, KTO) or an estimate from the policy itself (KTO's KL);
     #: ``None`` for a loss that does not. The policy head reads the passes' ``outputs`` after
@@ -408,7 +414,7 @@ class WindowLoss:
         Callable[[Any], Union[ReferencePass, Sequence[ReferencePass]]]
     ] = None
 
-    def divisor(self, k: int, num_items: Optional[int]) -> int:
+    def divisor(self, k: int, num_items: Any, *, preserve_item_tensor: bool = False) -> Any:
         """The number the window's loss is divided by. The one place the scale rule lives."""
         if self.divide_by == "micro_batches":
             return int(k)
@@ -417,7 +423,7 @@ class WindowLoss:
                 "training.l2l needs num_items_in_batch from the HF loop to scale "
                 "the loss over the window; this trainer did not receive one."
             )
-        return int(num_items)
+        return num_items if preserve_item_tensor else int(num_items)
 
 
 SFT_WINDOW_LOSS = WindowLoss(
@@ -715,7 +721,7 @@ def run_window(
     model: Any,
     ids_list: List[Any],
     label_list: Any,
-    n_items: Optional[int],
+    n_items: Any,
     device: Any,
 ) -> Tuple[List[Any], Any]:
     """One L2L step over the window; returns the losses and the step's load counters.
@@ -724,7 +730,11 @@ def run_window(
     ``n_items`` is HF's ``num_items_in_batch``, ``None`` for the preference trainers.
     """
     strategy = state.loss
-    divisor = strategy.divisor(len(ids_list), n_items)
+    pool = getattr(state.runtime, "expert_pool", None)
+    divisor = strategy.divisor(
+        len(ids_list), n_items,
+        preserve_item_tensor=getattr(pool, "group_compute", None) is not None,
+    )
     stepper, calls = _l2l_step_for(state, model, ids_list)
     store = _store_for(state, stepper, ids_list, device)
     head = strategy.make_head(label_list, divisor)
@@ -808,7 +818,9 @@ def make_l2l_trainer_class(base_cls: type) -> type:
             if not first:
                 return torch.zeros((), device=self.args.device)
             # Refuse a missing item count (SFT) before anything runs.
-            state.loss.divisor(len(window), num_items_in_batch)
+            pool = getattr(state.runtime, "expert_pool", None)
+            grouped = getattr(pool, "group_compute", None) is not None
+            state.loss.divisor(len(window), num_items_in_batch, preserve_item_tensor=grouped)
             model.train()
             if state.has_dropout is None:
                 state.has_dropout = _has_dropout(model)
@@ -830,12 +842,15 @@ def make_l2l_trainer_class(base_cls: type) -> type:
             # The step bypasses the wrapped forward, where the Trainer applies its mixed
             # precision; forward, head and the recompute in backward all run inside it.
             with self.accelerator.autocast():
+                n_items = num_items_in_batch
+                if n_items is not None and not grouped:
+                    n_items = int(n_items)
                 losses, counters = run_window(
                     state,
                     model,
                     ids_list,
                     label_list,
-                    None if num_items_in_batch is None else int(num_items_in_batch),
+                    n_items,
                     device,
                 )
             state.steps += 1

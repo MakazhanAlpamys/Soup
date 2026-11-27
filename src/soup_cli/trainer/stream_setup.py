@@ -351,7 +351,7 @@ def _validate_stream_staging_ram_fit(
     )
 
 
-def _expert_buffer_requirements(shard_dir, index, *, device="cpu"):
+def _expert_buffer_requirements(shard_dir, index, *, device="cpu", stream_experts=None):
     """(arena bytes on the compute device, host staging bytes) of the expert buffer pool.
 
     Reads the expert files' headers only: no expert is read and no arena is allocated. The
@@ -381,9 +381,18 @@ def _expert_buffer_requirements(shard_dir, index, *, device="cpu"):
             dtype=index.dtype,
         )
         try:
-            plan = plan_expert_buffer(reader, dtype=index.dtype)
-            weight_bytes = max(weight_bytes, expert_allocation_budget(plan, device=device))
-            staging_bytes = max(staging_bytes, plan.host_staging_bytes)
+            if stream_experts is None:
+                plan = plan_expert_buffer(reader, dtype=index.dtype)
+                weight = expert_allocation_budget(plan, device=device)
+                staging = plan.host_staging_bytes
+            else:
+                from soup_cli.utils.expert_training import expert_training_reservations
+
+                weight, staging = expert_training_reservations(
+                    reader, stream_experts, dtype=index.dtype, device=device,
+                )
+            weight_bytes = max(weight_bytes, weight)
+            staging_bytes = max(staging_bytes, staging)
         finally:
             reader.close()
     return weight_bytes, staging_bytes
@@ -1176,6 +1185,14 @@ class StreamingSetupMixin:
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.
         arch = stream_arch_of(model_config)
+        stream_experts = getattr(tcfg, "stream_experts", None)
+        if arch == "olmoe":
+            if stream_experts is None:
+                raise ValueError("OLMoE streaming requires training.stream_experts")
+            if getattr(tcfg, "moe_aux_loss_coeff", None) != 0:
+                raise ValueError("training.stream_experts on OLMoE requires moe_aux_loss_coeff=0")
+            if getattr(tcfg, "l2l_two_read_experts", False):
+                raise ValueError("OLMoE streaming requires training.l2l_two_read_experts=false")
         # training.stream_expert_layout, in the sharder's spelling ("" = fused).
         # Refused here for an architecture the layout is not gated on: before any
         # weight is resolved, downloaded or sharded.
@@ -1202,6 +1219,7 @@ class StreamingSetupMixin:
                 model_config,
                 n_gpu=0,
                 expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
+                **({"stream_experts": stream_experts} if stream_experts is not None else {}),
             )
         two_read_experts = bool(getattr(tcfg, "l2l_two_read_experts", False))
         grouped_expert_routes = bool(getattr(tcfg, "l2l_grouped_expert_routes", False))
@@ -1236,6 +1254,15 @@ class StreamingSetupMixin:
         # made the entire free tier unsupported without saying so, and could not
         # fail on the Ampere card every published measurement came from.
         dtype = expert_gemm_dtype or resolve_stream_dtype(str(self.device))
+        if stream_experts is not None:
+            from soup_cli.utils.expert_training import validate_expert_training
+
+            validate_expert_training(stream_experts, device=str(self.device), dtype=dtype)
+            if stream_experts.backend == "fused_nf4" and not run_is_4bit:
+                raise ValueError(
+                    "training.stream_experts.backend='fused_nf4' requires "
+                    "training.quantization=4bit"
+                )
         if fp8_block is not None:
             console.print(
                 f"[dim]FP8 block-quantised base ({fp8_block[0]}x{fp8_block[1]} blocks): "
@@ -1553,7 +1580,8 @@ class StreamingSetupMixin:
         expert_pool_bytes = expert_staging_bytes = 0
         if l2l_experts:
             expert_pool_bytes, expert_staging_bytes = _expert_buffer_requirements(
-                shard_dir, index, device=str(self.device)
+                shard_dir, index, device=str(self.device),
+                **({"stream_experts": stream_experts} if stream_experts is not None else {}),
             )
         large_buffer_bytes = large_layer_buffer_bytes(shard_dir, index)
         large_budget_bytes = self._stream_large_budget_bytes(
@@ -1563,6 +1591,13 @@ class StreamingSetupMixin:
 
         free_ram = free_ram_bytes()
         total_ram = total_ram_bytes()
+        if stream_experts is not None and free_ram is not None:
+            expert_host_bytes = expert_staging_bytes + (0 if on_cuda else expert_pool_bytes)
+            if expert_host_bytes >= free_ram:
+                raise ValueError("training.stream_experts exceeds available host RAM")
+            free_ram -= expert_host_bytes
+            if total_ram is not None:
+                total_ram -= expert_host_bytes
         if free_ram is None:
             console.print(
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
@@ -1712,7 +1747,9 @@ class StreamingSetupMixin:
         # operator has to scroll past a summary to find reads as an afterthought.
         if plan.tier == TIER_DISK:
             _validate_stream_staging_ram_fit(
-                staging_bytes=plan.staging_bytes + expert_staging_bytes,
+                staging_bytes=plan.staging_bytes + (
+                    expert_staging_bytes if stream_experts is None else 0
+                ),
                 read_ahead=read_ahead,
                 free_ram=free_ram,
                 resident_ram=embed_bytes,
@@ -1818,6 +1855,7 @@ class StreamingSetupMixin:
                     "two_read_experts": two_read_experts,
                     "grouped_expert_routes": grouped_expert_routes,
                     **({"expert_gemm": expert_gemm} if expert_gemm != "native" else {}),
+                    **({"stream_experts": stream_experts} if stream_experts is not None else {}),
                 }
                 if l2l_experts
                 else {}
@@ -2087,6 +2125,8 @@ class StreamingSetupMixin:
             n_gpu=int(training_args.n_gpu),
             fp16=bool(training_args.fp16),
             expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
+            **({"stream_experts": tcfg.stream_experts}
+               if getattr(tcfg, "stream_experts", None) is not None else {}),
         )
         warning = unready_task_warning(getattr(self.config, "task", None))
         if warning is not None:

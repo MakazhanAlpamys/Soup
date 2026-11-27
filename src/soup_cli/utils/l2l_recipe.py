@@ -37,6 +37,7 @@ class L2LRecipe:
     mbr_split_backward: bool = False
     mbr_ordered_backward: bool = False
     expert_gemm: str = "native"
+    stream_experts: Optional[dict] = None
 
 
 def validate_l2l_options(tcfg: Any) -> None:
@@ -98,6 +99,7 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
             f"training.l2l_mbr_group_size={mbr_group_size} exceeds the "
             f"effective L2L window of {effective_k} micro-batches"
         )
+    stream_experts = getattr(tcfg, "stream_experts", None)
     return L2LRecipe(
         requested_k=requested,
         effective_k=effective_k,
@@ -110,6 +112,7 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
         mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
         mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
         expert_gemm=getattr(tcfg, "stream_expert_gemm", "native"),
+        stream_experts=stream_experts.model_dump(mode="json") if stream_experts else None,
     )
 
 
@@ -119,6 +122,8 @@ def write_recipe(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe | None)
 
     path = os.path.join(os.fspath(output_dir), RECIPE_NAME)
     data = asdict(recipe) if recipe is not None else {"l2l": False}
+    if recipe is not None and recipe.stream_experts is None:
+        del data["stream_experts"]
     text = json.dumps(data, indent=2, sort_keys=True) + "\n"
     return atomic_write_text(text, path, field="l2l recipe")
 
@@ -166,12 +171,14 @@ def _validate_recipe_match(saved: L2LRecipe, recipe: L2LRecipe) -> None:
         "mbr_split_backward",
         "mbr_ordered_backward",
         "expert_gemm",
+        "stream_experts",
     ):
         before, now = getattr(saved, name), getattr(recipe, name)
         if before != now:
+            field = "training.stream_experts" if name == "stream_experts" else name
             raise ValueError(
-                f"cannot resume: the checkpoint was trained with {name}={before!r}, but this "
-                f"run has {name}={now!r}. Restore the old value in the config."
+                f"cannot resume: the checkpoint was trained with {field}={before!r}, but this "
+                f"run has {field}={now!r}. Restore the old value in the config."
             )
 
 
@@ -194,9 +201,9 @@ def validate_resume_source(
 ) -> L2LRecipe | None:
     """Validate the checkpoint or its run-root recipe, then return the recipe to write.
 
-    Accept legacy checkpoints with no covering recipe. When resuming a legacy checkpoint,
-    the new run-root recipe starts at that checkpoint's step, so it cannot reclassify the
-    checkpoint itself or earlier ones. A checkpoint-local recipe takes precedence.
+    A checkpoint-local recipe takes precedence. Grouped expert compute requires a saved
+    recipe. When resuming a legacy checkpoint with no covering recipe, the new run-root
+    recipe starts at that checkpoint's step and covers only later checkpoints.
     """
     path = Path(os.path.realpath(checkpoint))
     step = None
@@ -211,10 +218,18 @@ def validate_resume_source(
     if saved is None:
         if recipe is None:
             return None
+        if recipe.stream_experts is not None:
+            raise ValueError(
+                "cannot resume with training.stream_experts: checkpoint has no L2L recipe"
+            )
         if step is None:
             step = checkpoint_step(path)
         return replace(recipe, start_step=step or 0)
     if recipe is None:
+        if saved.stream_experts is not None:
+            raise ValueError(
+                "cannot resume without training.l2l: checkpoint used training.stream_experts"
+            )
         raise ValueError(
             "cannot resume: the checkpoint was trained with training.l2l "
             f"(effective_k={saved.effective_k!r}, activation_codec={saved.activation_codec!r}), "

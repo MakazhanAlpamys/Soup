@@ -40,6 +40,7 @@ Sections:
 - [`data`](#data)
 - [`training`](#training)
 - [`training.lora`](#traininglora)
+- [`training.stream_experts`](#trainingstream_experts)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
 - [`eval.ship`](#evalship)
@@ -330,6 +331,7 @@ Sections:
 | `training.l2l_mbr_group_size` | `int \| null` | `null` | `>= 1` | Number of micro-batches per routed-expert group. Requires l2l_route_preserving_mbr=true and cannot exceed gradient_accumulation_steps. Null uses the full L2L window. |
 | `training.l2l_mbr_split_backward` | `bool` | `false` |  | EXPERIMENTAL — under l2l_route_preserving_mbr, differentiate grouped experts first, then backpropagate through the rest of the layer per micro-batch in L2L order. Excludes l2l_mbr_ordered_backward and deferred decoder forward hooks. |
 | `training.l2l_mbr_ordered_backward` | `bool` | `false` |  | EXPERIMENTAL — under l2l_route_preserving_mbr, build the recompute graph in reverse micro-batch order so a single backward per MoE layer visits the micro-batches in L2L order. Excludes l2l_mbr_split_backward. |
+| `training.stream_experts` | `section \| null` | `null` |  | Opt-in bounded grouped compute for frozen routed experts. Requires training.l2l=true and stream_expert_layout='per_expert'. See [`training.stream_experts`](#trainingstream_experts). |
 | `training.stream_expert_gemm` | `str` | `"native"` | one of `"native"`, `"batch_invariant"` | EXPERIMENTAL — use a fixed-order CUDA Triton GEMM for routed experts with 'batch_invariant'. Requires training.l2l=true, stream_expert_layout='per_expert' and l2l_route_preserving_mbr=true. The default keeps the native expert matmul. |
 | `training.stream_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where the streamed base lives. 'ram' (the only tier implemented in v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the store fits free-RAM headroom and the store plus resident extras fits the physical RAM ceiling. |
 | `training.stream_ngram_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer streaming. 'disk' gathers only requested rows from the original safetensors through a read-only mmap; 'ram' keeps the table in CPU RAM; 'auto' uses RAM only when the table and selected base tier plus resident extras fit within free-RAM headroom and the physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' (or 'auto') so only selected rows are dequantized. A non-default value warns when the checkpoint has no external PLE table. |
@@ -392,6 +394,19 @@ Sections:
 | `training.lora.init_strategy` | `str` | `"random"` | one of `"random"`, `"pissa"`, `"olora"`, `"loftq"` | LoRA init strategy. 'random' (default) is standard Kaiming init. 'pissa' (PiSSA) initializes A/B from the SVD of the base weight — faster early convergence but adds an SVD pass on the first epoch. 'olora' is equivalent to use_olora=True (orthogonal QR init). 'loftq' (v0.41.0) initialises A/B + a low-bit base together, useful with QLoRA. Cannot be combined with use_dora or use_vera. |
 | `training.lora.loftq_iter` | `int` | `1` | `>= 1`, `<= 10` | LoftQ iteration count (1-10). Higher = better quant-aware init at the cost of one-time setup latency. Used only when init_strategy='loftq'. |
 | `training.lora.loftq_bits` | `int` | `4` | one of `2`, `4`, `8` | LoftQ target bitwidth — must be one of {2, 4, 8}. Used only when init_strategy='loftq'. |
+
+## `training.stream_experts`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.stream_experts.backend` | `str` | `"grouped"` | one of `"sequential"`, `"grouped"`, `"triton"`, `"fused_nf4"` | Compute backend for the leased expert group. |
+| `training.stream_experts.group_width` | `int` | `4` | `>= 1`, `<= 4` | Maximum experts per lease. |
+| `training.stream_experts.weight_budget_bytes` | `int` | `67108864` | `>= 1` | Expert weight arena ceiling in bytes. |
+| `training.stream_experts.activation_budget_bytes` | `int` | `268435456` | `>= 1` | Live expert activations in bytes. |
+| `training.stream_experts.call_budget_bytes` | `int` | `67108864` | `>= 1` | Projection call ceiling in bytes. |
+| `training.stream_experts.cublas_library` | `str \| null` | `null` |  | Absolute Linux cuBLAS library for CUDA grouped compute. |
+| `training.stream_experts.native_rows_max` | `int` | `128` | one of `16`, `128` | Native GEMM cutoff for small OLMoE row buckets. |
+| `training.stream_experts.native_rows_from` | `int \| null` | `481` | `>= 129`, `< 2147483648` | First large OLMoE row bucket using native GEMM. Null disables that fallback. |
 
 ## `training.eval_gate`
 
