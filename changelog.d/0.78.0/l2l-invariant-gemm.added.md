@@ -1,1 +1,0 @@
-- Added an opt-in batch-invariant CUDA GEMM for streamed routed experts in layer-to-layer micro-batch routing. (#PENDING by @Batyrkhantzy111)
