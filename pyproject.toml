@@ -277,6 +277,9 @@ artifacts = [
   "src/soup_cli/data/_fixtures/unlearning/*.jsonl",
   "src/soup_cli/data/_fixtures/behavior/*.jsonl",
   "src/soup_cli/data/_fixtures/gate/*.jsonl",
+  # Ship sources for explicit native builds.
+  "src/soup_cli/utils/native_expert_reader/*.cpp",
+  "src/soup_cli/utils/native_expert_reader/*.cu",
 ]
 
 # Package the 17 canonical reference guides from docs/ (outside src/soup_cli)
