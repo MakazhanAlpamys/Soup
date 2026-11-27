@@ -192,6 +192,7 @@ def _warn_existing_output_files(
         return
     if resume is not None or hf_resume:
         return
+    from soup_cli.utils.terminal import for_terminal
     from soup_cli.utils.training_output import training_output_dir
 
     destination = training_output_dir(cfg.output, cfg.experiment_name)
@@ -205,7 +206,7 @@ def _warn_existing_output_files(
     else:
         names = ", ".join(existing[:-1]) + f" and {existing[-1]}"
     console.print(
-        f"[yellow]Warning:[/] {destination} already has {names}. "
+        f"[yellow]Warning:[/] {for_terminal(destination)} already has {names}. "
         "This run may replace them."
     )
 

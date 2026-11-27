@@ -134,7 +134,12 @@ def test_checkpoint_only_directory_stays_silent(run) -> None:
     assert "This run may replace them" not in _output(result)
 
 
-def _silent_cfg(tmp_path: Path, task: str = "sft", backend: str = "transformers") -> SoupConfig:
+def _silent_cfg(
+    tmp_path: Path,
+    task: str = "sft",
+    backend: str = "transformers",
+    output: str | None = None,
+) -> SoupConfig:
     return SoupConfig.model_validate(
         {
             "base": "owner/base",
@@ -142,7 +147,7 @@ def _silent_cfg(tmp_path: Path, task: str = "sft", backend: str = "transformers"
             "backend": backend,
             "data": {"train": "data.jsonl", "format": "alpaca", "val_split": 0},
             "training": {"epochs": 1, "quantization": "none", "batch_size": 1},
-            "output": str(tmp_path / "out"),
+            "output": output if output is not None else str(tmp_path / "out"),
             "experiment_name": "exp1",
         }
     )
@@ -183,3 +188,19 @@ def test_helper_warns_on_the_fresh_path(tmp_path: Path, capsys: pytest.CaptureFi
     _warn_existing_output_files(_silent_cfg(tmp_path), resume=None, hf_resume=False)
     captured = capsys.readouterr()
     assert "already has adapter_model.safetensors" in captured.out + captured.err
+
+
+def test_helper_prints_bracketed_path_as_supplied(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # A destination containing Rich markup text must appear exactly as
+    # supplied: without escaping, "[yellow]" is read as a style tag and the
+    # rendered path differs from the directory the save will use.
+    dest = tmp_path / "out[yellow]" / "exp1"
+    _seed_adapter_files(dest)
+    _warn_existing_output_files(
+        _silent_cfg(tmp_path, output=str(tmp_path / "out[yellow]")),
+        resume=None, hf_resume=False,
+    )
+    captured = capsys.readouterr()
+    assert str(dest) in _squash(strip_ansi(captured.out + captured.err))
