@@ -116,7 +116,22 @@ def test_checkpoint_kwargs_and_input_grad_hook(use_reentrant):
     )
 
     assert model.is_gradient_checkpointing
-    assert model.get_input_embeddings()(torch.tensor([[1, 2]])).requires_grad is use_reentrant
+    # The lean path must install exactly the input-grad hook PEFT's own preparation installs for
+    # these kwargs. Whether PEFT/Transformers install it for use_reentrant=False depends on their
+    # versions, so the reference is PEFT itself, run on an identical model.
+    import peft
+
+    reference = _tiny_model(torch.bfloat16)
+    peft.prepare_model_for_kbit_training(
+        reference,
+        use_gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+    )
+    tokens = torch.tensor([[1, 2]])
+    expected = reference.get_input_embeddings()(tokens).requires_grad
+    if use_reentrant:
+        assert expected, "PEFT installs the input-grad hook for reentrant checkpointing"
+    assert model.get_input_embeddings()(tokens).requires_grad is expected
 
 
 def test_restores_original_storage_when_peft_raises(monkeypatch):
