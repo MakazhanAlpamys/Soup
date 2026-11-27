@@ -1717,6 +1717,7 @@ Listed by first contribution. PR numbers link the work.
   - Added charts for recorded mean training scores and spread in `soup runs show`, with documentation and CLI coverage. ([#3151](https://github.com/MakazhanAlpamys/Soup/pull/3151))
   - Added opt-in local-history duration and cost estimates for comparable single-GPU SFT runs, with launch eligibility, an additive SQLite migration and CPU tests. ([#3152](https://github.com/MakazhanAlpamys/Soup/pull/3152))
   - Added custom ZeroGPU Space template guidance before deploy confirmation. ([#3319](https://github.com/MakazhanAlpamys/Soup/pull/3319))
+  - Added the original GLM-5 GRPO recipe and its configuration regressions. ([#3320](https://github.com/MakazhanAlpamys/Soup/pull/3320))
 
 - **MOHD OWAIS** ([@codewithchotu](https://github.com/codewithchotu))
   - Validated judge JSONL categories before generation, with helper, gate-result, and CLI regression coverage and migration guidance. ([#3174](https://github.com/MakazhanAlpamys/Soup/pull/3174))
