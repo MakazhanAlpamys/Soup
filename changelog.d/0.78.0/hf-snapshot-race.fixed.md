@@ -1,1 +1,0 @@
-- Reuse a matching Hugging Face snapshot copy when another Soup process publishes it first. (#PENDING by @nurseit14)
