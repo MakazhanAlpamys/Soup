@@ -130,6 +130,8 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
 
   `--repair-json` and `--drop-invalid-json` read every call the tool-calling loader reads: the row's top-level `tool_calls` and each assistant turn's `tool_calls`, in the documented `{"function": {"name": ..., "arguments": ...}}` shape or flat. Arguments given as a JSON object are left as they are.
 
+Rows the loader skips (a line that is not valid JSON, or a value that is not an object) are counted apart from `Dropped`, as `Skipped: N` in the summary header and `skipped_rows` in the `--json` result (0 when none). The loader prints a warning for each of the first three skipped rows of each kind and one summary line for the rest of that kind (`... and 2 more lines skipped (invalid JSON)`); the count includes every skipped row. When every row is skipped, the command exits 1 with `no object rows remain: N row(s) skipped (listed above)`.
+
 Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
 ## Topic map (`soup data topics`)
