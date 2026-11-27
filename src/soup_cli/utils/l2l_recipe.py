@@ -32,6 +32,10 @@ class L2LRecipe:
     grouped_expert_routes: bool = False
     # A run-root recipe covers checkpoints made after this step.
     start_step: int = 0
+    route_preserving_mbr: bool = False
+    mbr_group_size: Optional[int] = None
+    mbr_split_backward: bool = False
+    mbr_ordered_backward: bool = False
 
 
 def validate_l2l_options(tcfg: Any) -> None:
@@ -87,6 +91,12 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
         effective_k = requested
     if type(effective_k) is not int or not 1 <= effective_k <= requested:
         raise ValueError("training.l2l_auto_k requires a resolved, RAM-fitting effective k")
+    mbr_group_size = getattr(tcfg, "l2l_mbr_group_size", None)
+    if mbr_group_size is not None and mbr_group_size > effective_k:
+        raise ValueError(
+            f"training.l2l_mbr_group_size={mbr_group_size} exceeds the "
+            f"effective L2L window of {effective_k} micro-batches"
+        )
     return L2LRecipe(
         requested_k=requested,
         effective_k=effective_k,
@@ -94,6 +104,10 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
         auto_k=auto_k,
         two_read_experts=bool(getattr(tcfg, "l2l_two_read_experts", False)),
         grouped_expert_routes=bool(getattr(tcfg, "l2l_grouped_expert_routes", False)),
+        route_preserving_mbr=getattr(tcfg, "l2l_route_preserving_mbr", False),
+        mbr_group_size=mbr_group_size,
+        mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
+        mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
     )
 
 
@@ -140,7 +154,16 @@ def validate_resume(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> 
 
 
 def _validate_recipe_match(saved: L2LRecipe, recipe: L2LRecipe) -> None:
-    for name in ("effective_k", "activation_codec", "two_read_experts", "grouped_expert_routes"):
+    for name in (
+        "effective_k",
+        "activation_codec",
+        "two_read_experts",
+        "grouped_expert_routes",
+        "route_preserving_mbr",
+        "mbr_group_size",
+        "mbr_split_backward",
+        "mbr_ordered_backward",
+    ):
         before, now = getattr(saved, name), getattr(recipe, name)
         if before != now:
             raise ValueError(

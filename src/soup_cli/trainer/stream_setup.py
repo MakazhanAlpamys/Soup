@@ -2093,6 +2093,10 @@ class StreamingSetupMixin:
             effective_k=effective_k,
             two_read_experts=bool(getattr(tcfg, "l2l_two_read_experts", False)),
             grouped_expert_routes=bool(getattr(tcfg, "l2l_grouped_expert_routes", False)),
+            route_preserving_mbr=getattr(tcfg, "l2l_route_preserving_mbr", False),
+            mbr_group_size=getattr(tcfg, "l2l_mbr_group_size", None),
+            mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
+            mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "

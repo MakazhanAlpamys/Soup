@@ -509,6 +509,8 @@ def _validate_route_preserving_mbr(layers: Sequence[Any], causal: Any) -> None:
             raise ValueError(
                 f"route-preserving MBR layer {index} requires grouped_expert_routes=True"
             )
+        if experts.pool is None:
+            raise ValueError(f"route-preserving MBR layer {index} requires an expert buffer pool")
         if any(
             getattr(experts, name, None)
             for name in (
@@ -572,11 +574,7 @@ def _route_preserving_deepseek_forward(
     attention_kwargs = {
         name: value
         for name, value in layer_kwargs.items()
-        if name in attention_parameters
-        or (
-            accepts_attention_kwargs
-            and name not in {"use_cache", "output_attentions", "past_key_values"}
-        )
+        if name in attention_parameters or accepts_attention_kwargs
     }
 
     residual = hidden_states
@@ -657,7 +655,9 @@ def _patched_route_preserving_forward(layer: Any, capture: List[Dict[str, Any]])
 
 
 @contextmanager
-def _defer_decoder_forward_hooks(layer: Any) -> Iterator[Tuple[Any, Any, List[Any]]]:
+def _defer_decoder_forward_hooks(
+    layer: Any, *, split_backward: bool
+) -> Iterator[Tuple[Any, Any, List[Any]]]:
     """Hide marked hooks during the placeholder call and capture real wrapper inputs."""
     inner = getattr(layer, "inner", layer)
     wrapper_hooks = layer._forward_hooks
@@ -672,6 +672,11 @@ def _defer_decoder_forward_hooks(layer: Any) -> Iterator[Tuple[Any, Any, List[An
             for hook_id, hook in hooks.items()
         ):
             raise ValueError("route-preserving MBR requires explicitly marked deferred hooks")
+    if split_backward and (wrapper_hooks or inner_hooks):
+        raise RuntimeError(
+            "mbr_split_backward does not support deferred decoder forward hooks: "
+            "a hook may read tensors that phase one would sum group-wide"
+        )
 
     def record_inputs(_module: Any, args: Any, kwargs: Any) -> None:
         wrapper_inputs.append((args, dict(kwargs)))
@@ -872,8 +877,10 @@ class L2LStep:
         calls: Sequence[LayerCall],
         group_size: int,
         deferred_hooks: Tuple[Any, Any, List[Any]],
+        *,
         split_records: Optional[List[Dict[str, Any]]] = None,
         reverse_graph_order: bool = False,
+        preserve_expert_shapes: bool = False,
     ) -> Tuple[List[Any], List[Tuple[Any, Any]], List[List[int]], Dict[str, int]]:
         """Run each layer's attention/router per micro-batch, grouping only routed experts.
 
@@ -881,10 +888,9 @@ class L2LStep:
         its inputs and the residual path become fresh leaves and one record per group lists the
         per-micro-batch tensors behind them, so the caller can run the block's backward once
         and the rest of each micro-batch's backward on its own (see ``_split_group_backward``).
-        ``reverse_graph_order`` builds each group's micro-batches from the last to the first, in
-        the forward pass and the recompute alike (two-read replays router decisions in the order
-        the forward took them), so one backward over the group adds gradients in micro-batch
-        order (see ``mbr_ordered_backward``); rows, outputs and routes keep micro-batch order.
+        ``reverse_graph_order`` builds the micro-batches from the last to the first, in the
+        forward pass and the recompute alike (two-read replays router decisions in the order
+        the forward took them). Rows within a group, outputs and routes keep micro-batch order.
         """
         import torch
 
@@ -905,8 +911,9 @@ class L2LStep:
 
         inner = getattr(module, "inner", module)
         wrapper_hooks, inner_hooks, wrapper_inputs = deferred_hooks
+        starts = range(0, len(hidden), group_size)
         with _patched_route_preserving_forward(module, captured):
-            for start in range(0, len(hidden), group_size):
+            for start in reversed(starts) if reverse_graph_order else starts:
                 indices = list(range(start, min(start + group_size, len(hidden))))
                 first_record = len(captured)
                 build_order = list(reversed(indices)) if reverse_graph_order else list(indices)
@@ -948,14 +955,7 @@ class L2LStep:
                     or joined_ids.shape[0] != joined_hidden.shape[0]
                 ):
                     raise RuntimeError("route-preserving MBR joined token counts do not match")
-                # Two-read normally replaces recompute output with zeros. A decoder
-                # hook needs the actual value, so re-read experts for this call.
                 if split_records is not None:
-                    if wrapper_hooks or inner_hooks:
-                        raise RuntimeError(
-                            "mbr_split_backward does not support deferred decoder forward hooks: "
-                            "a hook may read tensors that phase one would sum group-wide"
-                        )
                     split_records.append(
                         _cut_group_graph(indices, rows, joined_hidden, joined_weights, sizes)
                     )
@@ -965,16 +965,19 @@ class L2LStep:
                 else:
                     residuals = [row["residual"] for row in rows]
                     shared = [row["shared_output"] for row in rows]
-                previous_materialize = experts._mbr_materialize_recompute
-                experts._mbr_materialize_recompute = bool(wrapper_hooks or inner_hooks)
-                # Row counts of the joined micro-batches in micro-batch order, for hooks that
-                # split the joined call (the call order of the micro-batches may be reversed).
-                experts._mbr_group_sizes = list(sizes)
+                # Two-read normally replaces recompute output with zeros. A decoder
+                # hook needs the actual value, so re-read experts for this call.
+                previous_materialize = experts.materialize_recompute
+                experts.materialize_recompute = previous_materialize or bool(
+                    wrapper_hooks or inner_hooks
+                )
                 try:
-                    joined_output = experts(joined_hidden, joined_ids, joined_weights)
+                    joined_output = experts(
+                        joined_hidden, joined_ids, joined_weights,
+                        group_sizes=sizes if preserve_expert_shapes else None,
+                    )
                 finally:
-                    experts._mbr_materialize_recompute = previous_materialize
-                    experts._mbr_group_sizes = None
+                    experts.materialize_recompute = previous_materialize
                 unique_experts_by_group.append(len(experts.last_trace))
                 if joined_output.shape != joined_hidden.shape:
                     raise RuntimeError(
@@ -1005,6 +1008,9 @@ class L2LStep:
 
         if any(output is None for output in outputs) or any(route is None for route in routes):
             raise RuntimeError("route-preserving MBR left a micro-batch without a layer output")
+        if reverse_graph_order:
+            groups.reverse()
+            unique_experts_by_group.reverse()
         return (
             outputs,
             routes,
@@ -1142,8 +1148,8 @@ class L2LStep:
         experts and grouped route dispatch. ``mbr_group_size`` defaults to the full window.
         ``mbr_split_backward`` runs each group's backward in two phases (grouped experts once,
         then the rest per micro-batch), so LoRA gradients add up in the order of group size 1.
-        ``mbr_ordered_backward`` gets the same order in one engine call per group: the backward
-        recompute builds each group's micro-batches from the last to the first, so the engine
+        ``mbr_ordered_backward`` gets the same order in one engine call per MoE layer: the backward
+        recompute builds the micro-batches from the last to the first, so the engine
         (highest sequence number first) meets micro-batch 0's nodes first and adds every
         weight's contributions in micro-batch order. It excludes ``mbr_split_backward``.
         """
@@ -1259,6 +1265,7 @@ class L2LStep:
         # The final optimizer window can contain fewer micro-batches than the configured
         # capacity; run that shorter window as one group instead of rejecting it.
         group_size = k if mbr_group_size is None else min(mbr_group_size, k)
+        preserve_expert_shapes = mbr_split_backward or mbr_ordered_backward
         if k > store.k:
             raise ValueError(f"{k} micro-batches, but the activation store holds {store.k}")
         if calls is None:
@@ -1331,7 +1338,9 @@ class L2LStep:
                     pair = contexts.get(idx)
                     before = self._expert_read_snapshot() if phase_stats is not None else None
                     with (
-                        _defer_decoder_forward_hooks(layer) as deferred_hooks,
+                        _defer_decoder_forward_hooks(
+                            layer, split_backward=mbr_split_backward
+                        ) as deferred_hooks,
                         pair[0] if pair else nullcontext(),
                     ):
                         layer_outputs, layer_routes, layer_groups, dispatch = (
@@ -1343,6 +1352,7 @@ class L2LStep:
                                 group_size,
                                 deferred_hooks,
                                 reverse_graph_order=mbr_ordered_backward,
+                                preserve_expert_shapes=preserve_expert_shapes,
                             )
                         )
                     for mb in range(k):
@@ -1447,9 +1457,20 @@ class L2LStep:
                     split_records: Optional[List[Dict[str, Any]]] = (
                         [] if mbr_split_backward else None
                     )
+                    # Distinct bf16 casts round each adapter gradient before the fp32 sum,
+                    # as separate L2L backward calls do even when they reuse the same cast.
+                    device_type = inputs[0].device.type
+                    autocast = (
+                        torch.autocast(device_type, cache_enabled=False)
+                        if mbr_ordered_backward and torch.is_autocast_enabled(device_type)
+                        else nullcontext()
+                    )
                     with (
                         torch.enable_grad(),
-                        _defer_decoder_forward_hooks(layer) as deferred_hooks,
+                        autocast,
+                        _defer_decoder_forward_hooks(
+                            layer, split_backward=mbr_split_backward
+                        ) as deferred_hooks,
                         pair[1] if pair else nullcontext(),
                     ):
                         outputs, layer_routes, layer_groups, dispatch = (
@@ -1460,8 +1481,9 @@ class L2LStep:
                                 calls,
                                 group_size,
                                 deferred_hooks,
-                                split_records,
+                                split_records=split_records,
                                 reverse_graph_order=mbr_ordered_backward,
+                                preserve_expert_shapes=preserve_expert_shapes,
                             )
                         )
                     after_recompute = (
@@ -1520,7 +1542,10 @@ class L2LStep:
                         )
                         gate_weight_max_abs = float(weight_delta.abs().max().item())
                         before_backward = self._expert_read_snapshot()
-                    for position, group in enumerate(layer_groups):
+                    # One ordered backward over the layer preserves the running sum across
+                    # group boundaries as well as within each group.
+                    backward_groups = [range(k)] if mbr_ordered_backward else layer_groups
+                    for position, group in enumerate(backward_groups):
                         if split_records is not None:
                             _split_group_backward(
                                 split_records[position],
@@ -1556,7 +1581,7 @@ class L2LStep:
                             "backward_dX",
                             before_backward,
                             after_backward,
-                            layer_calls=len(layer_groups),
+                            layer_calls=len(backward_groups),
                             tokens=sum(int(value.shape[0] * value.shape[1]) for value in inputs),
                         )
                         layer_stats["recompute_forward"].update(dispatch)

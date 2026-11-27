@@ -4086,6 +4086,40 @@ class TrainingConfig(BaseModel):
             "is refused."
         ),
     )
+    l2l_route_preserving_mbr: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — group streamed DeepSeek-V3 routed experts across L2L micro-batches. "
+            "Attention and routing still run per micro-batch. Requires training.l2l=true, "
+            "stream_expert_layout='per_expert', l2l_two_read_experts=true and "
+            "l2l_grouped_expert_routes=true. Off by default."
+        ),
+    )
+    l2l_mbr_group_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Number of micro-batches per routed-expert group. Requires "
+            "l2l_route_preserving_mbr=true and cannot exceed gradient_accumulation_steps. "
+            "Null uses the full L2L window."
+        ),
+    )
+    l2l_mbr_split_backward: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under l2l_route_preserving_mbr, differentiate grouped experts "
+            "first, then backpropagate through the rest of the layer per micro-batch in L2L "
+            "order. Excludes l2l_mbr_ordered_backward and deferred decoder forward hooks."
+        ),
+    )
+    l2l_mbr_ordered_backward: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under l2l_route_preserving_mbr, build the recompute graph in "
+            "reverse micro-batch order so a single backward per MoE layer visits the "
+            "micro-batches in L2L order. Excludes l2l_mbr_split_backward."
+        ),
+    )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
@@ -4672,7 +4706,9 @@ class TrainingConfig(BaseModel):
         )
 
     @field_validator(
-        "l2l", "l2l_auto_k", "l2l_two_read_experts", "l2l_grouped_expert_routes", mode="before"
+        "l2l", "l2l_auto_k", "l2l_two_read_experts", "l2l_grouped_expert_routes",
+        "l2l_route_preserving_mbr", "l2l_mbr_split_backward", "l2l_mbr_ordered_backward",
+        mode="before",
     )
     @classmethod
     @_type_error_as_value_error
@@ -4684,6 +4720,16 @@ class TrainingConfig(BaseModel):
         raise TypeError(
             f"training.{info.field_name} must be true or false, got "
             f"{type(v).__name__} {v!r}"
+        )
+
+    @field_validator("l2l_mbr_group_size", mode="before")
+    @classmethod
+    def _validate_l2l_mbr_group_size(cls, value: Any) -> Any:
+        if value is None or type(value) is int:
+            return value
+        raise ValueError(
+            "training.l2l_mbr_group_size must be an integer or null, got "
+            f"{type(value).__name__} {value!r}"
         )
 
     @field_validator("l2l_spill_dir")
@@ -8384,12 +8430,19 @@ class SoupConfig(BaseModel):
         launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
         """
         tcfg = self.training
+        mbr_options = {
+            "l2l_route_preserving_mbr": tcfg.l2l_route_preserving_mbr,
+            "l2l_mbr_group_size": tcfg.l2l_mbr_group_size is not None,
+            "l2l_mbr_split_backward": tcfg.l2l_mbr_split_backward,
+            "l2l_mbr_ordered_backward": tcfg.l2l_mbr_ordered_backward,
+        }
         options = {
             "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
             "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
             "l2l_auto_k": tcfg.l2l_auto_k,
             "l2l_two_read_experts": tcfg.l2l_two_read_experts,
             "l2l_grouped_expert_routes": tcfg.l2l_grouped_expert_routes,
+            **mbr_options,
         }
         if not tcfg.l2l:
             for name, is_set in options.items():
@@ -8404,13 +8457,37 @@ class SoupConfig(BaseModel):
                 "training.l2l requires training.stream_layers=true: L2L reuses the "
                 "streamed layer loads, and a resident model has none to reuse."
             )
-        for name in ("l2l_two_read_experts", "l2l_grouped_expert_routes"):
+        for name in (*mbr_options, "l2l_two_read_experts", "l2l_grouped_expert_routes"):
             if options[name] and tcfg.stream_expert_layout != "per_expert":
                 raise ValueError(
                     f"training.{name} acts on the routed experts of a per_expert cache and "
                     "a fused layout has none to read: set "
                     f"training.stream_expert_layout='per_expert' or drop {name}."
                 )
+        if tcfg.l2l_route_preserving_mbr:
+            if not (tcfg.l2l_two_read_experts and tcfg.l2l_grouped_expert_routes):
+                raise ValueError(
+                    "training.l2l_route_preserving_mbr requires both "
+                    "l2l_two_read_experts=true and l2l_grouped_expert_routes=true"
+                )
+            if (
+                tcfg.l2l_mbr_group_size is not None
+                and tcfg.l2l_mbr_group_size > tcfg.gradient_accumulation_steps
+            ):
+                raise ValueError(
+                    "training.l2l_mbr_group_size cannot exceed training.gradient_accumulation_steps"
+                )
+            if tcfg.l2l_mbr_ordered_backward and tcfg.l2l_mbr_split_backward:
+                raise ValueError(
+                    "training.l2l_mbr_ordered_backward and training.l2l_mbr_split_backward "
+                    "exclude each other"
+                )
+        else:
+            for name, enabled in mbr_options.items():
+                if enabled:
+                    raise ValueError(
+                        f"training.{name} requires training.l2l_route_preserving_mbr=true"
+                    )
         if self.task not in L2L_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "

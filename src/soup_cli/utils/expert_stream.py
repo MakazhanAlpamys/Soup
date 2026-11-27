@@ -1245,16 +1245,19 @@ def _build_streamed_experts_class():
         respect to the hidden slice and the routing weights. First-order only, like
         ``PooledExpert``. The forward's routing decisions reach a recompute through the router
         replay of ``_routing_forward``; a recompute that routed elsewhere would be a bug there.
+        A group can keep its micro-batch GEMM and routing-weight multiply shapes while sharing
+        each expert lease. The segment sizes are saved here for the corresponding backward.
         """
 
         @staticmethod
-        def forward(ctx, hidden, weights, owner, expert, replay, nxt=None, prv=None):
+        def forward(ctx, hidden, weights, owner, expert, replay, nxt, prv, segments):
             ctx.owner = owner
             ctx.act_fn = owner.act_fn
             ctx.expert = expert
             ctx.hint_prev = prv  # the backward visits experts in the reverse order
             ctx.device_type = hidden.device.type
             ctx.autocast_kwargs = _autocast_state(ctx.device_type)
+            ctx.segments = segments
             ctx.save_for_backward(hidden, weights)
             if replay:
                 # The consumers of this product (the cast and index_add_) keep it for its
@@ -1266,6 +1269,11 @@ def _build_streamed_experts_class():
                 owner.reader, expert, phase=phase, layer_idx=owner.layer_idx
             ) as (gate_up, down):
                 owner.pool.prefetch(owner.reader, nxt)
+                if segments is not None:
+                    return torch.cat([
+                        expert_mlp(rows, gate_up, down, owner.act_fn) * routing
+                        for rows, routing in zip(hidden.split(segments), weights.split(segments))
+                    ])
                 return expert_mlp(hidden, gate_up, down, owner.act_fn) * weights
 
         @staticmethod
@@ -1274,24 +1282,39 @@ def _build_streamed_experts_class():
                 raise RuntimeError("expert streaming does not support higher-order gradients")
             need_hidden, need_weights = ctx.needs_input_grad[0], ctx.needs_input_grad[1]
             if not (need_hidden or need_weights):
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None
             _validate_training_activation(ctx.act_fn)
             hidden, weights = ctx.saved_tensors
-            with ctx.owner.pool.lease(
-                ctx.owner.reader, ctx.expert, phase="backward_dX", layer_idx=ctx.owner.layer_idx
-            ) as (gate_up, down):
-                ctx.owner.pool.prefetch(ctx.owner.reader, ctx.hint_prev)
-                local_hidden = hidden.detach().requires_grad_(need_hidden)
-                local_weights = weights.detach().requires_grad_(need_weights)
+
+            def vjp(rows: Any, routing: Any, grad: Any) -> Tuple[Any, ...]:
+                local_hidden = rows.detach().requires_grad_(need_hidden)
+                local_weights = routing.detach().requires_grad_(need_weights)
                 with torch.enable_grad(), torch.autocast(ctx.device_type, **ctx.autocast_kwargs):
                     result = expert_mlp(local_hidden, gate_up, down, ctx.act_fn) * local_weights
                 wanted = [
                     tensor for tensor in (local_hidden, local_weights) if tensor.requires_grad
                 ]
-                grads = list(torch.autograd.grad(result, wanted, grad_out))
-            grad_hidden = grads.pop(0) if need_hidden else None
-            grad_weights = grads.pop(0) if need_weights else None
-            return grad_hidden, grad_weights, None, None, None, None, None
+                return torch.autograd.grad(result, wanted, grad)
+
+            with ctx.owner.pool.lease(
+                ctx.owner.reader, ctx.expert, phase="backward_dX", layer_idx=ctx.owner.layer_idx
+            ) as (gate_up, down):
+                ctx.owner.pool.prefetch(ctx.owner.reader, ctx.hint_prev)
+                if ctx.segments is None:
+                    grads = vjp(hidden, weights, grad_out)
+                else:
+                    segment_grads = [
+                        vjp(rows, routing, grad)
+                        for rows, routing, grad in zip(
+                            hidden.split(ctx.segments),
+                            weights.split(ctx.segments),
+                            grad_out.split(ctx.segments),
+                        )
+                    ]
+                    grads = tuple(torch.cat(parts) for parts in zip(*segment_grads))
+            grad_hidden = grads[0] if need_hidden else None
+            grad_weights = grads[-1] if need_weights else None
+            return grad_hidden, grad_weights, None, None, None, None, None, None
 
     class StreamedExperts(nn.Module):
         """Drop-in for a transformers experts module; reads each expert on use.
@@ -1365,9 +1388,11 @@ def _build_streamed_experts_class():
             scope = _active_scope() if self.two_reads else None
             return scope is not None and scope.replay and not self.materialize_recompute
 
-        def forward(self, hidden_states, top_k_index, top_k_weights):
+        def forward(self, hidden_states, top_k_index, top_k_weights, *, group_sizes=None):
             if self.pool is not None:
-                return self._forward_pooled(hidden_states, top_k_index, top_k_weights)
+                return self._forward_pooled(
+                    hidden_states, top_k_index, top_k_weights, group_sizes
+                )
             final_hidden_states = torch.zeros_like(hidden_states)
             with torch.no_grad():
                 expert_mask = functional.one_hot(top_k_index, num_classes=self.num_experts)
@@ -1385,7 +1410,7 @@ def _build_streamed_experts_class():
                 final_hidden_states.index_add_(0, token_idx, current.to(final_hidden_states.dtype))
             return final_hidden_states
 
-        def _forward_pooled(self, hidden_states, top_k_index, top_k_weights):
+        def _forward_pooled(self, hidden_states, top_k_index, top_k_weights, group_sizes):
             if not self._forward_lock.acquire(blocking=False):
                 raise RuntimeError("expert forward is already active")
             try:
@@ -1408,6 +1433,9 @@ def _build_streamed_experts_class():
                 expert_mask = expert_mask.permute(2, 1, 0)
                 routes = self._routes(expert_mask)
                 replay = self._replaying()
+                boundaries = None
+                if group_sizes is not None and len(group_sizes) > 1:
+                    boundaries = top_k_index.new_tensor(group_sizes).cumsum(0)[:-1]
                 # A hint names the next expert of this visit order (and the previous one for the
                 # backward). Hints never cross a layer: the next layer's routes are unknown.
                 hinting = bool(self.pool.prefetch_enabled)
@@ -1426,12 +1454,22 @@ def _build_streamed_experts_class():
                     before = self.reader.bytes_read
                     fetches = self.pool.fetches
                     try:
+                        segments = None
+                        if boundaries is not None:
+                            # Grouped routes are in top-k/row order. Stable sorting by
+                            # micro-batch keeps that same order inside each expert segment.
+                            batch = torch.bucketize(token_idx.contiguous(), boundaries, right=True)
+                            counts = torch.bincount(batch, minlength=len(group_sizes)).tolist()
+                            if sum(count > 0 for count in counts) > 1:
+                                order = batch.argsort(stable=True)
+                                token_idx, top_k_pos = token_idx[order], top_k_pos[order]
+                                segments = [count for count in counts if count]
                         current_state, weights = self._gather(
                             hidden_states, top_k_weights, token_idx, top_k_pos
                         )
                         if self.two_reads:
                             current = PooledWeightedExpert.apply(
-                                current_state, weights, self, expert, replay, nxt, prv
+                                current_state, weights, self, expert, replay, nxt, prv, segments
                             )
                         else:
                             current = PooledExpert.apply(current_state, self, expert, nxt, prv)

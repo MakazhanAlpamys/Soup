@@ -1,0 +1,1 @@
+- Added opt-in micro-batch routing for DeepSeek-V3 MoE under layer-to-layer training, with split and ordered backward modes. (#PENDING by @M1kado0, @Artix6034)

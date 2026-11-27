@@ -193,6 +193,8 @@ class L2LState:
     grouped_expert_routes: bool = False
     route_preserving_mbr: bool = False
     mbr_group_size: Optional[int] = None
+    mbr_split_backward: bool = False
+    mbr_ordered_backward: bool = False
 
     def __post_init__(self) -> None:
         if self.loss is None:
@@ -260,6 +262,8 @@ class L2LState:
         if self.route_preserving_mbr:
             fields["l2l_route_preserving_mbr"] = True
             fields["l2l_mbr_group_size"] = self.mbr_group_size or self.effective_k
+            fields["l2l_mbr_split_backward"] = self.mbr_split_backward
+            fields["l2l_mbr_ordered_backward"] = self.mbr_ordered_backward
         return fields
 
     def spill_directory(self) -> str:
@@ -732,6 +736,11 @@ def run_window(
         routing["routing_budget"] = (
             state.memory_plan.routing_record_bytes, state.memory_plan.routing_comparison_bytes
         )
+    # The first window after launch or resume can be short, so the store may only have
+    # that many slots. Keep the recipe's configured size for subsequent windows.
+    mbr_group_size = state.mbr_group_size
+    if mbr_group_size is not None:
+        mbr_group_size = min(mbr_group_size, len(ids_list))
     losses = stepper.run(
         ids_list,
         store,
@@ -740,7 +749,9 @@ def run_window(
         reference=reference,
         **routing,
         route_preserving_mbr=state.route_preserving_mbr,
-        mbr_group_size=state.mbr_group_size,
+        mbr_group_size=mbr_group_size,
+        mbr_split_backward=state.mbr_split_backward,
+        mbr_ordered_backward=state.mbr_ordered_backward,
     )
     return losses, stepper.counters
 
@@ -855,6 +866,8 @@ def attach_l2l_state(
     grouped_expert_routes: bool = False,
     route_preserving_mbr: bool = False,
     mbr_group_size: Optional[int] = None,
+    mbr_split_backward: bool = False,
+    mbr_ordered_backward: bool = False,
 ) -> L2LState:
     """Give a trainer from :func:`make_l2l_trainer_class` its streaming runtime.
 
@@ -889,6 +902,8 @@ def attach_l2l_state(
         grouped_expert_routes=grouped_expert_routes,
         route_preserving_mbr=route_preserving_mbr,
         mbr_group_size=mbr_group_size,
+        mbr_split_backward=mbr_split_backward,
+        mbr_ordered_backward=mbr_ordered_backward,
     )
     # The trainer's run directory is the fallback location for activation spill.
     state.output_dir = getattr(args, "output_dir", None)
