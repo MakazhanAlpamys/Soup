@@ -704,13 +704,18 @@ def _run_judge_task(
     validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
         for line_number, raw_line in enumerate(fh, start=1):
-            if not raw_line.strip():
+            row_text = raw_line.rstrip("\r\n")
+            stripped = row_text.strip()
+            if not stripped:
                 continue
             try:
-                # The decoder sees the physical row minus the line ending,
-                # leading indentation and trailing spaces included, so its
-                # coordinates already match the file position.
-                row = json.loads(raw_line.rstrip("\r\n"))
+                # Keep the base behavior of parsing surrounding whitespace
+                # (including NBSP and other unicode blanks) away, but feed the
+                # decoder the content padded back to the same width with ASCII
+                # spaces so its column coordinates match the physical row.
+                leading = len(row_text) - len(row_text.lstrip())
+                trailing = len(row_text) - len(stripped) - leading
+                row = json.loads(" " * leading + stripped + " " * trailing)
             except json.JSONDecodeError as exc:
                 raise JudgeJSONLError(
                     f"judge task {task.name!r} file {task.prompts!r} "

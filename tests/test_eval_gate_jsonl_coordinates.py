@@ -117,3 +117,31 @@ def test_valid_rows_still_load_after_the_rebase(
     seen: list[str] = []
     gate._run_judge_task(task(), lambda prompt: seen.append(prompt) or "ok")
     assert seen == ["p", "q"]
+
+
+def test_row_wrapped_in_unicode_blanks_still_parses_and_keeps_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path("prompts.jsonl").write_text(
+        "\u00a0" + json.dumps({"prompt": "valid"}) + "\u00a0\r\n",
+        encoding="utf-8",
+    )
+    # previously accepted input keeps passing: surrounding unicode blanks
+    # are stripped before decoding, exactly like the base loader.
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    monkeypatch.setattr(
+        JudgeEvaluator, "_call_llm",
+        lambda self, prompt: json.dumps(
+            {"scores": {"helpfulness": 5, "accuracy": 5, "safety": 5}},
+        ),
+    )
+    gate._run_judge_task(task(), lambda prompt: "synthetic")
+    Path("prompts.jsonl").write_text(
+        "\u00a0" + '{"prompt": }' + "\u00a0\n", encoding="utf-8"
+    )
+    # a malformed row reports the physical column past the leading blank.
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(task(), lambda prompt: "synthetic")
+    assert "line 1 column 13: Expecting value" in str(caught.value)
