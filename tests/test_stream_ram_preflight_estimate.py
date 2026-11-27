@@ -408,8 +408,10 @@ class TestAnFp8BlockSource:
     def test_it_is_charged_its_dequantised_size(self, tmp_path, monkeypatch, quantization):
         fp8, ref, quantization_config = _fp8_pair(tmp_path)
         quant = "nf4" if quantization == "4bit" else "none"
+        # Match the FP8 source's unset NF4 setting when sizing the dequantised reference.
         dequantised = _estimate(
-            ref, quant=quant, suffixes=_FP8_SUFFIXES, num_hidden_layers=_FP8_LAYERS
+            ref, quant=quant, suffixes=_FP8_SUFFIXES, num_hidden_layers=_FP8_LAYERS,
+            double_quant=False,
         )
         seen = _passed(
             _drive(
@@ -419,6 +421,8 @@ class TestAnFp8BlockSource:
         )
         assert [call["ram_bytes"] for call in seen["early"]] == [dequantised.ram_tier_bytes]
         assert seen["early"][0]["approximate"] is False
+        if quantization == "4bit":
+            assert [call["double_quant"] for call in seen["shards"]] == [False]
         # one byte per FP8 weight on disk: the old charge was well under the dequantised one
         assert 2 * _flat(_source_bytes(fp8), quant=quant) < dequantised.ram_tier_bytes
 

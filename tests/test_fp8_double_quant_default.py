@@ -15,6 +15,14 @@ DEEPSEEK_FP8 = {
     "activation_scheme": "dynamic",
     "weight_block_size": [128, 128],
 }
+DOUBLE_QUANT_REFUSAL = (
+    "training.bnb_4bit_use_double_quant=true is not supported for an FP8 "
+    "block-quantised base sharded as NF4: with double-quant on, the NF4 codec "
+    "exceeds the per-block reconstruction bound on a block-scaled weight whose "
+    "block scales span a wide range, and stays within it with double-quant off. "
+    "Leave it unset or set it to false; the cost is about 0.37 bit per parameter "
+    "of extra NF4 statistics."
+)
 
 
 @pytest.mark.parametrize(
@@ -37,12 +45,9 @@ def test_the_resolution_table(requested, fp8_block, quant_nf4, expected):
 
 
 def test_an_explicit_true_is_refused_for_an_fp8_nf4_source():
-    with pytest.raises(
-        ValueError,
-        match=r"training\.bnb_4bit_use_double_quant=true is not supported for an FP8 "
-        r"block-quantised base sharded as NF4",
-    ):
+    with pytest.raises(ValueError) as exc_info:
         resolve_fp8_double_quant(True, fp8_block=BLOCK, quant_nf4=True)
+    assert str(exc_info.value) == DOUBLE_QUANT_REFUSAL
 
 
 def _drive(tmp_path, monkeypatch, *, requested, quantization="4bit", **overrides):
@@ -91,13 +96,19 @@ def test_the_setup_shards_an_fp8_nf4_base_without_double_quant(tmp_path, monkeyp
 
 
 def test_the_setup_refuses_double_quant_true_for_an_fp8_nf4_base(tmp_path, monkeypatch):
-    with pytest.raises(ValueError, match="sharded as NF4: with double-quant on"):
+    with pytest.raises(ValueError) as exc_info:
         _drive(tmp_path, monkeypatch, requested=True)
+    assert str(exc_info.value) == DOUBLE_QUANT_REFUSAL
 
 
 def test_the_setup_refuses_the_scale_cache_for_an_fp8_nf4_base(tmp_path, monkeypatch):
-    with pytest.raises(ValueError, match="an FP8 block-quantised base is sharded without it"):
+    with pytest.raises(ValueError) as exc_info:
         _drive(tmp_path, monkeypatch, requested=None, stream_nf4_scale_cache=True)
+    assert str(exc_info.value) == (
+        "training.stream_nf4_scale_cache caches the expanded nested scales of "
+        "double quantisation, and an FP8 block-quantised base is sharded "
+        "without it; unset stream_nf4_scale_cache for this base."
+    )
 
 
 def test_an_fp8_base_that_is_not_nf4_keeps_the_shipped_default(tmp_path, monkeypatch):
