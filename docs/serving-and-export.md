@@ -59,7 +59,7 @@ IDs and tensor dimensions, resizes the base, then loads the saved weights.
 Incomplete or incompatible expanded artifacts fail before merged output is written.
 Quantized-base reconstruction is refused; it never falls back to a different
 precision. This support does not extend to `--low-memory`, native MLX (#3089),
-or the separate `chat`, `diff`, `infer`, `serve` and `export` loaders (#3351).
+or the separate `chat`, `diff`, `infer`, `serve` and `export` loaders (#3425).
 
 `--low-memory` reads the base `.safetensors` files and writes the merged files
 one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
