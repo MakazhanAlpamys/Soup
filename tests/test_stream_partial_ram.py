@@ -585,7 +585,7 @@ def test_pinned_rounding_is_charged_before_allocation(tmp_path, monkeypatch):
     assert not allocations
 
 
-def test_trainer_setup_consumes_budget_and_reports_cache(tmp_path, monkeypatch):
+def _partial_ram_trainer(tmp_path, monkeypatch):
     from soup_cli.config.schema import SoupConfig
     from tests.test_v07200 import TestStreamingEndToEndSetup
 
@@ -604,6 +604,66 @@ def test_trainer_setup_consumes_budget_and_reports_cache(tmp_path, monkeypatch):
         }
     )
     wrapper.config = SoupConfig.model_validate(config)
+    return wrapper, dataset
+
+
+def _mock_host_memory(tmp_path, monkeypatch, *, available, cgroup_limit):
+    from functools import partial
+
+    from soup_cli.utils import layer_stream, stream_ram_cache
+    from tests.test_stream_ram_cache_memory import fixture, write
+
+    _root, own, files = fixture(tmp_path)
+    write(
+        own,
+        **{"memory.max": cgroup_limit, "memory.current": 2_000_000, "memory.stat": "file 0\n"},
+    )
+    monkeypatch.setattr(layer_stream, "free_ram_bytes", lambda: available)
+    monkeypatch.setattr(layer_stream, "total_ram_bytes", lambda: 64 * 2**30)
+    monkeypatch.setattr(
+        stream_ram_cache, "available_memory", partial(stream_ram_cache.available_memory, **files)
+    )
+
+
+@pytest.mark.parametrize(
+    ("available", "cgroup_limit", "message"),
+    [
+        (
+            32 * 2**30,
+            10_000_000,
+            "training.stream_partial_ram.limit_bytes exceeds the current safe host RAM budget",
+        ),
+        (None, "max", "training.stream_partial_ram requires a known host RAM budget"),
+        (
+            32 * 2**30,
+            "unreadable",
+            "training.stream_partial_ram requires a known host RAM budget",
+        ),
+    ],
+    ids=["cgroup-limit", "unknown-host", "unreadable-cgroup"],
+)
+def test_trainer_refuses_unadmitted_partial_ram_before_runtime_build(
+    tmp_path, monkeypatch, available, cgroup_limit, message
+):
+    from unittest.mock import Mock
+
+    from soup_cli.utils import layer_stream_runtime
+
+    wrapper, dataset = _partial_ram_trainer(tmp_path, monkeypatch)
+    _mock_host_memory(tmp_path, monkeypatch, available=available, cgroup_limit=cgroup_limit)
+    build = Mock(side_effect=AssertionError("partial RAM must be admitted before runtime build"))
+    monkeypatch.setattr(layer_stream_runtime, "build_streamed_model", build)
+
+    with pytest.raises(ValueError) as excinfo:
+        wrapper.setup(dataset)
+
+    assert str(excinfo.value) == message
+    build.assert_not_called()
+
+
+def test_trainer_setup_consumes_budget_and_reports_cache(tmp_path, monkeypatch):
+    wrapper, dataset = _partial_ram_trainer(tmp_path, monkeypatch)
+    _mock_host_memory(tmp_path, monkeypatch, available=32 * 2**30, cgroup_limit=32_000_000)
     try:
         wrapper.setup(dataset)
         source = wrapper._stream_runtime.source

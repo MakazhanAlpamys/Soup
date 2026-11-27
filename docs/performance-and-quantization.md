@@ -583,8 +583,9 @@ training:
 
 These values illustrate the configuration, not a measured safe recipe. Choose
 reservations for the actual workload. The trainer also charges resident extras
-and RAM-backed auxiliary weights, and caps the envelope using the existing
-free/physical-RAM headroom rules. The source checks the envelope **before buffer
+and RAM-backed auxiliary weights. It caps the envelope using free and physical
+RAM headroom, including visible Linux cgroup limits. Setup refuses the envelope
+when it cannot determine available memory. The source checks the envelope **before buffer
 allocation**: caller/trainer reservations + resident allocations + disk staging
 allocations + the largest selected shard's loading map must fit. Pinned arena
 rounding and staging alignment overhead count against the envelope. Pinned

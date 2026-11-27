@@ -1372,6 +1372,11 @@ class StreamPartialRamConfig(BaseModel):
         description="Allocation cap, in bytes, for the decoder layers kept in RAM",
     )
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
     @model_validator(mode="after")
     def _check_budget(self) -> "StreamPartialRamConfig":
         from soup_cli.utils.partial_ram_source import PartialRamBudget
@@ -4375,6 +4380,7 @@ class TrainingConfig(BaseModel):
     @classmethod
     def _validate_stream_resident_layers(cls, v: Any) -> Any:
         """A count is an int, never a bool (``True`` would read as one layer)."""
+        v = _reject_boolean_numeric_field(cls, "stream_resident_layers", v)
         if v == "auto" and isinstance(v, str):
             return v
         if type(v) is not int or v < 0:
