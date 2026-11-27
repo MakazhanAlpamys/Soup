@@ -1,1 +1,0 @@
-- Ship the optional C++ expert reader sources with an explicit build for the host reader and a Linux CUDA build option for the NF4 decoder. (#PENDING by @M1kado0, @kok-o)
