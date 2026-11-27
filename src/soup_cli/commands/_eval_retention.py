@@ -409,10 +409,11 @@ def _run(
 
     # 4. Register new control tasks, then prove every control file is the one on record.
     now = rl.utc_timestamp()
+    task_statuses = []
     try:
         for name, path in specs:
             ledger, status = rl.register_task(ledger, name, path, label=label, now=now)
-            console.print(terminal_text(f"Control task {name}: {status}.", "dim"))
+            task_statuses.append((name, status))
         if not ledger.tasks:
             raise rl.LedgerError(
                 "the ledger has no control tasks; register one with --add-task NAME=PATH"
@@ -426,6 +427,8 @@ def _run(
         control = _load_control_tasks(ledger)
     except (rl.LedgerError, ValueError, TypeError, OSError) as exc:
         _fail(console, str(exc), EXIT_USAGE_ERROR)
+    for name, status in task_statuses:
+        console.print(terminal_text(f"Control task {name}: {status}.", "dim"))
 
     # 5. ONE model in memory, scored on every task. A failed generation is not a wrong
     #    answer: the first task with one stops the run, and nothing is recorded.
