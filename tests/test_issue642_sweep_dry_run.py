@@ -197,6 +197,72 @@ class TestTheSeveritySplit:
         assert "Config validation error" in result.output
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_sweep_refuses_both_spellings_of_learning_rate(runner, tmp_path, reverse):
+    from .conftest import strip_ansi
+
+    config_file = tmp_path / "soup.yaml"
+    config_file.write_text(_CLEAN, encoding="utf-8")
+    params = ["lr=0.01,0.02", "training.lr=0.03"]
+    if reverse:
+        params.reverse()
+    result = runner.invoke(
+        app,
+        [
+            "sweep", "--config", str(config_file), "--dry-run",
+            "--param", params[0], "--param", params[1],
+        ],
+    )
+    output = strip_ansi(result.output)
+    assert result.exit_code == 1, output
+    assert "'lr'" in output and "'training.lr'" in output
+    assert "same config field" in output
+    assert "Sweep Plan" not in output
+
+
+def test_sweep_refuses_colliding_yaml_parameters_before_training(runner, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from soup_cli.commands import sweep as sweep_command
+
+    from .conftest import strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.yaml").write_text(_CLEAN, encoding="utf-8")
+    (tmp_path / "search.yaml").write_text(
+        "strategy: random\nn_runs: 1\nparams:\n  lora_r: [4, 8]\n  training.lora.r: [16]\n",
+        encoding="utf-8",
+    )
+    run_arm = Mock(side_effect=RuntimeError("the test must not start an arm"))
+    monkeypatch.setattr(sweep_command, "_run_single", run_arm)
+
+    result = runner.invoke(
+        app, ["sweep", "--config", "soup.yaml", "--sweep-config", "search.yaml", "--yes"],
+    )
+    output = strip_ansi(result.output)
+    run_arm.assert_not_called()
+    assert result.exit_code == 1, output
+    assert "'lora_r'" in output and "'training.lora.r'" in output
+    assert "same config field" in output
+    assert "Sweep Plan" not in output
+
+
+@pytest.mark.parametrize("key", ["lr", "training.lr"])
+def test_sweep_accepts_one_spelling_of_learning_rate(runner, tmp_path, key):
+    from .conftest import strip_ansi
+
+    config_file = tmp_path / "soup.yaml"
+    config_file.write_text(_CLEAN, encoding="utf-8")
+    result = runner.invoke(
+        app, ["sweep", "--config", str(config_file), "--param", f"{key}=0.01,0.02", "--dry-run"],
+    )
+    output = strip_ansi(result.output)
+    assert result.exit_code == 0, output
+    assert "Parameter Grid" in output
+    assert key in output
+    assert "0.01" in output and "0.02" in output
+
+
 class TestTheControl:
     """Criterion 4: a clean config under --dry-run emits no warning at all."""
 

@@ -158,6 +158,19 @@ def sweep(
         console.print("[red]No valid sweep parameters provided.[/]")
         raise typer.Exit(1)
 
+    spellings: dict[str, str] = {}
+    for key in sweep_params:
+        field = _PARAM_SHORTCUTS.get(key, key)
+        if field in spellings:
+            console.print(
+                f"[red]Sweep parameters '{for_terminal(spellings[field])}' and "
+                f"'{for_terminal(key)}' target the same config field '{for_terminal(field)}'. "
+                "Use one spelling.[/]",
+                emoji=False,
+            )
+            raise typer.Exit(1)
+        spellings[field] = key
+
     # Generate parameter combinations
     combinations = _generate_combinations(sweep_params, strategy, max_runs)
 
