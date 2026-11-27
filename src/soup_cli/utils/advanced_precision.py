@@ -22,8 +22,7 @@ v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
 
 Both raise friendly ``RuntimeError`` on missing hardware / torchao instead
 of silently no-opping. ``utils/v028_features.apply_v028_speed_memory`` lets
-every ``apply_fp8_attention`` error stop the run (#835, #1152); only
-``apply_nvfp4``'s are still degraded to yellow advisories.
+every error from either stop the run (#835, #1152, #3249).
 """
 
 from __future__ import annotations
@@ -63,6 +62,21 @@ _BLACKWELL_MIN_CC_MAJOR = 10
 # ptxas or torchao may accept ``.rs`` on more targets; the ``gpu`` test in
 # ``tests/test_nvfp4_training_gate.py`` checks this list against the card it runs on.
 _NVFP4_TRAINING_CAPABILITIES: frozenset[tuple[int, int]] = frozenset({(10, 0), (10, 3)})
+
+#: The clause every NVFP4 refusal ends with (#3249).
+NVFP4_FIX: str = (
+    "Remove training.nvfp4 to train in bf16, or run on SM 10.0 (B200/GB200) "
+    "or SM 10.3 (B300/GB300)."
+)
+
+
+class NVFP4PartialConversionError(RuntimeError):
+    """``quantize_`` left the model partly NVFP4 (#3249).
+
+    Its own type so the stop on a partial conversion is separable from the
+    card and torchao refusals.
+    """
+
 
 #: Shared diagnostic explanation for precision feature incompatibility with Unsloth (#1124).
 UNSLOTH_PRECISION_INCOMPATIBLE_REASON: str = "unsloth uses its own fused kernels"
@@ -414,20 +428,23 @@ def apply_nvfp4(model: object) -> int:
     ``soup_cli/utils/torchao_compat.py`` holds both, and where each lives.
 
     Returns:
-        The number of ``nn.Linear`` modules torchao targeted (advisory
-        count, taken before the in-place ``quantize_`` call).
+        The number of linears converted to ``NVFP4Linear``.
 
     Raises:
         TypeError: ``model`` is None.
         RuntimeError: non-Blackwell GPU, an SM 12.x Blackwell card, torchao
             missing, or no candidate module in ``torchao_compat`` defines
-            ``NVFP4TrainingConfig``.
+            ``NVFP4TrainingConfig`` or ``NVFP4Linear``.
+        NVFP4PartialConversionError: ``quantize_`` raised after it started, or
+            returned with fewer ``NVFP4Linear`` modules than it had targets.
+
+    Every message ends with :data:`NVFP4_FIX`.
     """
     if model is None:
         raise TypeError("model must not be None")
     refusal = nvfp4_training_refusal()
     if refusal is not None:
-        raise RuntimeError(refusal)
+        raise RuntimeError(f"{refusal} {NVFP4_FIX}")
     # #826: torchao never exported NVFP4Config. The class that does what this
     # flag promises is NVFP4TrainingConfig, whose docstring says it "replaces
     # nn.Linear modules with NVFP4Linear, which quantizes all three GEMMs
@@ -435,21 +452,40 @@ def apply_nvfp4(model: object) -> int:
     # post-training weight quantization, which is not what training.nvfp4 means.
     from soup_cli.utils.torchao_compat import resolve_torchao_class
 
-    training_config = resolve_torchao_class("NVFP4Training")
-    quantize_ = resolve_torchao_class("quantize_")
+    try:
+        training_config = resolve_torchao_class("NVFP4Training")
+        nvfp4_linear = resolve_torchao_class("NVFP4Linear")
+        quantize_ = resolve_torchao_class("quantize_")
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} {NVFP4_FIX}") from exc
 
     import torch.nn as nn
 
-    linear_count = sum(
+    # The targets are what torchao 0.18's default quantize_ filter (_is_linear)
+    # hands NVFP4TrainingConfig's handler, which converts each one: every
+    # nn.Linear except NonDynamicallyQuantizableLinear (nn.MultiheadAttention's
+    # out_proj), which torchao leaves out on purpose. Its other exclusion, a weight
+    # that is already a QAT fake-quantised tensor, is not subtracted: no config
+    # Soup loads produces one (int8 QAT is refused, #1222), and if one did, the run
+    # would refuse here rather than train partly converted.
+    targets = sum(
         1 for _fqn, module in model.named_modules()
         if isinstance(module, nn.Linear)
+        and not isinstance(module, nn.modules.linear.NonDynamicallyQuantizableLinear)
     )
     try:
         quantize_(model, training_config())
     except Exception as exc:  # noqa: BLE001 — in-place mutation honesty
-        raise RuntimeError(
+        raise NVFP4PartialConversionError(
             "NVFP4 quantisation failed partway — the model may be "
-            "PARTIALLY quantised; restart training without the flag "
-            f"({type(exc).__name__}: {exc})"
+            f"PARTIALLY quantised ({type(exc).__name__}: {exc}). {NVFP4_FIX}"
         ) from exc
-    return linear_count
+    converted = sum(
+        1 for _fqn, module in model.named_modules() if isinstance(module, nvfp4_linear)
+    )
+    if converted < targets:
+        raise NVFP4PartialConversionError(
+            f"NVFP4 quantisation converted {converted} of {targets} linears to "
+            f"NVFP4Linear — the model is PARTIALLY quantised. {NVFP4_FIX}"
+        )
+    return converted

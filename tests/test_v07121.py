@@ -288,7 +288,7 @@ class TestApplyFp8Attention:
 # ---------------------------------------------------------------------------
 
 
-def _install_fake_torchao_quant(monkeypatch, record, *, with_nvfp4=True):
+def _install_fake_torchao_quant(monkeypatch, record, *, with_nvfp4=True, convert=None):
     """Stub torchao at the paths it really uses (#826).
 
     The old version of this helper defined ``torchao.quantization.NVFP4Config``,
@@ -297,15 +297,29 @@ def _install_fake_torchao_quant(monkeypatch, record, *, with_nvfp4=True):
     ``torchao.prototype.moe_training.nvfp4_training.nvfp4_training``;
     ``tests/test_issue826_torchao_class_names.py`` checks the paths against the
     installed package so a stub cannot drift from it again.
+
+    ``quantize_`` turns the plain ``nn.Linear`` modules into ``NVFP4Linear``, as
+    torchao 0.18's does: all of them, or only the first ``convert`` (#3249).
     """
     fake_q = types.ModuleType("torchao.quantization")
 
     class _NVFP4TrainingConfig:
         pass
 
+    try:
+        import torch.nn as nn
+    except ImportError:  # the doctor tests resolve the names only
+        nn = None
+
+    class NVFP4Linear(nn.Linear if nn else object):
+        pass
+
     def _quantize(model, config):
         record["model"] = model
         record["config"] = config
+        linears = [m for m in model.modules() if type(m) is nn.Linear]
+        for module in linears[:convert]:
+            module.__class__ = NVFP4Linear
 
     fake_q.quantize_ = _quantize
     fake_root = types.ModuleType("torchao")
@@ -315,6 +329,7 @@ def _install_fake_torchao_quant(monkeypatch, record, *, with_nvfp4=True):
 
     training_path = "torchao.prototype.moe_training.nvfp4_training.nvfp4_training"
     fake_training = types.ModuleType(training_path)
+    fake_training.NVFP4Linear = NVFP4Linear
     if with_nvfp4:
         fake_training.NVFP4TrainingConfig = _NVFP4TrainingConfig
     for path in (
@@ -471,7 +486,8 @@ class TestV028PrecisionWiring:
         )
         assert result["fp8_attention"] is True
 
-    def test_nvfp4_gate_failure_degrades(self, monkeypatch):
+    def test_nvfp4_gate_failure_stops_the_run(self, monkeypatch):
+        """#3249: it used to degrade to ``nvfp4: False`` and train in bf16."""
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         def _gate(model, **kwargs):
@@ -480,10 +496,10 @@ class TestV028PrecisionWiring:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.apply_nvfp4", _gate
         )
-        result = apply_v028_speed_memory(
-            model=object(), tcfg=self._tcfg(nvfp4=True), base_model="x/y",
-        )
-        assert result["nvfp4"] is False
+        with pytest.raises(RuntimeError, match="no Blackwell"):
+            apply_v028_speed_memory(
+                model=object(), tcfg=self._tcfg(nvfp4=True), base_model="x/y",
+            )
 
     def test_nvfp4_applied(self, monkeypatch):
         from soup_cli.utils.v028_features import apply_v028_speed_memory
@@ -1765,20 +1781,23 @@ class TestReviewFollowupsPrecision:
             apply_nvfp4(_tiny_attn_model())
 
     def test_v028_degrade_is_hermetic(self, monkeypatch):
-        """Force the degrade path by patching the converters directly —
+        """Force the refusal path by patching the converters directly —
         environment-independent (review fix: the original test relied on
         the host lacking torchao/Hopper). #1152: ``fp8_attention`` no longer
-        degrades, it stops the run, so NVFP4's degrade is checked without it."""
+        degrades, it stops the run; #3249: neither does NVFP4. Each gate has its
+        own message, so the test sees which one stopped the run."""
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.utils import advanced_precision, v028_features
 
-        def _gate(model, **kwargs):
-            raise RuntimeError("gate fired")
+        def _gate_for(name):
+            def _gate(model, **kwargs):
+                raise RuntimeError(f"{name} gate fired")
+            return _gate
 
         # v028_features lazy-imports the converters at call time, so the
         # patch targets the defining module.
-        monkeypatch.setattr(advanced_precision, "apply_fp8_attention", _gate)
-        monkeypatch.setattr(advanced_precision, "apply_nvfp4", _gate)
+        monkeypatch.setattr(advanced_precision, "apply_fp8_attention", _gate_for("fp8_attention"))
+        monkeypatch.setattr(advanced_precision, "apply_nvfp4", _gate_for("nvfp4"))
         # quantization_aware: fp8 is set too, and a missing torchao now stops the
         # run (#835 ruling); this test is about fp8_attention, so stub that half.
         monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
@@ -1801,9 +1820,9 @@ class TestReviewFollowupsPrecision:
                 console=None, device="cpu", backend="transformers",
             )
 
-        applied = _apply(_cfg(False))
-        assert applied.get("nvfp4") is False
-        with pytest.raises(RuntimeError, match="gate fired"):
+        with pytest.raises(RuntimeError, match="nvfp4 gate fired"):
+            _apply(_cfg(False))
+        with pytest.raises(RuntimeError, match="fp8_attention gate fired"):
             _apply(_cfg(True))
 
 

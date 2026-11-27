@@ -39,9 +39,9 @@ def apply_v028_speed_memory(
 
     Returns a dict ``{feature_name: applied}`` so the caller can log the
     decisions for the run record. Cut-CE degrades to a yellow advisory when
-    its library is missing. An explicitly requested FP8 does not: a card that
-    cannot run it, a missing torchao (#835), or a conversion that fails
-    (#1152) stops the run, before anything trains.
+    its library is missing. An explicitly requested FP8 or NVFP4 does not: a
+    card that cannot run it, a missing torchao (#835), or a conversion that
+    fails (#1152, #3249) stops the run, before anything trains.
     """
     applied: dict[str, bool] = {
         "cut_ce": False,
@@ -100,14 +100,13 @@ def apply_v028_speed_memory(
 
     # --- NVFP4 (v0.71.21 #141 — SM 10.0 / 10.3 only, #2867) ------------------------------
     if getattr(tcfg, "nvfp4", False):
-        try:
-            from soup_cli.utils.advanced_precision import apply_nvfp4
-            targeted = apply_nvfp4(model)
-            applied["nvfp4"] = True
-            _say(f"NVFP4 quantisation applied ({targeted} linears)")
-        except (RuntimeError, ValueError, TypeError) as exc:
-            applied["nvfp4"] = False
-            _say(f"NVFP4: {exc}", style="yellow")
+        # Explicitly asked for, so a refused card, a missing torchao, or a partial
+        # conversion stops the run, as FP8's do (#835, #1152, #3249).
+        from soup_cli.utils.advanced_precision import apply_nvfp4
+
+        targeted = apply_nvfp4(model)
+        applied["nvfp4"] = True
+        _say(f"NVFP4 quantisation applied ({targeted} linears)")
 
     # --- Kernel auto-compose -------------------------------------------------
     # Config validation rejects this flag. Keep a defensive guard for callers

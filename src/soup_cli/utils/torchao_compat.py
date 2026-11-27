@@ -85,6 +85,11 @@ TORCHAO_CLASSES: dict[str, Tuple[Tuple[str, str], ...]] = {
             "NVFP4TrainingConfig",
         ),
     ),
+    # What NVFP4TrainingConfig converts nn.Linear into; counted after quantize_ (#3249).
+    "NVFP4Linear": (
+        ("torchao.quantization", "NVFP4Linear"),
+        ("torchao.prototype.moe_training.nvfp4_training.nvfp4_training", "NVFP4Linear"),
+    ),
     "quantize_": (("torchao.quantization", "quantize_"),),
 }
 
