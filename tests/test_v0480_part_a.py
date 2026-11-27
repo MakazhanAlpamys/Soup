@@ -705,8 +705,8 @@ def test_should_recompute_boundary_minus_one():
     assert p.should_recompute(50) is True
 
 
-def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
-    """Use the recommended `(result.output, repr(result.exception))` assert form."""
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_curriculum_curve_renders_every_history_row(tmp_path, monkeypatch, encoding):
     from typer.testing import CliRunner
 
     import soup_cli.experiment.tracker as et
@@ -714,9 +714,8 @@ def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     history = tmp_path / "history.jsonl"
-    history.write_text(
-        json.dumps({"step": 100, "weights": [0.5, 0.5]}) + "\n"
-    )
+    rows = [{"step": 100, "weights": [0.25, 0.75]}, {"step": 200, "weights": [0.75, 0.25]}]
+    history.write_bytes("".join(json.dumps(row) + "\n" for row in rows).encode(encoding))
 
     class FakeTracker:
         def get_run(self, run_id):
@@ -728,6 +727,11 @@ def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
         app, ["runs", "curriculum-curve", "stub", "--history", str(history)]
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert [line.split() for line in strip_ansi(result.output).splitlines()] == [
+        ["step", "B0", "B1"],
+        ["100", "0.2500", "0.7500"],
+        ["200", "0.7500", "0.2500"],
+    ]
 
 
 def test_curriculum_curve_corrupt_history(tmp_path, monkeypatch):

@@ -239,11 +239,10 @@ def _multinomial_sample(probs):
     return torch.multinomial(probs, num_samples=1)
 
 
-def _supports_kv_cache(model: object) -> bool:
-    """Capability probe: does ``model.forward`` explicitly take a KV cache?
+def _supports_forward_parameters(model: object, *names: str) -> bool:
+    """Probe explicit forward parameters, unwrapping PEFT only for inspection.
 
-    Requires BOTH ``past_key_values`` and ``use_cache`` to be declared as
-    explicit parameters (every HF ``*ForCausalLM`` does). A bare ``**kwargs``
+    Each requested name must be declared as an explicit parameter. A bare ``**kwargs``
     does NOT count — a model that merely swallows the kwarg would silently
     ignore the cache and the rollout would feed it a single token per step
     against an empty context. PEFT wrappers
@@ -269,7 +268,48 @@ def _supports_kv_cache(model: object) -> bool:
         params = inspect.signature(forward).parameters
     except (TypeError, ValueError):
         return False
-    return "past_key_values" in params and "use_cache" in params
+    # Only a declared parameter that accepts a keyword can be passed by name.
+    # A positional-only one would raise TypeError, and ``**cache`` would
+    # silently swallow the kwarg without using it (#3385).
+    keyword_names = {
+        name
+        for name, param in params.items()
+        if param.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    return all(name in keyword_names for name in names)
+
+
+def _kv_cache_parameter(model: object) -> Optional[str]:
+    """The explicit name of the model's per-call KV cache parameter.
+
+    Newer Transformers forwards declare and return ``cache``: 5.24.1 already
+    uses that spelling, while ``past_key_values`` is accepted through a
+    deprecation decorator that names 5.40.0. A bare ``**kwargs`` never counts:
+    a model that merely swallows the kwarg would silently ignore the cache and
+    the rollout would feed one token per step against an empty context
+    (#3381, #3385).
+    """
+    for name in ("past_key_values", "cache"):
+        if _supports_forward_parameters(model, name):
+            return name
+    return None
+
+
+def _supports_kv_cache(model: object) -> bool:
+    """Require an explicit cache parameter and ``use_cache`` on the model."""
+    return _kv_cache_parameter(model) is not None and _supports_forward_parameters(
+        model, "use_cache"
+    )
+
+
+def _output_cache(output: object, name: str):
+    """Read the cache the model returned, under either spelling (#3381)."""
+    cache = getattr(output, name, None)
+    if cache is None:
+        other = "cache" if name == "past_key_values" else "past_key_values"
+        cache = getattr(output, other, None)
+    return cache
 
 
 def minillm_on_policy_rollout(
@@ -301,8 +341,9 @@ def minillm_on_policy_rollout(
     reverse-KL is averaged over the rollout length so longer rollouts don't
     dominate the gradient.
 
-    KV-cache (v0.71.22 #263): when ``use_cache`` is True (default) and BOTH
-    models declare ``past_key_values``/``use_cache`` on their forward
+    KV-cache (v0.71.22 #263, #3381): when ``use_cache`` is True (default) and
+    BOTH models declare a cache parameter (``past_key_values``, or ``cache``
+    in Transformers 5.40+) and ``use_cache`` on their forward
     (:func:`_supports_kv_cache`), each step forwards only the new token
     against the cached context — O(L) compute instead of the O(L²) full
     re-forward. Forward logits are identical either way (modulo float
@@ -319,9 +360,13 @@ def minillm_on_policy_rollout(
       activations of ~one full-sequence forward — at or below the no-cache
       peak.
 
-    Models whose forward does not declare the cache params (or that ignore
-    ``use_cache`` and return no ``past_key_values``) transparently keep the
-    legacy full re-forward path.
+    Models whose forward does not declare a cache parameter (or that ignore
+    ``use_cache`` and return no cache) transparently keep the legacy full
+    re-forward path.
+
+    Prompt masks define real tokens even when pad and EOS ids are shared.
+    Padding is compacted to the left; models declaring ``position_ids`` receive
+    mask-derived per-row positions in both cached and full-prefix forwards.
 
     Returns ``(loss, num_steps)`` where ``loss`` is a scalar differentiable
     w.r.t. the student parameters and scaled by ``temperature**2`` (the
@@ -347,47 +392,75 @@ def minillm_on_policy_rollout(
 
     sampler = sample_fn or _multinomial_sample
     ratio = float(config.teacher_mix_ratio)
-    cur_ids = input_ids
+    if input_ids.ndim != 2 or not all(input_ids.shape):
+        raise ValueError("MiniLLM rollout input_ids must be a non-empty [batch, length] tensor")
     if attention_mask is None:
         cur_mask = torch.ones_like(input_ids)
     else:
         cur_mask = attention_mask
+    if cur_mask.shape != input_ids.shape:
+        raise ValueError("MiniLLM rollout attention_mask must match input_ids")
+    if not ((cur_mask == 0) | (cur_mask == 1)).all() or not cur_mask.any(dim=1).all():
+        raise ValueError("MiniLLM rollout requires a binary mask and a non-empty prompt per row")
+    # Compact padding to the left without interpreting shared pad/EOS token ids.
+    order = cur_mask.long().argsort(dim=1, stable=True)
+    cur_ids = input_ids.gather(1, order)
+    cur_mask = cur_mask.gather(1, order)
+    student_positions = _supports_forward_parameters(student_model, "position_ids")
+    teacher_positions = _supports_forward_parameters(teacher_model, "position_ids")
+    teacher_device = next(teacher_model.parameters(), input_ids).device
+    student_cache_name = _kv_cache_parameter(student_model) if use_cache else None
+    teacher_cache_name = _kv_cache_parameter(teacher_model) if use_cache else None
     cache_ok = (
         use_cache
-        and _supports_kv_cache(student_model)
-        and _supports_kv_cache(teacher_model)
+        and student_cache_name is not None
+        and teacher_cache_name is not None
+        and _supports_forward_parameters(student_model, "use_cache")
+        and _supports_forward_parameters(teacher_model, "use_cache")
     )
     s_past = None
     t_past = None
     step_ids = cur_ids  # full prompt on the first step; the delta afterwards
     kl_terms = []
     for _ in range(int(max_new_tokens)):
+        positions = cur_mask.long().cumsum(dim=1).sub(1).masked_fill(cur_mask == 0, 0)
+        position_ids = positions[:, -step_ids.shape[1]:]
+        student_kwargs = {"position_ids": position_ids} if student_positions else {}
+        teacher_kwargs = (
+            {"position_ids": position_ids.to(teacher_device)} if teacher_positions else {}
+        )
         if cache_ok:
             s_out = student_model(
                 input_ids=step_ids,
                 attention_mask=cur_mask,
-                past_key_values=s_past,
+                **{student_cache_name: s_past},
                 use_cache=True,
+                **student_kwargs,
             )
         else:
-            s_out = student_model(input_ids=cur_ids, attention_mask=cur_mask)
+            s_out = student_model(
+                input_ids=cur_ids, attention_mask=cur_mask, **student_kwargs,
+            )
         s_logits = s_out.logits[:, -1, :] / t  # [B, Vs]  (grad ON)
         with torch.no_grad():
             if cache_ok:
                 te_out = teacher_model(
-                    input_ids=step_ids,
-                    attention_mask=cur_mask,
-                    past_key_values=t_past,
+                    input_ids=step_ids.to(teacher_device),
+                    attention_mask=cur_mask.to(teacher_device),
+                    **{teacher_cache_name: t_past},
                     use_cache=True,
+                    **teacher_kwargs,
                 )
             else:
                 te_out = teacher_model(
-                    input_ids=cur_ids, attention_mask=cur_mask
+                    input_ids=cur_ids.to(teacher_device),
+                    attention_mask=cur_mask.to(teacher_device),
+                    **teacher_kwargs,
                 )
-            te_logits = te_out.logits[:, -1, :] / t  # [B, Vt]  (grad OFF)
+            te_logits = te_out.logits[:, -1, :].to(s_logits.device) / t  # [B, Vt] (grad OFF)
         if cache_ok:
-            new_s_past = getattr(s_out, "past_key_values", None)
-            new_t_past = getattr(te_out, "past_key_values", None)
+            new_s_past = _output_cache(s_out, student_cache_name)
+            new_t_past = _output_cache(te_out, teacher_cache_name)
             if new_s_past is None or new_t_past is None:
                 # Model ignored use_cache — degrade to full re-forwards for
                 # the remaining steps (cur_ids is maintained either way).

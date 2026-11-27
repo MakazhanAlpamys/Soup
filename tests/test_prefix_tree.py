@@ -1113,3 +1113,46 @@ class TestThroughLayerStreaming:
         assert verdict.exact, verdict
         assert verdict.relative_error < 1e-4
         assert verdict.mask_control > 10 * verdict.bound
+
+
+class TestNonfiniteLogits:
+    """``max`` keeps its first argument against a NaN, so a NaN difference used
+    to vanish from the reduction and the verdict could stay exact."""
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    @pytest.mark.parametrize("where", ["packed", "ordinary", "alone"])
+    def test_a_nonfinite_logit_is_never_exact(self, bad, where):
+        from soup_cli.utils.prefix_tree import verify_prefix_tree_model
+
+        model = _tiny_model("llama")
+        real = model.forward
+        calls = {"packed": 0}
+
+        def forward(input_ids=None, attention_mask=None, **kwargs):
+            out = real(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+            packed = attention_mask is not None and attention_mask.dim() == 4
+            if packed:
+                calls["packed"] += 1
+            if where == "packed":
+                hit = packed and calls["packed"] == 1
+            elif where == "ordinary":
+                hit = not packed and input_ids.shape[0] > 1
+            else:
+                hit = not packed and input_ids.shape[0] == 1 and attention_mask is None
+            if hit:
+                logits = out.logits.clone()
+                last = -1 if attention_mask is None or packed else int(attention_mask[0].sum()) - 1
+                logits[0, last] = bad
+                out.logits = logits
+            return out
+
+        model.forward = forward
+        verdict = verify_prefix_tree_model(model, pad_token_id=0)
+        assert not verdict.exact
+        assert "not finite" in verdict.reason
+        names = {
+            "packed": "prefix-tree row",
+            "ordinary": "in the ordinary batch",
+            "alone": "run alone",
+        }
+        assert names[where] in verdict.reason

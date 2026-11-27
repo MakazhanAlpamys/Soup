@@ -13,7 +13,7 @@ from fractions import Fraction
 from pathlib import Path
 from statistics import mean
 from typing import TYPE_CHECKING, Optional, Protocol, Sequence
-from urllib.parse import urlparse
+from unicodedata import normalize
 
 from soup_cli.eval.judge_templates import (
     JUDGE_SCORE_PREFERENCE,
@@ -22,7 +22,8 @@ from soup_cli.eval.judge_templates import (
     PAIRWISE_REFERENCE,
     reference_fence,
 )
-from soup_cli.utils.redaction import redact_url
+from soup_cli.utils.redaction import parse_url_with_safe_error, redact_url, url_without_userinfo
+from soup_cli.utils.terminal import strip_control
 
 if TYPE_CHECKING:
     from trl import BasePairwiseJudge
@@ -240,6 +241,19 @@ def load_rubric(path: Path) -> dict:
     return rubric
 
 
+def judge_model_label(model: str) -> str:
+    """Derive the terminal and tracker label without changing opaque model IDs."""
+    if "://" not in model:
+        return model
+    try:
+        parsed = parse_url_with_safe_error(model, label="--model")
+    except ValueError:
+        return "<invalid URL>"
+    if not parsed.netloc and "@" in normalize("NFKC", model):
+        return "<invalid URL>"
+    return strip_control(url_without_userinfo(model), single_line=True)
+
+
 def validate_judge_api_base(api_base: Optional[str]) -> None:
     """SSRF protection for judge API base URL.
 
@@ -252,11 +266,10 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
 
     from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
-    parsed = urlparse(api_base)
+    parsed = parse_url_with_safe_error(api_base, label="--api-base")
     if parsed.scheme not in ("http", "https"):
         raise ValueError(
-            f"Invalid scheme '{parsed.scheme}' in --api-base. "
-            "Only http:// and https:// are allowed."
+            "Invalid scheme in --api-base. Only http:// and https:// are allowed."
         )
 
     # Block non-HTTPS for remote URLs (allow HTTP only for localhost)
@@ -312,12 +325,12 @@ def _build_judge_prompt(
 _MAX_JUDGE_REPLY_CHARS = 64 * 1024
 
 
-def _first_json_object(text: str) -> Optional[dict]:
-    """The first JSON object in ``text`` that has a ``scores`` key (#1467).
+def _first_json_object(text: str, *, preferred_key: str = "scores") -> Optional[dict]:
+    """Return the first JSON object with the preferred key.
 
     Each ``{`` is tried in turn with ``json.JSONDecoder.raw_decode``, so an
     object nested at any depth (a quoted ``{...}`` in the reasoning) is read
-    whole. Falls back to the first JSON object when none has ``scores``.
+    whole. Falls back to the first JSON object when none has the preferred key.
     Nesting deeper than the decoder's recursion limit (a model repeating
     ``{"a":`` in a loop) ends the scan instead of retrying every ``{``.
     """
@@ -332,7 +345,7 @@ def _first_json_object(text: str) -> Optional[dict]:
         except RecursionError:
             return first
         if isinstance(obj, dict):
-            if "scores" in obj:
+            if preferred_key in obj:
                 return obj
             if first is None:
                 first = obj
@@ -722,25 +735,46 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
 # ---------------------------------------------------------------------------
 
 
+#: A whole pairwise reply that is just a verdict letter, optionally labelled or
+#: wrapped in quotes / markdown emphasis / brackets: ``B``, ``"A"``, ``**B**``,
+#: ``[A]``, ``Answer: B``, ``The winner is B``, ``Better response is A``.
+#: The letter is read by position, never searched for, so the English article
+#: "a" in prose cannot masquerade as verdict A (#2356).
+_VERDICT_ONLY = re.compile(
+    r"^(?:(?:the\s+)?(?:final\s+)?"
+    r"(?:answer|winner|verdict|choice|vote|prefer(?:red)?(?:\s+response)?"
+    r"|better(?:\s+(?:response|one))?)\s*(?::|=|\bis\b)\s*)?"
+    r"[\"'*(\[]*([AB])[\"'*)\].]*$",
+    re.IGNORECASE,
+)
+
+#: A reply that opens with an affirmative verdict: ``A is clearly better``,
+#: ``B wins here``. A bare ``A is`` also starts negative comparisons.
+_LEADING_VERDICT = re.compile(
+    r"^([AB])\s+(?:is\s+(?:clearly\s+)?better|wins)\b", re.IGNORECASE,
+)
+
+
 def _parse_pairwise(text: str) -> int:
-    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable)."""
-    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            winner = str(data.get("winner", "")).strip().upper()
-            if winner == "A":
-                return 0
-            if winner == "B":
-                return 1
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-    # Fallback: a bare "A" / "B" token.
-    stripped = (text or "").strip().upper()
-    if stripped.startswith("A") and not stripped.startswith("B"):
-        return 0
-    if stripped.startswith("B"):
-        return 1
+    """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable).
+
+    A reply is read as a verdict only when the letter is where a verdict would
+    be: a JSON object's ``winner``, a whole reply that is just the letter (with
+    optional label), or a reply that opens with ``A is better`` / ``B wins``.
+    Other replies abstain with -1, which every caller treats as "no verdict", so
+    a judge that names no winner cannot flip the tuned win-rate (#2356).
+    """
+    text = text or ""
+    if len(text) > _MAX_JUDGE_REPLY_CHARS:
+        return -1
+    stripped = text.strip()
+    data = _first_json_object(stripped, preferred_key="winner") if stripped else None
+    if isinstance(data, dict) and "winner" in data:
+        return {"A": 0, "B": 1}.get(str(data["winner"]).strip().upper(), -1)
+    for pattern in (_VERDICT_ONLY, _LEADING_VERDICT):
+        match = pattern.match(stripped)
+        if match:
+            return 0 if match.group(1).upper() == "A" else 1
     return -1
 
 

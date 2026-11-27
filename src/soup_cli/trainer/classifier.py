@@ -609,6 +609,10 @@ class ClassifierTrainerWrapper:
             data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
             compute_metrics=compute_metrics,
         )
+        # The sequence-classification loss is a per-micro-batch mean that never
+        # reads num_items_in_batch, so keep training_step's 1 / G division (as
+        # prm.py does for #1444); left True, loss and gradient came out G times.
+        self.trainer.model_accepts_loss_kwargs = False
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR

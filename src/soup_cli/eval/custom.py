@@ -83,11 +83,25 @@ class EvalResults:
             }
 
 
-def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
+def load_eval_tasks(
+    path: "Path | str", *, require_expected: bool = True, graded_by: Optional[str] = None,
+) -> list[EvalTask]:
     """Load eval tasks from a JSONL file with schema validation.
 
-    Each line must be a JSON object with at least a 'prompt' field.
-    Optional: 'expected', 'category', 'scoring'.
+    Each line must be a JSON object with a 'prompt' field and, by default, an
+    'expected' that is not missing, null, empty or whitespace-only (#3240). Before,
+    a missing or empty 'expected' scored 1.0 for every output under 'contains' and
+    'regex', and a whitespace-only one did under 'contains'. Optional: 'category',
+    'scoring'. ``require_expected=False`` is for ``soup ship --task-mode
+    judge_score``, ``pairwise`` and ``reward``, which accept a prompt-only file:
+    the judge modes take their reference from ``--judge-reference``, validated on
+    its own, and the reward function receives 'expected' as ``answer`` (``""`` when
+    the row has none). ``graded_by`` is a hint, not an override: it names the scorer
+    that will grade every row in place of the row's own (an eval gate task's
+    ``scorer``). The loader does not apply it, so each task keeps the row's
+    ``scoring``; it only stops holding a row to its own scorer's reference rule. The
+    caller substitutes the scorer and runs that scorer's reference checks. An unknown
+    row ``scoring`` is still refused (#3327).
     """
     path = Path(path)
     if not path.exists():
@@ -97,18 +111,24 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
         raise ValueError(f"Expected .jsonl file, got: {path.suffix}")
 
     with open(path, encoding="utf-8") as fh:
-        return parse_eval_task_lines(fh, path)
+        return parse_eval_task_lines(
+            fh, path, require_expected=require_expected, graded_by=graded_by
+        )
 
 
-def parse_eval_task_lines(lines: Iterable[str], source: object) -> list[EvalTask]:
+def parse_eval_task_lines(
+    lines: Iterable[str], source: object, *, require_expected: bool = True,
+    graded_by: Optional[str] = None,
+) -> list[EvalTask]:
     """Parse the JSONL lines of an eval file (``source`` only names it in messages).
 
     ``load_eval_tasks`` feeds it the open file; a caller that already holds the bytes
     (it hashed them) parses those same bytes instead of opening the path a second time.
+    ``require_expected`` and ``graded_by`` are as in :func:`load_eval_tasks`.
     """
     tasks: list[EvalTask] = []
-    for line_num, line in enumerate(lines, 1):
-        line = line.strip()
+    for line_num, raw_line in enumerate(lines, 1):
+        line = raw_line.strip()
         if not line:
             continue
 
@@ -121,8 +141,16 @@ def parse_eval_task_lines(lines: Iterable[str], source: object) -> list[EvalTask
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
+            # The decoder saw the stripped row: shift its offset back by the row's
+            # indentation, so the column is the one in the file (#3326). An error
+            # at the end of the stripped row sits after the row's last physical
+            # character, trailing whitespace included.
+            if exc.pos >= len(line):
+                column = len(raw_line.rstrip("\r\n")) + 1
+            else:
+                column = len(raw_line) - len(raw_line.lstrip()) + exc.pos + 1
             raise ValueError(
-                f"Invalid JSON on line {line_num}: {exc}"
+                f"Invalid JSON on line {line_num}, column {column}: {exc.msg}"
             ) from exc
 
         if not isinstance(row, dict):
@@ -141,8 +169,11 @@ def parse_eval_task_lines(lines: Iterable[str], source: object) -> list[EvalTask
                 f"Line {line_num}: invalid scoring '{scoring}', "
                 f"must be one of: {', '.join(sorted(VALID_SCORING))}"
             )
+        if require_expected:
+            _require_expected(row, line_num)
         expected = str(row.get("expected", ""))
-        if scoring == "answer":
+        # A row graded by another scorer than its own is not held to its own's reference rule.
+        if scoring == "answer" and graded_by in (None, "answer"):
             require_single_answer(expected, f"Line {line_num}")
 
         tasks.append(EvalTask(
@@ -160,6 +191,21 @@ def parse_eval_task_lines(lines: Iterable[str], source: object) -> list[EvalTask
         raise ValueError(f"No eval tasks found in {source}")
 
     return tasks
+
+
+def _require_expected(row: dict, line_num: int) -> None:
+    """Refuse a row whose ``expected`` is missing, null, empty or whitespace-only (#3240).
+
+    A presence, ``None`` and ``str.strip()`` test, not a truthiness one: ``0``,
+    ``false`` and ``"0"`` are answers and keep loading as ``str()`` of the value.
+    """
+    if "expected" not in row:
+        raise ValueError(f"Line {line_num}: field 'expected' is missing")
+    expected = row["expected"]
+    if expected is None:
+        raise ValueError(f"Line {line_num}: field 'expected' is null")
+    if isinstance(expected, str) and not expected.strip():
+        raise ValueError(f"Line {line_num}: field 'expected' is empty or whitespace-only")
 
 
 def require_single_answer(expected: str, where: str) -> None:

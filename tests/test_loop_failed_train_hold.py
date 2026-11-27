@@ -576,3 +576,54 @@ class TestStatusAndResume:
 
         assert "loop is running, not paused" in _plain(result.output)
         assert "hold cleared" not in _plain(result.output)
+
+
+class TestPartialReadFingerprint:
+    """#3222: an unreadable file's key must not depend on where the read failed."""
+
+    @staticmethod
+    def _fingerprint(tmp_path, monkeypatch, *, fail_after_chunks):
+        path = tmp_path / "pairs.jsonl"
+        path.write_bytes(b"x" * (2 * 1024 * 1024 + 10))  # over one chunk, under the cap
+        real_open = open
+        reads = {"count": 0}
+
+        class FailingReader:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size=-1):
+                reads["count"] += 1
+                if reads["count"] > fail_after_chunks:
+                    raise OSError("disk read failed partway")
+                return b"a" * min(size, 1024 * 1024)
+
+            def seek(self, *args):
+                return 0
+
+        def fake_open(file, mode="r", *args, **kwargs):
+            if str(file) == str(path) and "b" in mode:
+                return FailingReader()
+            return real_open(file, mode, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr("builtins.open", fake_open)
+            return retry.train_inputs_fingerprint(_state(), str(path), "sft")
+
+    def test_a_partial_read_gives_the_same_key_as_an_early_failure(self, tmp_path, monkeypatch):
+        early = self._fingerprint(tmp_path, monkeypatch, fail_after_chunks=0)
+        partial = self._fingerprint(tmp_path, monkeypatch, fail_after_chunks=1)
+        assert early == partial
+
+    def test_the_fallback_key_still_holds_and_recovery_changes_it(self, tmp_path, monkeypatch):
+        early = self._fingerprint(tmp_path, monkeypatch, fail_after_chunks=0)
+        record = retry.after_failure(None, early, NOW, "train failed")
+        assert retry.hold_reason(record, early, NOW + timedelta(seconds=1)) is not None
+
+        path = tmp_path / "pairs.jsonl"
+        complete = retry.train_inputs_fingerprint(_state(), str(path), "sft")
+        assert complete != early
+        assert retry.hold_reason(record, complete, NOW) is None
