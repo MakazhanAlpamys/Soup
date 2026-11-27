@@ -4727,6 +4727,9 @@ class TrainingConfig(BaseModel):
     def _validate_l2l_mbr_group_size(cls, value: Any) -> Any:
         if value is None or type(value) is int:
             return value
+        if isinstance(value, bool):
+            # The wording every numeric training field uses for a bool.
+            raise ValueError("training.l2l_mbr_group_size must be an int, not a bool")
         raise ValueError(
             "training.l2l_mbr_group_size must be an integer or null, got "
             f"{type(value).__name__} {value!r}"
