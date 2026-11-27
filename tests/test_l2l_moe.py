@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import re
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -25,7 +27,9 @@ from soup_cli.config.loader import load_config_from_string
 EXPERT_LEVERS = ("l2l_two_read_experts", "l2l_grouped_expert_routes")
 
 
-def _yaml(**training: Any) -> str:
+def _yaml(
+    *, base: str = "hf-internal-testing/tiny-random-LlamaForCausalLM", **training: Any
+) -> str:
     fields = {
         "batch_size": 1,
         "quantization": "none",
@@ -36,7 +40,7 @@ def _yaml(**training: Any) -> str:
     fields.update(training)
     return yaml.safe_dump(
         {
-            "base": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+            "base": base,
             "task": "sft",
             "data": {"train": "data.jsonl"},
             "training": fields,
@@ -194,6 +198,158 @@ def test_a_recipe_written_before_the_levers_existed_resumes_as_off(tmp_path):
     assert (recipe.two_read_experts, recipe.grouped_expert_routes) == (False, False)
 
 
+class _ReachedCheckpointLoadError(Exception):
+    """The wrapper passed validation and handed the checkpoint to the trainer."""
+
+
+def _resume_wrapper(destination: Path, *, l2l: bool = True, **training: Any) -> Any:
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
+
+    cfg = load_config_from_string(
+        _yaml(l2l=l2l, stream_expert_layout="per_expert", gradient_accumulation_steps=4, **training)
+    )
+    wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
+    wrapper.config = cfg
+    wrapper._output_dir = str(destination)
+    wrapper._quest_metadata = None
+    wrapper._stream_loss_chunk_hook = None
+    wrapper._l2l_recipe = resolve_l2l_recipe(cfg.training) if l2l else None
+    wrapper.trainer = SimpleNamespace(
+        model=SimpleNamespace(named_parameters=lambda: ()),
+        args=SimpleNamespace(),
+        train=Mock(side_effect=_ReachedCheckpointLoadError),
+        add_callback=Mock(),
+        remove_callback=Mock(),
+    )
+    return wrapper
+
+
+@pytest.fixture
+def resume_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    monkeypatch.chdir(tmp_path)
+    checkpoint = tmp_path / "source" / "checkpoint-4"
+    checkpoint.mkdir(parents=True)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    return checkpoint, destination
+
+
+@pytest.mark.parametrize("name", EXPERT_LEVERS)
+def test_resume_refuses_a_source_expert_mismatch_before_writing_destination(resume_dirs, name):
+    from soup_cli.utils.l2l_recipe import RECIPE_NAME, resolve_l2l_recipe, write_recipe
+
+    checkpoint, destination = resume_dirs
+    write_recipe(checkpoint.parent, resolve_l2l_recipe(_tcfg()))
+    wrapper = _resume_wrapper(destination, **{name: True})
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
+    field = name.removeprefix("l2l_")
+    assert str(caught.value) == (
+        f"cannot resume: the checkpoint was trained with {field}=False, "
+        f"but this run has {field}=True. Restore the old value in the config."
+    )
+    wrapper.trainer.train.assert_not_called()
+    assert not (destination / RECIPE_NAME).exists()
+
+
+def test_resume_uses_checkpoint_recipe_over_parent_and_destination_recipes(resume_dirs):
+    from soup_cli.utils.l2l_recipe import load_recipe, resolve_l2l_recipe, write_recipe
+
+    checkpoint, destination = resume_dirs
+    recipe = resolve_l2l_recipe(_tcfg(l2l_two_read_experts=True))
+    unrelated = resolve_l2l_recipe(_tcfg(l2l_grouped_expert_routes=True))
+    write_recipe(checkpoint.parent, unrelated)
+    write_recipe(destination, unrelated)
+    write_recipe(checkpoint, recipe)
+    wrapper = _resume_wrapper(destination, l2l_two_read_experts=True)
+
+    with pytest.raises(_ReachedCheckpointLoadError):
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
+    wrapper.trainer.train.assert_called_once_with(resume_from_checkpoint=str(checkpoint))
+    assert load_recipe(destination) == recipe
+    assert load_recipe(checkpoint) == recipe
+    assert load_recipe(checkpoint.parent) == unrelated
+
+
+def test_resume_refuses_a_source_l2l_recipe_when_l2l_is_off(resume_dirs):
+    from soup_cli.utils.l2l_recipe import RECIPE_NAME, resolve_l2l_recipe, write_recipe
+
+    checkpoint, destination = resume_dirs
+    write_recipe(checkpoint.parent, resolve_l2l_recipe(_tcfg()))
+    wrapper = _resume_wrapper(destination, l2l=False)
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with training.l2l "
+        "(effective_k=4, activation_codec='none'), but this run has training.l2l off. "
+        "Set training.l2l to true with the same settings."
+    )
+    wrapper.trainer.train.assert_not_called()
+    assert not (destination / RECIPE_NAME).exists()
+
+
+@pytest.mark.parametrize("l2l", [False, True])
+def test_resume_accepts_a_source_without_a_recipe_even_with_a_destination_recipe(resume_dirs, l2l):
+    from soup_cli.utils.l2l_recipe import resolve_l2l_recipe, write_recipe
+
+    checkpoint, destination = resume_dirs
+    write_recipe(destination, resolve_l2l_recipe(_tcfg(l2l_grouped_expert_routes=True)))
+    wrapper = _resume_wrapper(destination, l2l=l2l)
+    with pytest.raises(_ReachedCheckpointLoadError):
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
+    wrapper.trainer.train.assert_called_once_with(resume_from_checkpoint=str(checkpoint))
+
+
+def test_a_resume_into_the_same_directory_does_not_relabel_the_legacy_checkpoint(resume_dirs):
+    checkpoint, _destination = resume_dirs
+    first = _resume_wrapper(checkpoint.parent, l2l_two_read_experts=True)
+    with pytest.raises(_ReachedCheckpointLoadError):
+        first.train(resume_from_checkpoint=str(checkpoint))
+
+    retry = _resume_wrapper(checkpoint.parent, l2l=False)
+    with pytest.raises(_ReachedCheckpointLoadError):
+        retry.train(resume_from_checkpoint=str(checkpoint))
+    retry.trainer.train.assert_called_once_with(resume_from_checkpoint=str(checkpoint))
+
+
+@pytest.mark.parametrize("l2l", [False, True])
+def test_new_checkpoint_keeps_its_recipe_when_the_run_root_recipe_changes(resume_dirs, l2l):
+    from dataclasses import replace
+
+    from soup_cli.utils.l2l_recipe import RECIPE_NAME, load_recipe, resolve_l2l_recipe, write_recipe
+
+    checkpoint, destination = resume_dirs
+    root = checkpoint.parent
+    # The older source checkpoint predates the L2L run recorded in its parent.
+    write_recipe(root, replace(resolve_l2l_recipe(_tcfg()), start_step=4))
+    wrapper = _resume_wrapper(root, l2l=l2l, l2l_two_read_experts=l2l)
+    new_checkpoint = root / "checkpoint-5"
+
+    def save_checkpoint(**_kwargs: Any) -> None:
+        new_checkpoint.mkdir()
+        args = SimpleNamespace(output_dir=str(root), should_save=True)
+        state = SimpleNamespace(global_step=5)
+        control = SimpleNamespace()
+        for call in wrapper.trainer.add_callback.call_args_list:
+            call.args[0].on_save(args, state, control)
+        raise _ReachedCheckpointLoadError
+
+    wrapper.trainer.train.side_effect = save_checkpoint
+    with pytest.raises(_ReachedCheckpointLoadError):
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
+    assert (new_checkpoint / RECIPE_NAME).is_file()
+    expected = replace(wrapper._l2l_recipe, start_step=4) if l2l else None
+    assert load_recipe(new_checkpoint) == expected
+
+    # The root now describes a different run. The newly saved checkpoint remains authoritative.
+    write_recipe(root, resolve_l2l_recipe(_tcfg(l2l_grouped_expert_routes=True)))
+    retry = _resume_wrapper(destination, l2l=l2l, l2l_two_read_experts=l2l)
+    with pytest.raises(_ReachedCheckpointLoadError):
+        retry.train(resume_from_checkpoint=str(new_checkpoint))
+    retry.trainer.train.assert_called_once_with(resume_from_checkpoint=str(new_checkpoint))
+
+
 # --------------------------------------------------------------------------
 # expert-buffer pre-flight
 # --------------------------------------------------------------------------
@@ -298,8 +454,6 @@ def test_a_run_without_a_pool_keeps_the_in_flight_line(monkeypatch):
 # the setup wiring: levers and pool only under training.l2l
 # --------------------------------------------------------------------------
 def test_the_setup_reads_the_levers_and_builds_the_pool_only_under_l2l_on_per_expert():
-    from pathlib import Path
-
     source = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
     text = (source / "stream_setup.py").read_text(encoding="utf-8")
     assert "l2l_experts = bool(getattr(tcfg, \"l2l\", False)) and bool(expert_layout)" in text
@@ -307,6 +461,139 @@ def test_the_setup_reads_the_levers_and_builds_the_pool_only_under_l2l_on_per_ex
     assert call is not None
     assert "if l2l_experts" in call.group(0)
     assert "two_read_experts" in call.group(0) and "grouped_expert_routes" in call.group(0)
+
+
+class _ReachedRuntimeBuilderError(Exception):
+    """Stop streaming setup before allocating the runtime."""
+
+
+@pytest.fixture
+def expert_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Mock]:
+    pytest.importorskip("peft")
+    from transformers import AutoTokenizer
+
+    from soup_cli.trainer import stream_setup
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils import kimi_k2, layer_stream, layer_stream_runtime, spectrum_scan
+    from tests.test_expert_stream import _tiny_deepseek_v3
+
+    weights, model = _tiny_deepseek_v3(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("SOUP_LAYER_STREAM_STRIPE_DIRS", raising=False)
+    monkeypatch.setattr(kimi_k2, "load_stream_model_config", lambda *_a, **_k: model.config)
+    monkeypatch.setattr(
+        AutoTokenizer, "from_pretrained", lambda *_a, **_k: SimpleNamespace(pad_token="<pad>")
+    )
+    monkeypatch.setattr(spectrum_scan, "resolve_model_weights", lambda *_a, **_k: weights)
+    monkeypatch.setattr(layer_stream, "free_ram_bytes", lambda: 10_000_000_000)
+    monkeypatch.setattr(layer_stream, "total_ram_bytes", lambda: 100_000_000_000)
+    monkeypatch.setattr(
+        layer_stream, "classify_disk_kind",
+        lambda *_a, **_k: layer_stream.DiskClassification("nvme"),
+    )
+    monkeypatch.setattr(SFTTrainerWrapper, "_stream_budget_lines", lambda *_a, **_k: ([], None))
+    builder = Mock(side_effect=_ReachedRuntimeBuilderError)
+    monkeypatch.setattr(layer_stream_runtime, "build_streamed_model", builder)
+
+    def setup(*, staging_bytes: int | None = None, **training: Any) -> None:
+        if staging_bytes is not None:
+            # Synthetic header sizes, with no matching allocations. A 6 GB decoder store
+            # fits 7 GB of headroom by itself. Disk staging uses two 2 GB decoder layers.
+            monkeypatch.setattr(
+                layer_stream_runtime.RamSource, "layer_specs_from_paths",
+                lambda _paths: [{"weight": ((500_000_000,), "float32")}] * 3,
+            )
+            monkeypatch.setattr(layer_stream_runtime, "extras_resident_bytes", lambda _dir: 0)
+            monkeypatch.setattr(layer_stream_runtime, "large_layer_store_bytes", lambda *_a: 0)
+            monkeypatch.setattr(
+                stream_setup, "_expert_buffer_requirements", lambda *_a, **_k: (0, staging_bytes)
+            )
+        cfg = load_config_from_string(
+            _yaml(base=weights, stream_expert_layout="per_expert", **training)
+        )
+        wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
+        wrapper._trust_remote_code = False
+        wrapper.device = "cpu"
+        wrapper._setup_streaming_transformers(cfg, cfg.training)
+
+    return setup, builder
+
+
+@pytest.mark.parametrize(
+    ("training", "expected"),
+    [
+        ({"l2l": True}, (True, False, False)),
+        ({"l2l": True, "l2l_two_read_experts": True}, (True, True, False)),
+        ({"l2l": True, "l2l_grouped_expert_routes": True}, (True, False, True)),
+        ({}, (None, None, None)),
+    ],
+    ids=["defaults", "two-reads", "grouped-routes", "ordinary-per-expert"],
+)
+def test_streaming_setup_passes_expert_pool_and_lever_values(expert_setup, training, expected):
+    setup, builder = expert_setup
+    with pytest.raises(_ReachedRuntimeBuilderError):
+        setup(**training)
+    builder.assert_called_once()
+    kwargs = builder.call_args.kwargs
+    assert kwargs["index"].expert_layout == "per_expert"
+    for name, value in zip(("expert_pool", "two_read_experts", "grouped_expert_routes"), expected):
+        if value is None:
+            assert name not in kwargs
+        else:
+            assert kwargs[name] is value
+
+
+@pytest.mark.parametrize("limit", ["available", "physical"])
+def test_forced_ram_refuses_when_the_expert_staging_exceeds_headroom(
+    expert_setup, monkeypatch, limit
+):
+    from soup_cli.utils import layer_stream
+
+    setup, builder = expert_setup
+    if limit == "physical":
+        monkeypatch.setattr(layer_stream, "free_ram_bytes", lambda: 20_000_000_000)
+        monkeypatch.setattr(layer_stream, "total_ram_bytes", lambda: 12_000_000_000)
+    with pytest.raises(ValueError) as caught:
+        setup(l2l=True, stream_source="ram", staging_bytes=2_000_000_000)
+    reason = {
+        "available": "needs 8.0 GB and only 10.0 GB of RAM is free.",
+        "physical": "needs 8.0 GB, which exceeds 55% of physical RAM (12.0 GB).",
+    }[limit]
+    assert str(caught.value) == (
+        "training.stream_source='ram' but the base plus resident extras and expert pool "
+        f"host staging {reason} Set stream_source='auto' to allow the disk tier, "
+        "free RAM, or pick a smaller base."
+    )
+    builder.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("staging_bytes", "tier"), [(500_000_000, "ram"), (2_000_000_000, "disk")]
+)
+def test_auto_tier_charges_expert_staging_on_top_of_the_decoder_store(
+    expert_setup, staging_bytes, tier
+):
+    setup, builder = expert_setup
+    with pytest.raises(_ReachedRuntimeBuilderError):
+        setup(l2l=True, stream_source="auto", staging_bytes=staging_bytes)
+    builder.assert_called_once()
+    assert builder.call_args.kwargs["tier"] == tier
+
+
+def test_disk_tier_still_charges_expert_staging_on_top_of_decoder_staging(expert_setup):
+    setup, builder = expert_setup
+    with pytest.raises(ValueError) as caught:
+        setup(l2l=True, stream_source="disk", staging_bytes=4_000_000_000)
+    assert str(caught.value) == (
+        "layer streaming's disk tier would hold 8.00 GB of host staging (page-locked when the "
+        "box allows) at training.stream_read_ahead=2, and with 0.00 GB of resident extras "
+        "that needs 8.00 GB — more than the 7.00 GB safety headroom on 10.0 GB of free RAM. "
+        "The reader stages whole layers, and the embedding and lm_head take one slot each at "
+        "ANY depth because they are one layer each. Lower training.stream_read_ahead "
+        "(currently 2), free RAM, or use a smaller base."
+    )
+    builder.assert_not_called()
 
 
 # --------------------------------------------------------------------------

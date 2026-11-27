@@ -1211,14 +1211,27 @@ training:
 | `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
 | `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
 | `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
-| `l2l_two_read_experts` | `false` | MoE only (`stream_expert_layout: per_expert`). Replay each layer's routing in the checkpoint recompute so a routed expert is read in the forward and in its own backward, not a third time in the recompute. Experimental; results are bit-equal to the default. |
-| `l2l_grouped_expert_routes` | `false` | MoE only. Find a layer's hit experts and their token rows with one `nonzero` instead of one per expert. Experimental; results are bit-equal to the default. |
+| `l2l_two_read_experts` | `false` | Experimental. Replay routing during recompute. |
+| `l2l_grouped_expert_routes` | `false` | Experimental. Gather expert routes in one `nonzero`. |
+
+Both settings require `stream_expert_layout: per_expert` with L2L. Routing replay reads a routed
+expert in the forward pass and again in its backward pass. Grouped routing gathers the hit
+experts and their token rows together. The tiny DeepSeek-V3 CPU tests found bit-equal losses and
+LoRA gradients with FP32 and BF16 autocast for the tested settings. CUDA parity is unverified.
 
 - **Scope.** Llama and Mistral models, and DeepSeek-V3-family MoE models streamed with `stream_expert_layout: per_expert`, on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model with the fused expert layout is refused at launch, before any weight is sharded, naming `stream_expert_layout`. On a MoE model every routed expert is read through one bounded buffer pool (the pre-flight charges its arena in place of the single in-flight expert), the backward leases each hit expert again, and a routing guard stops a step whose recompute routed tokens differently from its forward. Only the stateless SiLU activation can be recomputed. `l2l_auto_k` stays refused on a MoE model: its host-RAM window planner is not wired into the launch. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
-- **Recipe and resume.** The run writes `l2l_recipe.json` (requested and effective k, codec, the two expert levers) to its output directory. A resume whose k, codec or expert levers differ from the checkpoint's is refused, because a different k moves the optimizer-step boundaries.
+- **Recipe and resume.** SFT writes `l2l_recipe.json` (requested and effective k, activation
+  codec, and expert settings) to the run directory and each L2L checkpoint. Ordinary checkpoints
+  saved in a run directory with L2L history record their training mode too. Resume checks the
+  source checkpoint's metadata first, then its source run's recipe for older checkpoints. A
+  recorded L2L checkpoint requires `l2l: true` and matching effective k, codec, and expert
+  settings. A legacy checkpoint without a covering recipe can resume with either mode. A
+  run-root recipe covers checkpoints after the step at which that recipe took effect.
+- **Host RAM.** The expert pool's persistent staging counts against the RAM budget in both
+  tiers. With `stream_source: auto`, staging can push the run to the NVMe disk tier.
 - **k = 1** behaves like plain streaming.
 
 ### Preference losses over streaming (v0.72.4)

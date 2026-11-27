@@ -9,7 +9,8 @@ directory and checked on resume, because a different k changes the optimizer-ste
 
 import json
 import os
-from dataclasses import MISSING, asdict, dataclass, fields
+import re
+from dataclasses import MISSING, asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,6 +30,8 @@ class L2LRecipe:
     auto_k: bool
     two_read_experts: bool = False
     grouped_expert_routes: bool = False
+    # A run-root recipe covers checkpoints made after this step.
+    start_step: int = 0
 
 
 def validate_l2l_options(tcfg: Any) -> None:
@@ -94,12 +97,13 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
     )
 
 
-def write_recipe(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> str:
-    """Write the recipe to ``<output_dir>/l2l_recipe.json``; returns the path."""
+def write_recipe(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe | None) -> str:
+    """Write the L2L recipe or an explicit record of ordinary training to a checkpoint."""
     from soup_cli.utils.paths import atomic_write_text
 
     path = os.path.join(os.fspath(output_dir), RECIPE_NAME)
-    text = json.dumps(asdict(recipe), indent=2, sort_keys=True) + "\n"
+    data = asdict(recipe) if recipe is not None else {"l2l": False}
+    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
     return atomic_write_text(text, path, field="l2l recipe")
 
 
@@ -110,6 +114,8 @@ def load_recipe(output_dir: "str | os.PathLike[str]") -> Optional[L2LRecipe]:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("l2l") is False:
+            return None
         values = {}
         for field in fields(L2LRecipe):
             if field.name in data:
@@ -129,8 +135,11 @@ def validate_resume(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> 
     No saved recipe (a run from before the recipe existed) is accepted.
     """
     saved = load_recipe(output_dir)
-    if saved is None:
-        return
+    if saved is not None:
+        _validate_recipe_match(saved, recipe)
+
+
+def _validate_recipe_match(saved: L2LRecipe, recipe: L2LRecipe) -> None:
     for name in ("effective_k", "activation_codec", "two_read_experts", "grouped_expert_routes"):
         before, now = getattr(saved, name), getattr(recipe, name)
         if before != now:
@@ -138,3 +147,65 @@ def validate_resume(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> 
                 f"cannot resume: the checkpoint was trained with {name}={before!r}, but this "
                 f"run has {name}={now!r}. Restore the old value in the config."
             )
+
+
+def checkpoint_step(checkpoint: str | os.PathLike[str]) -> int | None:
+    """Read the trainer's global step, falling back to the standard checkpoint name."""
+    path = Path(os.path.realpath(checkpoint))
+    try:
+        state = json.loads((path / "trainer_state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = None
+    step = state.get("global_step") if isinstance(state, dict) else None
+    if type(step) is int and step >= 0:
+        return step
+    match = re.fullmatch(r"checkpoint-(\d+)", path.name)
+    return int(match.group(1)) if match else None
+
+
+def validate_resume_source(
+    checkpoint: str | os.PathLike[str], recipe: L2LRecipe | None,
+) -> L2LRecipe | None:
+    """Validate the checkpoint or its run-root recipe, then return the recipe to write.
+
+    Accept legacy checkpoints with no covering recipe. When resuming a legacy checkpoint,
+    the new run-root recipe starts at that checkpoint's step, so it cannot reclassify the
+    checkpoint itself or earlier ones. A checkpoint-local recipe takes precedence.
+    """
+    path = Path(os.path.realpath(checkpoint))
+    step = None
+    if (path / RECIPE_NAME).is_file():
+        saved = load_recipe(path)
+    else:
+        saved = load_recipe(path.parent)
+        if saved is not None:
+            step = checkpoint_step(path)
+            if step is not None and step <= saved.start_step:
+                saved = None
+    if saved is None:
+        if recipe is None:
+            return None
+        if step is None:
+            step = checkpoint_step(path)
+        return replace(recipe, start_step=step or 0)
+    if recipe is None:
+        raise ValueError(
+            "cannot resume: the checkpoint was trained with training.l2l "
+            f"(effective_k={saved.effective_k!r}, activation_codec={saved.activation_codec!r}), "
+            "but this run has training.l2l off. Set training.l2l to true with the same settings."
+        )
+    _validate_recipe_match(saved, recipe)
+    return replace(recipe, start_step=saved.start_step)
+
+
+def build_l2l_recipe_callback(output_dir: str, recipe: L2LRecipe | None) -> Any:
+    """Preserve the training mode and recipe beside each saved checkpoint."""
+    from transformers import TrainerCallback
+
+    class L2LRecipeCallback(TrainerCallback):
+        def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+            if args.should_save:
+                checkpoint = Path(args.output_dir or output_dir) / f"checkpoint-{state.global_step}"
+                write_recipe(checkpoint, recipe)
+
+    return L2LRecipeCallback()

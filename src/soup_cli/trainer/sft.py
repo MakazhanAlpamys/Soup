@@ -2697,15 +2697,6 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # rejected resume must not overwrite the root artifact's previous
             # route declaration during setup.
             write_metadata(self._output_dir, self._quest_metadata)
-        l2l_recipe = getattr(self, "_l2l_recipe", None)
-        if l2l_recipe is not None:
-            from soup_cli.utils.l2l_recipe import validate_resume, write_recipe
-
-            # Same order as the QuEST metadata: a rejected resume must not overwrite the
-            # recipe the checkpoint was trained with.
-            if resume_from_checkpoint is not None:
-                validate_resume(self._output_dir, l2l_recipe)
-            write_recipe(self._output_dir, l2l_recipe)
         offload_save_dir: Optional[str] = None
         if tcfg.activation_offloading == "disk":
             candidate = str(Path(self._output_dir) / "_activation_offload")
@@ -2726,6 +2717,22 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         ) as train_ctx:
             # #1693: also when training raises.
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
+            l2l_recipe = getattr(self, "_l2l_recipe", None)
+            if resume_from_checkpoint is not None:
+                from soup_cli.utils.l2l_recipe import validate_resume_source
+
+                l2l_recipe = validate_resume_source(resume_from_checkpoint, l2l_recipe)
+            if l2l_recipe is not None:
+                from soup_cli.utils.l2l_recipe import write_recipe
+
+                write_recipe(self._output_dir, l2l_recipe)
+            from soup_cli.utils.l2l_recipe import RECIPE_NAME, build_l2l_recipe_callback
+
+            # In an output with L2L history, ordinary saves also need checkpoint metadata.
+            if l2l_recipe is not None or (Path(self._output_dir) / RECIPE_NAME).is_file():
+                recipe_callback = build_l2l_recipe_callback(self._output_dir, l2l_recipe)
+                self.trainer.add_callback(recipe_callback)
+                train_ctx.callback(self.trainer.remove_callback, recipe_callback)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

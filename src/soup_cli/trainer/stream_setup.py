@@ -180,6 +180,7 @@ def _validate_qwen4_ngram_ram_fit(
     free_ram: int,
     resident_ram: int = 0,
     total_ram: int | None = None,
+    expert_staging_bytes: int = 0,
 ) -> None:
     """Refuse a RAM base or PLE before either source allocates its store."""
     from soup_cli.utils.layer_stream import (
@@ -189,7 +190,12 @@ def _validate_qwen4_ngram_ram_fit(
     )
 
     ram_required = stream_source == "ram" or ngram_source == "ram"
-    total_required_ram = required_ram + int(resident_ram)
+    total_required_ram = required_ram + int(resident_ram) + expert_staging_bytes
+    footprint = (
+        "the base plus resident extras and expert pool host staging"
+        if expert_staging_bytes
+        else "the base plus resident extras and selected PLE storage"
+    )
     if (
         ram_required
         and total_ram is not None
@@ -206,8 +212,7 @@ def _validate_qwen4_ngram_ram_fit(
             else "stream_source='auto' to allow the disk tier"
         )
         raise ValueError(
-            f"{policy} but the base plus resident extras and selected PLE "
-            f"storage needs {total_required_ram / 1e9:.1f} GB, "
+            f"{policy} but {footprint} needs {total_required_ram / 1e9:.1f} GB, "
             "which exceeds "
             f"{PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM "
             f"({total_ram / 1e9:.1f} GB). Set {fallback}, free RAM, "
@@ -225,8 +230,7 @@ def _validate_qwen4_ngram_ram_fit(
             else "stream_source='auto' to allow the disk tier"
         )
         raise ValueError(
-            f"{policy} but the base plus resident extras and selected PLE "
-            f"storage needs {total_required_ram / 1e9:.1f} GB and only "
+            f"{policy} but {footprint} needs {total_required_ram / 1e9:.1f} GB and only "
             f"{free_ram / 1e9:.1f} GB of RAM is free. Set {fallback}, free RAM, "
             "or pick a smaller base."
         )
@@ -1593,6 +1597,7 @@ class StreamingSetupMixin:
             free_ram=free_ram,
             resident_ram=embed_bytes,
             total_ram=total_ram,
+            expert_staging_bytes=expert_staging_bytes,
         )
         plan_free_ram = free_ram
         if ngram_source == "ram":
@@ -1610,6 +1615,7 @@ class StreamingSetupMixin:
             large_buffer_bytes=large_buffer_bytes,
             available_ram_bytes=plan_free_ram,
             total_ram_bytes=total_ram,
+            persistent_host_bytes=expert_staging_bytes,
             # The page-locked ceiling is a property of the box, not of free RAM;
             # rather than probe it destructively we attempt the pinned store and
             # fall back loudly (see layer_stream_runtime._build_source).
