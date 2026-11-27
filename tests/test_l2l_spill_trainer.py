@@ -684,6 +684,7 @@ def test_the_disk_tier_keeps_the_default_dir_off_the_weights_disk(
     from soup_cli.trainer.l2l_trainer import L2LState, _store_for
     from soup_cli.utils import l2l_spill
 
+    # Put the spill directory and weight cache on the same disk regardless of the host.
     monkeypatch.setattr(l2l_spill, "physical_disks", lambda path: (frozenset({"sda"}), "sda"))
     lines = []
     monkeypatch.setattr(l2l_spill, "say", lambda line, notify=None: lines.append(line))
@@ -702,6 +703,6 @@ def test_the_disk_tier_keeps_the_default_dir_off_the_weights_disk(
             return
         store = _store_for(state, _stepper(state, model, 64), _ids([64] * 2), "cpu")
         assert store.spill_layers > 0
-        assert any("13% slower" in line for line in lines)
+        assert any("shares a physical disk with the layer cache" in line for line in lines)
     finally:
         state.close()
