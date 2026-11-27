@@ -443,6 +443,16 @@ resolves the same card-aware `get_compute_dtype()`, rather than leaving those mo
 whatever `from_pretrained`'s bare default happened to pick.
 
 
+### Experimental Triton NF4 dequantization
+
+Set `SOUP_NF4_TRITON=1` before running `soup train` with `backend: transformers`,
+`training.quantization: 4bit` and resident weights. This opt-in uses an installed
+Triton on NVIDIA CUDA GPUs with compute capability 8.0 or newer. It handles plain
+and double-quantized NF4 with contiguous `uint8` packing, including the
+dequantization used by the unfused 4-bit linear path. bitsandbytes handles fused
+GEMMs, FP4, other layouts, and calls outside the supported path. Leave the
+variable unset to use stock bitsandbytes for all calls.
+
 ## Activation Offloading (Small-VRAM Large-Batch)
 
 Offload saved activations to RAM or disk during the backward pass to fit bigger effective batch sizes on smaller GPUs:
