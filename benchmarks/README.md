@@ -1,21 +1,24 @@
 # Measurement records
 
-Raw gate records for Soup's layer-streaming feature and its release gate,
-published as written.
+This index includes Soup layer-streaming gate records and standalone
+benchmark records.
 
-These are not a report assembled after the fact. They are the working records
-kept while each item was built and verified, so they contain the failures, the
-assumptions that turned out wrong, and the numbers that were measured and then
-discarded — in the order those things happened.
+The original gate records were kept while each item was built and verified.
+They include failures, revised assumptions, and measurements that were later
+discarded, in the order they happened.
 
-They are the evidence behind the preprint:
+The layer-streaming gate records are the evidence behind the preprint:
 
 > Makazhan, A. (2026). *Exact Layer Streaming: LoRA Fine-Tuning of an 8B Model
 > on a 4 GB Laptop GPU.* Zenodo.
 > [10.5281/zenodo.21771064](https://doi.org/10.5281/zenodo.21771064)
 
-| File | What it gates | Headline |
+| File | Question or gate | Headline |
 |---|---|---|
+| [`response-format-policy-linux-gpu-2026-10-22.md`](response-format-policy-linux-gpu-2026-10-22.md) | Equal-budget training policies and paired response-format tests on Mistral-7B | Mixed. The baseline had the lowest held-out cross-entropy. Role-boundary stopping improved exact scores, and the format-prompt follow-up stopped before generation. |
+| [`direct-storage-read-rtx4090-2026-10-23.md`](direct-storage-read-rtx4090-2026-10-23.md) | Native NVMe-to-CUDA transfers versus pinned host staging on Linux | Blocked at cuFile driver initialization. The staged-copy controls passed. Native support has no verdict. |
+| [`liger-kernel-comparison-rtx4090-2026-11-02.md`](liger-kernel-comparison-rtx4090-2026-11-02.md) | Liger cross-entropy versus the Transformers baseline under a fixed QLoRA recipe | Negative. No detectable speed difference on the measured RTX 4090 setup. |
+| [`sustained-nvme-read-micron-laptop-2026-10-15.md`](sustained-nvme-read-micron-laptop-2026-10-15.md) | One hour of sequential unbuffered reads on a laptop NVMe | Positive. One passing run measured the sustained rate for this host and read pattern. |
 | [`quant-check-performance-smoke-2026-11-10.md`](quant-check-performance-smoke-2026-11-10.md) | Functional validation of opt-in combined quality/performance reporting ([#2677](https://github.com/MakazhanAlpamys/Soup/issues/2677)) | Real Qwen FP16/NF4 on H200 and identical tiny CPU checkpoints; four CLI reports, null CPU VRAM, quality exit-code regression and full CPU suite. Not a speedup or model-quality claim |
 | [`flash-liger-h200-2026-11-10.md`](flash-liger-h200-2026-11-10.md) | Sequence/checkpointing sweep for #378; measurement, no default change | 120 timings and 32 probes on a shared H200: Liger 1.197-1.229x SDPA with 21.6-54.7% less allocated peak at feasible points; separate FA2 0.929-0.989x. Eight long-sequence checkpoint-off probe OOMs and all 40 unrun timing slots retained. |
 | [`protocol-378-h200.md`](protocol-378-h200.md) | Frozen protocol for the H200 sequence/checkpointing sweep of [#378](https://github.com/MakazhanAlpamys/Soup/issues/378), written before the timed matrix; the results are in [`flash-liger-h200-2026-11-10.md`](flash-liger-h200-2026-11-10.md) | Llama-3.1-8B, resident BF16 base with LoRA r=16 on all seven projections, batch 4, sequence 1024/2048/4096/8192 with checkpointing off and on, four arms (default SDPA, FA2, Liger, FA2+Liger), five interleaved repetitions per feasible cell, 5 warm-up and 80 measured updates. Activation probes run before timing, and a failed probe is retained rather than turned into a ratio. A second Hopper measurement, not a reproduction of the older H100 values. |
