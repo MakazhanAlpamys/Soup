@@ -1747,6 +1747,9 @@ Listed by first contribution. PR numbers link the work.
 - **Artem Kremko** ([@trustkrem](https://github.com/trustkrem))
   - Added the PEFT and torchao compatibility finding to `soup doctor`. ([#3230](https://github.com/MakazhanAlpamys/Soup/pull/3230))
 
+- **S Niwas** ([@sniwas](https://github.com/sniwas))
+  - Clarified the file and directory destinations in `soup export --help` and added a CLI help regression. ([#3280](https://github.com/MakazhanAlpamys/Soup/pull/3280))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
