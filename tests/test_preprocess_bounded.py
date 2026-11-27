@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
 from tests.test_issue1038_preprocess_to_pretokenized import _ROW, _tokenizer
 
 
@@ -123,10 +124,10 @@ def test_reader_and_formatter_diagnostics_match_eager_loader(tmp_path, monkeypat
 
     cfg = load_config("soup.yaml")
     expected = load_dataset(cfg.data)["train"]
-    expected_output = " ".join(capsys.readouterr().out.split())
+    expected_output = " ".join(strip_ansi(capsys.readouterr().out).split())
     with preprocessing_rows(cfg.data, cfg.task) as rows:
         assert list(rows) == expected
-    assert " ".join(capsys.readouterr().out.split()) == expected_output
+    assert " ".join(strip_ansi(capsys.readouterr().out).split()) == expected_output
 
 
 def test_unsupported_replay_format_keeps_media_validation(tmp_path, monkeypatch):
@@ -276,7 +277,7 @@ def test_row_cap_still_counts_rows_after_split_replay(tmp_path, monkeypatch):
     result = _invoke()
     assert result.exit_code == 0, result.output
     assert _cache(tmp_path)[2]["row_count"] == 3
-    assert "Reached row cap 3" in result.output
+    assert "Reached row cap 3" in strip_ansi(result.output)
 
 
 @pytest.mark.parametrize("replay", [False, True])
@@ -294,12 +295,12 @@ def test_failed_auto_detection_retains_prior_parse_diagnostics(
         cfg.data.replay = "replay.jsonl"
     with pytest.raises(ValueError) as expected:
         load_dataset(cfg.data)
-    expected_output = " ".join(capsys.readouterr().out.split())
+    expected_output = " ".join(strip_ansi(capsys.readouterr().out).split())
     with pytest.raises(ValueError, match="Cannot detect format") as actual:
         with preprocessing_rows(cfg.data, cfg.task):
             pass
     assert str(actual.value) == str(expected.value)
-    assert " ".join(capsys.readouterr().out.split()) == expected_output
+    assert " ".join(strip_ansi(capsys.readouterr().out).split()) == expected_output
     assert "invalid JSON on line 1" in expected_output
 
 
@@ -371,9 +372,11 @@ def test_cli_split_replay_matches_eager_full_corpus_oracle(tmp_path, monkeypatch
     assert metadata["dataset_key"]["val_split"] == 0.3
 
 
-def test_full_cli_python_working_set_is_bounded(tmp_path, monkeypatch):
+def _measure_cli_working_set(tmp_path):
     import gc
     import tracemalloc
+
+    monkeypatch = pytest.MonkeyPatch()
 
     _config(tmp_path, monkeypatch)
     yaml = tmp_path / "soup.yaml"
@@ -395,8 +398,40 @@ def test_full_cli_python_working_set_is_bounded(tmp_path, monkeypatch):
         finally:
             tracemalloc.stop()
         assert result.exit_code == 0, result.output
-    # Same row and token limits: 16x the corpus must not add a whole-corpus list.
-    assert peaks[1] < peaks[0] + 4 * 1024 * 1024, peaks
+    monkeypatch.undo()
+    return peaks
+
+
+def _memory_worker(root, output):
+    try:
+        output.put((_measure_cli_working_set(Path(root)), None))
+    except Exception as error:
+        output.put((None, repr(error)))
+        raise
+
+
+def test_full_cli_python_working_set_is_bounded(tmp_path):
+    import multiprocessing
+
+    # A fresh interpreter excludes tracer state and background work from other tests.
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    process = context.Process(target=_memory_worker, args=(str(tmp_path), output))
+    process.start()
+    try:
+        process.join(timeout=300)
+        assert not process.is_alive(), "preprocessing memory check did not finish"
+        assert process.exitcode == 0
+        peaks, error = output.get(timeout=2)
+        assert error is None, error
+        # Same row and token limits: 16x the corpus must not add a whole-corpus list.
+        assert peaks[1] < peaks[0] + 4 * 1024 * 1024, peaks
+    finally:
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=5)
+        output.close()
+        output.join_thread()
 
 
 def test_byte_limit_finishes_a_shard_before_the_row_limit(tmp_path, monkeypatch):
@@ -506,3 +541,25 @@ def test_spooled_diagnostic_path_cannot_emit_terminal_controls(tmp_path, monkeyp
     output = capsys.readouterr().out
     assert "rows dropped" in output
     assert "\x1b" not in output
+
+
+def test_replayed_diagnostics_remove_rendering_escapes(tmp_path, monkeypatch, capsys):
+    from rich.console import Console
+
+    from soup_cli.data import loader
+    from soup_cli.data.preprocess import preprocessing_rows
+
+    cfg = _config(tmp_path, monkeypatch)
+    _write(tmp_path / "data.jsonl", [{}, _ROW])
+    monkeypatch.setattr(loader, "console", Console(
+        force_terminal=True, color_system="standard", no_color=False, width=100,
+    ))
+    assert loader.load_dataset(cfg.data)["train"] == [_ROW]
+    expected = capsys.readouterr().out
+    assert "\x1b[" in expected
+    with preprocessing_rows(cfg.data, cfg.task) as rows:
+        assert list(rows) == [_ROW]
+    actual = capsys.readouterr().out
+    assert "\x1b" not in actual
+    assert actual.endswith("\n")
+    assert " ".join(actual.split()) == " ".join(strip_ansi(expected).split())

@@ -11,6 +11,8 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from rich.text import Text
+
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.terminal import strip_control
 
@@ -165,15 +167,19 @@ def preprocessing_rows(config, task: str):
                         counts.append(count)
                         connection.execute("DELETE FROM raw WHERE source = ?", (source,))
             except BaseException:
+                diagnostics = captured.get()
                 loader.console.print(
-                    strip_control(captured.get()), end="", markup=False, highlight=False,
+                    strip_control(Text.from_ansi(diagnostics).plain),
+                    end="\n" if diagnostics else "", markup=False, highlight=False,
                 )
                 raise
             if not supported:
                 yield loader.load_dataset(config).get("train", [])
                 return
+            diagnostics = captured.get()
             loader.console.print(
-                strip_control(captured.get()), end="", markup=False, highlight=False,
+                strip_control(Text.from_ansi(diagnostics).plain),
+                end="\n" if diagnostics else "", markup=False, highlight=False,
             )
             train_count = int(counts[0] * (1 - config.val_split))
             connection.execute(
