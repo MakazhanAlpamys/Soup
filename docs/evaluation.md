@@ -2195,6 +2195,6 @@ Only Hugging Face safetensors (`.safetensors` or `.bin`) directories are support
 | Code | Status | Meaning |
 |---|---|---|
 | `0` | `PASS` | Adapter delta is preserved across active prompts and NLL (when `|base_nll - ref_nll| > 1e-4`), and agreement meets `--min-agreement`. |
-| `1` | Runtime error | Model loading or live evaluation failed (unless `--allow-stub` triggers a stub fallback), or a computed NLL is non-finite (`NaN`/`Inf`, even with `--allow-stub`). |
+| `1` | Runtime error | Model loading failed (unless `--allow-stub` triggers a stub fallback), or live evaluation or NLL computation failed (including non-finite `NaN`/`Inf` NLL, even with `--allow-stub`). |
 | `2` | Gate failed | `DELTA_LOST` (generation or NLL reverted closer to base), `LOW_AGREEMENT` (agreement fell below `--min-agreement`), `NO_EVIDENCE` (no active adapter prompts found), or an actual `--allow-stub` stub fallback. |
 | `3` | Usage error | Missing `--prompts`, path outside current working directory, unsupported artifact format, malformed prompt row, or invalid arguments. |

@@ -637,8 +637,9 @@ class TestExportCheckCLI:
             assert data["verdict"] == "NO_EVIDENCE"
             assert data["active_prompt_count"] == 0
 
+    @pytest.mark.parametrize("allow_stub", [False, True])
     @pytest.mark.parametrize("failing", ["base", "ref", "exp"])
-    def test_cli_failing_nll_exits_runtime_error(self, tmp_path, monkeypatch, failing):
+    def test_cli_failing_nll_exits_runtime_error(self, tmp_path, monkeypatch, failing, allow_stub):
         monkeypatch.chdir(tmp_path)
         adapter_dir, exported_dir = self._setup_dirs(tmp_path)
         prompts = tmp_path / "prompts.txt"
@@ -659,14 +660,21 @@ class TestExportCheckCLI:
             mock_hf_eval.side_effect = [make_eval("base"), make_eval("exp")]
             mock_ref_eval.return_value = make_eval("ref")
 
-            result = runner.invoke(app, [
+            argv = [
                 "eval", "export-check",
                 "--adapter", str(adapter_dir),
                 "--exported", str(exported_dir),
                 "--prompts", str(prompts),
-            ])
+            ]
+            if allow_stub:
+                argv.append("--allow-stub")
+
+            result = runner.invoke(app, argv)
             assert result.exit_code == EXIT_RUNTIME_ERROR
-            assert "nll boom" in _clean_output(result.output)
+            cleaned = _clean_output(result.output)
+            assert "nll boom" in cleaned
+            assert "deterministic stubs" not in cleaned
+            assert "Failed to load models" not in cleaned
 
     @pytest.mark.parametrize("allow_stub", [False, True])
     @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])

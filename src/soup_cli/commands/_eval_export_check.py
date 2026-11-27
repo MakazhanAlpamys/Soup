@@ -230,11 +230,13 @@ def register(app: typer.Typer, console: Console) -> None:
         from soup_cli.eval.export_check import (
             FunctionModelEvaluator,
             HFCausalLMEvaluator,
-            NonFiniteNLLError,
             make_hf_adapter_evaluator,
             make_hf_evaluator,
             run_export_check_from_factories,
         )
+
+        class _ModelLoadError(RuntimeError):
+            """Raised only when loading a model inside a factory fails."""
 
         if is_stub:
             # Stub path: factories return deterministic FunctionModelEvaluator stubs
@@ -257,20 +259,28 @@ def register(app: typer.Typer, console: Console) -> None:
             _fmt_cap = fmt
             _console_cap = console
 
+            def _load_stage(loader):
+                try:
+                    return loader()
+                except (ImportError, OSError, ValueError, RuntimeError) as exc:
+                    raise _ModelLoadError(str(exc)) from exc
+
             def _base_factory() -> HFCausalLMEvaluator:
                 if _fmt_cap == "table":
                     _console_cap.print("[dim]Loading base model...[/]")
-                return make_hf_evaluator(_resolved_base_cap)
+                return _load_stage(lambda: make_hf_evaluator(_resolved_base_cap))
 
             def _ref_factory() -> HFCausalLMEvaluator:
                 if _fmt_cap == "table":
                     _console_cap.print("[dim]Loading reference model (adapter)...[/]")
-                return make_hf_adapter_evaluator(_adapter_path_str, _resolved_base_cap)
+                return _load_stage(
+                    lambda: make_hf_adapter_evaluator(_adapter_path_str, _resolved_base_cap)
+                )
 
             def _exp_factory() -> HFCausalLMEvaluator:
                 if _fmt_cap == "table":
                     _console_cap.print("[dim]Loading exported model...[/]")
-                return make_hf_evaluator(_exported_path_str)
+                return _load_stage(lambda: make_hf_evaluator(_exported_path_str))
 
             base_factory = _base_factory
             ref_factory = _ref_factory
@@ -286,10 +296,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 min_agreement=min_agreement,
                 stub=is_stub,
             )
-        except NonFiniteNLLError as exc:
-            console.print(f"[red]{for_terminal(str(exc))}[/]")
-            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
-        except (ImportError, OSError, ValueError, RuntimeError) as exc:
+        except _ModelLoadError as exc:
             # Model loading failed inside a factory (e.g. missing weights, bad path).
             if not allow_stub:
                 console.print(
@@ -325,8 +332,9 @@ def register(app: typer.Typer, console: Console) -> None:
                 )
                 raise typer.Exit(EXIT_RUNTIME_ERROR) from exc2
         except Exception as exc:  # noqa: BLE001
+            # Live scoring / NLL errors (including NonFiniteNLLError) never fall back to stubs.
             console.print(
-                f"[red]Export check failed unexpectedly: {for_terminal(str(exc))}[/]"
+                f"[red]Export check failed: {for_terminal(str(exc))}[/]"
             )
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
 
