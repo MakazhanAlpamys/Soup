@@ -887,11 +887,12 @@ def attach_l2l_state(
         effective_k=effective_k,
         spill_dir=spill_dir,
         weight_dirs=tuple(str(path) for path in weight_dirs),
-        output_dir=getattr(args, "output_dir", None),
         two_read_experts=two_read_experts,
         grouped_expert_routes=grouped_expert_routes,
         route_preserving_mbr=route_preserving_mbr,
         mbr_group_size=mbr_group_size,
     )
+    # The trainer's run directory is the fallback location for activation spill.
+    state.output_dir = getattr(args, "output_dir", None)
     trainer._soup_l2l = state
     return state
