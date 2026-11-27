@@ -1,0 +1,1 @@
+- Add benchmark records for LoRA placement on MoE models and frozen-prefix caching with top-layer LoRA. (#PENDING by @Batyrkhantzy111, @nurseit14)
