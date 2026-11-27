@@ -165,7 +165,10 @@ def test_the_recipe_records_the_expert_levers():
 
 
 @pytest.mark.parametrize("name", EXPERT_LEVERS)
-def test_a_resume_with_another_expert_lever_is_refused_with_the_lever_named(tmp_path, name):
+def test_a_resume_with_another_expert_lever_is_refused_with_the_lever_named(
+    tmp_path, monkeypatch, name
+):
+    monkeypatch.chdir(tmp_path)
     from soup_cli.utils.l2l_recipe import resolve_l2l_recipe, validate_resume, write_recipe
 
     write_recipe(tmp_path, resolve_l2l_recipe(_tcfg()))
