@@ -2830,18 +2830,18 @@ def shard_checkpoint(
                     f"(unset it to shard to one root).",
                 ) from exc
             if per_expert_ids or fused_experts:
-                import torch
+                if fused_experts:
+                    pairs = _fused_expert_pairs(fused_experts, where, handles, dtype)
+                else:
+                    import torch
 
-                def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
-                    for expert in ids:
-                        gate = read("gate_proj", expert)
-                        gate_up_one = torch.cat((gate, read("up_proj", expert)))
-                        yield gate_up_one, read("down_proj", expert)
+                    def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
+                        for expert in ids:
+                            gate = read("gate_proj", expert)
+                            gate_up_one = torch.cat((gate, read("up_proj", expert)))
+                            yield gate_up_one, read("down_proj", expert)
 
-                pairs = (
-                    _fused_expert_pairs(fused_experts, where, handles, dtype)
-                    if fused_experts else _expert_pairs()
-                )
+                    pairs = _expert_pairs()
                 info = write_expert_shard(
                     os.path.join(shard_dirs[root], expert_shard_name(idx)),
                     pairs,
