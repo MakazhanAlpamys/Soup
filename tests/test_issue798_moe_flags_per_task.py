@@ -344,7 +344,7 @@ class TestShippedConfigs:
             load_catalog_config(recipe), name
 
     def test_the_moe_recipes_are_the_ones_this_issue_names(self):
-        """19 shipped preference/RL MoE recipes: 9 DPO and 10 GRPO."""
+        """20 shipped preference/RL MoE recipes: 9 DPO and 11 GRPO."""
         import yaml
 
         from soup_cli.recipes.catalog import RECIPES
@@ -359,7 +359,8 @@ class TestShippedConfigs:
         # minimax-m3-dpo (DPO cannot build its VL wrapper): 9 -> 7 dpo.
         # qwen3.5-122b-a10b-dpo adds one MoE DPO recipe.
         # qwen3.5-397b-a17b-dpo adds one MoE DPO recipe.
-        assert sorted(tasks) == ["dpo"] * 9 + ["grpo"] * 10, sorted(tasks)
+        # glm-5-grpo adds one MoE GRPO recipe.
+        assert sorted(tasks) == ["dpo"] * 9 + ["grpo"] * 11, sorted(tasks)
 
 
 

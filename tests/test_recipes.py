@@ -644,6 +644,41 @@ class TestGlm51GrpoRecipe:
         assert grpo.model == sft.model == dpo.model == self.MODEL
 
 
+class TestGlm5GrpoRecipe:
+    RECIPE = "glm-5-grpo"
+    MODEL = "zai-org/GLM-5"
+
+    def test_metadata_names_original_glm5(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        assert (recipe.model, recipe.task, recipe.size) == (self.MODEL, "grpo", "744B")
+
+    def test_cli_writes_original_glm5_with_inherited_grpo_settings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        monkeypatch.chdir(tmp_path)
+        shown = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert shown.exit_code == 0, shown.output
+        lines = [line.strip("│| ") for line in strip_ansi(shown.output).splitlines()]
+        assert f"base: {self.MODEL}" in lines
+
+        used = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert used.exit_code == 0, used.output
+        actual = load_config_from_string((tmp_path / "soup.yaml").read_text(encoding="utf-8"))
+        assert actual.base == self.MODEL
+        assert actual.task == "grpo"
+
+        reference = get_recipe("glm-5.1-grpo")
+        assert reference is not None
+        inherited = load_config_from_string(reference.yaml_str)
+        assert actual.model_dump(exclude={"base"}) == inherited.model_dump(exclude={"base"})
+
+
 class TestDeepSeekV4FlashDpoRecipe:
     """Regression coverage for the deepseek-v4-flash-dpo recipe (#275).
 
