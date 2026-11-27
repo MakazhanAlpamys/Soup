@@ -1,1 +1,0 @@
-- Add opt-in Triton NF4 dequantization for resident bitsandbytes training on CUDA via `SOUP_NF4_TRITON=1`. (#PENDING by @nurseit14)
