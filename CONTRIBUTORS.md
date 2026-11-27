@@ -994,6 +994,7 @@ Listed by first contribution. PR numbers link the work.
   - Revalidated eval gate thresholds and scorers before generation and added boundary and mutation controls. ([#3234](https://github.com/MakazhanAlpamys/Soup/pull/3234))
   - Added CLI regression coverage for finite eval-gate thresholds outside the supported range. ([#3308](https://github.com/MakazhanAlpamys/Soup/pull/3308))
   - Added MCP transport tests for dataset path refusals and valid dataset controls. ([#3309](https://github.com/MakazhanAlpamys/Soup/pull/3309))
+  - Documented the registry list/search limits and clamping in CLI help and covered both screens. ([#3413](https://github.com/MakazhanAlpamys/Soup/pull/3413))
 
 - **Suyog Verma** ([@commit-msuyog](https://github.com/commit-msuyog))
   - First contribution: A local `.parquet` dataset with list columns loaded 0 training rows for eight formats, because pandas handed every list cell to the converters as a numpy array, and `soup data validate` / `inspect` crashed on the same file. The loader now reads parquet with pyarrow, so rows match the same data in JSONL, and it drops pandas' hidden `__index_level_N__` index column while keeping a named index. The new tests fail 15 of 24 on `main`, and all 5 mutations of the fix fail a test ([#1218](https://github.com/MakazhanAlpamys/Soup/issues/1218), [#1292](https://github.com/MakazhanAlpamys/Soup/pull/1292))
