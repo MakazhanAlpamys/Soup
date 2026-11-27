@@ -1226,9 +1226,13 @@ LoRA gradients with FP32 and BF16 autocast for the tested settings. CUDA parity 
 MBR leaves attention, routing and the shared experts per micro-batch. Each group dispatches its
 routed rows together, so each hit expert shares one pool lease per group in the forward and one
 in the backward. A supported deferred decoder hook also needs a lease during recompute.
-The group size and the backward switches require MBR to be enabled. Both
-backward modes preserve the per-micro-batch expert operation shapes and the order of LoRA gradient
-accumulation. With both switches off, grouping can change floating-point results.
+The group size and the backward switches require MBR to be enabled. With split or ordered
+backward, MBR preserves per-micro-batch expert operation shapes and accumulates LoRA gradients in
+plain L2L order. With both switches off and a group size greater than one, MBR combines expert
+operations across micro-batches and uses a grouped backward, which can change floating-point
+results. The CPU parity test checks exact losses and LoRA gradients in fp32 and under bf16
+autocast over five micro-batches, using group size 1 with both switches off and group size 3
+with each switch enabled separately.
 
 - **Scope.** Llama and Mistral models, and DeepSeek-V3-family MoE models streamed with `stream_expert_layout: per_expert`, on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model with the fused expert layout is refused at launch, before any weight is sharded, naming `stream_expert_layout`. On a MoE model every routed expert is read through one bounded buffer pool (the pre-flight charges its arena in place of the single in-flight expert), the backward leases each hit expert again, and a routing guard stops a step whose recompute routed tokens differently from its forward. Only the stateless SiLU activation can be recomputed. `l2l_auto_k` stays refused on a MoE model: its host-RAM window planner is not wired into the launch. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.

@@ -1,6 +1,7 @@
 """Micro-batch routing under layer-to-layer execution."""
 
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -150,6 +151,58 @@ def test_mbr_recipe_refuses_changed_options_on_resume(
         f"cannot resume: the checkpoint was trained with {key}={before!r}, but this "
         f"run has {key}={after!r}. Restore the old value in the config."
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "before", "after"),
+    [(MBR, False, True), (SIZE, None, 2), (SPLIT, False, True), (ORDERED, False, True)],
+)
+def test_sft_resume_refuses_changed_mbr_setting_from_source_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, before: Any, after: Any,
+) -> None:
+    from unittest.mock import Mock
+
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils.l2l_recipe import RECIPE_NAME, resolve_l2l_recipe, write_recipe
+
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "source"
+    checkpoint = source / "checkpoint-5"
+    checkpoint.mkdir(parents=True)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+
+    options = {
+        **PREREQUISITES,
+        "l2l": True,
+        "stream_expert_layout": "per_expert",
+        "gradient_accumulation_steps": 5,
+        MBR: True,
+    }
+    saved = resolve_l2l_recipe(_load(**{**options, name: before}))
+    write_recipe(source, saved)
+    original_recipe = (source / RECIPE_NAME).read_bytes()
+
+    config = load_config_from_string(training_yaml(**{**options, name: after}))
+    wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
+    wrapper.config = config
+    wrapper._quest_metadata = None
+    wrapper._output_dir = str(destination)
+    wrapper._l2l_recipe = resolve_l2l_recipe(config.training)
+    train = Mock(side_effect=AssertionError("Trainer.train reached after a recipe mismatch"))
+    wrapper.trainer = SimpleNamespace(model=None, args=SimpleNamespace(), train=train)
+
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(checkpoint))
+
+    key = name.removeprefix("l2l_")
+    assert str(caught.value) == (
+        f"cannot resume: the checkpoint was trained with {key}={before!r}, but this "
+        f"run has {key}={after!r}. Restore the old value in the config."
+    )
+    train.assert_not_called()
+    assert (source / RECIPE_NAME).read_bytes() == original_recipe
+    assert not (destination / RECIPE_NAME).exists()
 
 
 def test_recipe_from_before_mbr_resumes_with_mbr_defaults(tmp_path) -> None:
