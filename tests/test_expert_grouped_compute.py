@@ -197,7 +197,11 @@ def test_olmoe_fused_checkpoint_uses_the_same_l2l_pool(tmp_path):
     from transformers import OlmoeConfig, OlmoeForCausalLM
 
     from soup_cli.config.schema import ExpertStreamConfig
-    from soup_cli.utils.layer_shard import estimate_shard_cache_bytes, shard_checkpoint
+    from soup_cli.utils.layer_shard import (
+        _discover_safetensors,
+        estimate_shard_cache_bytes,
+        shard_checkpoint,
+    )
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
     torch.manual_seed(11)
@@ -212,7 +216,7 @@ def test_olmoe_fused_checkpoint_uses_the_same_l2l_pool(tmp_path):
     save_file(base.state_dict(), str(weights / "model.safetensors"))
     shard_dir = str(tmp_path / "shards")
     cache = dict(dtype="float32", arch="olmoe", expert_layout="per_expert")
-    estimate = estimate_shard_cache_bytes(str(weights), **cache)
+    estimate = estimate_shard_cache_bytes(_discover_safetensors(str(weights)), **cache)
     assert estimate.expert_file_bytes > 0
     index = shard_checkpoint(str(weights), shard_dir, **cache)
     assert tuple(index.expert_layers) == (0, 1, 2)
