@@ -7,6 +7,26 @@ import pytest
 from tests.test_stream_ram_cache import source
 
 
+def test_stale_gpu_resident_staging_slot_is_evicted_before_wanted_layer():
+    from soup_cli.utils.async_disk_source import AsyncDiskSource
+
+    # Setup left two released staging slots. Layer 2 has since moved to a
+    # private device slot, while layer 1 is still the disk walk's anchor.
+    ours = object.__new__(AsyncDiskSource)
+    ours._group_of = [0, 0, 0, 0]
+    ours._group_slots = [[0, 1]]
+    ours._next_slot = [0]
+    ours._slot_of = {1: 0, 2: 1}
+    ours._live = [False, False]
+    ours._last_get = {0: 1}
+    ours._direction = {0: 1}
+    ours._resident = frozenset({2})
+    ours._cache = {}
+
+    assert ours._claim_slot(3) == 1
+    assert ours._slot_of == {1: 0}
+
+
 def test_promoted_cache_hit_does_not_borrow_its_stale_staging_slot(tmp_path):
     import threading
 

@@ -100,22 +100,29 @@ def test_cached_layers_are_never_opened_by_async_reader(tmp_path, monkeypatch):
     assert not set(opened).intersection(paths[:2])
 
 
-def test_staging_budget_refuses_before_allocation(tmp_path, monkeypatch):
+def test_partial_ram_refuses_disk_staging_over_budget_before_allocation(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
     from soup_cli.utils.async_disk_source import AsyncDiskSource
 
-    paths, specs = shards(tmp_path)
-    allocated = []
-    monkeypatch.setattr(AsyncDiskSource, "_allocate_staging", lambda *args: allocated.append(True))
-    with pytest.raises(ValueError, match="budget"):
+    paths, specs = shards(tmp_path, count=1)
+    allocate = Mock(side_effect=AssertionError("disk staging allocated over budget"))
+    monkeypatch.setattr(AsyncDiskSource, "_allocate_staging", allocate)
+    # No cached layer means no loading transient. The singleton needs one
+    # 4096-byte staging region plus 4096 bytes of pageable alignment slack.
+    with pytest.raises(ValueError) as excinfo:
         PartialRamSource(
             str(tmp_path),
-            5,
+            1,
             specs,
             pin=False,
             shard_paths=paths,
-            budget=PartialRamBudget(1000, 900, 68),
+            budget=PartialRamBudget(limit_bytes=9191, reserved_bytes=1000, cache_bytes=0),
         )
-    assert not allocated
+    assert str(excinfo.value) == (
+        "disk staging needs 8192 bytes, exceeding remaining host RAM budget 8191"
+    )
+    allocate.assert_not_called()
 
 
 def test_memory_reserves_load_transient_even_all_cached(tmp_path):
@@ -188,6 +195,37 @@ def test_runtime_factory_routes_explicit_budget(tmp_path):
         assert not pinned
     finally:
         source.close()
+
+
+def test_runtime_refuses_nf4_with_partial_ram(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from soup_cli.utils import layer_stream_runtime
+    from soup_cli.utils.layer_shard import QUANT_NF4, NF4WeightSpec
+
+    model = SimpleNamespace(config=SimpleNamespace(model_type="llama"))
+    index = SimpleNamespace(
+        quant=QUANT_NF4,
+        quant_specs={
+            "mlp.down_proj.weight": NF4WeightSpec((8, 8), "float32", 64, "nf4", False, 0),
+        },
+    )
+    decoder_owner = Mock(side_effect=AssertionError("decoder lookup preceded NF4 refusal"))
+    monkeypatch.setattr(layer_stream_runtime, "decoder_owner", decoder_owner)
+
+    with pytest.raises(ValueError) as excinfo:
+        layer_stream_runtime.install_streaming(
+            model,
+            shard_dir=str(tmp_path),
+            index=index,
+            device="cpu",
+            pin=False,
+            tier="disk",
+            partial_ram_budget=PartialRamBudget(1_000_000, 0, 68),
+        )
+    assert str(excinfo.value) == "partial RAM NF4 model validation is pending; use quant='none'"
+    decoder_owner.assert_not_called()
 
 
 @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda:0", marks=pytest.mark.gpu)])

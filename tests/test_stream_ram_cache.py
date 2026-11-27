@@ -104,6 +104,26 @@ def test_budget_smaller_than_one_real_allocation_uses_no_hotset(tmp_path, monkey
         ours.close()
 
 
+def test_hotset_refuses_actual_allocation_above_admitted_budget(tmp_path, monkeypatch):
+    from soup_cli.utils import stream_ram_cache
+
+    _folder, _specs, ours = source(tmp_path, monkeypatch, budget=0)
+    # Simulate a planner that admits one sector of payload but misses the
+    # alignment slack. The real pageable allocation charges both sectors.
+    monkeypatch.setattr(
+        stream_ram_cache,
+        "plan_hotset",
+        lambda *args, **kwargs: {"indices": [3], "allocated_bytes": 4096},
+    )
+    try:
+        with pytest.raises(RuntimeError) as excinfo:
+            ours.configure_ram_cache(4096)
+        assert str(excinfo.value) == "RAM cache allocation exceeds its admitted arena plan"
+        assert ours.ram_cache_stats()["indices"] == []
+    finally:
+        ours.close()
+
+
 def test_cached_hit_still_refuses_changed_shard(tmp_path, monkeypatch):
     _folder, specs, ours = source(tmp_path, monkeypatch)
     idx = ours.ram_cache_stats()["indices"][0]
