@@ -233,6 +233,14 @@ def make_prefix_tree_trainer_class(base_cls: type) -> type:
                 pin_memory=pin_memory,
             )
 
+        def _run_epoch(self, model: Any, epoch: int, *args: Any, **kwargs: Any) -> Any:
+            state = prefix_tree_state(self)
+            if state is not None:
+                # Trainer may wrap the loader to skip batches on resume. Set the
+                # epoch on the original sampler before the wrapper can iterate it.
+                state.sampler.set_epoch(epoch)
+            return super()._run_epoch(model, epoch, *args, **kwargs)
+
         def compute_loss(  # type: ignore[override]
             self, model, inputs, return_outputs=False, num_items_in_batch=None
         ):
