@@ -120,8 +120,12 @@ def _chunked_function():
                 entropies.append(entropy)
                 losses.append(token_loss)
                 correct = correct + hits
-            token_entropy = torch.cat(entropies, dim=1)
-            token_loss = torch.cat(losses, dim=1)
+            if entropies:
+                token_entropy = torch.cat(entropies, dim=1)
+                token_loss = torch.cat(losses, dim=1)
+            else:
+                token_entropy = hidden.new_empty(target.shape)
+                token_loss = total.new_empty(target.shape)
             ctx.with_grad = with_grad
             ctx.deferred_starts = deferred_starts
             if deferred_starts:
@@ -138,7 +142,7 @@ def _chunked_function():
                 ctx.scalar_denominator = denominator if tensor_denominator is None else None
                 ctx.save_for_backward(grad, hidden, target, tensor_denominator)
             elif with_grad:
-                ctx.save_for_backward(grad)
+                ctx.save_for_backward(grad if grad is not None else torch.zeros_like(hidden))
             ctx.mark_non_differentiable(token_entropy, token_loss, correct)
             return total / denominator, token_entropy, token_loss, correct
 

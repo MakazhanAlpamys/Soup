@@ -926,6 +926,8 @@ to its estimate. The usual path fills the hidden-state gradient in forward and m
 by the incoming gradient in backward. With FP16 head logits, backward holds the hidden states
 and fills their gradient by recomputing the head one chunk at a time. That extra pass applies
 loss scaling before rounding to FP16 and keeps the live logits bounded by the chunk width.
+Recomputing the head adds backward compute. The end-to-end GPU training throughput impact
+has not been measured.
 At batch size 1, 2048 tokens and hidden size 4096, two 16-bit tensors cost about 34 MB.
 
 **What it gives up.**

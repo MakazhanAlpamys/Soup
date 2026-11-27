@@ -163,6 +163,25 @@ class TestTheLossAndItsGradient:
         assert torch.isnan(_full(head, hidden, labels)) and torch.isnan(loss)
         assert int(step.labelled) == 0
 
+    def test_an_empty_sequence_returns_empty_metrics_and_gradient(self):
+        from soup_cli.utils.stream_loss_chunk import chunked_causal_lm_loss
+
+        hidden = torch.empty(2, 0, 3, requires_grad=True)
+        labels = torch.empty(2, 0, dtype=torch.long)
+
+        def head(_):
+            pytest.fail("an empty sequence must not project a chunk")
+
+        loss, step = chunked_causal_lm_loss(hidden, head, labels, 16, num_items_in_batch=1)
+        (loss * 2).backward()
+
+        assert loss.item() == 0
+        assert step.token_entropy.shape == step.token_loss.shape == labels.shape
+        assert step.labelled.item() == step.correct.item() == 0
+        assert hidden.grad is not None
+        torch.testing.assert_close(hidden.grad, torch.zeros_like(hidden))
+
+
     def test_the_gradient_scales_with_what_is_done_to_the_loss(self):
         """The stored gradient is multiplied by the incoming one, not returned
         as it is: a loss scaled by gradient accumulation scales its gradient."""
