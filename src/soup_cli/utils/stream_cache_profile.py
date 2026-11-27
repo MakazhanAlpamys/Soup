@@ -142,6 +142,36 @@ def profile_path_allowed(path: str | Path) -> bool:
     return False
 
 
+#: A profile file nests about five levels deep. The bound is checked on the raw bytes before
+#: parsing, because the C JSON parser's own recursion limit differs between platforms and
+#: Python versions.
+PROFILE_MAX_JSON_DEPTH = 32
+
+
+def _json_nesting_exceeds(raw: bytes, limit: int) -> bool:
+    """True when ``[``/``{`` nesting outside JSON strings goes deeper than ``limit``."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # quote
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x5B, 0x7B):  # [ {
+            depth += 1
+            if depth > limit:
+                return True
+        elif byte in (0x5D, 0x7D):  # ] }
+            depth -= 1
+    return False
+
+
 def _read_profiles(path: Path) -> dict[str, Any]:
     from soup_cli.utils.paths import open_no_follow
 
@@ -159,6 +189,8 @@ def _read_profiles(path: Path) -> dict[str, Any]:
             return {"version": PROFILE_VERSION, "profiles": {}}
         if len(raw) > PROFILE_MAX_BYTES:
             raise ValueError("exceeds the size limit")
+        if _json_nesting_exceeds(raw, PROFILE_MAX_JSON_DEPTH):
+            raise ValueError("JSON nesting is too deep")
         try:
             data = json.loads(raw)
         except RecursionError as error:

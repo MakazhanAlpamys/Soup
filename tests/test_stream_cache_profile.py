@@ -639,6 +639,21 @@ def test_stream_setup_names_invalid_profile_json(tmp_path, monkeypatch, raw, rea
     _assert_setup_refuses(path, reason, monkeypatch)
 
 
+def test_profile_nesting_bound_is_exact_and_ignores_brackets_inside_strings(tmp_path, monkeypatch):
+    from soup_cli.utils.stream_cache_profile import PROFILE_MAX_JSON_DEPTH, _json_nesting_exceeds
+
+    at_limit = "[" * PROFILE_MAX_JSON_DEPTH + "]" * PROFILE_MAX_JSON_DEPTH
+    assert not _json_nesting_exceeds(at_limit.encode(), PROFILE_MAX_JSON_DEPTH)
+    assert _json_nesting_exceeds(("[" + at_limit + "]").encode(), PROFILE_MAX_JSON_DEPTH)
+    quoted = json.dumps({"version": 1, "profiles": {}, "note": "[[[{{{\\\"" * 40})
+    assert not _json_nesting_exceeds(quoted.encode(), PROFILE_MAX_JSON_DEPTH)
+    # One level past the bound is refused by name, on every platform: the C JSON parser's own
+    # recursion limit is not what decides it.
+    path = tmp_path / "profile.json"
+    path.write_text("[" + at_limit + "]", encoding="utf-8")
+    _assert_setup_refuses(path, "JSON nesting is too deep", monkeypatch)
+
+
 @pytest.mark.parametrize("field, value, reason", [
     ("startup_seconds", 10**400, "cache profile timings must be finite and positive"),
     ("step_seconds", 10**400, "cache profile timings must be finite and positive"),
