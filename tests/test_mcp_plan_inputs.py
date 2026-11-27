@@ -194,6 +194,28 @@ def test_absent_input_created_after_plan_refused(project):
     _assert_refused(manager, token)
 
 
+@pytest.mark.parametrize("existing", [False, True])
+def test_stream_cache_profile_changed_after_plan_is_refused(project, existing):
+    path = project / "profile.json"
+    if existing:
+        path.write_text('{"version":1,"profiles":{}}', encoding="utf-8")
+    _write_config(
+        project,
+        "base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n  train: data.jsonl\n"
+        "training:\n  stream_layers: true\n  stream_source: disk\n  batch_size: 1\n"
+        "  stream_cache_profile: profile.json\n",
+    )
+    manager = ExecutionManager()
+    token = _plan(manager)
+    path.write_text('{"version":1,"profiles":{"key":{"updated":1,"rows":[]}}}',
+                    encoding="utf-8")
+
+    with patch("subprocess.Popen") as mock_popen, pytest.raises(ExecutionError) as exc_info:
+        manager.execute(token=token, kind="train")
+    assert str(exc_info.value) == "planned input changed; create a new plan"
+    mock_popen.assert_not_called()
+
+
 def test_hub_id_base_does_not_block_execution(project):
     _write_config(
         project,

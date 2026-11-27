@@ -873,6 +873,7 @@ PLAN_INPUT_FIELDS: tuple[str, ...] = (
     "training.mole_task_adapters",
     "training.ra_dit_retriever_model",
     "training.checkpoint_eval_tasks",
+    "training.stream_cache_profile",
     "training.eval_gate.suite",
     "training.eval_gate.baseline",
     "eval.custom_tasks",

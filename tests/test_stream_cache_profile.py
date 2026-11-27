@@ -1,6 +1,10 @@
 """Cache history must amortize setup, respect ceilings and fail safely when stale."""
 
-from dataclasses import replace
+import json
+import os
+import subprocess
+import sys
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 
 import pytest
@@ -121,6 +125,7 @@ def test_profile_identity_binds_runtime_data_and_math_but_not_job_length(tmp_pat
     import torch
 
     import soup_cli.utils.stream_cache_profile as module
+    from soup_cli.utils import layer_stream
 
     index = tmp_path / "index.json"
     index.write_text('{"model":"a"}')
@@ -133,8 +138,17 @@ def test_profile_identity_binds_runtime_data_and_math_but_not_job_length(tmp_pat
     optimizer = SimpleNamespace(defaults={"lr": .002, "foreach": False})
     properties = SimpleNamespace(name="card", uuid="GPU-test", total_memory=8 * 2**30,
                                  major=8, minor=9)
+    tool = str(tmp_path / "nvidia-smi")
+
+    def check_driver(command, **_kwargs):
+        assert command == [
+            tool, "--id=GPU-test", "--query-gpu=driver_version", "--format=csv,noheader",
+        ]
+        return "590.00\n"
+
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda *_: properties)
-    monkeypatch.setattr(module.subprocess, "check_output", lambda *_a, **_k: "590.00")
+    monkeypatch.setattr(layer_stream, "_resolve_tool", lambda name: {"nvidia-smi": tool}[name])
+    monkeypatch.setattr(module.subprocess, "check_output", check_driver)
     monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "1.0")
     key = module._runtime_identity(owner, cfg, args, index, optimizer)
     properties.uuid = "test"
@@ -150,6 +164,61 @@ def test_profile_identity_binds_runtime_data_and_math_but_not_job_length(tmp_pat
     dataset._fingerprint = "tokens-a"
     optimizer.defaults["foreach"] = True
     assert module._runtime_identity(owner, cfg, args, index, optimizer) != key
+
+
+@pytest.mark.parametrize("driver", [
+    pytest.param(None, id="only-current-directory-tool"),
+    pytest.param("", id="empty"),
+    pytest.param("N/A", id="unavailable"),
+    pytest.param("NVIDIA-SMI has failed", id="malformed"),
+    pytest.param("590.00\n590.01", id="multiple-results"),
+    pytest.param(subprocess.TimeoutExpired("nvidia-smi", 5), id="timeout"),
+    pytest.param(UnicodeError("invalid output encoding"), id="undecodable"),
+])
+def test_unavailable_driver_identity_keeps_ordinary_streaming(tmp_path, monkeypatch, driver):
+    import torch
+
+    import soup_cli.utils.stream_cache_profile as module
+
+    name = "nvidia-smi.EXE" if os.name == "nt" else "nvidia-smi"
+    tool = tmp_path / name
+    tool.write_bytes(b"")
+    tool.chmod(0o755)
+
+    def check_driver(command, **_kwargs):
+        assert driver is not None, "the current-directory tool must be ignored"
+        assert command[0] == str(tool)
+        if isinstance(driver, Exception):
+            raise driver
+        return driver
+
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda *_: SimpleNamespace(
+        uuid="GPU-test",
+    ))
+    monkeypatch.setattr(module.subprocess, "check_output", check_driver)
+    cfg = SoupConfig.model_validate(payload(stream_ram_cache_mb=1024))
+    owner = SimpleNamespace(
+        trainer=SimpleNamespace(train_dataset=SimpleNamespace(_fingerprint="tokens")),
+        _stream_runtime=SimpleNamespace(
+            tier="disk", pool=SimpleNamespace(is_cuda=True, device="cuda:0"),
+        ),
+    )
+    messages = []
+    callback = module.build_stream_cache_callback(
+        owner, cfg, index_path=tmp_path / "index.json", setup_started=0, notify=messages.append,
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "." if driver is None else str(tmp_path))
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    control = object()
+    assert callback.on_train_begin(None, SimpleNamespace(max_steps=100), control,
+                                   model=object(), optimizer=object()) is control
+    assert messages == [
+        "Stream cache profile: ordinary streaming (cache profiles require the actual GPU "
+        "driver identity)."
+    ]
+    assert not callback.recording
+    assert not hasattr(owner, "_stream_cache_profile_selection")
 
 
 @pytest.mark.parametrize("raw", ['[]', '{"version":1,"profiles":{"x":0}}'])
@@ -174,6 +243,12 @@ def test_schema_default_and_record_mode():
     )).training.stream_cache_profile_mode == "record"
     default = SoupConfig.model_validate({"base": "local", "data": {"train": "x.jsonl"}})
     assert default.training.stream_cache_profile is None
+
+
+def test_explicit_reuse_without_a_profile_keeps_the_default():
+    value = payload(stream_cache_profile_mode="reuse")
+    del value["training"]["stream_cache_profile"]
+    assert SoupConfig.model_validate(value).training.stream_cache_profile is None
 
 
 @pytest.mark.parametrize("field,value", [
@@ -460,18 +535,16 @@ def test_profile_path_must_stay_under_home_cwd_or_temp(tmp_path, monkeypatch):
         assert SoupConfig.model_validate(value).training.stream_cache_profile == str(inside)
 
 
-def test_profile_file_symlink_is_refused(tmp_path):
-    import os
-
+@pytest.mark.requires_symlink
+def test_profile_file_symlink_is_refused(tmp_path, monkeypatch):
     real_file = tmp_path / "real.json"
     real_file.write_text("{}")
     file_link = tmp_path / "profile.json"
-    try:
-        os.symlink(real_file, file_link)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
-    with pytest.raises(ValueError, match="must not be a symlink"):
+    file_link.symlink_to(real_file)
+    with pytest.raises(ValueError) as exc_info:
         load_measurements(file_link, "key")
+    assert str(exc_info.value) == f"cache profile {file_link}: cache profile must not be a symlink"
+    _assert_setup_refuses(file_link, "cache profile must not be a symlink", monkeypatch)
 
 
 def test_resident_layers_beside_auto_recompute_is_allowed_only_with_a_profile():
@@ -531,6 +604,91 @@ def test_missing_and_valid_profile_files_pass_validation(tmp_path):
     path = tmp_path / "ok.json"
     save_measurement(path, "key", rows()[0])
     validate_profile_file(path)
+
+
+def _assert_setup_refuses(path, reason, monkeypatch, *, cfg=None):
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+    from soup_cli.utils import kimi_k2
+
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setattr(kimi_k2, "load_stream_model_config", lambda *_a, **_k: pytest.fail(
+        "invalid stream cache profile reached model configuration loading",
+    ))
+    if cfg is None:
+        value = payload()
+        value["training"]["stream_cache_profile"] = str(path)
+        cfg = SoupConfig.model_validate(value)
+    setup = StreamingSetupMixin()
+    setup.device = "cpu"
+    with pytest.raises(ValueError) as exc_info:
+        setup._setup_streaming_transformers(cfg, cfg.training)
+    assert str(exc_info.value) == f"cache profile {path}: {reason}"
+
+
+@pytest.mark.parametrize("raw, reason", [
+    pytest.param(
+        "[" * (sys.getrecursionlimit() + 1) + "0" + "]" * (sys.getrecursionlimit() + 1),
+        "JSON nesting is too deep", id="deep-json",
+    ),
+    pytest.param("{bad", "Expecting property name enclosed in double quotes: line 1 column 2 "
+                 "(char 1)", id="invalid-json"),
+])
+def test_stream_setup_names_invalid_profile_json(tmp_path, monkeypatch, raw, reason):
+    path = tmp_path / "profile.json"
+    path.write_text(raw, encoding="utf-8")
+    _assert_setup_refuses(path, reason, monkeypatch)
+
+
+@pytest.mark.parametrize("field, value, reason", [
+    ("startup_seconds", 10**400, "cache profile timings must be finite and positive"),
+    ("step_seconds", 10**400, "cache profile timings must be finite and positive"),
+    ("updated", 10**400, "cache profile timestamp must be finite"),
+    ("updated", float("inf"), "cache profile timestamp must be finite"),
+])
+def test_stream_setup_and_reuse_name_invalid_profile_numbers(
+    tmp_path, monkeypatch, field, value, reason,
+):
+    path = tmp_path / "profile.json"
+    row = asdict(rows()[0])
+    entry = {"updated": 0, "rows": [row]}
+    (entry if field == "updated" else row)[field] = value
+    path.write_text(json.dumps({"version": 1, "profiles": {"key": entry}}), encoding="utf-8")
+
+    _assert_setup_refuses(path, f"entry key: {reason}", monkeypatch)
+    with pytest.raises(ValueError) as exc_info:
+        load_measurements(path, "key")
+    assert str(exc_info.value) == f"cache profile {path}: entry key: {reason}"
+
+
+def test_stream_setup_names_non_regular_profile_file(tmp_path, monkeypatch):
+    path = tmp_path / "profile.json"
+    path.mkdir()
+    _assert_setup_refuses(path, "must be a regular file", monkeypatch)
+
+
+def test_stream_setup_names_profile_path_outside_allowed_roots(tmp_path, monkeypatch):
+    import soup_cli.utils.stream_cache_profile as module
+
+    work = tmp_path / "work"
+    work.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(work)
+    expanduser = module.os.path.expanduser
+    monkeypatch.setattr(module.os.path, "expanduser", lambda path: (
+        str(tmp_path / "home") if path == "~" else expanduser(path)
+    ))
+    monkeypatch.setattr(module.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    path = work / "profile.json"
+    value = payload()
+    value["training"]["stream_cache_profile"] = str(path)
+    cfg = SoupConfig.model_validate(value)
+    monkeypatch.chdir(other)
+
+    _assert_setup_refuses(
+        path, "cache profile must stay under the home, working or temp directory", monkeypatch,
+        cfg=cfg,
+    )
 
 
 def test_reuse_with_a_malformed_history_keeps_ordinary_streaming_and_names_the_file(

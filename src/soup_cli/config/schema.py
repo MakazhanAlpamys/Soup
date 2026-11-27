@@ -4388,11 +4388,12 @@ class TrainingConfig(BaseModel):
             "RAM/GPU placement that is cheapest for the Trainer's real update count "
             "(cold startup included) inside the stream_ram_cache_mb and "
             "stream_resident_layers ceilings, and with stream_recompute='auto' it may "
-            "also keep a measured suffix of decoder layers' activations. Missing or "
-            "stale history keeps ordinary streaming and never starts a calibration "
-            "sweep; current memory admission stays mandatory. The path must stay "
-            "under the home, working or temp directory. stream_recompute='off' is "
-            "refused with it."
+            "also keep a measured suffix of decoder layers' activations. Reuse "
+            "keeps ordinary streaming when history is missing, stale or unmatched, "
+            "or when driver identity is unavailable. Existing invalid files are "
+            "refused by name during setup. Current memory admission stays mandatory. "
+            "The path must stay under the home, working or temp directory. "
+            "stream_recompute='off' is refused with it."
         ),
     )
     stream_cache_profile_mode: Literal["reuse", "record"] = Field(
@@ -4401,7 +4402,7 @@ class TrainingConfig(BaseModel):
             "With stream_cache_profile: 'record' measures two warmup and six ordinary "
             "training updates under the requested placement and saves their costs "
             "(every update still trains); 'reuse' (the default) reads matching "
-            "history without per-step timing. Refused without stream_cache_profile."
+            "history without per-step timing. Only 'record' requires stream_cache_profile."
         ),
     )
 

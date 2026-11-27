@@ -793,14 +793,18 @@ layers' activations, probed with main's own `auto` planner and then re-checked a
 
 - `stream_cache_profile_mode: record` measures two warmup and six ordinary updates under the
   placement the config requests, and writes one candidate (RAM bytes, resident layers, retained
-  layers, cold startup, seconds per update) to the JSON file. Every update still trains.
+  layers, cold startup, seconds per update) to the JSON file. It requires `stream_cache_profile`.
+  Every update still trains.
 - `stream_cache_profile_mode: reuse` (the default) reads that file, picks the candidate with the
   smallest estimated job time for the Trainer's real update count (a close call or a short job keeps
-  ordinary streaming), and re-checks current RAM and a full-shape GPU probe before applying it. A
-  missing, stale (older than 30 days) or non-matching history keeps ordinary streaming; it never
-  starts a calibration sweep. A malformed or oversize file is refused at setup with the file named.
+  ordinary streaming), and re-checks current RAM and a full-shape GPU probe before applying it.
+  Setting `reuse` without a profile path leaves profile placement disabled. Missing, stale (older
+  than 30 days) or unmatched history keeps ordinary streaming without a calibration sweep.
+- Setup names and refuses an invalid existing profile before loading the model. The profile path
+  may name a missing file or a regular file of at most 1 MiB.
 - The history is keyed to the model, dataset fingerprint, GPU, driver, library versions, optimizer
-  and batch settings, not to `epochs` or the cache ceilings.
+  and batch settings, not to `epochs` or the cache ceilings. If the GPU driver identity is
+  unavailable, training uses ordinary streaming.
 - The path must stay under your home, the working directory or the temp directory, and must not be a
   symlink. Scope: text Transformers SFT, `stream_source: disk`, explicit `batch_size`, dense
   decoders, single device, no `activation_offloading`, `stream_vram_probe`, `stream_partial_ram` or

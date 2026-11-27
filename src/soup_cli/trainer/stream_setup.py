@@ -1026,6 +1026,12 @@ class StreamingSetupMixin:
         # load, a weight resolve or a shard write.
         refuse_if_distributed_launch()
 
+        cache_profile = getattr(tcfg, "stream_cache_profile", None)
+        if cache_profile:
+            from soup_cli.utils.stream_cache_profile import validate_profile_file
+
+            validate_profile_file(cache_profile)
+
         from dataclasses import replace
 
         from peft import TaskType
@@ -1727,17 +1733,13 @@ class StreamingSetupMixin:
                 "a pageable CPU source.[/]"
             )
 
-        cache_profile = getattr(tcfg, "stream_cache_profile", None)
         cache_setup_started = None
         if cache_profile:
-            from soup_cli.utils.stream_cache_profile import validate_profile_file
-
             if self._stream_total_experts(model_config) > 1:
                 raise ValueError(
                     "training.stream_cache_profile supports dense decoders only; this base "
                     "routes over several experts. Remove training.stream_cache_profile."
                 )
-            validate_profile_file(cache_profile)
             cache_setup_started = time.perf_counter()
 
         partial_budget = None

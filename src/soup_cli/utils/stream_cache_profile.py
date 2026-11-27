@@ -11,6 +11,8 @@ import importlib.metadata
 import json
 import math
 import os
+import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -23,6 +25,13 @@ PROFILE_MAX_BYTES = 2**20
 PROFILE_MAX_AGE = 30 * 86400
 PROFILE_WARMUP = 2
 PROFILE_SAMPLES = 6
+
+
+def _is_finite_number(value: Any) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -43,10 +52,8 @@ class CacheMeasurement:
                       self.baseline_reserved, self.retained_layers):
             if type(value) is not int or value < 0:
                 raise ValueError("cache profile counts must be non-negative integers")
-        if (any(type(value) not in (int, float) for value in (
-                    self.startup_seconds, self.step_seconds,
-                )) or not math.isfinite(self.startup_seconds) or self.startup_seconds < 0
-                or not math.isfinite(self.step_seconds) or self.step_seconds <= 0):
+        if (not _is_finite_number(self.startup_seconds) or self.startup_seconds < 0
+                or not _is_finite_number(self.step_seconds) or self.step_seconds <= 0):
             raise ValueError("cache profile timings must be finite and positive")
         if (type(self.record_only_seconds) not in (int, float)
                 or not 0 <= self.record_only_seconds <= self.startup_seconds):
@@ -136,15 +143,26 @@ def profile_path_allowed(path: str | Path) -> bool:
 
 
 def _read_profiles(path: Path) -> dict[str, Any]:
-    path = _profile_path(path)
-    if not path.exists():
-        return {"version": PROFILE_VERSION, "profiles": {}}
+    from soup_cli.utils.paths import open_no_follow
+
     try:
-        with path.open("rb") as source:
-            raw = source.read(PROFILE_MAX_BYTES + 1)
+        _profile_path(path)
+        try:
+            if not stat.S_ISREG(path.lstat().st_mode):
+                raise ValueError("must be a regular file")
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+            with os.fdopen(open_no_follow(path, flags), "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise ValueError("must be a regular file")
+                raw = source.read(PROFILE_MAX_BYTES + 1)
+        except FileNotFoundError:
+            return {"version": PROFILE_VERSION, "profiles": {}}
         if len(raw) > PROFILE_MAX_BYTES:
             raise ValueError("exceeds the size limit")
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except RecursionError as error:
+            raise ValueError("JSON nesting is too deep") from error
         if (not isinstance(data, dict) or data.get("version") != PROFILE_VERSION
                 or not isinstance(data.get("profiles"), dict)
                 or len(data["profiles"]) > 64):
@@ -154,22 +172,29 @@ def _read_profiles(path: Path) -> dict[str, Any]:
     return data
 
 
-def _rows_from_entry(entry: Any) -> list[CacheMeasurement]:
-    if (not isinstance(entry, dict) or type(entry.get("updated")) not in (int, float)
-            or "rows" not in entry):
-        raise ValueError("invalid cache profile entry")
-    if not isinstance(entry["rows"], list) or len(entry["rows"]) > 16:
-        raise ValueError("invalid cache profile candidate list")
+def _parse_profile_entry(
+    path: str | Path, identity: str, entry: Any,
+) -> tuple[float, list[CacheMeasurement]]:
     try:
-        rows = [CacheMeasurement(**{
-            **row, "ram_indices": tuple(row["ram_indices"]),
-            "gpu_indices": tuple(row["gpu_indices"]),
-        }) for row in entry["rows"]]
-    except (KeyError, TypeError) as error:
-        raise ValueError(f"invalid cache profile candidate ({type(error).__name__})") from error
-    if len({row.placement for row in rows}) != len(rows):
-        raise ValueError("duplicate cache profile candidate")
-    return rows
+        if not isinstance(entry, dict) or "updated" not in entry or "rows" not in entry:
+            raise ValueError("invalid cache profile entry")
+        updated = entry["updated"]
+        if not _is_finite_number(updated):
+            raise ValueError("cache profile timestamp must be finite")
+        if not isinstance(entry["rows"], list) or len(entry["rows"]) > 16:
+            raise ValueError("invalid cache profile candidate list")
+        try:
+            rows = [CacheMeasurement(**{
+                **row, "ram_indices": tuple(row["ram_indices"]),
+                "gpu_indices": tuple(row["gpu_indices"]),
+            }) for row in entry["rows"]]
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"invalid cache profile candidate ({type(error).__name__})") from error
+        if len({row.placement for row in rows}) != len(rows):
+            raise ValueError("duplicate cache profile candidate")
+    except ValueError as error:
+        raise ValueError(f"cache profile {path}: entry {identity[:12]}: {error}") from error
+    return updated, rows
 
 
 def validate_profile_file(path: str | Path) -> None:
@@ -177,24 +202,17 @@ def validate_profile_file(path: str | Path) -> None:
 
     A missing file is fine (nothing recorded yet). Every refusal names the file.
     """
-    data = _read_profiles(Path(path))
-    for identity, entry in data["profiles"].items():
-        try:
-            _rows_from_entry(entry)
-        except ValueError as error:
-            raise ValueError(f"cache profile {path}: entry {identity[:12]}: {error}") from error
+    for identity, entry in _read_profiles(Path(path))["profiles"].items():
+        _parse_profile_entry(path, identity, entry)
 
 
 def load_measurements(path: str | Path, identity: str) -> list[CacheMeasurement]:
-    entry = _read_profiles(Path(path))["profiles"].get(identity)
-    if entry is None:
+    profiles = _read_profiles(Path(path))["profiles"]
+    if identity not in profiles:
         return []
-    if not isinstance(entry, dict) or type(entry.get("updated")) not in (int, float):
-        raise ValueError("invalid cache profile entry")
-    age = time.time() - entry["updated"]
-    if not math.isfinite(age) or not -300 <= age <= PROFILE_MAX_AGE:
-        return []
-    return _rows_from_entry(entry)
+    updated, rows = _parse_profile_entry(path, identity, profiles[identity])
+    age = time.time() - updated
+    return rows if -300 <= age <= PROFILE_MAX_AGE else []
 
 
 def save_measurement(path: str | Path, identity: str, row: CacheMeasurement) -> None:
@@ -241,6 +259,22 @@ def save_measurement(path: str | Path, identity: str, row: CacheMeasurement) -> 
             temporary.unlink(missing_ok=True)
 
 
+def _read_driver_version(uuid: str) -> str | None:
+    from soup_cli.utils.layer_stream import _resolve_tool
+
+    tool = _resolve_tool("nvidia-smi")
+    if tool is None:
+        return None
+    try:
+        driver = subprocess.check_output(
+            [tool, f"--id={uuid}", "--query-gpu=driver_version", "--format=csv,noheader"],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+    return driver if re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", driver) else None
+
+
 def _runtime_identity(
     owner: Any, cfg: Any, args: Any, index_path: Path, optimizer: Any,
 ) -> str:
@@ -258,13 +292,9 @@ def _runtime_identity(
         raise ValueError("cache profiles require a stable GPU UUID")
     if not uuid.startswith(("GPU-", "MIG-")):
         uuid = "GPU-" + uuid
-    try:
-        driver = subprocess.check_output(
-            ["nvidia-smi", f"--id={uuid}", "--query-gpu=driver_version", "--format=csv,noheader"],
-            text=True, timeout=5, stderr=subprocess.DEVNULL,
-        ).strip()
-    except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError("cache profiles require the actual GPU driver identity") from error
+    driver = _read_driver_version(uuid)
+    if driver is None:
+        raise ValueError("cache profiles require the actual GPU driver identity")
     from soup_cli.utils.stream_ram_cache import available_memory
 
     ram = available_memory()
