@@ -8,8 +8,9 @@ import sys
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 err_console = Console(stderr=True)
@@ -42,16 +43,18 @@ def search(
 
     fmt = format.lower()
     if fmt not in ("table", "json"):
-        fmt_term = for_terminal(format)
         err_console.print(
-            f"[bold red]Error:[/bold red] Unknown --format: '{fmt_term}'. Choose 'table' or 'json'."
+            Text.assemble(
+                ("Error:", "bold red"),
+                f" Unknown --format: '{strip_control(format)}'. Choose 'table' or 'json'.",
+            )
         )
         raise typer.Exit(code=2)
 
     try:
         results = search_docs(query, top_k=top_k)
     except (RuntimeError, ValueError, FileNotFoundError, OSError) as err:
-        err_console.print(f"[bold red]Error:[/bold red] {for_terminal(str(err))}")
+        err_console.print(Text.assemble(("Error:", "bold red"), " ", strip_control(err)))
         raise typer.Exit(code=1)
 
     if fmt == "json":
@@ -59,11 +62,18 @@ def search(
         return
 
     if not results:
-        q_term = for_terminal(query)
-        console.print(f"[dim]No matching documentation found for:[/dim] [italic]{q_term}[/italic]")
+        console.print(
+            Text.assemble(
+                ("No matching documentation found for:", "dim"),
+                " ",
+                (strip_control(query), "italic"),
+            )
+        )
         return
 
-    table = Table(title=f"Documentation Search: '{for_terminal(query)}'")
+    table = Table(
+        title=Text(f"Documentation Search: '{strip_control(query)}'", style="table.title")
+    )
     table.add_column("Doc", style="cyan", no_wrap=True)
     table.add_column("Section", style="bold green")
     table.add_column("Score", style="yellow", justify="right")
@@ -74,10 +84,10 @@ def search(
         if len(excerpt) > 120:
             excerpt = excerpt[:117] + "..."
         table.add_row(
-            for_terminal(r.get("doc_name", "")),
-            for_terminal(r.get("section", "")),
+            Text(strip_control(r.get("doc_name", ""))),
+            Text(strip_control(r.get("section", ""))),
             f"{r.get('score', 0.0):.4f}",
-            for_terminal(excerpt),
+            Text(strip_control(excerpt)),
         )
 
     console.print(table)
