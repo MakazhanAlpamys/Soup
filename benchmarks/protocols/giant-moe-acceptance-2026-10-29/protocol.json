@@ -4,7 +4,7 @@
   "authorization": "The eight-fragment paired loss and perplexity protocol was approved before measurement on 2026-10-29. Final acceptance requires external review.",
   "model": "deepseek-ai/DeepSeek-V3",
   "model_revision": "e815299b0bcbac849fa540c768ef21845365c9eb",
-  "evaluation_data_sha256": "bfd83091425d7ef2292aa7502ffbd6ee9f42291c1b5e234d945098aab77faa75",
+  "evaluation_data_sha256": "5bf15fd1b4296f0c89eb33ae8fb9c363816ab3d9832b0c5f17c84f9d5e800d19",
   "example_ids": [
     "wikitext2-test-row-260",
     "wikitext2-test-row-711",
