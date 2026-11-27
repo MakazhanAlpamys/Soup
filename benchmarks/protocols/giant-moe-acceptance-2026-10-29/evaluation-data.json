@@ -1,9 +1,10 @@
 {
   "version": 1,
-  "dataset": "WikiText",
+  "dataset": "Salesforce/wikitext",
   "config": "wikitext-2-raw-v1",
   "split": "test",
   "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+  "source_url": "https://huggingface.co/datasets/Salesforce/wikitext/resolve/b08601e04326c79dfdd32d625aee71d232d685c3/wikitext-2-raw-v1/test-00000-of-00001.parquet",
   "source_parquet_sha256": "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91",
   "selection": "Eligible rows: >=512 stripped characters, not heading (=). In original test order choose eligible-list positions floor((i+0.5)*N/8), i=0..7; preserve original text; tokenize with truncation max_length=64.",
   "examples": [
