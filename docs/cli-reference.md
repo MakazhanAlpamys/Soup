@@ -70,7 +70,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup data`](#soup-data) | Dataset tools: inspect, convert, merge, dedup, validate, stats. |
 | [`soup delinearize-llama4`](#soup-delinearize-llama4) | Delinearize Llama 4 fused expert weights to 3-D form. |
 | [`soup deploy`](#soup-deploy) | Deploy models: Ollama integration (deploy, list, remove). |
-| [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0). |
+| [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination / citation (v0.56.0; citation v0.71.10). |
 | [`soup diff`](#soup-diff) | Compare outputs of two models side-by-side on the same prompts. |
 | [`soup distill-prompt`](#soup-distill-prompt) | Distill prompt-heavy traces into a small FT plan (v0.68.0). |
 | [`soup docs`](#soup-docs) | Documentation search &amp; offline reference guides. |
@@ -1396,6 +1396,10 @@ Usage: `soup data leakage [OPTIONS]`
 | `--eval` | text |  | yes | Evaluation JSONL under cwd. |
 | `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
 | `--json` | flag | off |  | Print a machine-readable JSON report. |
+| `--near-duplicates` | flag | off |  | Look for lexical near-duplicates with the optional data extra. |
+| `--threshold` | text |  |  | Minimum Jaccard score, greater than 0 and at most 1 (default 0.8). |
+| `--permutations` | text |  |  | MinHash permutations, 16 to 256 (default 128). |
+| `--seed` | text |  |  | MinHash seed, 0 to 4294967295 (default 1). |
 
 ### `soup data lint`
 
@@ -1752,7 +1756,7 @@ Usage: `soup deploy ollama [OPTIONS]`
 
 ## `soup diagnose`
 
-Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0).
+Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination / citation (v0.56.0; citation v0.71.10).
 
 Usage: `soup diagnose [OPTIONS] RUN_ID`
 
@@ -1765,8 +1769,8 @@ Usage: `soup diagnose [OPTIONS] RUN_ID`
 | `--output`, `-o` | text |  |  | Write the report JSON to this path. |
 | `--badge` | text |  |  | Write an SVG badge to this path. |
 | `--attach-to-registry` | text |  |  | Attach the --output report to a registry entry id (needs --output). Exits 1 when the attach fails. |
-| `--base-model` | text |  |  | Base model id to LOAD for a live diagnose run (e.g. HuggingFaceTB/SmolLM2-135M). When set, the 6 probes run live against the model instead of emitting neutral scores. |
-| `--dataset` | text |  |  | Training JSONL for live format / memorization / citation probes (must stay under cwd). |
+| `--base-model` | text |  |  | Base model id to LOAD for a live diagnose run (e.g. HuggingFaceTB/SmolLM2-135M). When set, the report's probes run live against the model instead of emitting neutral scores; format, mode_collapse, memorization and citation need --dataset, and citation only RAFT-shaped rows. |
+| `--dataset` | text |  |  | Training JSONL for live format / mode_collapse / memorization / citation probes (must stay under cwd). |
 | `--holdout` | text |  |  | Held-out evaluation JSONL for the live forgetting probe (must stay under cwd; falls back to built-in general prompts if unset). |
 | `--tokenizer` | text |  |  | Tokenizer id/path for a sub-word memorization probe (live). |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
@@ -2317,7 +2321,7 @@ Usage: `soup eval leaderboard [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--sort-by`, `-s` | text |  |  | Sort by specific benchmark (default: average) |
+| `--sort-by`, `-s` | text |  |  | Sort the table, JSON and CSV rows by one benchmark (default: average) |
 | `--format`, `-f` | text | `table` |  | Output format: table, json, csv |
 
 ### `soup eval lock`
@@ -2813,7 +2817,7 @@ Usage: `soup loop prune [OPTIONS]`
 |---|---|---|---|---|
 | `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
 | `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
-| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); `versions.jsonl` always retains at least 20 rollback transitions. |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
 
 ### `soup loop replay`
 
@@ -2824,7 +2828,7 @@ Usage: `soup loop replay [OPTIONS] [ITERATION_ID]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `ITERATION_ID` | text |  |  | Iteration id (omit to list all). |
-| `--extract` | text |  |  | Extract the iteration's .can to this directory for a what-if re-run (v0.71.4). |
+| `--extract` | text |  |  | Extract the given iteration's .can to this directory for a what-if re-run (needs the iteration ID; v0.71.4). |
 
 ### `soup loop resume`
 
@@ -2911,7 +2915,7 @@ Usage: `soup mcp runs reconcile [OPTIONS]`
 
 ### `soup mcp serve`
 
-Start the MCP server (read-only tools by default).
+Start the MCP server (ungated tools available by default).
 
 Usage: `soup mcp serve [OPTIONS]`
 
@@ -3604,7 +3608,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank` | text |  |  | Path to a VeRA / VB-LoRA vector bank (JSON). Multi-tenant LoRA serving at MB-per-user: the per-token delta is v_u ⊙ Px, routed by the X-User-Id request header. Requires --backend transformers. (v0.71.12 #221) |
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
-| `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
+| `--kv-cache-type` | text |  |  | KV-cache type for decoding, on --backend transformers only: q8_0 (8-bit quantized cache, needs hqq), bf16 or f16 (cache dtype). fp8 is refused on every backend, Hopper GPUs included, and every other backend refuses this option. v0.71.14 (#140). |
 | `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
@@ -3789,7 +3793,7 @@ Usage: `soup train [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--name`, `-n` | text |  |  | Experiment name (auto-generated if not set) |
-| `--dry-run` | flag | off |  | Validate config and data without training |
+| `--dry-run` | flag | off |  | Validate config and data without training. Cannot be combined with --find-lr. |
 | `--resume`, `-r` | text |  |  | Resume from checkpoint: path to checkpoint dir ('auto' for latest); on the MLX backend, a path to a .safetensors adapter file instead. Not supported when training.relora_steps is configured, for task: unlearn or task: ppo, and on backend: mlx for a full fine-tune (lora.r: 0) or task: grpo |
 | `--wandb` | flag | off |  | Enable Weights &amp; Biases logging |
 | `--tensorboard` | flag | off |  | Enable TensorBoard logging (logs to output_dir/runs/) |
@@ -3835,6 +3839,7 @@ Usage: `soup train [OPTIONS]`
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
+| `--result-json` | flag | off |  | Emit a machine-readable dry-run result (preview). |
 
 ## `soup tui`
 

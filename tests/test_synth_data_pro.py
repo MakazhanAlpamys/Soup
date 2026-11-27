@@ -1116,19 +1116,18 @@ class TestPathWithinCwd:
         outside = tmp_path.resolve()
         assert _path_within_cwd(outside, cwd) is False
 
-    def test_absolute_path_outside_cwd(self):
-        """Absolute path to system directory should return False."""
-        from pathlib import Path
-
+    def test_absolute_path_outside_cwd(self, tmp_path):
+        """An absolute path in a sibling directory is outside cwd."""
         from soup_cli.commands.generate import _path_within_cwd
 
-        cwd = Path.cwd().resolve()
-        # /tmp or C:\Windows are outside typical cwd
-        system_path = Path("/tmp/exfil.jsonl").resolve()
-        # This may or may not be within cwd depending on where tests run,
-        # but the function itself should work correctly
-        result = _path_within_cwd(system_path, cwd)
-        assert isinstance(result, bool)
+        cwd = tmp_path / "work"
+        sibling = tmp_path / "other"
+        cwd.mkdir()
+        sibling.mkdir()
+        outside = (sibling / "data.jsonl").resolve()
+
+        assert _path_within_cwd(outside, cwd.resolve()) is False
+        assert _path_within_cwd((cwd / outside.name).resolve(), cwd.resolve()) is True
 
 
 class TestOutputPathSanitization:

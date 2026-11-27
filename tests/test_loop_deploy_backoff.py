@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from soup_cli.utils import loop_stages
 from soup_cli.utils.loop_daemon import WatchConfig, run_once
-from soup_cli.utils.loop_retry import DEPLOY_FAILURE_FINGERPRINT
+from soup_cli.utils.loop_retry import DEPLOY_FAILURE_FINGERPRINT, deploy_failure_after
 from soup_cli.utils.loop_state import LoopState, read_state, write_state
 
 CURSOR = 1_800_000_000.0
@@ -277,6 +278,114 @@ def test_restarted_daemon_deploys_saved_candidate_when_server_recovers(tmp_path,
     assert state.failed_deploy is None
     assert state.attempt_cursor_ts == CURSOR
     assert calls == {"cost": 2, "harvest": 1, "train": 1, "deploy": 2}
+
+
+def test_restarted_deploy_waits_for_endpoint_and_keeps_same_candidate(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.commands.loop import app
+
+    monkeypatch.chdir(tmp_path)
+    path = str(tmp_path / ".soup" / "loop.yaml")
+    endpoint = "http://127.0.0.1:8000"
+    monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", endpoint)
+    loaded = []
+    replies = iter([(503, "serve restarting"), (200, "")])
+
+    def load_adapter(url, name, adapter_path):
+        loaded.append((url, name, adapter_path))
+        return next(replies)
+
+    monkeypatch.setattr(loop_stages, "_LOAD_POSTER", load_adapter)
+    config = WatchConfig(
+        state_path=path,
+        iteration_dir=str(tmp_path / ".soup-loops"),
+        harvest_fn=lambda _: {"pairs_harvested": 3, "cursor_ts": CURSOR},
+        train_fn=lambda *_: {"run_id": "run-1", "adapter_path": "out/a1"},
+        gate_fn=lambda *_: {"gate_verdict": "OK"},
+        deploy_fn=loop_stages.deploy_to_canary,
+        cost_fn=lambda _: 0.0,
+    )
+    original = LoopState(
+        served_model="base", eval_suite="e.json", baseline="b", status="running",
+        harvest_cursor_ts=CURSOR - 2, attempt_cursor_ts=CURSOR - 1,
+    )
+    start = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
+    refused, _, _ = run_once(original, config, now=start)
+    assert refused.pending_deploy is not None
+    assert refused.failed_deploy["attempts"] == 1
+    write_state(refused, path)
+    monkeypatch.delenv("SOUP_LOOP_SERVE_ENDPOINT")
+
+    for minute in (5, 10):
+        waiting, record, decision = run_once(
+            read_state(path), config, now=start + timedelta(minutes=minute),
+        )
+        assert waiting.pending_deploy == refused.pending_deploy
+        assert waiting.failed_deploy == refused.failed_deploy
+        assert waiting.attempt_cursor_ts == original.attempt_cursor_ts
+        assert waiting.harvest_cursor_ts == original.harvest_cursor_ts
+        assert waiting.iteration_count == refused.iteration_count
+        assert not decision.proceed
+        assert "SOUP_LOOP_SERVE_ENDPOINT" in record.notes
+        assert len(loaded) == 1
+        write_state(waiting, path)
+
+    status = CliRunner().invoke(app, ["status"])
+    assert status.exit_code == 0, status.output
+    assert "pending_deploy" in _plain(status.output)
+    assert "no SOUP_LOOP_SERVE_ENDPOINT configured" in _plain(status.output)
+
+    monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", endpoint)
+    recovered, record, _ = run_once(
+        read_state(path), config, now=start + timedelta(minutes=11),
+    )
+    assert record.shipped
+    assert record.iteration_id == refused.pending_deploy["iteration_id"]
+    assert loaded == [(endpoint, "a1", str(tmp_path / "out" / "a1"))] * 2
+    assert recovered.pending_deploy is None and recovered.failed_deploy is None
+    assert recovered.attempt_cursor_ts == CURSOR
+    assert recovered.harvest_cursor_ts == original.harvest_cursor_ts
+
+
+@pytest.mark.parametrize("deployment_configured", [False, True])
+def test_new_candidate_does_not_inherit_orphaned_deploy_failure(
+    tmp_path, monkeypatch, deployment_configured,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SOUP_LOOP_SERVE_ENDPOINT", raising=False)
+    monkeypatch.setattr(loop_stages, "_LOAD_POSTER", lambda *_: (503, "serve restarting"))
+    if deployment_configured:
+        monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", "http://127.0.0.1:8000")
+    start = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
+    stale = deploy_failure_after(None, start - timedelta(minutes=45), "previous candidate")
+    stale = deploy_failure_after(stale, start - timedelta(minutes=40), "previous candidate")
+    original = LoopState(
+        served_model="base", eval_suite="e.json", baseline="b", status="running",
+        failed_deploy=stale if deployment_configured else None,
+    )
+    config = WatchConfig(
+        state_path=str(tmp_path / ".soup" / "loop.yaml"),
+        iteration_dir=str(tmp_path / ".soup-loops"),
+        harvest_fn=lambda _: {"pairs_harvested": 3, "cursor_ts": CURSOR},
+        train_fn=lambda *_: {"run_id": "run-new", "adapter_path": "out/new"},
+        gate_fn=lambda *_: {"gate_verdict": "OK"},
+        deploy_fn=loop_stages.deploy_to_canary,
+        cost_fn=lambda _: 0.0,
+    )
+
+    state, record, decision = run_once(original, config, now=start)
+
+    assert decision.proceed and not record.shipped
+    if deployment_configured:
+        assert state.pending_deploy["train"]["run_id"] == "run-new"
+        assert state.pending_deploy["attempts"] == state.failed_deploy["attempts"] == 1
+        assert state.failed_deploy["retry_after"] == "2026-11-23T12:05:00+00:00"
+        assert state.attempt_cursor_ts is None
+    else:
+        assert state.pending_deploy is None and state.failed_deploy is None
+        assert state.attempt_cursor_ts == CURSOR
+        assert "no SOUP_LOOP_SERVE_ENDPOINT configured" in record.notes
 
 
 def test_resume_clears_deploy_hold_but_keeps_candidate(tmp_path, monkeypatch):

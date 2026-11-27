@@ -203,6 +203,7 @@
     "training.online_dpo_max_new_tokens": 64,
     "training.optimizer": "adamw_torch",
     "training.orpo_beta": 0.1,
+    "training.packed_lora": null,
     "training.packing": false,
     "training.packing_cross_doc_attn_mask": false,
     "training.parallelism": "data",
@@ -650,6 +651,21 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 0.0002
+    },
+    "glm-5-grpo": {
+      "base": "zai-org/GLM-5",
+      "data.format": "auto",
+      "data.max_length": 8192,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
     },
     "glm-5-sft": {
       "base": "zai-org/GLM-5",

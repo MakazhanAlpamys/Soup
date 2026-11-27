@@ -303,7 +303,11 @@ class TestRetiredBeta:
                 with pytest.warns(SoupConfigDeprecationWarning) as record:
                     got = _step(control[:n], treatment[:n], beta=beta)
                 assert got == want, (beta, n)
-                message = str(record[0].message)
+                message = next(
+                    str(item.message)
+                    for item in record
+                    if issubclass(item.category, SoupConfigDeprecationWarning)
+                )
                 assert message.startswith("beta no longer does anything (#1418)")
                 assert "lower alpha" in message and "will refuse it" in message
 

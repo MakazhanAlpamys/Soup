@@ -145,8 +145,9 @@ EXPECTED_LOCAL_ONLY = frozenset({
     "node_rank",
     "master_addr",
     "master_port",
-    # Plan-only: the multi-GPU path skips re-exec entirely.
+    # Dry-run preflights stay in the calling process.
     "dry_run",
+    "result_json",
     # Early-return before any launch.
     "find_lr",
     "find_lr_start",

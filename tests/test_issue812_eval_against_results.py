@@ -107,6 +107,27 @@ def test_named_soup_eval_results_are_directly_comparable(metric):
     assert payload["source_metric"] == metric
 
 
+@pytest.mark.parametrize(
+    "legacy_run", [None, "run-base", "run-candidate"],
+    ids=["current", "legacy-baseline", "legacy-candidate"],
+)
+def test_judge_gate_resolves_redacted_url_labels(legacy_run):
+    metric = "judge:https://fixture-user:fixture-password@judge.example.invalid/model"
+    label = "judge:https://judge.example.invalid/model"
+    _save_score("run-base", metric if legacy_run == "run-base" else label, 0.75)
+    _save_score("run-candidate", metric if legacy_run == "run-candidate" else label, 0.50)
+    result = _against(
+        "run-base", "--candidate", "run-candidate", "--metric", metric, "--json-only",
+    )
+    output = strip_ansi(result.stdout)
+    assert result.exit_code == 2, (output, repr(result.exception))
+    assert "fixture-user" not in output
+    assert "fixture-password" not in output
+    payload = json.loads(output)
+    assert payload["metric"] == payload["source_metric"] == label
+    assert payload["offenders"] == [label]
+
+
 def test_unknown_metric_is_usage_error_before_tracker_initialization(monkeypatch):
     import soup_cli.experiment.tracker as tracker_module
 

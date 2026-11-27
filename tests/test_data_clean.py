@@ -683,3 +683,126 @@ def test_cli_clean_json_keeps_the_unknown_format_warning_on_stderr(
     assert payload["total_scanned"] == 2
     assert "not in a recognised format" in _strip_ansi(result.stderr)
     assert "not in a recognised format" not in result.stdout
+
+
+# --- #3363: rows the loader skips are counted -------------------------------------
+
+
+def _alpaca_line(instruction: str) -> str:
+    return json.dumps({"instruction": instruction, "input": "", "output": f"{instruction} answer"})
+
+
+def _write_lines(path: Path, lines: list[str]) -> Path:
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _skipped_file(directory: Path) -> Path:
+    """Three alpaca rows, one invalid JSON line and one JSON array line (5 lines)."""
+    return _write_lines(
+        directory / "bad.jsonl",
+        [
+            _alpaca_line("first"),
+            _alpaca_line("second"),
+            "not json",
+            '["a list row"]',
+            _alpaca_line("third"),
+        ],
+    )
+
+
+class TestSkippedRows:
+    def test_panel_shows_skipped_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        bad = _skipped_file(tmp_path)
+        out = tmp_path / "out.jsonl"
+
+        result = runner.invoke(
+            app, ["data", "clean", str(bad), "-o", str(out)], env={"COLUMNS": "200"}
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        text = _strip_ansi(result.output)
+        assert "Scanned: 3 rows | Skipped: 2 | Modified: 0 | Dropped: 0 | Clean: 3" in text
+        assert len(out.read_text(encoding="utf-8").splitlines()) == 3
+
+    def test_json_counts_skipped_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        bad = _skipped_file(tmp_path)
+
+        result = runner.invoke(
+            app, ["data", "clean", str(bad), "-o", str(tmp_path / "out.jsonl"), "--json"]
+        )
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        payload = json.loads(result.stdout)
+        assert payload["skipped_rows"] == 2
+        assert payload["output_rows"] == 3
+        assert payload["total_scanned"] == 3
+        # Skipped rows are not rows a cleaning rule dropped.
+        assert payload["total_dropped"] == 0
+
+    def test_json_array_non_object_entry_is_counted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        array_file = tmp_path / "rows.json"
+        array_file.write_text(
+            "[" + _alpaca_line("only") + ", 5]", encoding="utf-8"
+        )
+
+        result = runner.invoke(app, ["data", "clean", str(array_file), "--dry-run", "--json"])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        payload = json.loads(result.stdout)
+        assert payload["skipped_rows"] == 1
+        assert payload["output_rows"] == 1
+
+    @pytest.mark.parametrize("extra", [[], ["--json"]])
+    def test_all_rows_skipped_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str]
+    ):
+        monkeypatch.chdir(tmp_path)
+        all_bad = _write_lines(tmp_path / "allbad.jsonl", ["not json", '["a list row"]'])
+
+        result = runner.invoke(app, ["data", "clean", str(all_bad), *extra])
+
+        assert result.exit_code == 1
+        text = _strip_ansi(result.output)
+        assert "no object rows remain: 2 row(s) skipped (listed above)" in text
+        assert "Dataset is empty" not in text
+
+    def test_clean_file_has_no_skipped_rows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        good = _write_lines(
+            tmp_path / "good.jsonl", [_alpaca_line(n) for n in ("one", "two", "three")]
+        )
+
+        as_json = runner.invoke(app, ["data", "clean", str(good), "--dry-run", "--json"])
+        assert as_json.exit_code == 0, (as_json.output, repr(as_json.exception))
+        payload = json.loads(as_json.stdout)
+        assert payload["skipped_rows"] == 0
+        assert payload["total_scanned"] == 3
+        assert payload["output_rows"] == 3
+
+        panel = runner.invoke(
+            app, ["data", "clean", str(good), "--dry-run"], env={"COLUMNS": "200"}
+        )
+        assert panel.exit_code == 0, (panel.output, repr(panel.exception))
+        text = _strip_ansi(panel.output)
+        assert "Scanned: 3 rows | Modified: 0 | Dropped: 0 | Clean: 3" in text
+        assert "Skipped" not in text
+
+    def test_empty_file_still_says_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("", encoding="utf-8")
+
+        result = runner.invoke(app, ["data", "clean", str(empty)])
+
+        assert result.exit_code == 1
+        text = _strip_ansi(result.output)
+        assert "Dataset is empty." in text
+        assert "no object rows remain" not in text

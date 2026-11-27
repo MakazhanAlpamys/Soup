@@ -141,7 +141,10 @@ def list_cmd(
         None, "--task", help="Filter by training task."
     ),
     limit: int = typer.Option(
-        100, "--limit", "-l", help="Maximum number of entries to show."
+        100,
+        "--limit",
+        "-l",
+        help="Maximum number of entries to show (1-1000; out-of-range values are clamped).",
     ),
 ) -> None:
     """List registry entries."""
@@ -222,7 +225,7 @@ def show_cmd(
                 art_table.add_row(
                     escape(art["kind"]),
                     Text(strip_control(art["path"])),
-                    f"{art['size_bytes'] / 1024 / 1024:.1f} MB"
+                    f"{art['size_bytes'] / 1024 / 1024:.1f} MiB"
                     if art["size_bytes"] > 1024 * 1024
                     else f"{art['size_bytes']} B",
                     escape(art["sha256"][:16]),
@@ -247,7 +250,10 @@ def show_cmd(
 def search_cmd(
     query: str = typer.Argument(..., help="Keyword to search for"),
     limit: int = typer.Option(
-        50, "--limit", "-l", help="Maximum number of matching entries to show."
+        50,
+        "--limit",
+        "-l",
+        help="Maximum number of matching entries to show (1-500; out-of-range values are clamped).",
     ),
 ) -> None:
     """Search registry entries by name/base/task/notes."""

@@ -278,9 +278,19 @@ A task `name` must also be non-empty and free of NUL characters; a suite with
 such a name is refused at load time (`soup eval gate` exits `3`), before any
 model setup or verdict.
 
-Each task's `threshold` is a numeric cutoff in the existing 0–1000 range.
+Each task's `threshold` must be a finite number from 0 to 1000 inclusive.
 `soup eval gate` refuses YAML booleans such as `false` and `true` before model
 construction; use numeric `0` when a zero cutoff is intended.
+
+When you edit a loaded suite through the SDK, `run_gate` applies the same
+threshold rules and checks any supplied `scorer`. Use `exact`, `contains`,
+`answer`, `regex` or `semantic`. An invalid value raises `ValueError` before
+any task runs.
+
+For a `type: custom` task, set `tasks` to a JSONL file under the current
+working directory. Relative paths start from the working directory where you
+run Soup. If the path resolves outside it, the task fails without reading the
+file or generating answers, even if you assigned the path after loading the suite.
 
 The `run_gate` SDK refuses a non-finite `regression_threshold` with a named
 `ValueError` before generation. Finite tolerances retain their absolute-value
@@ -383,7 +393,8 @@ Each JSONL row's text is read from `output`, `response` or `text`. A file in whi
 # Neutral report (no model load — runs as a sanity check)
 soup diagnose my-run-id
 
-# LIVE (v0.71.7): load the model and run all six probes for real
+# LIVE (v0.71.7): load the model and run the probes for real (format, mode_collapse,
+# memorization and citation need --dataset; citation only RAFT-shaped rows)
 soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M \
     --adapter ./out --dataset train.jsonl --tokenizer HuggingFaceTB/SmolLM2-135M
 
@@ -414,11 +425,12 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 when it fails (unknown or ambiguous entry, unreadable registry), with the report left on disk,
 and exits 3 before anything runs when the flag is given without `--output`.
 
-**Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
-(+ optional `--adapter` LoRA path, `--dataset` for format / memorization / citation probes,
+**Live runners (v0.71.7).** With `--base-model` the report's probes run against the loaded model
+(+ optional `--adapter` LoRA path, `--dataset` for format / mode_collapse / memorization / citation probes,
 `--holdout` for the forgetting probe using the first 12 usable rows and falling back to built-in general prompts if unset,
 `--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
+`citation` only scores RAFT-shaped rows;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
 The memorization probe measures clipped completion-bigram precision against the held-out suffix,
 so its 64-token live generation limit does not dilute the overlap score for long training rows.
@@ -726,7 +738,7 @@ CPU-instant):
 |-------|----------------|--------|
 | `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
 | `mini_tool_call` | function selection still works (right tool named, or exact `NO_TOOL` when no call is needed) | `tool_call_name_match` + exact abstention |
-| `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
+| `mini_format_json` | the JSON shape each prompt asks for: key names, value types, array length, exact keys (#1192) | JSON object/array extraction + per-row `expect` shape |
 | `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
 | `mini_over_refusal` | benign prompts are NOT refused (over-refusal = regression) | refusal heuristic (inverse) |
 
@@ -1434,8 +1446,8 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   `A-Z a-z 0-9 _ . -` and must start with a letter or digit. The file's SHA-256 is
   pinned in the ledger; if a registered file later changes, the run is refused (exit
   `3`) with a message naming the task and both hashes, because a silently swapped
-  control set would fake retention. Register the new file under a new task name
-  instead. The same name with the same bytes is a no-op, or updates the stored path if
+  control set would fake retention. Restore the exact original bytes to keep using that
+  ledger. The same name with the same bytes is a no-op, or updates the stored path if
   you moved the file: pass `--add-task NAME=NEWPATH` (a missing control file is refused
   with exactly that hint). The file is read once and the bytes that are hashed are the
   bytes that are parsed.
@@ -1458,6 +1470,13 @@ soup eval retention --model ./base --adapter ./out/v3 --label v3 \
   lost or reset ledger makes every task new, so nothing can regress and the run exits
   `0`; in CI pass the flag so that cannot pass silently. Without the flag a run with no
   earlier version prints a warning that names it.
+
+**Correcting a registered control file.** You can add a control under a new task name
+once all original controls match their registered bytes and pass validation. The ledger
+keeps checking every original control. To replace an unusable control, fix or remove
+any invalid rows, such as those with missing, null or blank `expected` values. Start
+a fresh `--ledger NEW.json`, register the controls with `--add-task`, and establish
+the first baseline with `--record` and without `--require-history`.
 
 **Loading the model.** The candidate is loaded the way `soup ship` loads one, with
 the same helpers: native bfloat16 on capable CUDA cards, float16 on older CUDA cards,

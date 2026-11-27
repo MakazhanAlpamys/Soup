@@ -1052,7 +1052,7 @@ def test_the_train_command_records_failures_through_the_guarded_helper():
 
     source = inspect.getsource(train_command)
     assert source.count("tracker.fail_run(") == 1  # the one inside _record_run_failure
-    assert source.count("_record_run_failure(tracker, run_id, exc)") == 2
+    assert source.count("_record_run_failure(tracker, run_id, exc)") == 3
 
 
 def test_an_error_whose_text_cannot_be_read_still_gives_a_bundle():

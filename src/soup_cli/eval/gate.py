@@ -13,7 +13,6 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Mapping, Optional
-from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -21,6 +20,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.redaction import parse_url_with_safe_error, url_without_userinfo
 from soup_cli.utils.yaml_limits import (
     MAX_CONFIG_BYTES,
     duplicate_keys_in_sequence_mappings,
@@ -121,27 +121,40 @@ class GateTask(BaseModel):
     def _valid_judge_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        # Allowlist of schemes — SSRF hardening consistent with the project.
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        # A private IP literal is refused when the suite is parsed, so a
+        # suite file cannot name one any more than --judge-model can.
+        # (Kept inline here: the net-guard contract test requires this
+        # validator itself to call the shared refusal.)
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
 
-        parsed = urlparse(value)
-
-        if parsed.scheme == "ollama":
-            return value
-
+        parsed = parse_url_with_safe_error(value, label="judge_model URL")
         if parsed.scheme == "https":
-            # A private IP literal is refused when the suite is parsed, so a
-            # suite file cannot name one any more than --judge-model can.
             refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
-            return value
+        return _check_judge_model_url(value)
 
-        if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
-            return value
 
-        raise ValueError(
-            f"judge_model URL '{value}' uses disallowed scheme - "
-            "use ollama://, https://, or http://localhost"
-        )
+def _check_judge_model_url(value: Optional[str]) -> Optional[str]:
+    # Allowlist of schemes — SSRF hardening consistent with the project.
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
+    parsed = parse_url_with_safe_error(value, label="judge_model URL")
+
+    if parsed.scheme == "ollama":
+        return value
+
+    if parsed.scheme == "https":
+        # A private IP literal is refused when the suite is parsed, so a
+        # suite file cannot name one any more than --judge-model can.
+        refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
+        return value
+
+    if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
+        return value
+
+    raise ValueError(
+        f"judge_model URL '{url_without_userinfo(value)}' uses disallowed scheme - "
+        "use ollama://, https://, or http://localhost"
+    )
 
 
 class EvalSuite(BaseModel):
@@ -195,6 +208,10 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
                 f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
             )
         names.add(task.name)
+        # #3241: a judge_model assigned after the suite is parsed is re-checked
+        # with the load-time rule, before any generator call in run_gate.
+        if task.judge_model is not None:
+            _check_judge_model_url(task.judge_model)
 
 
 def _suite_error_location(loc: tuple[object, ...]) -> str:
@@ -601,7 +618,8 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
       ``https://judge.example.com/m`` -> ("server", "m", "https://judge.example.com")
     """
 
-    parsed = urlparse(judge_model)
+    parsed = parse_url_with_safe_error(judge_model)
+    shown = url_without_userinfo(judge_model)
 
     if parsed.scheme == "ollama":
         return ("ollama", judge_model[len("ollama://"):], None)
@@ -626,13 +644,17 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     elif parsed.scheme == "http":
         # #2190 — http itself is accepted; what is refused is cleartext to a remote host.
         raise ValueError(
-            f"judge_model '{judge_model}' uses http to a host that is not loopback; "
+            f"judge_model '{shown}' uses http to a host that is not loopback; "
             f"http is accepted for a loopback host only ({', '.join(sorted(LOOPBACK_HOSTS))}). "
             "Use https://, ollama:// or a loopback http:// URL instead"
         )
     else:
+        # In a bare credential spelling, urllib interprets the username as a scheme.
+        scheme = parsed.scheme
+        if shown != judge_model and not shown.lstrip().lower().startswith(f"{scheme}:/"):
+            scheme = ""
         raise ValueError(
-            f"judge_model '{judge_model}' uses unsupported scheme '{parsed.scheme}'; "
+            f"judge_model '{shown}' uses unsupported scheme '{scheme}'; "
             "accepted: https://, ollama:// or http:// to a loopback host"
         )
 
@@ -640,12 +662,12 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
         base, model = judge_model.rsplit("/", 1)
     except ValueError as exc:
         raise ValueError(
-            f"judge_model '{judge_model}' missing model id"
+            f"judge_model '{shown}' missing model id"
         ) from exc
 
     if not model:
         raise ValueError(
-            f"judge_model '{judge_model}' missing model id"
+            f"judge_model '{shown}' missing model id"
         )
 
     return (default_provider, model, base)
@@ -778,7 +800,8 @@ def _run_custom_task(
             f"task '{task.name}' tasks file '{task.tasks}' "
             "is outside cwd - refusing to load"
         )
-    tasks = load_eval_tasks(task.tasks)
+    # The loader only takes the scorer as a hint; the override and its checks are here.
+    tasks = load_eval_tasks(task.tasks, graded_by=task.scorer)
     if not tasks:
         return 0.0
     # Override scoring if the suite specified one (EvalTask.scoring field)
