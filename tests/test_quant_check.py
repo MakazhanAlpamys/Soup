@@ -327,6 +327,34 @@ class TestQuantCheckIssue809:
         assert "Failed to load --before model" not in result.output
         assert "using deterministic stub" not in result.output
 
+    @pytest.mark.parametrize("failing_side", ["before_dir", "after_dir"])
+    def test_generation_failure_has_a_runtime_diagnostic(
+        self, tmp_path, monkeypatch, failing_side,
+    ):
+        monkeypatch.chdir(tmp_path)
+        tasks, before_dir, after_dir = self._setup_env(tmp_path)
+
+        def make_generator(path):
+            def generate(prompt):
+                if path.endswith(failing_side):
+                    raise RuntimeError("synthetic generation failed")
+                return "4"
+
+            return generate
+
+        monkeypatch.setattr("soup_cli.eval.quant_check.make_model_generator", make_generator)
+
+        result = runner.invoke(app, [
+            "eval", "quant-check",
+            "--before", str(before_dir), "--after", str(after_dir),
+            "--tasks", str(tasks), "--format", "json", "--allow-stub",
+        ])
+        assert result.exit_code == 1
+        assert " ".join(strip_ansi(result.output).split()) == (
+            "Quantization comparison failed: synthetic generation failed"
+        )
+        assert isinstance(result.exception, SystemExit)
+
     def test_major_verdict_asserts_exit_code_2(
         self, tmp_path, monkeypatch,
     ):

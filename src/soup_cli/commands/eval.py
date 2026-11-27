@@ -1682,12 +1682,18 @@ def quant_check_cmd(
             after_gen = stub_generator("after")
             is_stub = True
 
-        result = run_quant_check(
-            before_gen=before_gen,
-            after_gen=after_gen,
-            tasks=pre_tasks,
-            stub=is_stub,
-        )
+        try:
+            result = run_quant_check(
+                before_gen=before_gen,
+                after_gen=after_gen,
+                tasks=pre_tasks,
+                stub=is_stub,
+            )
+        except (OSError, ValueError, ImportError, RuntimeError) as exc:
+            console.print(
+                f"[red]Quantization comparison failed: {for_terminal(str(exc))}[/]"
+            )
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
     rendered = render(result, fmt=fmt)
     if fmt == "table":
         console.print(rendered)
