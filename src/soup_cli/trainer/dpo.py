@@ -467,18 +467,20 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         """Run DPO training and return results summary."""
         start = time.time()
 
+        from soup_cli.utils.l2l_recipe import (
+            checkpoint_recipe_context,
+            validate_resume_source,
+            write_run_recipe,
+        )
+
         l2l_recipe = getattr(self, "_l2l_recipe", None)
         if resume_from_checkpoint is not None:
-            from soup_cli.utils.l2l_recipe import validate_resume_source
-
             # The recipe of the checkpoint being resumed, which may sit in another run
             # directory, and with training.l2l off as well. A rejected resume must not
             # overwrite the recipe the checkpoint was trained with.
             l2l_recipe = validate_resume_source(resume_from_checkpoint, l2l_recipe)
         if l2l_recipe is not None:
-            from soup_cli.utils.l2l_recipe import write_recipe
-
-            write_recipe(self._output_dir, l2l_recipe)
+            write_run_recipe(self._output_dir, l2l_recipe)
 
         # Add callback for live display and experiment tracking
         if display:
@@ -527,7 +529,10 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             if resume_from_checkpoint is not None:
                 reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
-            with manual_save_context(self.trainer):
+            with (
+                checkpoint_recipe_context(self.trainer, self._output_dir, l2l_recipe),
+                manual_save_context(self.trainer),
+            ):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 

@@ -2697,18 +2697,21 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # rejected resume must not overwrite the root artifact's previous
             # route declaration during setup.
             write_metadata(self._output_dir, self._quest_metadata)
+
+        from soup_cli.utils.l2l_recipe import (
+            checkpoint_recipe_context,
+            validate_resume_source,
+            write_run_recipe,
+        )
+
         l2l_recipe = getattr(self, "_l2l_recipe", None)
         if resume_from_checkpoint is not None:
-            from soup_cli.utils.l2l_recipe import validate_resume_source
-
             # Same order as the QuEST metadata: a rejected resume must not overwrite the
             # recipe the checkpoint was trained with. The source checkpoint's recipe counts,
             # which may sit in another run directory, and with training.l2l off as well.
             l2l_recipe = validate_resume_source(resume_from_checkpoint, l2l_recipe)
         if l2l_recipe is not None:
-            from soup_cli.utils.l2l_recipe import write_recipe
-
-            write_recipe(self._output_dir, l2l_recipe)
+            write_run_recipe(self._output_dir, l2l_recipe)
         offload_save_dir: Optional[str] = None
         if tcfg.activation_offloading == "disk":
             candidate = str(Path(self._output_dir) / "_activation_offload")
@@ -2757,7 +2760,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             if resume_from_checkpoint is not None:
                 keep_trainable_dtype_on_resume(self.trainer)
-            with manual_save_context(self.trainer):
+            with (
+                checkpoint_recipe_context(self.trainer, self._output_dir, l2l_recipe),
+                manual_save_context(self.trainer),
+            ):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         self._report_rewind()

@@ -19,6 +19,7 @@ Seams:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1128,14 +1129,14 @@ def test_a_legacy_checkpoint_resumed_with_l2l_keeps_its_provenance_in_the_same_o
 
     wrapper = _train_wrapper(monkeypatch, tmp_path)
     out = tmp_path / "out"
-    for step in (3, 5):
-        (out / f"checkpoint-{step}").mkdir()
+    (out / "checkpoint-3").mkdir()
     legacy = str(out / "checkpoint-3")
     # legacy checkpoint-3 (no recipe anywhere) resumed with l2l on: the recipe records the start
     with pytest.raises(_ReachedError):
         wrapper.train(resume_from_checkpoint=legacy)
     saved = json.loads((out / "l2l_recipe.json").read_text(encoding="utf-8"))
     assert saved["start_step"] == 3
+    (out / "checkpoint-5").mkdir()
     # the same older checkpoint again with l2l off is still a non-L2L checkpoint
     wrapper._l2l_recipe = None
     with pytest.raises(_ReachedError):
@@ -1143,6 +1144,126 @@ def test_a_legacy_checkpoint_resumed_with_l2l_keeps_its_provenance_in_the_same_o
     # a checkpoint the L2L run wrote afterwards is L2L, and refused with l2l off
     with pytest.raises(ValueError) as caught:
         wrapper.train(resume_from_checkpoint=str(out / "checkpoint-5"))
-    assert str(caught.value).startswith(
-        "cannot resume: the checkpoint was trained with training.l2l ("
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with training.l2l (effective_k=2, "
+        "activation_codec='none'), but this run has training.l2l off. Set training.l2l to "
+        "true with the same settings."
     )
+
+
+@pytest.mark.parametrize("task", ["dpo", "sft"])
+def test_same_output_checkpoint_saves_preserve_the_training_mode(monkeypatch, tmp_path, task):
+    from dataclasses import replace
+
+    from soup_cli.utils.l2l_recipe import load_recipe, resolve_l2l_recipe
+
+    pytest.importorskip("transformers")
+    if task == "dpo":
+        wrapper = _launch_wrapper(monkeypatch, gradient_accumulation_steps=2)
+        monkeypatch.setattr("soup_cli.trainer.dpo.reload_root_adapter_on_resume", lambda _: None)
+    else:
+        from tests.test_l2l_sft_dispatch import _wrapper as sft_wrapper
+
+        wrapper = sft_wrapper(monkeypatch, l2l=True)
+        wrapper._quest_metadata = None
+        wrapper._stream_loss_chunk_hook = None
+
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "out"
+    legacy = out / "checkpoint-3"
+    legacy.mkdir(parents=True)
+    wrapper._output_dir = str(out)
+    original_recipe = resolve_l2l_recipe(wrapper.config.training)
+    callbacks = []
+    args = SimpleNamespace(output_dir=str(out), should_save=True)
+    save_step = 5
+
+    def train(*, resume_from_checkpoint):
+        assert Path(resume_from_checkpoint).is_dir()
+        if save_step is not None:
+            (out / f"checkpoint-{save_step}").mkdir()
+            state = SimpleNamespace(global_step=save_step)
+            for callback in callbacks:
+                callback.on_save(args, state, None)
+        raise _ReachedError
+
+    # Simulate the Trainer's save event after the checkpoint directory has been written.
+    monkeypatch.setattr(f"soup_cli.trainer.{task}.manual_save_context", lambda _: nullcontext())
+    wrapper.trainer = SimpleNamespace(
+        args=args,
+        model=None,
+        train=train,
+        add_callback=callbacks.append,
+        remove_callback=callbacks.remove,
+    )
+
+    wrapper._l2l_recipe = original_recipe
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=str(legacy))
+    assert load_recipe(out / "checkpoint-5") == replace(original_recipe, start_step=3)
+    assert not callbacks
+
+    wrapper._l2l_recipe = None
+    save_step = 4
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=str(legacy))
+    assert not callbacks
+
+    ordinary = out / "checkpoint-4"
+    save_step = None
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=str(ordinary))
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(out / "checkpoint-5"))
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with training.l2l (effective_k=2, "
+        "activation_codec='none'), but this run has training.l2l off. Set training.l2l to "
+        "true with the same settings."
+    )
+
+    wrapper._l2l_recipe = replace(original_recipe, requested_k=4, effective_k=4)
+    save_step = 6
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=str(ordinary))
+    assert load_recipe(out).effective_k == 4
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(out / "checkpoint-5"))
+    assert str(caught.value) == (
+        "cannot resume: the checkpoint was trained with effective_k=2, but this run has "
+        "effective_k=4. Restore the old value in the config."
+    )
+    assert load_recipe(out / "checkpoint-6").effective_k == 4
+
+
+@pytest.mark.parametrize("old_recipe_exists", [False, True])
+def test_publishing_a_recipe_preserves_retained_checkpoints(
+    monkeypatch, tmp_path, old_recipe_exists
+):
+    from dataclasses import replace
+
+    from soup_cli.utils.l2l_recipe import load_recipe, write_recipe
+
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    out = tmp_path / "out"
+    legacy = out / "checkpoint-3"
+    legacy.mkdir()
+    retained = out / "checkpoint-5"
+    retained.mkdir()
+    if old_recipe_exists:
+        previous = replace(wrapper._l2l_recipe, requested_k=4, effective_k=4, start_step=3)
+        write_recipe(out, previous)
+
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=str(legacy))
+    assert load_recipe(out).effective_k == 2
+    if old_recipe_exists:
+        with pytest.raises(ValueError) as caught:
+            wrapper.train(resume_from_checkpoint=str(retained))
+        assert str(caught.value) == (
+            "cannot resume: the checkpoint was trained with effective_k=4, but this run has "
+            "effective_k=2. Restore the old value in the config."
+        )
+    else:
+        wrapper._l2l_recipe = None
+        with pytest.raises(_ReachedError):
+            wrapper.train(resume_from_checkpoint=str(retained))

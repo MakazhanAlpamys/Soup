@@ -3,18 +3,22 @@
 ``training.gradient_accumulation_steps`` is what the user asks for. The effective k is what the
 run uses. Every consumer (the HF training arguments, the loss scale the HF loop derives from
 them, the activation store capacity, the log) reads the effective k from one
-:class:`L2LRecipe`, so none of them can disagree. The recipe is written to the output
-directory and checked on resume, because a different k changes the optimizer-step boundaries.
+:class:`L2LRecipe`, so none of them can disagree. The recipe is recorded with checkpoints
+and checked on resume, because a different k changes the optimizer-step boundaries.
 """
 
 import json
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import MISSING, asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Optional
 
 RECIPE_NAME = "l2l_recipe.json"
+_ORDINARY_CHECKPOINT = {"l2l": False}
+_CHECKPOINT_NAME = re.compile(r"checkpoint-(\d+)")
 
 #: Codecs the launch accepts. ``fp8_e4m3`` stays closed until its gradients are checked
 #: against the accumulation baseline; the trainer and planner accept it through the API
@@ -95,22 +99,25 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
     )
 
 
-def write_recipe(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> str:
-    """Write the recipe to ``<output_dir>/l2l_recipe.json``; returns the path."""
+def write_recipe(output_dir: "str | os.PathLike[str]", recipe: Optional[L2LRecipe]) -> str:
+    """Write a recipe or ordinary checkpoint record; return its path."""
     from soup_cli.utils.paths import atomic_write_text
 
     path = os.path.join(os.fspath(output_dir), RECIPE_NAME)
-    text = json.dumps(asdict(recipe), indent=2, sort_keys=True) + "\n"
+    data = _ORDINARY_CHECKPOINT if recipe is None else asdict(recipe)
+    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
     return atomic_write_text(text, path, field="l2l recipe")
 
 
 def load_recipe(output_dir: "str | os.PathLike[str]") -> Optional[L2LRecipe]:
-    """The recipe saved in ``output_dir``, or None if there is none."""
+    """The saved recipe, or None for a missing or explicitly ordinary record."""
     path = Path(output_dir) / RECIPE_NAME
     if not path.is_file():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and len(data) == 1 and data.get("l2l") is False:
+            return None
         values = {}
         for field in fields(L2LRecipe):
             if field.name in data:
@@ -155,15 +162,15 @@ def checkpoint_step(checkpoint: "str | os.PathLike[str]") -> Optional[int]:
             return step
     except (OSError, ValueError, AttributeError):
         pass
-    match = re.fullmatch(r"checkpoint-(\d+)", os.path.basename(path))
+    match = _CHECKPOINT_NAME.fullmatch(os.path.basename(path))
     return int(match.group(1)) if match else None
 
 
 def _source_recipe(checkpoint: "str | os.PathLike[str]") -> Optional[L2LRecipe]:
     """The recipe that covers ``checkpoint``, or None for a checkpoint without L2L provenance.
 
-    A recipe inside the checkpoint directory is authoritative. A recipe in the parent run
-    directory covers the checkpoint only when its step is greater than the recipe's
+    A checkpoint's own record is authoritative, including an explicit ordinary marker.
+    A recipe in the parent run directory covers the checkpoint only when its step exceeds the
     ``start_step``: the run that wrote the recipe began at ``start_step`` (a legacy checkpoint
     resumed with ``training.l2l``), so that checkpoint and the older ones predate it. A step
     that cannot be read counts as covered.
@@ -179,6 +186,54 @@ def _source_recipe(checkpoint: "str | os.PathLike[str]") -> Optional[L2LRecipe]:
     if step is not None and step <= saved.start_step:
         return None
     return saved
+
+
+def write_run_recipe(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> None:
+    """Preserve retained checkpoints' provenance before publishing a new run recipe."""
+    output = Path(os.path.realpath(output_dir))
+    if load_recipe(output) == recipe:
+        return
+    if output.is_dir():
+        for checkpoint in output.iterdir():
+            if not checkpoint.is_dir() or (checkpoint / RECIPE_NAME).is_file():
+                continue
+            if not (
+                _CHECKPOINT_NAME.fullmatch(checkpoint.name)
+                or (checkpoint / "trainer_state.json").is_file()
+            ):
+                continue
+            # A link can refer to a checkpoint in another output directory.
+            if os.path.normcase(os.path.realpath(checkpoint)) != os.path.normcase(checkpoint):
+                continue
+            write_recipe(checkpoint, _source_recipe(checkpoint))
+    write_recipe(output_dir, recipe)
+
+
+@contextmanager
+def checkpoint_recipe_context(
+    trainer: Any, output_dir: str, recipe: Optional[L2LRecipe]
+) -> Iterator[None]:
+    """Record the training mode with each checkpoint in an output that uses L2L."""
+    if recipe is None and not (Path(output_dir) / RECIPE_NAME).is_file():
+        yield
+        return
+
+    from transformers import TrainerCallback
+    from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+
+    class CheckpointRecipeCallback(TrainerCallback):
+        def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+            if args.should_save:
+                checkpoint = Path(args.output_dir) / f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}"
+                if checkpoint.is_dir():
+                    write_recipe(checkpoint, recipe)
+
+    callback = CheckpointRecipeCallback()
+    trainer.add_callback(callback)
+    try:
+        yield
+    finally:
+        trainer.remove_callback(callback)
 
 
 def validate_resume_source(

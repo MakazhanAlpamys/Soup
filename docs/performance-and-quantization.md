@@ -1216,7 +1216,11 @@ training:
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
-- **Recipe and resume.** The run writes `l2l_recipe.json` (requested and effective k, codec) to its output directory. A resume whose k or codec differs from the checkpoint's is refused, because a different k moves the optimizer-step boundaries.
+- **Recipe and resume.** L2L writes `l2l_recipe.json` with the requested and effective k
+  and activation codec. In an output directory used for L2L, each new checkpoint records
+  its own recipe or that it was saved with L2L off. Retained checkpoints keep their
+  provenance when a new run updates the output recipe. Resuming an L2L checkpoint
+  requires L2L to be on with the checkpoint's effective k and codec.
 - **k = 1** behaves like plain streaming.
 
 #### L2L for DPO
