@@ -1111,11 +1111,18 @@ def _build_streamed_experts_class():
     import torch.nn as nn
     import torch.nn.functional as functional
 
-    def expert_mlp(hidden: Any, gate_up: Any, down: Any, act_fn: Any) -> Any:
+    def expert_mlp(
+        hidden: Any, gate_up: Any, down: Any, act_fn: Any, linear: Any = functional.linear,
+    ) -> Any:
         # transformers' eager experts body, line for line.
-        gate, up = functional.linear(hidden, gate_up).chunk(2, dim=-1)
+        gate, up = linear(hidden, gate_up).chunk(2, dim=-1)
         current = act_fn(gate) * up
-        return functional.linear(current, down)
+        return linear(current, down)
+
+    def weighted_mlp(
+        hidden: Any, weights: Any, gate_up: Any, down: Any, owner: Any, act_fn: Any,
+    ) -> Any:
+        return owner.scale(expert_mlp(hidden, gate_up, down, act_fn, owner.linear), weights)
 
     def _autocast_state(device_type: str) -> Dict[str, Any]:
         return {
@@ -1271,10 +1278,10 @@ def _build_streamed_experts_class():
                 owner.pool.prefetch(owner.reader, nxt)
                 if segments is not None:
                     return torch.cat([
-                        expert_mlp(rows, gate_up, down, owner.act_fn) * routing
+                        weighted_mlp(rows, routing, gate_up, down, owner, ctx.act_fn)
                         for rows, routing in zip(hidden.split(segments), weights.split(segments))
                     ])
-                return expert_mlp(hidden, gate_up, down, owner.act_fn) * weights
+                return weighted_mlp(hidden, weights, gate_up, down, owner, ctx.act_fn)
 
         @staticmethod
         def backward(ctx, grad_out):
@@ -1290,7 +1297,9 @@ def _build_streamed_experts_class():
                 local_hidden = rows.detach().requires_grad_(need_hidden)
                 local_weights = routing.detach().requires_grad_(need_weights)
                 with torch.enable_grad(), torch.autocast(ctx.device_type, **ctx.autocast_kwargs):
-                    result = expert_mlp(local_hidden, gate_up, down, ctx.act_fn) * local_weights
+                    result = weighted_mlp(
+                        local_hidden, local_weights, gate_up, down, ctx.owner, ctx.act_fn
+                    )
                 wanted = [
                     tensor for tensor in (local_hidden, local_weights) if tensor.requires_grad
                 ]
@@ -1338,7 +1347,8 @@ def _build_streamed_experts_class():
         materialize_recompute = False
 
         def __init__(
-            self, reader, source, act_fn, layer_idx, two_reads=False, grouped_expert_routes=False
+            self, reader, source, act_fn, layer_idx, two_reads=False, grouped_expert_routes=False,
+            expert_gemm="native",
         ):
             super().__init__()
             if type(grouped_expert_routes) is not bool:
@@ -1357,6 +1367,12 @@ def _build_streamed_experts_class():
             self.num_experts = reader.count
             self.two_reads = bool(two_reads)
             self.grouped_expert_routes = grouped_expert_routes
+            self.expert_gemm = expert_gemm
+            self.linear, self.scale = functional.linear, torch.mul
+            if expert_gemm == "batch_invariant":
+                from soup_cli.utils import invariant_gemm
+
+                self.linear, self.scale = invariant_gemm.linear, invariant_gemm.scale_rows
             #: One row per expert visited by the latest pooled ``forward`` call, bounded by the
             #: expert count; a checkpoint recompute is a forward call and replaces it. Backward
             #: leases add no rows (``pool.fetches`` counts them).
@@ -1542,6 +1558,7 @@ def install_expert_streaming(
     *,
     two_reads: bool = False,
     grouped_expert_routes: bool = False,
+    expert_gemm: str = "native",
 ) -> int:
     """Replace each MoE layer's experts module with a ``StreamedExperts``.
 
@@ -1556,6 +1573,8 @@ def install_expert_streaming(
     parameters leave the layer and the layer pool never allocates them.
     ``two_reads`` also routes the MoE block's router (``.gate``) through
     :func:`_routing_forward`, whose decisions a two-read recompute replays.
+    ``expert_gemm="batch_invariant"`` selects the fixed-order CUDA matmul and
+    routing-weight reduction for pooled, two-read experts with grouped routes.
 
     Two-read contract. Each checkpointed layer call keeps its own record, so gradient
     accumulation, several forwards before one backward, ``retain_graph`` backwards, no-grad
@@ -1580,6 +1599,8 @@ def install_expert_streaming(
     """
     import torch.nn as nn
 
+    from soup_cli.utils.invariant_gemm import EXPERT_GEMMS, check_supported
+
     if type(grouped_expert_routes) is not bool:
         raise ValueError("grouped_expert_routes must be a bool")
     if any(
@@ -1588,6 +1609,17 @@ def install_expert_streaming(
     ):
         raise ValueError("expert reader layer index is outside the supplied layers")
     pooled = isinstance(source, ExpertBufferPool)
+    if expert_gemm not in EXPERT_GEMMS:
+        raise ValueError(f"training.stream_expert_gemm must be one of {EXPERT_GEMMS}")
+    if expert_gemm == "batch_invariant":
+        if not (pooled and two_reads and grouped_expert_routes):
+            raise ValueError(
+                "training.stream_expert_gemm='batch_invariant' requires pooled experts, "
+                "two_reads=True and grouped_expert_routes=True"
+            )
+        from soup_cli.utils.layer_stream_runtime import _torch_dtype
+
+        check_supported(source.device, _torch_dtype(source.dtype))
     cls = streamed_experts_class()
     replacements = []
     experts_modules = []
@@ -1660,6 +1692,7 @@ def install_expert_streaming(
             cls(
                 reader, source, module.act_fn, idx,
                 two_reads=two_reads, grouped_expert_routes=grouped_expert_routes,
+                expert_gemm=expert_gemm,
             ),
             router,
         ))

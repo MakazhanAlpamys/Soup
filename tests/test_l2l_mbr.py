@@ -246,18 +246,22 @@ def test_l2l_trainer_dispatches_mbr_settings_to_the_step(
 
 @pytest.fixture
 def window(tmp_path):
-    from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
-
     model, runtime = _build(tmp_path, **LEVERS["pool-all-levers"])
     try:
-        batches = [
-            ids[:, :length].contiguous()
-            for ids, length in zip(_micro_batches(5), (3, 6, 4, 5, 3))
-        ]
-        calls = [capture_layer_call(model, ids) for ids in batches]
-        yield model, L2LStep(model, runtime, calls[0]), batches, calls
+        yield _capture_window(model, runtime)
     finally:
         runtime.close()
+
+
+def _capture_window(model, runtime, device="cpu"):
+    from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
+
+    batches = [
+        ids[:, :length].contiguous().to(device)
+        for ids, length in zip(_micro_batches(5), (3, 6, 4, 5, 3))
+    ]
+    calls = [capture_layer_call(model, ids) for ids in batches]
+    return model, L2LStep(model, runtime, calls[0]), batches, calls
 
 
 def _run(window: Any, bf16: bool = False, **options: Any) -> Any:
@@ -267,11 +271,12 @@ def _run(window: Any, bf16: bool = False, **options: Any) -> Any:
 
     model, stepper, batches, calls = window
     model.zero_grad(set_to_none=True)
-    context = torch.autocast("cpu", dtype=torch.bfloat16) if bf16 else nullcontext()
+    device = batches[0].device
+    context = torch.autocast(device.type, dtype=torch.bfloat16) if bf16 else nullcontext()
     store = ActivationStore(
         n_layers=len(stepper.layers), k=len(batches), chunk_shape=(1, SEQ, HIDDEN),
         mb_shapes=[(*ids.shape, HIDDEN) for ids in batches],
-        dtype=torch.float32, device="cpu", pin=False,
+        dtype=torch.float32, device=device, pin=False,
     )
     with context:
         losses = stepper.run(batches, store, calls=calls, **options)

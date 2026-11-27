@@ -3952,6 +3952,7 @@ def _install_expert_streaming(
     expert_transfer: str = "sync",
     expert_host_cache_bytes: int = 0,
     expert_prefetch: bool = False,
+    expert_gemm: str = "native",
 ) -> Tuple[Any, Tuple[Any, ...]]:
     """Swap each MoE layer's experts module for a ``StreamedExperts``.
 
@@ -3988,6 +3989,7 @@ def _install_expert_streaming(
                 raise ValueError(f"{name} needs expert_pool=True")
     if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
         for name, set_ in (
+            ("training.stream_expert_gemm", expert_gemm != "native"),
             ("two_read_experts", two_reads),
             ("grouped_expert_routes", grouped_expert_routes),
             ("expert_pool", expert_pool),
@@ -4033,6 +4035,7 @@ def _install_expert_streaming(
         install_expert_streaming(
             layers, readers, source,
             two_reads=two_reads, grouped_expert_routes=grouped_expert_routes,
+            expert_gemm=expert_gemm,
         )
     except BaseException:
         for close in ([pool.close] if pool is not None else []) + [
@@ -4068,6 +4071,7 @@ def install_streaming(
     expert_transfer: str = "sync",
     expert_host_cache_bytes: int = 0,
     expert_prefetch: bool = False,
+    expert_gemm: str = "native",
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
@@ -4159,6 +4163,7 @@ def install_streaming(
         grouped_expert_routes=grouped_expert_routes, expert_pool=expert_pool,
         expert_transfer=expert_transfer, expert_host_cache_bytes=expert_host_cache_bytes,
         expert_prefetch=expert_prefetch,
+        expert_gemm=expert_gemm,
     )
     context_fns = [None] * n_layers
     if two_read_experts:
@@ -4789,6 +4794,7 @@ def build_streamed_model(
     expert_transfer: str = "sync",
     expert_host_cache_bytes: int = 0,
     expert_prefetch: bool = False,
+    expert_gemm: str = "native",
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
@@ -4803,8 +4809,8 @@ def build_streamed_model(
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts``,
     ``grouped_expert_routes``, ``expert_pool``, ``expert_transfer``,
-    ``expert_host_cache_bytes`` and ``expert_prefetch`` are ``install_streaming``'s: API
-    switches, no config fields.
+    ``expert_host_cache_bytes``, ``expert_prefetch`` and ``expert_gemm``
+    are forwarded to ``install_streaming``.
     """
     if lora_config is not None:
         from peft import get_peft_model
@@ -4862,6 +4868,7 @@ def build_streamed_model(
             expert_transfer=expert_transfer,
             expert_host_cache_bytes=expert_host_cache_bytes,
             expert_prefetch=expert_prefetch,
+            expert_gemm=expert_gemm,
         )
         if lora_config is None:
             try:

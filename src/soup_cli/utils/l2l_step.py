@@ -1152,6 +1152,7 @@ class L2LStep:
         recompute builds the micro-batches from the last to the first, so the engine
         (highest sequence number first) meets micro-batch 0's nodes first and adds every
         weight's contributions in micro-batch order. It excludes ``mbr_split_backward``.
+        Batch-invariant experts use joined matmuls and split backward by default.
         """
         if type(route_preserving_mbr) is not bool:
             raise ValueError("route_preserving_mbr must be a bool")
@@ -1334,12 +1335,17 @@ class L2LStep:
             for idx, layer in enumerate(self.layers):
                 for mb in range(k):
                     store.put(idx, mb, hidden[mb])
-                if route_preserving_mbr and _streamed_moe_experts(layer) is not None:
+                experts = _streamed_moe_experts(layer) if route_preserving_mbr else None
+                if experts is not None:
+                    invariant_gemm = experts.expert_gemm == "batch_invariant"
                     pair = contexts.get(idx)
                     before = self._expert_read_snapshot() if phase_stats is not None else None
                     with (
                         _defer_decoder_forward_hooks(
-                            layer, split_backward=mbr_split_backward
+                            layer,
+                            split_backward=mbr_split_backward or (
+                                invariant_gemm and not mbr_ordered_backward
+                            ),
                         ) as deferred_hooks,
                         pair[0] if pair else nullcontext(),
                     ):
@@ -1352,7 +1358,9 @@ class L2LStep:
                                 group_size,
                                 deferred_hooks,
                                 reverse_graph_order=mbr_ordered_backward,
-                                preserve_expert_shapes=preserve_expert_shapes,
+                                preserve_expert_shapes=(
+                                    preserve_expert_shapes and not invariant_gemm
+                                ),
                             )
                         )
                     for mb in range(k):
@@ -1448,14 +1456,19 @@ class L2LStep:
             saved = layer.use_checkpoint
             layer.use_checkpoint = False
             try:
-                if route_preserving_mbr and _streamed_moe_experts(layer) is not None:
+                experts = _streamed_moe_experts(layer) if route_preserving_mbr else None
+                if experts is not None:
+                    invariant_gemm = experts.expert_gemm == "batch_invariant"
+                    split_backward = mbr_split_backward or (
+                        invariant_gemm and not mbr_ordered_backward
+                    )
                     inputs = [store.get(idx, mb).requires_grad_(True) for mb in range(k)]
                     pair = contexts.pop(idx, None)
                     before_recompute = (
                         self._expert_read_snapshot() if phase_stats is not None else None
                     )
                     split_records: Optional[List[Dict[str, Any]]] = (
-                        [] if mbr_split_backward else None
+                        [] if split_backward else None
                     )
                     # Distinct bf16 casts round each adapter gradient before the fp32 sum,
                     # as separate L2L backward calls do even when they reuse the same cast.
@@ -1469,7 +1482,7 @@ class L2LStep:
                         torch.enable_grad(),
                         autocast,
                         _defer_decoder_forward_hooks(
-                            layer, split_backward=mbr_split_backward
+                            layer, split_backward=split_backward
                         ) as deferred_hooks,
                         pair[1] if pair else nullcontext(),
                     ):
@@ -1483,7 +1496,9 @@ class L2LStep:
                                 deferred_hooks,
                                 split_records=split_records,
                                 reverse_graph_order=mbr_ordered_backward,
-                                preserve_expert_shapes=preserve_expert_shapes,
+                                preserve_expert_shapes=(
+                                    preserve_expert_shapes and not invariant_gemm
+                                ),
                             )
                         )
                     after_recompute = (

@@ -620,7 +620,7 @@ def _micro_batches(count: int) -> List[Any]:
     ]
 
 
-def _build(tmp_path: Any, **levers: Any) -> Any:
+def _build(tmp_path: Any, *, device: str = "cpu", **levers: Any) -> Any:
     pytest.importorskip("peft")
     import torch
 
@@ -631,7 +631,7 @@ def _build(tmp_path: Any, **levers: Any) -> Any:
     index = _shard(tmp_path, weights, expert_layout="per_expert")
     model, runtime = build_streamed_model(
         model_id=weights, shard_dir=str(tmp_path / "shards"), index=index,
-        lora_config=_lora(), device="cpu", dtype="float32", buffers=2, pin=False, seed=3,
+        lora_config=_lora(), device=device, dtype="float32", buffers=2, pin=False, seed=3,
         **levers,
     )
     with torch.no_grad():  # integer-arithmetic adapter values: every lora_B is non-zero

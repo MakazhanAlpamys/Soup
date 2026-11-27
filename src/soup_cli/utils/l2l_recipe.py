@@ -36,6 +36,7 @@ class L2LRecipe:
     mbr_group_size: Optional[int] = None
     mbr_split_backward: bool = False
     mbr_ordered_backward: bool = False
+    expert_gemm: str = "native"
 
 
 def validate_l2l_options(tcfg: Any) -> None:
@@ -108,6 +109,7 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
         mbr_group_size=mbr_group_size,
         mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
         mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
+        expert_gemm=getattr(tcfg, "stream_expert_gemm", "native"),
     )
 
 
@@ -163,6 +165,7 @@ def _validate_recipe_match(saved: L2LRecipe, recipe: L2LRecipe) -> None:
         "mbr_group_size",
         "mbr_split_backward",
         "mbr_ordered_backward",
+        "expert_gemm",
     ):
         before, now = getattr(saved, name), getattr(recipe, name)
         if before != now:

@@ -4120,6 +4120,14 @@ class TrainingConfig(BaseModel):
             "micro-batches in L2L order. Excludes l2l_mbr_split_backward."
         ),
     )
+    stream_expert_gemm: Literal["native", "batch_invariant"] = Field(
+        default="native",
+        description=(
+            "EXPERIMENTAL — use a fixed-order CUDA Triton GEMM for routed experts with "
+            "'batch_invariant'. Requires training.l2l=true, stream_expert_layout='per_expert' "
+            "and l2l_route_preserving_mbr=true. The default keeps the native expert matmul."
+        ),
+    )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
@@ -8102,6 +8110,7 @@ class SoupConfig(BaseModel):
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
+                    ("stream_expert_gemm", tcfg.stream_expert_gemm != "native"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
                     ("stream_loss_chunk", tcfg.stream_loss_chunk is not None),
@@ -8433,6 +8442,14 @@ class SoupConfig(BaseModel):
         launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
         """
         tcfg = self.training
+        if tcfg.stream_expert_gemm == "batch_invariant" and not (
+            tcfg.l2l and tcfg.stream_expert_layout == "per_expert" and tcfg.l2l_route_preserving_mbr
+        ):
+            raise ValueError(
+                "training.stream_expert_gemm='batch_invariant' requires training.l2l=true, "
+                "training.stream_expert_layout='per_expert' and "
+                "training.l2l_route_preserving_mbr=true"
+            )
         mbr_options = {
             "l2l_route_preserving_mbr": tcfg.l2l_route_preserving_mbr,
             "l2l_mbr_group_size": tcfg.l2l_mbr_group_size is not None,

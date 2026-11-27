@@ -1056,6 +1056,24 @@ class StreamingSetupMixin:
         # load, a weight resolve or a shard write.
         refuse_if_distributed_launch()
 
+        expert_gemm = getattr(tcfg, "stream_expert_gemm", "native")
+        expert_gemm_dtype = None
+        if expert_gemm == "batch_invariant":
+            import torch
+
+            from soup_cli.utils.invariant_gemm import check_supported
+            from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+            expert_gemm_dtype = resolve_stream_dtype(str(self.device))
+            check_supported(self.device, getattr(torch, expert_gemm_dtype))
+            if not torch.are_deterministic_algorithms_enabled():
+                console.print(
+                    "[yellow]training.stream_expert_gemm='batch_invariant':[/] bitwise "
+                    "L2L parity also requires deterministic kernels outside the routed "
+                    "expert matmuls. Enable PyTorch deterministic algorithms and set "
+                    "CUBLAS_WORKSPACE_CONFIG=:4096:8 before starting the process."
+                )
+
         from dataclasses import replace
 
         from peft import TaskType
@@ -1217,7 +1235,7 @@ class StreamingSetupMixin:
         # (Kaggle), a V100 or a GTX 16xx does not have it. Hardcoding bf16 here
         # made the entire free tier unsupported without saying so, and could not
         # fail on the Ampere card every published measurement came from.
-        dtype = resolve_stream_dtype(str(self.device))
+        dtype = expert_gemm_dtype or resolve_stream_dtype(str(self.device))
         if fp8_block is not None:
             console.print(
                 f"[dim]FP8 block-quantised base ({fp8_block[0]}x{fp8_block[1]} blocks): "
@@ -1799,6 +1817,7 @@ class StreamingSetupMixin:
                     "expert_pool": True,
                     "two_read_experts": two_read_experts,
                     "grouped_expert_routes": grouped_expert_routes,
+                    **({"expert_gemm": expert_gemm} if expert_gemm != "native" else {}),
                 }
                 if l2l_experts
                 else {}
@@ -2097,6 +2116,7 @@ class StreamingSetupMixin:
             mbr_group_size=getattr(tcfg, "l2l_mbr_group_size", None),
             mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
             mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
+            expert_gemm=getattr(tcfg, "stream_expert_gemm", "native"),
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "
