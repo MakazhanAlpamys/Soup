@@ -27,6 +27,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import strip_control
 
 _MAX_FILE_BYTES = 256 * 1024 * 1024  # 256 MiB
 _MAX_ROWS = 1_000_000
@@ -161,7 +164,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             canonical_style = validate_citation_style(style)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid --style:[/] {escape(str(exc))}")
+            console.print(Text.assemble(("Invalid --style:", "red"), " ", strip_control(exc)))
             raise typer.Exit(2) from exc
 
         rows = _load_jsonl_rows(data, console)
@@ -246,7 +249,9 @@ def register(app: typer.Typer, console: Console) -> None:
             try:
                 enforce_under_cwd_and_no_symlink(output, "citation output")
             except (TypeError, ValueError) as exc:
-                console.print(f"[red]Invalid --output:[/] {escape(str(exc))}")
+                console.print(
+                    Text.assemble(("Invalid --output:", "red"), " ", strip_control(exc))
+                )
                 raise typer.Exit(2) from exc
             payload = {
                 "style": canonical_style,
@@ -256,4 +261,4 @@ def register(app: typer.Typer, console: Console) -> None:
             }
             with open(output, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2, allow_nan=False)
-            console.print(f"Wrote citation report -> {escape(output)}")
+            console.print(Text.assemble("Wrote citation report -> ", strip_control(output)))
