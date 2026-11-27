@@ -22,7 +22,9 @@ import contextlib
 import math
 import os
 import shutil
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from rich.console import Console
@@ -1725,6 +1727,19 @@ class StreamingSetupMixin:
                 "a pageable CPU source.[/]"
             )
 
+        cache_profile = getattr(tcfg, "stream_cache_profile", None)
+        cache_setup_started = None
+        if cache_profile:
+            from soup_cli.utils.stream_cache_profile import validate_profile_file
+
+            if self._stream_total_experts(model_config) > 1:
+                raise ValueError(
+                    "training.stream_cache_profile supports dense decoders only; this base "
+                    "routes over several experts. Remove training.stream_cache_profile."
+                )
+            validate_profile_file(cache_profile)
+            cache_setup_started = time.perf_counter()
+
         partial_budget = None
         if partial_config is not None:
             # Free RAM already excludes live allocations. This intentionally conservative
@@ -1841,7 +1856,7 @@ class StreamingSetupMixin:
         # training.stream_resident_layers -- after the recompute mode and before
         # the probe, so that the residency measurement and the probe both see the
         # step that will train. Off by default: nothing is read or imported.
-        if getattr(tcfg, "stream_resident_layers", 0) != 0:
+        if getattr(tcfg, "stream_resident_layers", 0) != 0 and not cache_profile:
             try:
                 self._configure_stream_residency(
                     model, runtime, cfg, tcfg, model_config=model_config,
@@ -1852,7 +1867,7 @@ class StreamingSetupMixin:
         # training.stream_ram_cache_mb -- after residency, so the hotset is sized
         # without the layers the GPU already holds. Off by default.
         cache_mb = getattr(tcfg, "stream_ram_cache_mb", 0)
-        if cache_mb:
+        if cache_mb and not cache_profile:
             if tier == TIER_DISK:
                 try:
                     runtime.source.configure_ram_cache(cache_mb * 2**20)
@@ -1863,6 +1878,20 @@ class StreamingSetupMixin:
                 console.print(
                     "[dim]RAM cache is unnecessary: the complete streamed store fits in RAM.[/]"
                 )
+        if cache_profile:
+            # The Trainer has not counted its optimizer updates yet: the profile
+            # resolves the RAM hotset, resident layers and retained suffix at
+            # train begin, inside the ceilings configured above.
+            from soup_cli.utils.stream_cache_profile import build_stream_cache_callback
+
+            try:
+                self._stream_cache_profile_callback = build_stream_cache_callback(
+                    self, cfg, index_path=Path(shard_dir) / "index.json",
+                    setup_started=cache_setup_started, notify=console.print,
+                )
+            except BaseException:
+                self._close_stream_runtime()
+                raise
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
@@ -1968,6 +1997,14 @@ class StreamingSetupMixin:
                     "does not skip the backward read of each layer, so it is likely no "
                     "faster and holds more VRAM; the recompute ('on') may be cheaper here."
                 )
+            return
+        if tier == TIER_DISK and getattr(tcfg, "stream_cache_profile", None):
+            console.print(
+                "[cyan]training.stream_recompute='auto' with training.stream_cache_profile:[/] "
+                "the retained suffix is taken from the measured profile at train begin, after "
+                "the RAM hotset and resident layers are installed; without a matching "
+                "profile the recompute is kept."
+            )
             return
         if tier == TIER_DISK:
             console.print(

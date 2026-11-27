@@ -43,6 +43,8 @@ class ResidencyPlan:
     setup_seconds: float = 0.0
     preload_seconds: float = 0.0
     reason: str = "disabled"
+    baseline_from_profile: bool = False
+    record_only_seconds: float = 0.0
 
     @property
     def selected_indices(self) -> tuple[int, ...]:
@@ -51,6 +53,15 @@ class ResidencyPlan:
     @property
     def enabled(self) -> bool:
         return bool(self.indices)
+
+
+@dataclass(frozen=True)
+class ResidencyHint:
+    """Planning hint only: a fresh full candidate probe remains authoritative."""
+
+    count: int
+    peak_allocated_bytes: int
+    peak_reserved_bytes: int
 
 
 def residency_budget(
@@ -204,6 +215,7 @@ def configure_stream_residency(
     measure: Optional[Callable[..., Any]] = None,
     reserve_bytes: int = RESIDENCY_RESERVE_BYTES,
     optimizer_reserve_bytes: Optional[int] = None,
+    hint: Optional[ResidencyHint] = None,
 ) -> ResidencyPlan:
     """Install and measure a resident set on the RAM tier or a coordinated SSD source.
 
@@ -293,12 +305,28 @@ def configure_stream_residency(
         pool.clear_resident_layers()
         memory.release()
 
-    try:
-        baseline = probe()
-    except Exception as exc:
-        if not _is_out_of_memory(exc):
-            raise
-        return refuse("ordinary streaming kept: baseline probe ran out of memory")
+    if hint is not None:
+        if (mode != "auto" or not isinstance(hint, ResidencyHint)
+                or any(type(value) is not int or value < 1 for value in (
+                    hint.count, hint.peak_allocated_bytes, hint.peak_reserved_bytes,
+                )) or hint.count > n_layers
+                or hint.peak_reserved_bytes < hint.peak_allocated_bytes):
+            raise ValueError("invalid stream residency profile hint")
+        from types import SimpleNamespace
+
+        baseline = SimpleNamespace(
+            peak_bytes=hint.peak_allocated_bytes, reserved_bytes=hint.peak_reserved_bytes,
+        )
+        state["baseline_from_profile"] = True
+    else:
+        try:
+            planning_started = time.perf_counter()
+            baseline = probe()
+            state["record_only_seconds"] = time.perf_counter() - planning_started
+        except Exception as exc:
+            if not _is_out_of_memory(exc):
+                raise
+            return refuse("ordinary streaming kept: baseline probe ran out of memory")
     if baseline is None:
         return refuse("ordinary streaming kept: baseline peak could not be measured")
     if getattr(baseline, "oom", False):
@@ -314,7 +342,7 @@ def configure_stream_residency(
     )
     state["cap_bytes"] = budget.cap_bytes
     sizes = [int(pool.resident_slot_bytes(idx)) for idx in range(n_layers)]
-    indices = (
+    indices = centered_layer_indices(n_layers, hint.count) if hint is not None else (
         plan_centered_layers(
             sizes, budget.available_bytes, peak_allocated_bytes=int(baseline.peak_bytes),
             peak_reserved_bytes=int(baseline.reserved_bytes),
@@ -323,7 +351,7 @@ def configure_stream_residency(
     if not indices:
         return refuse("ordinary streaming kept: no complete decoder layer fits the spare budget")
     payload = sum(sizes[idx] for idx in indices)
-    if mode != "auto" and payload > budget.available_bytes:
+    if (mode != "auto" or hint is not None) and payload > budget.available_bytes:
         return refuse("requested resident layers exceed the measured spare budget")
     preload_started = time.perf_counter()
     try:

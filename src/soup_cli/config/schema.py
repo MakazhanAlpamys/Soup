@@ -4285,7 +4285,9 @@ class TrainingConfig(BaseModel):
             "step at setup; RAM tier and CUDA only, otherwise the recompute is "
             "kept. Gradients are the recompute's: measured bit-identical under "
             "deterministic algorithms. task='sft' only for 'off' and 'auto', and "
-            "refused beside activation_offloading. YAML reads an unquoted on/off "
+            "refused beside activation_offloading. With stream_cache_profile on the "
+            "disk tier, 'auto' takes the retained suffix from the measured profile "
+            "instead of keeping the recompute. YAML reads an unquoted on/off "
             "(and true/false, yes/no) as a boolean; true is taken as 'on' and "
             "false as 'off'."
         ),
@@ -4325,7 +4327,9 @@ class TrainingConfig(BaseModel):
             "instead. The RAM-tier host store is retained. Setup probes preserve RNG "
             "and do not update adapters. No speed guarantee. task='sft' with an AdamW "
             "optimizer only, and refused beside activation_offloading and a "
-            "non-default stream_recompute."
+            "non-default stream_recompute (stream_recompute='auto' is allowed with "
+            "stream_cache_profile, which probes the retained suffix after the "
+            "resident layers are installed)."
         ),
     )
 
@@ -4372,6 +4376,51 @@ class TrainingConfig(BaseModel):
             "when the store spills to the disk tier."
         ),
     )
+
+    stream_cache_profile: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=4096,
+        description=(
+            "Optional local JSON history of measured cache costs for dense CUDA "
+            "disk-streamed SFT. It is an input to the placement the other stream "
+            "fields already request, never a second switch: reuse picks the measured "
+            "RAM/GPU placement that is cheapest for the Trainer's real update count "
+            "(cold startup included) inside the stream_ram_cache_mb and "
+            "stream_resident_layers ceilings, and with stream_recompute='auto' it may "
+            "also keep a measured suffix of decoder layers' activations. Missing or "
+            "stale history keeps ordinary streaming and never starts a calibration "
+            "sweep; current memory admission stays mandatory. The path must stay "
+            "under the home, working or temp directory. stream_recompute='off' is "
+            "refused with it."
+        ),
+    )
+    stream_cache_profile_mode: Literal["reuse", "record"] = Field(
+        default="reuse",
+        description=(
+            "With stream_cache_profile: 'record' measures two warmup and six ordinary "
+            "training updates under the requested placement and saves their costs "
+            "(every update still trains); 'reuse' (the default) reads matching "
+            "history without per-step timing. Refused without stream_cache_profile."
+        ),
+    )
+
+    @field_validator("stream_cache_profile", mode="before")
+    @classmethod
+    def _validate_stream_cache_profile_path(cls, v: Any) -> Any:
+        if v is None:
+            return v
+        if not isinstance(v, str) or not v.strip() or "\x00" in v or "://" in v:
+            raise ValueError("training.stream_cache_profile must be a nonempty local path")
+        from soup_cli.utils.paths import quote_path
+        from soup_cli.utils.stream_cache_profile import profile_path_allowed
+
+        if not profile_path_allowed(v):
+            raise ValueError(
+                f"training.stream_cache_profile {quote_path(v)} must stay under the home, "
+                "working or temp directory"
+            )
+        return v
 
     stream_expert_layout: Literal["fused", "per_expert"] = Field(
         default="fused",
@@ -8111,6 +8160,8 @@ class SoupConfig(BaseModel):
                     ("stream_recompute", tcfg.stream_recompute != "on"),
                     ("stream_resident_layers", tcfg.stream_resident_layers != 0),
                     ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                    ("stream_cache_profile", tcfg.stream_cache_profile is not None),
+                    ("stream_cache_profile_mode", tcfg.stream_cache_profile_mode != "reuse"),
                     ("stream_partial_ram", tcfg.stream_partial_ram is not None),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
@@ -8283,7 +8334,12 @@ class SoupConfig(BaseModel):
                     f"training.activation_offloading={tcfg.activation_offloading!r}: "
                     f"both claim the spare VRAM. Unset one of them."
                 )
-            if tcfg.stream_recompute != "on":
+            if tcfg.stream_recompute != "on" and not (
+                tcfg.stream_cache_profile is not None and tcfg.stream_recompute == "auto"
+            ):
+                # With a cache profile the retained suffix is probed after the
+                # resident layers and the RAM hotset are installed, against the
+                # shared cap, so that combination is measured.
                 raise ValueError(
                     f"training.stream_resident_layers cannot be combined with "
                     f"training.stream_recompute={tcfg.stream_recompute!r}: both "
@@ -8297,6 +8353,40 @@ class SoupConfig(BaseModel):
                     f"({', '.join(sorted(_STREAM_RESIDENCY_OPTIMIZERS))}) whose future "
                     f"moment allocation can be budgeted; got optimizer="
                     f"{tcfg.optimizer!r}."
+                )
+        if tcfg.stream_cache_profile is None:
+            if tcfg.stream_cache_profile_mode != "reuse":
+                raise ValueError(
+                    f"training.stream_cache_profile_mode={tcfg.stream_cache_profile_mode!r} "
+                    "requires training.stream_cache_profile"
+                )
+        else:
+            if (
+                stream_task != "sft" or self.backend != "transformers"
+                or self.modality != "text" or tcfg.stream_source != "disk"
+                or tcfg.batch_size == "auto" or tcfg.activation_offloading is not None
+                or tcfg.stream_vram_probe
+                or tcfg.stream_partial_ram is not None
+                or tcfg.stream_expert_layout != "fused"
+            ):
+                raise ValueError(
+                    "training.stream_cache_profile requires text Transformers SFT with "
+                    "stream_source='disk', an explicit batch_size, and no partial "
+                    "RAM, per-expert layout, activation offloading or stream_vram_probe"
+                )
+            if tcfg.stream_recompute == "off":
+                raise ValueError(
+                    "training.stream_cache_profile cannot be combined with "
+                    "training.stream_recompute='off': the profile measures the recompute "
+                    "('on') and the measured retention of 'auto' only. Set stream_recompute "
+                    "to 'on' or 'auto'."
+                )
+            if tcfg.stream_recompute == "auto" and (
+                tcfg.fast_lora or tcfg.optimizer not in _STREAM_RESIDENCY_OPTIMIZERS
+            ):
+                raise ValueError(
+                    "training.stream_cache_profile with stream_recompute='auto' requires an "
+                    "AdamW optimizer and fast_lora=false"
                 )
         if tcfg.stream_recompute != "on" and tcfg.activation_offloading is not None:
             # A retained layer saves its activations through its own

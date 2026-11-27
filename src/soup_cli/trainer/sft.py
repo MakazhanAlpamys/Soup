@@ -1255,6 +1255,9 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
 
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
+        cache_profile_callback = getattr(self, "_stream_cache_profile_callback", None)
+        if cache_profile_callback is not None:
+            self.trainer.add_callback(cache_profile_callback)
 
         # #351: normalise every `checkpoint-*` adapter as the Trainer writes it.
         # The final save is repaired at the end of `train()`; HF dispatches

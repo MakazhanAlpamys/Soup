@@ -477,6 +477,8 @@ training:
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
   # stream_nf4_scale_cache: true  # Keep expanded NF4 scales resident (4bit + double quant); see below
   # stream_recompute: auto     # Keep activations instead of the checkpoint recompute: on/off/auto; see below
+  # stream_cache_profile: .soup/stream-cache.json  # Measured cache history (disk tier SFT); see below
+  # stream_cache_profile_mode: record  # record | reuse (default)
   # stream_loss_chunk: 128     # Output head and loss N tokens at a time, for long contexts (sft only)
   # stream_disk_kind: nvme     # Override auto disk-kind detection: nvme/ssd/hdd; see below
 ```
@@ -516,7 +518,9 @@ from the `stream_ram_cache_mb` hotset. `auto` reports a fallback to ordinary str
 CPU/MPS or a source that cannot coordinate; an explicit positive count refuses an unsupported
 or over-budget request. The config refuses it beside
 `activation_offloading` and a non-default `stream_recompute`, because those also spend the spare
-VRAM and their combined budget is not measured.
+VRAM and their combined budget is not measured. The one exception is `stream_recompute: auto`
+together with `stream_cache_profile` (below), which probes the retained activations after the
+resident layers are installed, against the same cap.
 
 The measured candidate must fit the smallest of 85% of physical VRAM, currently free plus
 reserved memory, and `stream_vram_override`, after a 64 MiB setup reserve and an estimated
@@ -778,6 +782,31 @@ there and skipping the recompute does not skip the backward read (no gain measur
 on a read-bound 14B, worse at a high VRAM fill). `off` and `auto` are `task: sft`
 only and refused beside `activation_offloading`, whose hooks would never see the
 activations a retained layer keeps.
+
+**Measured cache profile (`stream_cache_profile`, opt-in).** On the disk tier `auto` keeps the
+recompute because a step is read-bound. `training.stream_cache_profile: <path>` gives `auto` (and
+the RAM hotset and resident-layer settings) a measured input instead of a guess. It is not a second
+recompute switch: `stream_recompute` keeps its values and its default (`on`), and the profile only
+chooses a placement inside the ceilings you already set (`stream_ram_cache_mb`,
+`stream_resident_layers`; `stream_recompute: auto` additionally lets it keep a measured suffix of
+layers' activations, probed with main's own `auto` planner and then re-checked as a whole).
+
+- `stream_cache_profile_mode: record` measures two warmup and six ordinary updates under the
+  placement the config requests, and writes one candidate (RAM bytes, resident layers, retained
+  layers, cold startup, seconds per update) to the JSON file. Every update still trains.
+- `stream_cache_profile_mode: reuse` (the default) reads that file, picks the candidate with the
+  smallest estimated job time for the Trainer's real update count (a close call or a short job keeps
+  ordinary streaming), and re-checks current RAM and a full-shape GPU probe before applying it. A
+  missing, stale (older than 30 days) or non-matching history keeps ordinary streaming; it never
+  starts a calibration sweep. A malformed or oversize file is refused at setup with the file named.
+- The history is keyed to the model, dataset fingerprint, GPU, driver, library versions, optimizer
+  and batch settings, not to `epochs` or the cache ceilings.
+- The path must stay under your home, the working directory or the temp directory, and must not be a
+  symlink. Scope: text Transformers SFT, `stream_source: disk`, explicit `batch_size`, dense
+  decoders, single device, no `activation_offloading`, `stream_vram_probe`, `stream_partial_ram` or
+  per-expert layout; `stream_recompute: off` is refused; `auto` needs an AdamW optimizer and
+  `fast_lora: false`. With the profile set, `stream_recompute: auto` and `stream_resident_layers`
+  may be combined (without it that pair is refused).
 
 **Qwen3.8-Flash-Next / Qwen4-Exp PLE.** The frozen PLE N-gram table is not a
 decoder-layer weight for storage purposes: putting it in the PLE layer's shard
@@ -1206,7 +1235,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_resident_layers` / `stream_ram_cache_mb` / `stream_partial_ram` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_resident_layers` / `stream_ram_cache_mb` / `stream_cache_profile` / `stream_cache_profile_mode` / `stream_partial_ram` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
 - a pre-quantised bitsandbytes NF4 base (`unsloth/*-bnb-4bit`: `quant_method: bitsandbytes`, `load_in_4bit`, `bnb_4bit_quant_type: nf4`, `bnb_4bit_use_double_quant: true`, `bnb_4bit_compute_dtype: bfloat16`, `uint8` storage) is the one quantised source that streams, and only under `training.quantization: 4bit` on a dense decoder architecture (not `deepseek_v3` or `qwen4_exp`): it is imported into the layer cache byte for byte, with no dequantisation and no requantisation, and the cache is the same on every run device. The run needs a bfloat16 card (a float16 GPU and the CPU are refused), double quantisation left on and an unstriped cache, each refused by name before the weights are resolved. An import killed half way leaves a `.soup-nf4-import.<pid>.*` staging folder in the cache folder; the next run removes it before the disk pre-flight (a folder whose process is still running, another run of the same base, is left alone). The same base under `quantization: none`, and bitsandbytes 8-bit, FP4 or a base that is not double-quantised, stay refused like the other quantised sources

@@ -161,8 +161,13 @@ def test_disabled_is_a_true_no_op_without_model_or_runtime():
     assert not plan.enabled
 
 
-def test_auto_preserves_rng_weights_gradients_and_mixed_training_flags():
+def test_auto_preserves_rng_weights_gradients_and_mixed_training_flags(monkeypatch):
     import torch
+
+    import soup_cli.utils.stream_residency as residency
+
+    clock = iter((0.0, 1.0, 4.0, 5.0, 7.0, 12.0))
+    monkeypatch.setattr(residency, "time", SimpleNamespace(perf_counter=lambda: next(clock)))
 
     model, runtime, memory, calls, measure = fixture()
     model[1].eval()
@@ -178,7 +183,8 @@ def test_auto_preserves_rng_weights_gradients_and_mixed_training_flags():
     assert plan.candidate_peak_reserved_bytes + 400 <= plan.cap_bytes
     assert plan.optimizer_reserve_bytes == 300
     assert plan.preload_seconds >= 0
-    assert plan.setup_seconds >= plan.preload_seconds
+    assert plan.setup_seconds == 12.0
+    assert plan.record_only_seconds == 3.0
     assert torch.equal(torch.get_rng_state(), initial_rng)
     assert all(
         torch.equal(before, after) for before, after in zip(initial_values, model.parameters())
