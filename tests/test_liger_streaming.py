@@ -211,22 +211,31 @@ def _install_cpu_substitutes(monkeypatch) -> None:
 
     from soup_cli.utils import liger_streaming
 
+    def normalize(hidden, eps):
+        variance = hidden.pow(2).mean(-1, keepdim=True)
+        return hidden * torch.rsqrt(variance + eps)
+
     class ReferenceRMS(torch.autograd.Function):
         @staticmethod
         def forward(ctx, hidden, weight, eps, offset, casting_mode, in_place):
             assert weight is None and offset == 0 and casting_mode == "llama"
             assert in_place is False
-            rstd = (hidden.float().square().mean(-1, keepdim=True) + eps).rsqrt()
-            ctx.save_for_backward(hidden, rstd)
-            return (hidden.float() * rstd).to(hidden.dtype)
+            assert hidden.dtype == torch.float32
+            ctx.eps = eps
+            ctx.save_for_backward(hidden)
+            return normalize(hidden, eps)
 
         @staticmethod
         def backward(ctx, gradient):
-            hidden, rstd = ctx.saved_tensors
-            normalized = hidden * rstd
-            scaled = gradient
-            dx = (scaled - normalized * (scaled * normalized).mean(-1, keepdim=True)) * rstd
-            return dx, None, None, None, None, None
+            (hidden,) = ctx.saved_tensors
+            # Rebuild HF's eager graph so mean, rsqrt and the two gradient paths
+            # round in ATen's order. The closed-form derivative reassociates them.
+            with torch.enable_grad():
+                reference = hidden.detach().requires_grad_()
+                (hidden_gradient,) = torch.autograd.grad(
+                    normalize(reference, ctx.eps), reference, gradient
+                )
+            return hidden_gradient, None, None, None, None, None
 
     class ReferenceSwiGLU(torch.autograd.Function):
         @staticmethod
@@ -651,6 +660,25 @@ def test_streamed_liger_accepts_the_pinned_version(monkeypatch):
     monkeypatch.setattr(liger_streaming, "_load_liger_ops", lambda: calls.append("ops"))
     liger_streaming.validate_streaming_liger_environment("cuda")
     assert calls == ["global", "ops"]
+
+
+def test_streamed_liger_refuses_an_unpinned_version(monkeypatch):
+    import importlib.metadata
+
+    from soup_cli.utils import liger_streaming
+
+    def unexpected_environment_check():
+        pytest.fail("an unpinned Liger version reached the subsequent environment checks")
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.9.1")
+    monkeypatch.setattr(liger_streaming, "_assert_no_global_liger", unexpected_environment_check)
+    monkeypatch.setattr(liger_streaming, "_load_liger_ops", unexpected_environment_check)
+    with pytest.raises(ValueError) as excinfo:
+        liger_streaming.validate_streaming_liger_environment("cuda")
+    assert str(excinfo.value) == (
+        'streamed Liger requires liger-kernel==0.8.1; '
+        'found 0.9.1; pip install "liger-kernel==0.8.1"'
+    )
 
 
 @pytest.mark.parametrize(

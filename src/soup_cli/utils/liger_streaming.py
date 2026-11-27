@@ -28,8 +28,8 @@ def validate_streaming_liger_environment(device: str) -> None:
         ) from exc
     if Version(installed) != Version("0.8.1"):
         raise ValueError(
-            "streamed Liger requires liger-kernel==0.8.1; "
-            f"found {installed}; install liger-kernel==0.8.1"
+            'streamed Liger requires liger-kernel==0.8.1; '
+            f'found {installed}; pip install "liger-kernel==0.8.1"'
         )
     _assert_no_global_liger()
     _load_liger_ops()
