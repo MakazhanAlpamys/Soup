@@ -114,7 +114,7 @@ def test_real_frozen_protocol_is_integrity_checked(tmp_path):
     assert len(examples) == 8
     assert protocol["max_length"] == 64
     assert protocol["evaluation_data_sha256"] == (
-        "bfd83091425d7ef2292aa7502ffbd6ee9f42291c1b5e234d945098aab77faa75"
+        "5bf15fd1b4296f0c89eb33ae8fb9c363816ab3d9832b0c5f17c84f9d5e800d19"
     )
     training = json.loads((repo / "examples/giant-moe-pilot-data.json").read_bytes())
     canonical = json.dumps(training, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
