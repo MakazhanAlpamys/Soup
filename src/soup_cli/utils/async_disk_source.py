@@ -597,7 +597,13 @@ class AsyncDiskSource:
                     f"disk staging needs {needed} bytes, "
                     f"exceeding remaining host RAM budget {max_host_bytes}"
                 )
-        self._arenas, self._regions = self._allocate_staging(region_sizes)
+        if max_host_bytes is not None and self.pinned:
+            # Allocate the admitted layout once, including its absolute-address padding.
+            self._arenas, self._regions = self._allocate_staging(
+                region_sizes, base_slack_bytes=SECTOR_BYTES - 1
+            )
+        else:
+            self._arenas, self._regions = self._allocate_staging(region_sizes)
         self.host_allocated_bytes = sum(
             arena.numel() * arena.element_size() for arena in self._arenas
         )
@@ -872,12 +878,14 @@ class AsyncDiskSource:
         if not self.pinned:
             return sum(size + SECTOR_BYTES for size in region_sizes)
         from soup_cli.utils.layer_stream_runtime import plan_pinned_arenas
-        from soup_cli.utils.stream_ram_cache import pinned_allocation_bytes
 
-        plan = plan_pinned_arenas(region_sizes, align=SECTOR_BYTES)
-        return pinned_allocation_bytes(plan, region_sizes, SECTOR_BYTES)
+        return plan_pinned_arenas(
+            region_sizes, align=SECTOR_BYTES, base_slack_bytes=SECTOR_BYTES - 1
+        ).pinned_bytes
 
-    def _allocate_staging(self, region_sizes: Sequence[int]) -> Tuple[List[Any], List[Any]]:
+    def _allocate_staging(
+        self, region_sizes: Sequence[int], *, base_slack_bytes: int = 0
+    ) -> Tuple[List[Any], List[Any]]:
         """Regions on sector boundaries; pinned ones as views of power-of-two arenas."""
         import torch
 
@@ -886,7 +894,9 @@ class AsyncDiskSource:
         arenas: List[Any] = []
         regions: List[Any] = []
         if self.pinned:
-            plan = plan_pinned_arenas(region_sizes, align=SECTOR_BYTES)
+            plan = plan_pinned_arenas(
+                region_sizes, align=SECTOR_BYTES, base_slack_bytes=base_slack_bytes
+            )
             fills = [0] * len(plan.arena_sizes)
             for (arena_index, offset), size in zip(plan.placements, region_sizes):
                 fills[arena_index] = max(fills[arena_index], offset + size)
@@ -897,7 +907,7 @@ class AsyncDiskSource:
                 arena = _allocate_pinned_arena(size)
                 shift = (-arena.data_ptr()) % SECTOR_BYTES
                 if shift + fill > size:
-                    # No room to shift: the next power of two has at least a sector spare.
+                    # The uncapped path can grow the arena when its alignment requires it.
                     del arena
                     arena = _allocate_pinned_arena(2 * size)
                     shift = (-arena.data_ptr()) % SECTOR_BYTES

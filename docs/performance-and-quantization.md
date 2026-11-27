@@ -587,9 +587,17 @@ and RAM-backed auxiliary weights, and caps the envelope using the existing
 free/physical-RAM headroom rules. The source checks the envelope **before buffer
 allocation**: caller/trainer reservations + resident allocations + disk staging
 allocations + the largest selected shard's loading map must fit. Pinned arena
-rounding and pageable staging alignment overhead count against the envelope.
+rounding and staging alignment overhead count against the envelope. Pinned
+staging reserves padding in each arena to align its actual address.
 An oversized plan is refused; it does not silently reduce reservations, change
 pinning or restart with another plan.
+
+With `training.l2l: true`, use a fixed integer `training.batch_size`. Before caching
+weights, Soup reserves the maximum activation window inside `limit_bytes`. It uses
+`data.max_length` rounded up to 64 tokens, the batch size, the accumulation count,
+the model dimensions, the activation dtype and pinned allocation rounding on CUDA.
+Keep this automatic charge out of `reserved_bytes`, which covers other host users
+and safety headroom. The shared-budget path keeps uncompressed activations in RAM.
 
 Selection is stable first-fit in decoder order, retaining complete layers only.
 Embedding/head shards remain on the existing path. Cached layers are removed
@@ -1328,6 +1336,11 @@ training:
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
 - **Recipe and resume.** The run writes `l2l_recipe.json` (requested and effective k, codec) to its output directory. A resume whose k or codec differs from the checkpoint's is refused, because a different k moves the optimizer-step boundaries.
 - **k = 1** behaves like plain streaming.
+- **Shared host budget.** Dense, unquantized Llama SFT on the disk tier can use
+  [experimental partial RAM residency](#experimental-partial-ram-residency) with L2L.
+  A window that exceeds the activation reservation fails before replacing the
+  current store. Leave `training.l2l_spill_dir` unset for this RAM-only mode.
+  Shutdown drains activations before releasing the streamed weights.
 
 ### Preference losses over streaming (v0.72.4)
 

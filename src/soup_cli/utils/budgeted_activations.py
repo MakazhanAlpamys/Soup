@@ -1,8 +1,8 @@
 """Shared allocation bridge for uncompressed L2L activations.
 
-An explicit shared allocator wraps the existing resident/spill store. Construct
-activations before any optional weight residency so the activations keep priority. This is not
-a process-RSS limit. The public L2L path uses a separately reserved RAM partition.
+Callers can reserve activations before allocating optional resident weights.
+The public shared-budget path charges its entire activation partition before
+streaming weights, then leases space within that partition as windows grow.
 """
 
 from collections.abc import Callable, Sequence
@@ -14,6 +14,7 @@ from soup_cli.utils.l2l_activations import (
     SECTOR_BYTES,
     ActivationStore,
     SpillBackend,
+    sector_round_up,
 )
 
 
@@ -22,8 +23,8 @@ def activation_allocation_bytes(
 ) -> int:
     """Uncompressed layout: resident chunks plus TWO aligned staging rings.
 
-    Matches the store's own host-byte count (floor bytes = 0).
-    Charge alignment slack before rounding each actual pinned allocation.
+    Charge the sector-rounded slot and its alignment slack before rounding
+    each pinned allocation.
     """
     from soup_cli.utils.layer_stream_runtime import _next_power_of_two
 
@@ -36,7 +37,7 @@ def activation_allocation_bytes(
     block = _next_power_of_two(chunk_bytes) if pin else chunk_bytes
     total = (n_layers - spill_layers) * k * block
     if spill_layers:
-        request = chunk_bytes + SECTOR_BYTES
+        request = sector_round_up(chunk_bytes) + SECTOR_BYTES
         total += 2 * ring * (_next_power_of_two(request) if pin else request)
     return total
 

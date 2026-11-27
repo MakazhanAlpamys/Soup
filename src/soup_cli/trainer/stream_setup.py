@@ -1714,6 +1714,7 @@ class StreamingSetupMixin:
             )
 
         partial_budget = None
+        self._l2l_host_budget_plan = None
         if partial_config is not None:
             # Free RAM already excludes live allocations. This intentionally conservative
             # envelope also reserves the caller-declared host consumers plus the resident
@@ -1736,6 +1737,24 @@ class StreamingSetupMixin:
                 + (ngram_bytes if ngram_source == "ram" else 0),
                 partial_config.cache_bytes,
             )
+            if getattr(tcfg, "l2l", False):
+                from soup_cli.utils.l2l_host_budget import plan_l2l_host_budget
+
+                recipe = getattr(self, "_l2l_recipe", None)
+                self._l2l_host_budget_plan = plan_l2l_host_budget(
+                    partial_budget,
+                    n_layers=int(model_config.num_hidden_layers),
+                    batch_size=tcfg.batch_size,
+                    max_length=cfg.data.max_length,
+                    hidden_size=int(model_config.hidden_size),
+                    microbatches=(
+                        recipe.effective_k if recipe is not None
+                        else tcfg.gradient_accumulation_steps
+                    ),
+                    dtype=dtype,
+                    pin=on_cuda,
+                )
+                partial_budget = self._l2l_host_budget_plan.weights
             console.print(
                 "[yellow]training.stream_partial_ram is experimental: you reserve the other "
                 "host users, and the envelope is an allocation budget, not a process-RSS "
@@ -2034,7 +2053,11 @@ class StreamingSetupMixin:
         assert_streamed_adapter_saved(self.trainer.model, output_dir)
 
     def _close_stream_runtime(self) -> None:
-        """Release the streaming weight source, if this run had one."""
+        """Release shared activations before closing the streaming weight source."""
+        state = getattr(getattr(self, "trainer", None), "_soup_l2l", None)
+        if getattr(state, "host_budget_plan", None) is not None:
+            # A failed drain keeps its activation lease and leaves the runtime open.
+            state.close()
         runtime = getattr(self, "_stream_runtime", None)
         if runtime is not None:
             runtime.close()
@@ -2117,6 +2140,7 @@ class StreamingSetupMixin:
             spill_dir=tcfg.l2l_spill_dir,
             weight_dirs=self._stream_weight_dirs,
             effective_k=effective_k,
+            host_budget_plan=getattr(self, "_l2l_host_budget_plan", None),
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "

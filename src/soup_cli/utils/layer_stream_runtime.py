@@ -755,6 +755,7 @@ def plan_pinned_arenas(
     *,
     arena_bytes: int = PINNED_ARENA_BYTES,
     align: int = PINNED_ARENA_ALIGN,
+    base_slack_bytes: int = 0,
 ) -> ArenaPlan:
     """Pack ``sizes`` (bytes, allocation order) into power-of-two arenas.
 
@@ -790,6 +791,9 @@ def plan_pinned_arenas(
     either way. Each arena is finally trimmed to the power of two above what
     it holds — the last one is usually part-filled, and a tiny model must not
     page-lock a whole default arena for a 5 MB store. Pure arithmetic, no torch.
+
+    ``base_slack_bytes`` reserves padding in each arena so a caller can align its
+    actual allocation address. Placements are relative to the aligned base.
     """
     if arena_bytes <= 0 or arena_bytes & (arena_bytes - 1):
         raise ValueError(f"arena_bytes must be a power of two; got {arena_bytes}")
@@ -797,6 +801,8 @@ def plan_pinned_arenas(
         raise ValueError(f"align must be a power of two; got {align}")
     if align > arena_bytes:
         raise ValueError(f"align ({align}) cannot exceed arena_bytes ({arena_bytes})")
+    if type(base_slack_bytes) is not int or base_slack_bytes < 0:
+        raise ValueError("base_slack_bytes must be a non-negative integer")
     sizes = [int(size) for size in sizes]
     if any(size < 0 for size in sizes):
         raise ValueError(f"a negative tensor size was planned: {min(sizes)}")
@@ -804,12 +810,14 @@ def plan_pinned_arenas(
         return ArenaPlan(arena_sizes=(), placements=(), requested_bytes=0)
     ceiling = max(arena_bytes, PINNED_ARENA_MAX_BYTES)
     capacity = min(max(arena_bytes, _next_power_of_two(4 * max(sizes))), ceiling)
-    in_order = _plan_in_order(sizes, capacity, align)
-    largest_first = _plan_largest_first(sizes, capacity, align)
+    in_order = _plan_in_order(sizes, capacity, align, base_slack_bytes)
+    largest_first = _plan_largest_first(sizes, capacity, align, base_slack_bytes)
     return largest_first if largest_first.pinned_bytes < in_order.pinned_bytes else in_order
 
 
-def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+def _plan_in_order(
+    sizes: Sequence[int], capacity: int, align: int, base_slack_bytes: int = 0
+) -> ArenaPlan:
     """Allocation order: each tensor into the arena opened last, else a new one."""
     fills: List[int] = []
     capacities: List[int] = []
@@ -817,22 +825,25 @@ def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan
     for size in sizes:
         if fills:
             start = -(-fills[-1] // align) * align
-            if start + size <= capacities[-1]:
+            if start + size + base_slack_bytes <= capacities[-1]:
                 placements.append((len(fills) - 1, start))
                 fills[-1] = start + size
                 continue
         fills.append(size)
-        # Only a tensor beyond the ceiling opens an arena wider than the rest.
-        capacities.append(max(capacity, _next_power_of_two(size)))
+        capacities.append(max(capacity, _next_power_of_two(size + base_slack_bytes)))
         placements.append((len(fills) - 1, 0))
     return ArenaPlan(
-        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        arena_sizes=tuple(
+            max(align, _next_power_of_two(fill + base_slack_bytes)) for fill in fills
+        ),
         placements=tuple(placements),
         requested_bytes=sum(sizes),
     )
 
 
-def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+def _plan_largest_first(
+    sizes: Sequence[int], capacity: int, align: int, base_slack_bytes: int = 0
+) -> ArenaPlan:
     """Largest tensor first, each into the FIRST arena with room, else a new one.
 
     The sort is stable, so equal sizes keep their allocation order. Each
@@ -845,16 +856,18 @@ def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> Aren
     for original, size in sorted(enumerate(sizes), key=lambda item: -item[1]):
         for arena, fill in enumerate(fills):
             start = -(-fill // align) * align
-            if start + size <= capacities[arena]:
+            if start + size + base_slack_bytes <= capacities[arena]:
                 placements[original] = (arena, start)
                 fills[arena] = start + size
                 break
         else:
             placements[original] = (len(fills), 0)
             fills.append(size)
-            capacities.append(max(capacity, _next_power_of_two(size)))
+            capacities.append(max(capacity, _next_power_of_two(size + base_slack_bytes)))
     return ArenaPlan(
-        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        arena_sizes=tuple(
+            max(align, _next_power_of_two(fill + base_slack_bytes)) for fill in fills
+        ),
         placements=tuple(placements),
         requested_bytes=sum(sizes),
     )
@@ -4155,12 +4168,14 @@ def install_streaming(
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
     partial_ram_budget: Any = None,
+    shared_host_budget: Any = None,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
     ``partial_ram_budget`` (a ``partial_ram_source.PartialRamBudget``,
     ``training.stream_partial_ram``): keep a bounded prefix of the decoder layers in host
     RAM beside the async disk reader. Disk tier, dense Llama, unquantized only.
+    ``shared_host_budget`` lets that source draw from an existing host envelope.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
@@ -4178,6 +4193,9 @@ def install_streaming(
     expert, so a step reads every routed-to expert twice instead of three times
     (``expert_stream.two_read_checkpoint_contexts``).
     """
+    if shared_host_budget is not None and partial_ram_budget is None:
+        raise ValueError("shared_host_budget requires an explicit partial_ram_budget")
+
     import torch
 
     from soup_cli.utils.layer_shard import (
@@ -4326,6 +4344,7 @@ def install_streaming(
         read_ahead_decision=read_ahead_decision,
         partial_ram_budget=partial_ram_budget,
         cacheable_layers=n_layers,
+        shared_host_budget=shared_host_budget,
     )
     try:
         pool = LayerBufferPool(
@@ -4681,6 +4700,7 @@ def _build_source(
     read_ahead_decision=None,
     partial_ram_budget=None,
     cacheable_layers=None,
+    shared_host_budget=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -4714,6 +4734,8 @@ def _build_source(
     The second element of the returned tuple means the same thing on both tiers:
     the host-side source memory is page-locked.
     """
+    if shared_host_budget is not None and partial_ram_budget is None:
+        raise ValueError("shared_host_budget requires an explicit partial_ram_budget")
     if partial_ram_budget is not None:
         from soup_cli.utils.partial_ram_source import PartialRamSource
 
@@ -4724,6 +4746,7 @@ def _build_source(
             shard_dir, n_layers, spec, budget=partial_ram_budget, pin=pin,
             shard_paths=shard_paths, read_ahead=read_ahead, layer_roots=layer_roots,
             cacheable_layers=cacheable_layers,
+            host_budget=shared_host_budget,
         )
         return source, source.pinned
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
@@ -4896,6 +4919,7 @@ def build_streamed_model(
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
     partial_ram_budget: Any = None,
+    shared_host_budget: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
@@ -4910,8 +4934,11 @@ def build_streamed_model(
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
     ``install_streaming``'s: an API switch, no config field. ``partial_ram_budget`` is
-    ``training.stream_partial_ram`` as a ``PartialRamBudget``.
+    ``training.stream_partial_ram`` as a ``PartialRamBudget``. An optional
+    ``shared_host_budget`` is passed through to the partial RAM source.
     """
+    if shared_host_budget is not None and partial_ram_budget is None:
+        raise ValueError("shared_host_budget requires an explicit partial_ram_budget")
     if lora_config is not None:
         from peft import get_peft_model
 
@@ -4964,6 +4991,7 @@ def build_streamed_model(
             nf4_scale_cache=nf4_scale_cache,
             two_read_experts=two_read_experts,
             partial_ram_budget=partial_ram_budget,
+            shared_host_budget=shared_host_budget,
         )
         if lora_config is None:
             try:

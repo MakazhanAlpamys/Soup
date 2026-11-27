@@ -4389,8 +4389,9 @@ class TrainingConfig(BaseModel):
         description=(
             "Experimental: keep a bounded prefix of the decoder layers in host RAM beside "
             "the async SSD reader, under an explicit host envelope. limit_bytes is the "
-            "total the weights may take, reserved_bytes covers activations and every other "
-            "host consumer (it is never measured for you) and cache_bytes caps the "
+            "total allocation envelope. With training.l2l, Soup reserves the maximum "
+            "RAM activation window in addition to reserved_bytes for other host consumers. "
+            "Otherwise reserved_bytes also covers activations. cache_bytes caps the "
             "allocation for the cached layers. Dense Llama, unquantized, task='sft', "
             "stream_source='disk' only; an allocation envelope, not a process-RSS limit. "
             "Refused beside stream_ram_cache_mb and stream_resident_layers."
@@ -8259,6 +8260,17 @@ class SoupConfig(BaseModel):
                         f"training.{other}: each decides which layers sit in host RAM "
                         f"or VRAM and their combined budget is not measured. Set one "
                         f"of them."
+                    )
+            if tcfg.l2l:
+                if type(tcfg.batch_size) is not int:
+                    raise ValueError(
+                        "training.stream_partial_ram with training.l2l requires a fixed "
+                        "positive integer training.batch_size"
+                    )
+                if tcfg.l2l_spill_dir is not None:
+                    raise ValueError(
+                        "training.l2l_spill_dir cannot be set with training.stream_partial_ram: "
+                        "the shared budget uses RAM-only activations"
                     )
         if tcfg.stream_source == "ram" and tcfg.stream_ram_cache_mb != 0:
             raise ValueError(
