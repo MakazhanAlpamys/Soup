@@ -1,6 +1,7 @@
 """soup docs search shows the typed query, the indexed text and its errors as typed."""
 
 import json
+import re
 
 import pytest
 from rich.console import Console
@@ -146,9 +147,10 @@ def test_a_plain_table_keeps_its_shape(monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     lines = strip_ansi(result.stdout).splitlines()
     assert lines[0].strip() == "Documentation Search: 'pip install'"
-    assert [" ".join(cell.split()) for cell in lines[2].strip("\u2503").split("\u2503")] == [
-        "Doc", "Section", "Score", "Excerpt",
-    ]
+    # The header row uses a heavy bar that Rich swaps for a light one where the terminal cannot
+    # draw it (Windows), so read the cell names whichever bar separates them.
+    header = [" ".join(cell.split()) for cell in re.split("[\u2502\u2503]", lines[2])]
+    assert [cell for cell in header if cell] == ["Doc", "Section", "Score", "Excerpt"]
     assert " ".join(lines[4].split()) == (
         "\u2502 models \u2502 The extras table \u2502 22.4966 \u2502 Add pip install \u2502"
     )
