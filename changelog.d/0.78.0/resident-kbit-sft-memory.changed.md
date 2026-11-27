@@ -1,1 +1,0 @@
-- Avoid temporary FP32 copies during resident BF16 k-bit SFT preparation and add `training.embed_on_host` to keep an untied frozen input embedding on the CPU. (#PENDING by @nurseit14)
