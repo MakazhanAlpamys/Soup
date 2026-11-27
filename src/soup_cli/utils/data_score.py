@@ -28,7 +28,18 @@ import stat as _stat
 import tempfile
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from soup_cli.utils.paths import is_under_cwd
 
@@ -600,8 +611,16 @@ def load_jsonl_rows(
     strict: bool = False,
     max_file_bytes: Optional[int] = None,
     max_rows: Optional[int] = None,
+    on_skip: Optional[Callable[[str, str], None]] = None,
 ) -> List[Mapping[str, Any]]:
-    """Read bounded JSONL under cwd, with optional tighter byte and record caps."""
+    """Read bounded JSONL under cwd, with optional tighter byte and record caps.
+
+    Over the record cap, both modes raise :class:`JsonlLimitError`; they never
+    return part of the file. With ``strict=False`` a line that is not valid
+    JSON or not an object is skipped, and ``on_skip(kind, message)`` (if
+    given) is called for it, ``kind`` being ``"invalid_json"`` or
+    ``"non_object"``. The message names the line, never its contents.
+    """
     max_file_bytes = _MAX_FILE_BYTES if max_file_bytes is None else min(
         max_file_bytes, _MAX_FILE_BYTES,
     )
@@ -616,20 +635,28 @@ def load_jsonl_rows(
             line = line.strip()
             if not line:
                 continue
-            if len(out) >= max_rows:
-                if strict:
-                    raise JsonlLimitError(f"file exceeds {max_rows} rows")
-                break
+            if strict and len(out) >= max_rows:
+                raise JsonlLimitError(f"file exceeds {max_rows} rows")
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 if strict:
                     raise ValueError(f"line {line_number} is not valid JSON") from exc
+                if on_skip is not None:
+                    on_skip("invalid_json", f"invalid JSON on line {line_number}: {exc}")
                 continue
             if isinstance(row, Mapping):
+                # Tolerant mode counts object rows only, so a skipped line
+                # past the last row does not push a full file over the cap.
+                if len(out) >= max_rows:
+                    raise JsonlLimitError(f"file exceeds {max_rows} rows")
                 out.append(row)
             elif strict:
                 raise ValueError(f"line {line_number} must be a JSON object")
+            elif on_skip is not None:
+                from soup_cli.data.loader import non_object_row_issue
+
+                on_skip("non_object", non_object_row_issue(row, line_number))
     return out
 
 
