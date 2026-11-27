@@ -1107,6 +1107,9 @@ class MLXSFTTrainerWrapper:
             build_optimizer(optimizer_plan), float(cfg.training.max_grad_norm)
         )
 
+        from soup_cli.utils.launcher import is_chief_rank
+
+        chief_rank = is_chief_rank()
         captured: dict = {}
         total_epochs = float(cfg.training.epochs)
 
@@ -1189,7 +1192,7 @@ class MLXSFTTrainerWrapper:
                         lr=cfg.training.lr,
                         val_loss=val_loss,
                     )
-                if tracker is not None and run_id:
+                if chief_rank and tracker is not None and run_id:
                     try:
                         # `log_metrics` defaults loss/lr/speed to 0.0, not None,
                         # so a bare val row writes three training columns that
@@ -1215,20 +1218,21 @@ class MLXSFTTrainerWrapper:
                         )
                     except Exception:  # noqa: BLE001 — telemetry must not kill a run
                         pass
-                try:
-                    from soup_cli.utils.sse_train_stream import TrainEvent
-                    from soup_cli.utils.train_event_buffer import push_train_event
+                if chief_rank:
+                    try:
+                        from soup_cli.utils.sse_train_stream import TrainEvent
+                        from soup_cli.utils.train_event_buffer import push_train_event
 
-                    push_train_event(
-                        TrainEvent(
-                            type="metric",
-                            step=step,
-                            epoch=float(epoch),
-                            val_loss=val_loss,
+                        push_train_event(
+                            TrainEvent(
+                                type="metric",
+                                step=step,
+                                epoch=float(epoch),
+                                val_loss=val_loss,
+                            )
                         )
-                    )
-                except Exception:  # noqa: BLE001 — telemetry must not kill a run
-                    pass
+                    except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                        pass
 
             def on_train_loss_report(self, train_info: dict) -> None:
                 should_stop = (
@@ -1286,7 +1290,7 @@ class MLXSFTTrainerWrapper:
                     # or event claims a measurement that did not happen.
                     val_loss=type(self)._sticky_val_loss,
                 )
-                if tracker is not None and run_id:
+                if chief_rank and tracker is not None and run_id:
                     tracker.log_metrics(
                         run_id=run_id,
                         step=step,
@@ -1303,22 +1307,23 @@ class MLXSFTTrainerWrapper:
                 # the same shape as the transformers path: any exception in
                 # here must never take down training. grad_norm stays None --
                 # mlx-lm does not compute one, and the event field is Optional.
-                try:
-                    from soup_cli.utils.sse_train_stream import TrainEvent
-                    from soup_cli.utils.train_event_buffer import push_train_event
+                if chief_rank:
+                    try:
+                        from soup_cli.utils.sse_train_stream import TrainEvent
+                        from soup_cli.utils.train_event_buffer import push_train_event
 
-                    push_train_event(
-                        TrainEvent(
-                            type="metric",
-                            step=step,
-                            epoch=float(epoch),
-                            loss=float(loss) if loss is not None else None,
-                            lr=float(lr_value) if lr_value is not None else None,
-                            grad_norm=None,
+                        push_train_event(
+                            TrainEvent(
+                                type="metric",
+                                step=step,
+                                epoch=float(epoch),
+                                loss=float(loss) if loss is not None else None,
+                                lr=float(lr_value) if lr_value is not None else None,
+                                grad_norm=None,
+                            )
                         )
-                    )
-                except Exception:  # noqa: BLE001 — telemetry must not kill a run
-                    pass
+                    except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                        pass
 
         callback = _Callback()
         eval_log: list = []

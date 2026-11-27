@@ -1001,6 +1001,10 @@ class PPOTrainerWrapper:
         all_rewards = []
         log_history = []
 
+        from soup_cli.utils.launcher import is_chief_rank
+
+        is_chief = is_chief_rank()
+
         for epoch in range(self._num_epochs):
             for batch_idx in range(0, len(self._train_ds), self._batch_size):
                 batch_end = min(batch_idx + self._batch_size, len(self._train_ds))
@@ -1056,8 +1060,8 @@ class PPOTrainerWrapper:
                         lr=log_entry["lr"],
                     )
 
-                # Update tracker
-                if tracker and run_id:
+                # Update tracker (chief rank only, #3370)
+                if is_chief and tracker and run_id:
                     tracker.log_metrics(
                         run_id=run_id,
                         step=step,

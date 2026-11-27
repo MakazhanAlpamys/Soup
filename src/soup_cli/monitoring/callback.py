@@ -456,11 +456,14 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # v0.53.9 #94 — push to the global SSE buffer so the live Web UI
         # dashboard sees per-step metrics in real time. Best-effort: any
         # exception inside the push must NEVER take down training.
+        from soup_cli.utils.launcher import is_chief_rank
+
+        is_chief = bool(getattr(state, "is_world_process_zero", True)) and is_chief_rank()
         try:
             from soup_cli.utils.sse_train_stream import TrainEvent
             from soup_cli.utils.train_event_buffer import push_train_event
 
-            if measured_any:
+            if is_chief and measured_any:
                 push_train_event(
                     TrainEvent(
                         type="metric",
@@ -554,9 +557,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if self._grad_accum_enabled and not self._grad_accum_advised:
             self._maybe_advise_grad_accum()
 
-        # Log to experiment tracker. An event that measured no loss, lr, grad_norm or
-        # validation number writes no training row.
-        if self.tracker and self.run_id and is_runtime_summary:
+        # Log to experiment tracker (chief rank only, #3370). An event that
+        # measured no loss, lr, grad_norm or validation number writes no training row.
+        if is_chief and self.tracker and self.run_id and is_runtime_summary:
             # HF's final runtime summary: its throughput is a measurement (#2810), so
             # it is kept, as a row of its own. Nothing else in the event is a per-step
             # value, so loss / lr / grad_norm / val -- and the reward -- stay NULL, not
@@ -570,7 +573,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 gpu_mem=gpu_mem,
                 kind=ROW_KIND_SUMMARY,
             )
-        if self.tracker and self.run_id and measured_any:
+        if is_chief and self.tracker and self.run_id and measured_any:
             # A training row; for a runtime summary that carried a leftover reward it is
             # the reward's own row, and the whole-run throughput is not its speed.
             self.tracker.log_metrics(

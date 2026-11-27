@@ -1288,6 +1288,8 @@ def _record_run_failure(tracker: Any, run_id: str, exc: BaseException) -> None:
     The failure is already being raised (and, on the training path, written to a crash
     bundle); a fault while recording it is reported and swallowed.
     """
+    if tracker is None or not run_id:
+        return
     try:
         tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
     except Exception as record_error:
@@ -2859,40 +2861,45 @@ def train(
     # shadows it (v0.43.0 review fix — name-collision regression).
     tracker_backend = tracker
 
-    # Start experiment tracking
-    from soup_cli.experiment.tracker import ExperimentTracker
+    # Start experiment tracking (chief rank only, #3370)
     from soup_cli.utils.cost_history import cost_history_eligible
     from soup_cli.utils.launcher import is_in_distributed
 
-    tracker = ExperimentTracker()
+    is_chief = _should_run_diagnose_gate_on_rank()
     run_base = cfg.base
-    experiment_name = cfg.experiment_name or name
-    run_id = tracker.start_run(
-        config_dict=cfg.model_dump(),
-        device=device,
-        device_name=device_name,
-        gpu_info=gpu_info,
-        experiment_name=experiment_name,
-        run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
-        cost_history_eligible=cost_history_eligible(
-            task=cfg.task,
-            resume_from=resume_from,
+    tracker = None
+    run_id = ""
+    if is_chief:
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        tracker = ExperimentTracker()
+        experiment_name = cfg.experiment_name or name
+        run_id = tracker.start_run(
+            config_dict=cfg.model_dump(),
             device=device,
-            gpu_count=gpu_info.get("gpu_count"),
-            distributed=is_in_distributed(),
-            fsdp=fsdp,
-            ds_config_path=ds_config_path,
-        ),
-    )
-    # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
-    # _reconcile_orphaned_run to ever notice the process is gone — the
-    # rescue path #401 built for MCP-spawned runs was otherwise inert here.
-    tracker.mark_running(run_id, pid=os.getpid())
-    tracker.record_training_data_hash(run_id, training_data_sha256)
-    tracker.record_code_revision(
-        run_id, commit=code_revision.commit, dirty=code_revision.dirty,
-    )
-    console.print(f"[dim]Run ID: {run_id}[/]")
+            device_name=device_name,
+            gpu_info=gpu_info,
+            experiment_name=experiment_name,
+            run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
+            cost_history_eligible=cost_history_eligible(
+                task=cfg.task,
+                resume_from=resume_from,
+                device=device,
+                gpu_count=gpu_info.get("gpu_count"),
+                distributed=is_in_distributed(),
+                fsdp=fsdp,
+                ds_config_path=ds_config_path,
+            ),
+        )
+        # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
+        # _reconcile_orphaned_run to ever notice the process is gone — the
+        # rescue path #401 built for MCP-spawned runs was otherwise inert here.
+        tracker.mark_running(run_id, pid=os.getpid())
+        tracker.record_training_data_hash(run_id, training_data_sha256)
+        tracker.record_code_revision(
+            run_id, commit=code_revision.commit, dirty=code_revision.dirty,
+        )
+        console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
         # Build trainer based on task type
@@ -3002,9 +3009,10 @@ def train(
         confirm_distributed_base_revision(
             base_identity, model=getattr(trainer_wrapper, "model", None),
         )
-        tracker.record_base_revision(
-            run_id, revision=base_identity.revision, source=base_identity.source,
-        )
+        if tracker is not None and run_id:
+            tracker.record_base_revision(
+                run_id, revision=base_identity.revision, source=base_identity.source,
+            )
         if base_identity.source == "hub_commit":
             console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
         elif base_identity.source == "cache_path":
@@ -3084,7 +3092,7 @@ def train(
         console.print("[bold green]Training started![/]\n")
 
         profiler_ctx = contextlib.nullcontext()
-        if profile_run:
+        if profile_run and is_chief:
             from soup_cli.utils.profiling import profile_training
 
             profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
@@ -3143,31 +3151,33 @@ def train(
         run_status: Literal["completed", "stopped"] = (
             "stopped" if manual_stop.stopped else "completed"
         )
-        tracker.record_base_revision(
-            run_id, revision=base_identity.revision, source=base_identity.source,
-        )
+        if tracker is not None and run_id:
+            tracker.record_base_revision(
+                run_id, revision=base_identity.revision, source=base_identity.source,
+            )
         # Only the saving rank writes portable metadata beside the final artifact.
         if _should_run_diagnose_gate_on_rank():
             metadata = base_identity.metadata(run_id)
             if manual_stop.stopped:
                 metadata["status"] = run_status
-            recorded_run = tracker.get_run(run_id)
+            recorded_run = tracker.get_run(run_id) if tracker is not None else None
             if isinstance(recorded_run, dict):
                 metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
             write_run_provenance(result["output_dir"], metadata)
 
-        # Save the terminal status and summary. An unobserved loss remains NULL.
-        initial_loss, final_loss = stored_run_losses(result)
-        tracker.finish_run(
-            run_id=run_id,
-            initial_loss=initial_loss,
-            final_loss=final_loss,
-            total_steps=result["total_steps"],
-            duration_secs=result["duration_secs"],
-            output_dir=result["output_dir"],
-            loss_summary_kind=stored_loss_summary_kind(result),
-            status=run_status,
-        )
+        if tracker is not None and run_id:
+            # Save the terminal status and summary. An unobserved loss remains NULL.
+            initial_loss, final_loss = stored_run_losses(result)
+            tracker.finish_run(
+                run_id=run_id,
+                initial_loss=initial_loss,
+                final_loss=final_loss,
+                total_steps=result["total_steps"],
+                duration_secs=result["duration_secs"],
+                output_dir=result["output_dir"],
+                loss_summary_kind=stored_loss_summary_kind(result),
+                status=run_status,
+            )
 
         _run_auto_eval_after_training(
             cfg.eval,
@@ -3185,12 +3195,12 @@ def train(
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
 
-            metrics = tracker.get_metrics(run_id)
+            metrics = tracker.get_metrics(run_id) if (tracker is not None and run_id) else []
             bundle = build_crash_bundle(
                 error=exc,
                 config=cfg.model_dump() if hasattr(cfg, "model_dump") else None,
                 metrics=metrics,
-                run_id=run_id,
+                run_id=run_id or None,
                 output_dir=getattr(cfg, "output", None),
             )
             crash_path = write_crash_bundle(bundle)
@@ -3236,14 +3246,16 @@ def train(
     else:
         title = "[bold green]Training Complete![/]"
 
+    run_id_line = f"Run ID: [bold]{run_id}[/]\n\n" if run_id else "\n"
+    run_details_line = f"\nRun details: [bold]soup runs show {run_id}[/]" if run_id else ""
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{_for_terminal(result['output_dir'], single_line=True)}[/]\n"
-            f"Run ID: [bold]{run_id}[/]\n\n"
-            f"{completion_commands}\n"
-            f"Run details: [bold]soup runs show {run_id}[/]",
+            f"{run_id_line}"
+            f"{completion_commands}"
+            f"{run_details_line}",
             title=title,
         )
     )
@@ -3524,31 +3536,13 @@ def _write_energy_json(path: str, measurement: "EnergyMeasurement") -> None:
 def _should_run_diagnose_gate_on_rank() -> bool:
     """Return True only for the single chief worker in a distributed launch.
 
-    The diagnose gate (and the --annex-xi / --repro-receipt / capture hooks)
-    write one report and, on a shared filesystem, read one shared output dir
-    -- so they should fire exactly once per *cluster*, not once per node.
-
-    Resolution (v0.71.15 #170 — fixes the v0.56.0 limitation where a shared-FS
-    multi-node run fired the gate once per node):
-      * If RANK is set (multi-node / torchrun launch) -> gate only on the
-        global chief, RANK == 0. On a single-node torchrun this is equivalent
-        to LOCAL_RANK == 0 (both 0 only for the one chief process).
-      * Else fall back to LOCAL_RANK == 0 (plain single-node accelerate launch
-        that doesn't export RANK) so a one-box multi-GPU run still gates once.
-
-    Defaults to True (run gate) on any parse error: a malformed env var is
-    safer to over-run than to silently skip.
+    The diagnose gate, experiment tracking (#3370), and post-training hooks
+    (--annex-xi / --repro-receipt / capture hooks) should fire once per *cluster*,
+    not once per node or worker. Delegates to :func:`soup_cli.utils.launcher.is_chief_rank`.
     """
-    rank = os.environ.get("RANK")
-    if rank:  # non-empty -> multi-node / torchrun sets a global RANK
-        try:
-            return int(rank) == 0
-        except ValueError:
-            return True
-    try:
-        return int(os.environ.get("LOCAL_RANK", "0")) == 0
-    except ValueError:
-        return True
+    from soup_cli.utils.launcher import is_chief_rank
+
+    return is_chief_rank()
 
 
 def _run_diagnose_gate(

@@ -89,6 +89,27 @@ def is_in_distributed() -> bool:
     )
 
 
+def is_chief_rank() -> bool:
+    """Return True only for the single chief worker in a distributed launch.
+
+    Matches the repository convention (#170):
+      * If ``RANK`` is set (non-empty) -> ``int(RANK) == 0`` (cluster chief).
+      * Otherwise fall back to ``int(LOCAL_RANK or 0) == 0``.
+      * Malformed values fail open (return ``True``) so callers do not
+        silently drop tracking or post-training checks.
+    """
+    rank = os.environ.get("RANK")
+    if rank:
+        try:
+            return int(rank) == 0
+        except ValueError:
+            return True
+    try:
+        return int(os.environ.get("LOCAL_RANK", "0")) == 0
+    except ValueError:
+        return True
+
+
 def build_accelerate_argv(
     num_processes: int,
     script_args: Sequence[str],
