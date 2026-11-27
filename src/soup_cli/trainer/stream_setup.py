@@ -929,6 +929,11 @@ class StreamingSetupMixin:
     #: predicted not to fit and the packed-state one is: the setup then routes the
     #: built model's layers to it. No config key; False for every run that fits.
     _stream_packed_backward = False
+    #: The resolved L2L recipe (``soup_cli.utils.l2l_recipe``); None without ``training.l2l``.
+    _l2l_recipe = None
+    #: The directories the streamed layers are read from (cache plus stripe folders), so
+    #: the L2L activation spill can stay off the weights' disk on the disk tier.
+    _stream_weight_dirs: tuple = ()
 
     #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
     #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
@@ -1770,6 +1775,9 @@ class StreamingSetupMixin:
             nf4_scale_cache=bool(getattr(tcfg, "stream_nf4_scale_cache", False)),
             **({"partial_ram_budget": partial_budget} if partial_budget is not None else {}),
         )
+        self._stream_weight_dirs = tuple(
+            stripe_dirs(shard_dir, tuple(getattr(index, "stripe_roots", None) or ()))
+        )
         self.model = model
         self._stream_runtime = runtime
         # #792 — on the materialised adapters, before the probe measures a step.
@@ -2048,6 +2056,73 @@ class StreamingSetupMixin:
         if trainer is not None and getattr(trainer, HOOK_ATTR, None) is hook:
             setattr(trainer, HOOK_ATTR, None)
         self._stream_loss_chunk_hook = None
+
+    def _build_l2l_trainer(
+        self, base_cls: Any, trainer_kwargs: dict, training_args: Any
+    ) -> Any:
+        """Build the trainer that runs each accumulation window as one L2L step.
+
+        Only SFT has an L2L window loss. The window length is HF's accumulation count,
+        which this builder checks against the recipe and never changes. An activation
+        codec the launch has not opened is refused here as well as in
+        ``resolve_l2l_recipe``, so a caller that skips the recipe cannot reach the trainer.
+        """
+        import torch
+
+        from soup_cli.trainer.l2l_trainer import (
+            attach_l2l_state,
+            make_l2l_trainer_class,
+            refuse_unsupported_l2l,
+            unready_task_warning,
+        )
+        from soup_cli.utils.l2l_recipe import AVAILABLE_CODECS, refuse_distributed_l2l
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        # `_distributed_stream` is set by the data-parallel layer stream (#3267); absent
+        # until that lands, so this is a no-op here.
+        refuse_distributed_l2l(bool(getattr(self, "_distributed_stream", False)))
+        tcfg = self.config.training
+        codec = str(tcfg.l2l_activation_codec)
+        if codec not in AVAILABLE_CODECS:
+            raise ValueError(
+                f"training.l2l_activation_codec={codec!r} is not available yet: the launch "
+                f"supports {', '.join(repr(c) for c in AVAILABLE_CODECS)}. Set it to 'none'."
+            )
+        base = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
+        refuse_unsupported_l2l(
+            base.config,
+            n_gpu=int(training_args.n_gpu),
+            fp16=bool(training_args.fp16),
+            expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
+        )
+        warning = unready_task_warning(getattr(self.config, "task", None))
+        if warning is not None:
+            console.print(f"[yellow]Warning:[/] {warning}")
+        recipe = self._l2l_recipe
+        effective_k = (
+            recipe.effective_k if recipe is not None
+            else int(training_args.gradient_accumulation_steps)
+        )
+        if int(training_args.gradient_accumulation_steps) != effective_k:
+            raise ValueError(
+                "gradient_accumulation_steps must equal the L2L recipe's effective k; "
+                "L2L does not resize the optimizer schedule or trim batches"
+            )
+        trainer = make_l2l_trainer_class(base_cls)(**trainer_kwargs)
+        attach_l2l_state(
+            trainer,
+            self._stream_runtime,
+            dtype=getattr(torch, resolve_stream_dtype(str(self.device))),
+            activation_codec=codec,
+            spill_dir=tcfg.l2l_spill_dir,
+            weight_dirs=self._stream_weight_dirs,
+            effective_k=effective_k,
+        )
+        console.print(
+            "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "
+            f"{effective_k} micro-batch(es)"
+        )
+        return trainer
 
     def _estimate_adapter_params(self, tcfg, model_config, target_modules=None) -> int:
         """Trainable adapter parameters, before the model exists.
