@@ -109,10 +109,13 @@ def _run_preprocess(tmp_path, monkeypatch, tok, *, messages, max_length=2048):
     )
     (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
-    monkeypatch.setattr(
-        "soup_cli.data.loader.load_dataset",
-        lambda *a, **k: {"train": [{"messages": messages}]},
-    )
+    from contextlib import contextmanager
+
+    @contextmanager
+    def normalized_rows(*args, **kwargs):
+        yield [{"messages": messages}]
+
+    monkeypatch.setattr("soup_cli.data.preprocess.preprocessing_rows", normalized_rows)
     result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
     assert result.exit_code == 0, result.output
     cache_dirs = [p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir()]

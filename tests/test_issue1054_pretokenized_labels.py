@@ -158,11 +158,14 @@ def _run_preprocess(tmp_path, monkeypatch, tok, *, rows, task="sft", data_extra=
     monkeypatch.setattr(
         transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok
     )
-    # Control the rows directly so the assertions are about masking, not format
-    # conversion. preprocess_dataset local-imports this name.
-    monkeypatch.setattr(
-        "soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows}
-    )
+    # Mask tests inject normalized rows at the shared preprocessing boundary.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def normalized_rows(*args, **kwargs):
+        yield rows
+
+    monkeypatch.setattr("soup_cli.data.preprocess.preprocessing_rows", normalized_rows)
     result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
     assert result.exit_code == 0, result.output
     cache_dirs = [p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir()]

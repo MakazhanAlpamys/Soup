@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from functools import partial
 from itertools import islice
@@ -170,7 +171,18 @@ def _load_jsonl(
     skip_non_object: bool = True,
     diagnostics: Console | None = None,
 ) -> list[dict]:
-    data = []
+    return list(_iter_jsonl(
+        path, issues=issues, skip_non_object=skip_non_object, diagnostics=diagnostics,
+    ))
+
+
+def _iter_jsonl(
+    path: Path,
+    *,
+    issues: list[str] | None = None,
+    skip_non_object: bool = True,
+    diagnostics: Console | None = None,
+) -> Iterator[dict]:
     non_objects = SkipTally(
         "lines skipped (JSON values that are not objects)",
         issues=issues,
@@ -193,12 +205,11 @@ def _load_jsonl(
                 if skip_non_object and not isinstance(row, dict):
                     non_objects.add(non_object_row_issue(row, i + 1))
                     continue
-                data.append(row)
+                yield row
             except json.JSONDecodeError as e:
                 bad_json.add(f"invalid JSON on line {i + 1}: {e}")
     non_objects.finish()
     bad_json.finish()
-    return data
 
 
 def _load_json(
@@ -369,10 +380,25 @@ def _format_rows(
     that converted, in order, so a caller can map a formatted row back to the
     raw row it came from.
     """
-    formatted: list[dict] = []
+    return list(_iter_formatted_rows(
+        raw_data, fmt, preserve_source_columns=preserve_source_columns,
+        source=source, kept_indices=kept_indices,
+    ))
+
+
+def _iter_formatted_rows(
+    raw_data: Iterable[dict],
+    fmt: str,
+    *,
+    preserve_source_columns: bool = False,
+    source: str | None = None,
+    kept_indices: list[int] | None = None,
+) -> Iterator[dict]:
+    total = 0
     dropped = 0
     first_drop: tuple[int, str] | None = None
     for index, raw_row in enumerate(raw_data):
+        total += 1
         # #1181: the same drop decision as format_to_messages, plus the reason,
         # so a dropped row is counted and named instead of vanishing.
         normalized, reason = format_to_messages_with_reason(raw_row, fmt)
@@ -383,19 +409,18 @@ def _format_rows(
             continue
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
-        formatted.append(normalized)
+        yield normalized
         if kept_indices is not None:
             kept_indices.append(index)
     global _last_load
     if dropped and first_drop is not None:
-        _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
+        _report_dropped_rows(dropped, total, fmt, first_drop, source)
         if _last_load.first_drop is None:
             _last_load = replace(
                 _last_load, first_drop=(fmt, first_drop[0], first_drop[1], source)
             )
     if _last_load.fmt is None:
         _last_load = replace(_last_load, fmt=fmt)
-    return formatted
 
 
 def _report_dropped_rows(

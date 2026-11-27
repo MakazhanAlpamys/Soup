@@ -1542,6 +1542,22 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys reject incompatible configured inputs.
 
+For a single local `.jsonl` text dataset (`task: sft` or `task: pretrain`), the
+producer spools parsed and normalized rows to a private SQLite file, then tokenizes
+bounded batches into Arrow shards. Automatic format detection, validation splitting
+and local JSONL text replay keep the existing row selection and seeded order. This
+uses extra temporary disk space and I/O to avoid keeping the corpus in Python lists.
+The working set depends on the largest source row and configured `max_length`, plus
+bounded SQLite and Arrow buffers. Final shard filenames/metadata grow with the number
+of shards, within the existing ten-million-training-row cap. The cap is applied after
+splitting/replay, as before; it does not limit the size of the input spool.
+
+Other file types, dataset lists, remote/Hub sources and nontext replay still use the
+existing eager input loader. Token output and staged validation use bounded batches
+on those paths too, but their raw input can still grow with the corpus. Temporary
+spools and Arrow preparation are removed on handled failures; they are never reused
+as restart progress. The cache key, row labels and public directory format are unchanged.
+
 The writer completes Arrow and `metadata.json` in a unique sibling staging directory,
 then reopens them for validation before changing the target. Rebuilding with `--yes`
 moves the previous cache to a unique sibling backup, installs the complete new cache,
