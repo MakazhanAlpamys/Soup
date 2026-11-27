@@ -771,7 +771,7 @@ def test_a_float32_cache_written_before_the_split_reads_back_identically():
 
 
 def _assert_quant_state_equal(key, rebuilt, reference):
-    """Compare a rebuilt NF4 ``QuantState`` with a fresh one, one named field at a time."""
+    """Compare a rebuilt NF4 ``QuantState`` with the stored state, one field at a time."""
     import torch
 
     assert rebuilt.blocksize == reference.blocksize, f"{key}: blocksize"
@@ -792,37 +792,59 @@ def test_a_nested_nf4_cache_written_before_the_split_reads_back_identically():
         "bitsandbytes.functional", reason="NF4 fixture needs a working bitsandbytes"
     )
     import torch
-    from bitsandbytes.functional import dequantize_4bit, quantize_4bit
+    from bitsandbytes.functional import QuantState, dequantize_4bit
     from safetensors.torch import load_file
 
     from soup_cli.utils.expert_shard import aligned_staging
+    from soup_cli.utils.layer_shard import (
+        ABSMAX_SUFFIX,
+        NESTED_ABSMAX_SUFFIX,
+        NESTED_OFFSET_SUFFIX,
+        NF4_CODE_KEY,
+        NF4_NESTED_CODE_KEY,
+    )
     from soup_cli.utils.layer_stream_runtime import rebuild_quant_state
 
-    source = _fixture_source()
     root, index, readers = _pre_port_readers("nf4")
     assert index.double_quant is True
     assert all(spec.nested for spec in index.expert_quant_specs.values())
-    codes = load_file(str(root / "extras.safetensors"))
+    # Quantisation can vary across bitsandbytes versions. Use the cache as the oracle.
+    stored_specs = json.loads((root / "index.json").read_text())["expert_quant_specs"]
+    extras = load_file(str(root / "extras.safetensors"))
+    codes = {name: extras[name].clone() for name in (NF4_CODE_KEY, NF4_NESTED_CODE_KEY)}
     for layer, reader in readers.items():
+        stored = load_file(str(root / f"experts_{layer:03d}.safetensors"))
         owner, staging = aligned_staging(reader.max_span)
         try:
             for expert in (1, 2, 0):
                 host = reader.read_host(expert, staging)
-                for part, value in zip(("gate_up", "down"), _expert_source(source, layer, expert)):
+                for part in ("gate_up", "down"):
                     key = f"{expert}.{part}"
-                    packed, state = quantize_4bit(
-                        value, blocksize=64, quant_type="nf4", compress_statistics=True
+                    spec = stored_specs[part]
+                    reference = QuantState(
+                        absmax=stored[key + ABSMAX_SUFFIX],
+                        shape=torch.Size(spec["shape"]),
+                        dtype=getattr(torch, spec["dtype"]),
+                        blocksize=spec["blocksize"],
+                        code=extras[NF4_CODE_KEY],
+                        quant_type=spec["quant_type"],
+                        offset=stored[key + NESTED_OFFSET_SUFFIX],
+                        state2=QuantState(
+                            absmax=stored[key + NESTED_ABSMAX_SUFFIX],
+                            code=extras[NF4_NESTED_CODE_KEY],
+                            blocksize=spec["nested_blocksize"],
+                            dtype=torch.float32,
+                        ),
                     )
                     rebuilt = rebuild_quant_state(
                         key, host, index.expert_quant_specs[part], codes
                     )
-                    assert torch.equal(host[key], packed), f"{key}: packed NF4 bytes differ"
-                    _assert_quant_state_equal(key, rebuilt, state)
-                    # Same packed bytes through the same bitsandbytes call: only the state
-                    # (checked exactly above) can make the dequantised values differ.
+                    assert torch.equal(host[key], stored[key]), f"{key}: packed NF4 bytes differ"
+                    _assert_quant_state_equal(key, rebuilt, reference)
                     assert torch.equal(
-                        dequantize_4bit(host[key], rebuilt), dequantize_4bit(host[key], state)
-                    ), f"{key}: dequantised values differ for identical packed bytes"
+                        dequantize_4bit(host[key], quant_state=rebuilt),
+                        dequantize_4bit(stored[key], quant_state=reference),
+                    ), f"{key}: dequantised values differ from the stored state"
         finally:
             reader.close()
         assert owner.numel() > 0
