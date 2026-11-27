@@ -437,6 +437,7 @@ def _run(
     counts: Dict[str, int] = {}
     failed: Optional[Tuple[str, int, int]] = None
     counter: Optional[_CountingGenerator] = None
+    model_setup_errors = (AttributeError, IndexError, KeyError)
     try:
         counter = _CountingGenerator(_build_generator(model, adapter, device, numerics, template))
         for task in ledger.tasks:
@@ -453,7 +454,9 @@ def _run(
                     "dim",
                 )
             )
-    except (ValueError, TypeError, OSError, RuntimeError, ImportError) as exc:
+    except (ValueError, TypeError, OSError, RuntimeError, ImportError, *model_setup_errors) as exc:
+        if counter is not None and isinstance(exc, model_setup_errors):
+            raise
         _fail(
             console,
             f"retention run failed: {type(exc).__name__}: {exc}",
