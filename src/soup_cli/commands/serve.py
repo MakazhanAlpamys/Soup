@@ -319,7 +319,7 @@ def serve(
         "--kv-cache-type",
         help=(
             "KV-cache type for decoding. Transformers: q8_0 (8-bit quantized "
-            "cache; needs hqq or optimum-quanto), bf16 or f16 (cache dtype); "
+            "cache; requires hqq), bf16 or f16 (cache dtype); "
             "fp8 is unsupported. vLLM: bf16/f16 must match the checkpoint dtype "
             "and float32 checkpoints are refused; fp8 requires Hopper "
             "(compute capability >= 9.0). The installed vLLM version must "
@@ -573,8 +573,7 @@ def serve(
         ):
             console.print(
                 "[red]--kv-cache-type q8_0[/] needs a quantized-cache backend. "
-                "Install one with [bold]pip install hqq[/] "
-                "(or optimum-quanto)."
+                "Install it with [bold]pip install hqq[/]."
             )
             raise typer.Exit(code=2)
 

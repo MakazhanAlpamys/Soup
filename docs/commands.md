@@ -97,7 +97,7 @@ soup serve --model <m> --backend vllm --max-model-len 8192  Cap the vLLM sequenc
 soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
 soup serve --model <m> --trace-log ./serve.jsonl  Per-request JSONL log + rotation + secret redaction
 soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into local-RL SQLite + POST /v1/thumbs (transformers)
-soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (Transformers; vLLM supports bf16/f16 and fp8 on Hopper; q8_0 needs hqq or optimum-quanto on Transformers) (v0.71.14; vLLM #140)
+soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (Transformers; vLLM supports bf16/f16 and fp8 on Hopper; q8_0 requires hqq on Transformers) (v0.71.14; vLLM #140)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file

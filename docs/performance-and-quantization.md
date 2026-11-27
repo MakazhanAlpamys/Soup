@@ -1907,7 +1907,7 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 ```
 
 - `bf16` / `f16` resolve the model compute dtype for the default `DynamicCache` (no extra dependency).
-- `q8_0` wires the transformers quantized KV cache (`cache_implementation="quantized"`, hqq backend). If no quant backend (`hqq` / `optimum-quanto`) is installed, the CLI exits 2 with an install hint rather than crashing.
+- `q8_0` wires the transformers quantized KV cache (`cache_implementation="quantized"`, hqq backend). If `hqq` is not installed, the CLI exits 2 with an install hint rather than crashing.
 - `fp8` is vLLM-only and requires Hopper-class GPU support (compute capability >= 9.0). Transformers has no FP8 KV-cache path.
 - vLLM supports `bf16`, `f16`, and `fp8`, validated against the installed vLLM API. `q8_0` remains unsupported on vLLM; SGLang wiring remains deferred.
 

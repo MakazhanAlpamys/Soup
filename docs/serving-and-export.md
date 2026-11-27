@@ -672,7 +672,7 @@ soup serve --model ./output --backend vllm --kv-cache-type fp8
 ```
 
 For Transformers, `bf16` / `f16` use the model compute dtype, `q8_0`
-requires `hqq` or `optimum-quanto`, and `fp8` is refused. For vLLM,
+requires `hqq`, and `fp8` is refused. For vLLM,
 `bf16` / `f16` must match the model checkpoint dtype;
 float32 checkpoints are refused. `fp8` requires Hopper-class GPU support,
 and `q8_0` is unsupported. SGLang KV-cache wiring remains deferred. Full

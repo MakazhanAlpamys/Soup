@@ -49,7 +49,7 @@ class TestServeHelpDescribesKvCacheType:
         text = _kv_cache_help(monkeypatch)
 
         assert "Transformers: q8_0" in text
-        assert "needs hqq or optimum-quanto" in text
+        assert "requires hqq" in text
         assert "bf16 or f16 (cache dtype)" in text
 
     def test_describes_backend_specific_fp8_support(self, monkeypatch):
