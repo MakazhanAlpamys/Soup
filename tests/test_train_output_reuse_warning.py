@@ -53,6 +53,9 @@ class _StubTrainer:
 
 @pytest.fixture
 def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Pin the console wide: the notice names a tmp_path, and on a narrow
+    # console Rich breaks the path mid-word, so the notice assertion fails.
+    monkeypatch.setenv("COLUMNS", "500")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "runs.db"))
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
