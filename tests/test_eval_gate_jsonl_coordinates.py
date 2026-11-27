@@ -1,9 +1,10 @@
 """#3247: a malformed judge JSONL row reports file-level line and column.
 
-The decoder is fed one stripped line at a time, so its coordinates are
-row-local (always line 1, column relative to the stripped text). The
-loader must rebase them onto the physical file position the way it
-already does for malformed objects and fields.
+The decoder is fed one row per line, so its coordinates are row-local only
+when the line ending is kept; the loader strips the line ending alone, so
+leading indentation and trailing spaces stay in the coordinates, which
+therefore match the physical file position the way they already do for
+malformed objects and fields.
 """
 
 from __future__ import annotations
@@ -40,6 +41,46 @@ def test_syntax_error_reports_the_physical_line_and_column(
         "judge task 'judge-control' file 'prompts.jsonl' line 4 column 14: "
         "Expecting value"
     )
+
+
+def test_syntax_error_on_an_indented_row_with_trailing_spaces_reports_row_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path("prompts.jsonl").write_text(
+        json.dumps({"prompt": "valid"}) + "\n"
+        + '  {"prompt":  \n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as caught:
+        gate._run_judge_task(task(), lambda prompt: "synthetic")
+    assert "line 2 column 15: Expecting value" in str(caught.value)
+
+
+def test_run_gate_returns_task_error_without_generation_or_judging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path("prompts.jsonl").write_text(
+        json.dumps({"prompt": "valid"}) + "\n" + '{"prompt": }\n',
+        encoding="utf-8",
+    )
+    suite = gate.EvalSuite(suite="s", tasks=[task()])
+    seen: list[str] = []
+
+    def generate_fn(prompt: str) -> str:
+        seen.append(prompt)
+        return "synthetic"
+
+    result = gate.run_gate(suite, generate_fn=generate_fn)
+    assert seen == []
+    assert len(result.task_results) == 1
+    task_result = result.task_results[0]
+    assert task_result.score is None
+    assert task_result.error is not None
+    assert task_result.error.startswith("invalid JSONL: judge task 'judge-control'")
+    assert "file 'prompts.jsonl' line 2 column 12: Expecting value" in task_result.error
+    assert not task_result.passed
 
 
 def test_syntax_error_on_an_unindented_row_keeps_column_1_based(

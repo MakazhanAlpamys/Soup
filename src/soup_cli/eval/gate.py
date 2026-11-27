@@ -165,12 +165,11 @@ class EvalSuite(BaseModel):
 
 
 class MalformedSuiteError(ValueError):
-    """Suite document does not match the expected schema."""
+    """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
 class JudgeJSONLError(ValueError):
     """Judge prompts JSONL could not be parsed (coordinates included)."""
-    """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
 def _require_gate_tasks(suite: EvalSuite) -> None:
@@ -705,18 +704,17 @@ def _run_judge_task(
     validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
         for line_number, raw_line in enumerate(fh, start=1):
-            indent = len(raw_line) - len(raw_line.lstrip())
-            line = raw_line.strip()
-            if not line:
+            if not raw_line.strip():
                 continue
             try:
-                row = json.loads(line)
+                # The decoder sees the physical row minus the line ending,
+                # leading indentation and trailing spaces included, so its
+                # coordinates already match the file position.
+                row = json.loads(raw_line.rstrip("\r\n"))
             except json.JSONDecodeError as exc:
-                # The decoder sees one stripped line, so its coordinates are
-                # row-local: rebase them onto the physical file position.
                 raise JudgeJSONLError(
                     f"judge task {task.name!r} file {task.prompts!r} "
-                    f"line {line_number} column {indent + exc.colno}: {exc.msg}"
+                    f"line {line_number} column {exc.colno}: {exc.msg}"
                 ) from exc
             if not isinstance(row, dict):
                 raise ValueError(
