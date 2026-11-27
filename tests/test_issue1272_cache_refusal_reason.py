@@ -51,7 +51,8 @@ class TestMetadataRecordsTheKey:
 
         assert meta["key_schema"] == dp._PREPROCESS_TOKENIZE_SCHEMA
         assert meta["dataset_key"]["val_split"] == 0.2
-        assert set(meta["dataset_key"]) == set(dp._DATASET_KEY_FIELDS)
+        assert meta["dataset_key"]["split_layout"] == dp._SPLIT_LAYOUT_V1
+        assert set(meta["dataset_key"]) == set(dp._DATASET_KEY_FIELDS) | {"split_layout"}
 
 
 class TestTheRefusalSaysWhy:
