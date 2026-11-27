@@ -92,8 +92,12 @@ class TestUIExportOllamaDeploy:
     def test_deploy_fails_when_export_fails(self, tmp_path):
         """When GGUF export fails, endpoint must report error, never success."""
         client = ui_client()
-        with patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"), patch(
-            "soup_cli.commands.export.export", side_effect=RuntimeError("llama.cpp quantize error")
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch(
+                "soup_cli.commands.export.export",
+                side_effect=RuntimeError("llama.cpp quantize error"),
+            ),
         ):
             res = client.post(
                 "/api/export/ollama",
@@ -111,9 +115,12 @@ class TestUIExportOllamaDeploy:
         fake_gguf.write_text("fake gguf content")
 
         client = ui_client()
-        with patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"), patch(
-            "soup_cli.utils.ollama.deploy_to_ollama",
-            return_value=(False, "GPU memory exhausted (out of VRAM)"),
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch(
+                "soup_cli.utils.ollama.deploy_to_ollama",
+                return_value=(False, "GPU memory exhausted (out of VRAM)"),
+            ),
         ):
             res = client.post(
                 "/api/export/ollama",
@@ -141,9 +148,11 @@ class TestUIExportOllamaDeploy:
         mock_client_instance.post.return_value = mock_resp
 
         client = ui_client()
-        with patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"), patch(
-            "soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")
-        ), patch("httpx.Client", return_value=mock_client_instance):
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch("soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")),
+            patch("httpx.Client", return_value=mock_client_instance),
+        ):
             res = client.post(
                 "/api/export/ollama",
                 json={
@@ -156,8 +165,225 @@ class TestUIExportOllamaDeploy:
             assert res.status_code == 200
             data = res.json()
             assert data["success"] is True
+            assert data["registered"] is True
+            assert data["verified"] is True
             assert data["model"] == "soup-my-adapter"
-            assert (
-                data["first_reply"]
-                == "Hello! I am your fine-tuned model running inside Ollama."
+            assert data["first_reply"] == "Hello! I am your fine-tuned model running inside Ollama."
+
+    def test_deploy_exports_gguf_when_none_exists(self, tmp_path):
+        """When directory has no GGUF, soup_export must be called with concrete defaults."""
+        from pathlib import Path
+
+        def fake_export(*args, **kwargs):
+            out_file = Path(kwargs["output"])
+            out_file.write_text("exported gguf content")
+            return out_file
+
+        client = ui_client()
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch("soup_cli.commands.export.export", side_effect=fake_export) as mock_export,
+            patch(
+                "soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")
+            ) as mock_deploy,
+        ):
+            res = client.post(
+                "/api/export/ollama",
+                json={
+                    "model_path": str(tmp_path),
+                    "deploy_name": "soup-exported-model",
+                    "quant": "q4_k_m",
+                },
+                headers=_auth_headers(),
             )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["registered"] is True
+            assert data["verified"] is None
+
+            # Verify export was called with concrete default values, not typer OptionInfo
+            mock_export.assert_called_once()
+            call_kwargs = mock_export.call_args.kwargs
+            assert call_kwargs["fmt"] == "gguf"
+            assert call_kwargs["quant"] == "q4_k_m"
+            assert call_kwargs["base"] is None
+            assert call_kwargs["llama_cpp_path"] is None
+            assert call_kwargs["onnx_task"] == "text-generation"
+            assert call_kwargs["validate_onnx"] is False
+            assert call_kwargs["prompts"] is None
+            assert call_kwargs["atol"] is None
+            assert call_kwargs["deploy"] is None
+            assert call_kwargs["deploy_name"] is None
+            assert call_kwargs["calibration_data"] is None
+            assert call_kwargs["registry_id"] is None
+            assert call_kwargs["trust_remote_code"] is False
+            assert call_kwargs["quant_config"] is None
+            assert call_kwargs["gguf_flavour"] is None
+            assert call_kwargs["hub"] == "hf"
+            assert call_kwargs["verbose"] is False
+            assert call_kwargs["no_install_deps"] is False
+
+            # Verify deployment used the exported GGUF
+            mock_deploy.assert_called_once()
+            assert ".q4_k_m.gguf" in str(mock_deploy.call_args[0][1])
+
+    def test_deploy_exports_requested_quantization_when_different_exists(self, tmp_path):
+        """If directory has another quantization (e.g. q8_0), export requested quant."""
+        from pathlib import Path
+
+        existing_gguf = tmp_path / "model.q8_0.gguf"
+        existing_gguf.write_text("q8_0 gguf content")
+
+        def fake_export(*args, **kwargs):
+            out_file = Path(kwargs["output"])
+            out_file.write_text("q4_k_m gguf content")
+            return out_file
+
+        client = ui_client()
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch("soup_cli.commands.export.export", side_effect=fake_export) as mock_export,
+            patch(
+                "soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")
+            ) as mock_deploy,
+        ):
+            res = client.post(
+                "/api/export/ollama",
+                json={
+                    "model_path": str(tmp_path),
+                    "deploy_name": "soup-re-quant-model",
+                    "quant": "q4_k_m",
+                },
+                headers=_auth_headers(),
+            )
+            assert res.status_code == 200
+            mock_export.assert_called_once()
+            assert mock_export.call_args.kwargs["quant"] == "q4_k_m"
+
+            mock_deploy.assert_called_once()
+            assert ".q4_k_m.gguf" in str(mock_deploy.call_args[0][1])
+
+    def test_deploy_prompt_omitted_returns_verified_none(self, tmp_path):
+        """When test_prompt is omitted, registration succeeds with verified=None."""
+        fake_gguf = tmp_path / "model.q4_k_m.gguf"
+        fake_gguf.write_text("fake gguf data")
+
+        client = ui_client()
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch("soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")),
+        ):
+            res = client.post(
+                "/api/export/ollama",
+                json={
+                    "model_path": str(tmp_path),
+                    "deploy_name": "soup-no-prompt-model",
+                },
+                headers=_auth_headers(),
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["registered"] is True
+            assert data["verified"] is None
+            assert data["first_reply"] is None
+            assert data["verification_error"] is None
+
+    def test_deploy_verification_failed_registration_succeeded(self, tmp_path):
+        """When verification fails or returns empty, registration still succeeds."""
+        fake_gguf = tmp_path / "model.q4_k_m.gguf"
+        fake_gguf.write_text("fake gguf data")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.text = "Internal Server Error"
+
+        mock_client_instance = MagicMock()
+        mock_client_instance.__enter__.return_value = mock_client_instance
+        mock_client_instance.post.return_value = mock_resp
+
+        client = ui_client()
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch("soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")),
+            patch("httpx.Client", return_value=mock_client_instance),
+        ):
+            res = client.post(
+                "/api/export/ollama",
+                json={
+                    "model_path": str(tmp_path),
+                    "deploy_name": "soup-failed-verify-model",
+                    "test_prompt": "Hello test!",
+                },
+                headers=_auth_headers(),
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["registered"] is True
+            assert data["verified"] is False
+            assert data["first_reply"] is None
+            assert "HTTP 500" in data["verification_error"]
+
+    def test_deploy_verification_empty_reply_shows_failure(self, tmp_path):
+        """When verification returns an empty reply string, mark verified=False."""
+        fake_gguf = tmp_path / "model.q4_k_m.gguf"
+        fake_gguf.write_text("fake gguf data")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"response": "   "}
+
+        mock_client_instance = MagicMock()
+        mock_client_instance.__enter__.return_value = mock_client_instance
+        mock_client_instance.post.return_value = mock_resp
+
+        client = ui_client()
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch("soup_cli.utils.ollama.deploy_to_ollama", return_value=(True, "success")),
+            patch("httpx.Client", return_value=mock_client_instance),
+        ):
+            res = client.post(
+                "/api/export/ollama",
+                json={
+                    "model_path": str(tmp_path),
+                    "deploy_name": "soup-empty-reply-model",
+                    "test_prompt": "Hello test!",
+                },
+                headers=_auth_headers(),
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["registered"] is True
+            assert data["verified"] is False
+            assert data["first_reply"] is None
+            assert "empty response" in data["verification_error"]
+
+    def test_deploy_different_quant_fails_reports_available(self, tmp_path):
+        """When requested quant export fails, error must list existing available GGUFs."""
+        existing_gguf = tmp_path / "model.q8_0.gguf"
+        existing_gguf.write_text("q8_0 content")
+
+        client = ui_client()
+        with (
+            patch("soup_cli.utils.ollama.detect_ollama", return_value="0.5.4"),
+            patch(
+                "soup_cli.commands.export.export", side_effect=RuntimeError("quantization missing")
+            ),
+        ):
+            res = client.post(
+                "/api/export/ollama",
+                json={
+                    "model_path": str(tmp_path),
+                    "quant": "q4_k_m",
+                },
+                headers=_auth_headers(),
+            )
+            assert res.status_code == 400
+            data = res.json()
+            assert data["success"] is False
+            assert "quantization missing" in data["error"]
+            assert "model.q8_0.gguf" in data["error"]

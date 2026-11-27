@@ -284,8 +284,8 @@ class ExportOllamaRequest(PydanticBaseModel):
     deploy_name: Optional[str] = Field(None, description="Ollama model tag/name")
     quant: str = Field("q4_k_m", description="Quantization type (q4_k_m, q8_0, f16)")
     test_prompt: Optional[str] = Field(
-        "Hello! Who are you?",
-        description="Test prompt to verify first reply in Ollama",
+        None,
+        description="Optional test prompt to verify first reply in Ollama",
     )
 
 
@@ -1606,16 +1606,19 @@ def create_app(
 
         # 4. GGUF Export via Soup's existing exporter
         target_gguf = None
+        target_quant = req.quant.lower()
         if model_path.is_file() and model_path.suffix.lower() == ".gguf":
             target_gguf = model_path
         else:
-            matching_ggufs = (
-                list(model_path.glob(f"*.{req.quant}.gguf"))
-                or list(model_path.glob("*.gguf"))
-            )
+            matching_ggufs = [
+                f for f in model_path.glob("*.gguf")
+                if f".{target_quant}." in f.name.lower()
+                or f.name.lower().endswith(f".{target_quant}.gguf")
+            ]
             if matching_ggufs:
                 target_gguf = matching_ggufs[0]
             else:
+                existing_ggufs = sorted(f.name for f in model_path.glob("*.gguf"))
                 out_gguf_path = model_path / f"{model_path.name}.{req.quant}.gguf"
                 try:
                     import typer
@@ -1627,32 +1630,82 @@ def create_app(
                         fmt="gguf",
                         quant=req.quant,
                         output=str(out_gguf_path),
+                        base=None,
+                        llama_cpp_path=None,
+                        onnx_task="text-generation",
+                        validate_onnx=False,
+                        prompts=None,
+                        atol=None,
+                        deploy=None,
+                        deploy_name=None,
+                        calibration_data=None,
+                        registry_id=None,
+                        trust_remote_code=False,
+                        quant_config=None,
+                        gguf_flavour=None,
+                        hub="hf",
+                        verbose=False,
+                        no_install_deps=False,
                     )
-                    target_gguf = out_gguf_path
+                    if out_gguf_path.exists():
+                        target_gguf = out_gguf_path
+                    else:
+                        matching_after = [
+                            f
+                            for f in model_path.glob("*.gguf")
+                            if f".{target_quant}." in f.name.lower()
+                            or f.name.lower().endswith(f".{target_quant}.gguf")
+                        ]
+                        target_gguf = matching_after[0] if matching_after else out_gguf_path
                 except typer.Exit as exc:
+                    avail = (
+                        f" Available GGUF(s): {', '.join(existing_ggufs)}."
+                        if existing_ggufs
+                        else ""
+                    )
                     if exc.exit_code != 0:
                         return JSONResponse(
                             status_code=400,
                             content={
                                 "success": False,
-                                "error": f"GGUF export failed with exit code {exc.exit_code}.",
+                                "error": (
+                                    f"GGUF export for '{req.quant}' failed with exit code "
+                                    f"{exc.exit_code}.{avail}"
+                                ),
                             },
                         )
                 except Exception as exc:
+                    avail = (
+                        f" Available GGUF(s): {', '.join(existing_ggufs)}."
+                        if existing_ggufs
+                        else ""
+                    )
                     return JSONResponse(
                         status_code=400,
                         content={
                             "success": False,
-                            "error": f"GGUF export failed: {exc}",
+                            "error": f"GGUF export for '{req.quant}' failed: {exc}.{avail}",
                         },
                     )
 
         if not target_gguf or not target_gguf.exists():
+            existing_ggufs = (
+                sorted(f.name for f in model_path.glob("*.gguf"))
+                if model_path.is_dir()
+                else []
+            )
+            avail = (
+                f" Available GGUF(s): {', '.join(existing_ggufs)}."
+                if existing_ggufs
+                else ""
+            )
             return JSONResponse(
                 status_code=400,
                 content={
                     "success": False,
-                    "error": "GGUF export did not produce a valid output file.",
+                    "error": (
+                        f"No GGUF file found or generated for '{req.quant}'.{avail}"
+                    ),
                 },
             )
 
@@ -1681,27 +1734,57 @@ def create_app(
             )
 
         # 6. Verify first reply if test_prompt is provided
-        first_reply = None
-        if req.test_prompt:
+        verified: Optional[bool] = None
+        first_reply: Optional[str] = None
+        verification_error: Optional[str] = None
+
+        if req.test_prompt and req.test_prompt.strip():
             try:
                 import httpx
 
                 with httpx.Client(timeout=30.0) as client:
                     resp = client.post(
                         "http://127.0.0.1:11434/api/generate",
-                        json={"model": target_name, "prompt": req.test_prompt, "stream": False},
+                        json={
+                            "model": target_name,
+                            "prompt": req.test_prompt.strip(),
+                            "stream": False,
+                        },
                     )
                     if resp.status_code == 200:
-                        first_reply = resp.json().get("response")
+                        reply_text = resp.json().get("response")
+                        if reply_text and str(reply_text).strip():
+                            verified = True
+                            first_reply = str(reply_text).strip()
+                        else:
+                            verified = False
+                            verification_error = "Model generated an empty response"
+                    else:
+                        verified = False
+                        verification_error = f"Ollama generation returned HTTP {resp.status_code}"
             except Exception as exc:
+                verified = False
+                verification_error = f"Verification request failed: {exc}"
                 logger.debug("First reply verification check failed: %s", exc)
 
         return {
             "success": True,
+            "registered": True,
+            "verified": verified,
             "model": target_name,
             "gguf_path": str(target_gguf),
             "first_reply": first_reply,
-            "message": f"Successfully exported and deployed {target_name} to Ollama",
+            "verification_error": verification_error,
+            "message": (
+                f"Successfully exported and verified {target_name}"
+                if verified is True
+                else (
+                    f"Model {target_name} registered, but verification failed: "
+                    f"{verification_error}"
+                    if verified is False
+                    else f"Successfully exported and registered {target_name} with Ollama"
+                )
+            ),
         }
 
     # --- Health ---

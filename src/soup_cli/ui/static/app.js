@@ -1178,16 +1178,30 @@ async function deployToOllama() {
       return;
     }
 
-    // Verified success with first reply
+    // Registration succeeded; handle verification if test prompt was provided
     const modelSuccessEl = document.getElementById('export-success-model');
     if (modelSuccessEl) modelSuccessEl.textContent = data.model;
 
     const replyElem = document.getElementById('export-success-reply');
     const replyWrapper = document.getElementById('export-reply-wrapper');
-    if (data.first_reply) {
-      if (replyElem) replyElem.textContent = data.first_reply;
+    const verifyHeader = document.getElementById('export-verify-header');
+
+    if (data.verified === true) {
+      if (verifyHeader) {
+        verifyHeader.textContent = 'First-Reply Verification (Passed):';
+        verifyHeader.style.color = '#10b981';
+      }
+      if (replyElem) replyElem.textContent = data.first_reply || '';
+      if (replyWrapper) replyWrapper.style.display = 'block';
+    } else if (data.verified === false) {
+      if (verifyHeader) {
+        verifyHeader.textContent = 'First-Reply Verification (Failed):';
+        verifyHeader.style.color = 'var(--danger)';
+      }
+      if (replyElem) replyElem.textContent = data.verification_error || 'Verification failed';
       if (replyWrapper) replyWrapper.style.display = 'block';
     } else {
+      // Prompt was omitted or not tested
       if (replyWrapper) replyWrapper.style.display = 'none';
     }
 
