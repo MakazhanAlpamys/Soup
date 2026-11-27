@@ -9,7 +9,8 @@ directory and checked on resume, because a different k changes the optimizer-ste
 
 import json
 import os
-from dataclasses import MISSING, asdict, dataclass, fields
+import re
+from dataclasses import MISSING, asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,6 +28,10 @@ class L2LRecipe:
     effective_k: int
     activation_codec: str
     auto_k: bool
+    #: The global step at which this run began: 0 for a fresh run, the resumed checkpoint's step
+    #: otherwise. A recipe in a run directory covers only the checkpoints after it; an older
+    #: one belongs to the run that wrote it (a recipe without the field counts as 0).
+    start_step: int = 0
 
 
 def validate_l2l_options(tcfg: Any) -> None:
@@ -136,28 +141,57 @@ def validate_resume(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> 
             )
 
 
-def _source_recipe_dir(checkpoint: "str | os.PathLike[str]") -> Optional[str]:
-    """The directory holding the recipe of the run that wrote ``checkpoint``.
+def checkpoint_step(checkpoint: "str | os.PathLike[str]") -> Optional[int]:
+    """The global step of a checkpoint directory, or None when it cannot be read.
 
-    The trainer writes the recipe next to its checkpoints, so ``<run>/checkpoint-N`` belongs to
-    ``<run>/l2l_recipe.json``; a recipe inside the checkpoint directory itself wins. None when
-    neither exists (a run without ``training.l2l``, or from before the recipe existed).
+    ``trainer_state.json`` wins; the ``checkpoint-N`` directory name is the fallback.
     """
     path = os.path.realpath(os.fspath(checkpoint))
-    for candidate in (path, os.path.dirname(path)):
-        if os.path.isfile(os.path.join(candidate, RECIPE_NAME)):
-            return candidate
-    return None
+    state = os.path.join(path, "trainer_state.json")
+    try:
+        with open(state, encoding="utf-8") as handle:
+            step = json.load(handle).get("global_step")
+        if type(step) is int and step >= 0:
+            return step
+    except (OSError, ValueError, AttributeError):
+        pass
+    match = re.fullmatch(r"checkpoint-(\d+)", os.path.basename(path))
+    return int(match.group(1)) if match else None
+
+
+def _source_recipe(checkpoint: "str | os.PathLike[str]") -> Optional[L2LRecipe]:
+    """The recipe that covers ``checkpoint``, or None for a checkpoint without L2L provenance.
+
+    A recipe inside the checkpoint directory is authoritative. A recipe in the parent run
+    directory covers the checkpoint only when its step is greater than the recipe's
+    ``start_step``: the run that wrote the recipe began at ``start_step`` (a legacy checkpoint
+    resumed with ``training.l2l``), so that checkpoint and the older ones predate it. A step
+    that cannot be read counts as covered.
+    """
+    path = os.path.realpath(os.fspath(checkpoint))
+    if os.path.isfile(os.path.join(path, RECIPE_NAME)):
+        return load_recipe(path)
+    parent = os.path.dirname(path)
+    saved = load_recipe(parent)
+    if saved is None:
+        return None
+    step = checkpoint_step(path)
+    if step is not None and step <= saved.start_step:
+        return None
+    return saved
 
 
 def validate_resume_source(
     checkpoint: "str | os.PathLike[str]", recipe: Optional[L2LRecipe]
-) -> None:
+) -> Optional[L2LRecipe]:
     """Refuse a resume whose SOURCE checkpoint was trained under another L2L recipe.
 
     ``checkpoint`` is the path handed to ``resume_from_checkpoint``; it may sit in another run
     directory than this launch's output, so its own recipe is the one that counts. ``recipe`` is
-    this launch's, or None when ``training.l2l`` is off.
+    this launch's, or None when ``training.l2l`` is off. Returns the recipe to write for this
+    run (None when ``training.l2l`` is off): ``recipe`` with ``start_step`` set to where this
+    run begins, which is the covering recipe's ``start_step`` when there is one and the
+    checkpoint's own step for a checkpoint without L2L provenance.
 
     - A source recipe that differs in ``effective_k`` or ``activation_codec`` is refused.
     - A source with a recipe resumed with ``training.l2l`` off is refused.
@@ -165,18 +199,23 @@ def validate_resume_source(
       from before the recipe existed), and the optimizer-step boundaries come from
       ``gradient_accumulation_steps`` in both modes, because ``l2l_auto_k`` is refused.
     """
-    source = _source_recipe_dir(checkpoint)
-    if source is None:
-        return
-    if recipe is not None:
-        validate_resume(source, recipe)
-        return
-    saved = load_recipe(source)
+    saved = _source_recipe(checkpoint)
     if saved is None:
-        return
-    raise ValueError(
-        f"cannot resume: the checkpoint was trained with training.l2l "
-        f"(effective_k={saved.effective_k!r}, activation_codec={saved.activation_codec!r}), "
-        "but this run has training.l2l off. Set training.l2l to true with the same "
-        "settings."
-    )
+        if recipe is None:
+            return None
+        return replace(recipe, start_step=checkpoint_step(checkpoint) or 0)
+    if recipe is None:
+        raise ValueError(
+            f"cannot resume: the checkpoint was trained with training.l2l "
+            f"(effective_k={saved.effective_k!r}, activation_codec={saved.activation_codec!r}), "
+            "but this run has training.l2l off. Set training.l2l to true with the same "
+            "settings."
+        )
+    for name in ("effective_k", "activation_codec"):
+        before, now = getattr(saved, name), getattr(recipe, name)
+        if before != now:
+            raise ValueError(
+                f"cannot resume: the checkpoint was trained with {name}={before!r}, but this "
+                f"run has {name}={now!r}. Restore the old value in the config."
+            )
+    return replace(recipe, start_step=saved.start_step)

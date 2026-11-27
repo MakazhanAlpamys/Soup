@@ -2704,7 +2704,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # Same order as the QuEST metadata: a rejected resume must not overwrite the
             # recipe the checkpoint was trained with. The source checkpoint's recipe counts,
             # which may sit in another run directory, and with training.l2l off as well.
-            validate_resume_source(resume_from_checkpoint, l2l_recipe)
+            l2l_recipe = validate_resume_source(resume_from_checkpoint, l2l_recipe)
         if l2l_recipe is not None:
             from soup_cli.utils.l2l_recipe import write_recipe
 

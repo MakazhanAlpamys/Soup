@@ -210,3 +210,46 @@ def test_resume_source_accepts_a_checkpoint_without_a_recipe(tmp_path):
     (tmp_path / "run" / "checkpoint-1").mkdir(parents=True)
     validate_resume_source(tmp_path / "run" / "checkpoint-1", None)
     validate_resume_source(tmp_path / "run" / "checkpoint-1", resolve_l2l_recipe(_tcfg()))
+
+
+def test_resume_source_scopes_a_parent_recipe_by_start_step(tmp_path, monkeypatch):
+    import dataclasses
+
+    from soup_cli.utils.l2l_recipe import load_recipe, validate_resume_source
+
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "run"
+    for step in (2, 4, 6):
+        (run / f"checkpoint-{step}").mkdir(parents=True)
+    recipe = resolve_l2l_recipe(_tcfg())
+    # a recipe written when checkpoint-4 was resumed: 2 and 4 predate it, 6 follows it
+    write_recipe(run, dataclasses.replace(recipe, start_step=4))
+    assert validate_resume_source(run / "checkpoint-2", None) is None
+    assert validate_resume_source(run / "checkpoint-4", None) is None
+    with pytest.raises(ValueError, match=r"training\.l2l off"):
+        validate_resume_source(run / "checkpoint-6", None)
+    # resuming 6 with l2l on carries the run's start; resuming 2 starts a new one at 2
+    assert validate_resume_source(run / "checkpoint-6", recipe).start_step == 4
+    assert validate_resume_source(run / "checkpoint-2", recipe).start_step == 2
+    # a recipe without the field counts as start_step 0
+    (run / "l2l_recipe.json").write_text(
+        '{"activation_codec": "none", "auto_k": false, "effective_k": 8, "requested_k": 8}',
+        encoding="utf-8",
+    )
+    assert load_recipe(run).start_step == 0
+    with pytest.raises(ValueError, match=r"training\.l2l off"):
+        validate_resume_source(run / "checkpoint-2", None)
+
+
+def test_resume_source_reads_the_step_from_trainer_state(tmp_path, monkeypatch):
+    import dataclasses
+
+    from soup_cli.utils.l2l_recipe import checkpoint_step, validate_resume_source
+
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "run"
+    (run / "last").mkdir(parents=True)
+    (run / "last" / "trainer_state.json").write_text('{"global_step": 4}', encoding="utf-8")
+    assert checkpoint_step(run / "last") == 4
+    write_recipe(run, dataclasses.replace(resolve_l2l_recipe(_tcfg()), start_step=4))
+    assert validate_resume_source(run / "last", None) is None

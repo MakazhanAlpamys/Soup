@@ -1114,3 +1114,30 @@ def test_the_logits_dtype_is_left_alone_without_autocast(monkeypatch):
     causal.lm_head = causal.lm_head.to(torch.bfloat16)
     _completion_logps_of(causal, owner, torch.randn(4, 6, 8, dtype=torch.bfloat16), labels)
     assert seen == [torch.bfloat16]  # the ordinary forward returns the model dtype here too
+
+
+def test_a_legacy_checkpoint_resumed_with_l2l_keeps_its_provenance_in_the_same_output(
+    monkeypatch, tmp_path
+):
+    import json
+
+    wrapper = _train_wrapper(monkeypatch, tmp_path)
+    out = tmp_path / "out"
+    for step in (3, 5):
+        (out / f"checkpoint-{step}").mkdir()
+    legacy = str(out / "checkpoint-3")
+    # legacy checkpoint-3 (no recipe anywhere) resumed with l2l on: the recipe records the start
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=legacy)
+    saved = json.loads((out / "l2l_recipe.json").read_text(encoding="utf-8"))
+    assert saved["start_step"] == 3
+    # the same older checkpoint again with l2l off is still a non-L2L checkpoint
+    wrapper._l2l_recipe = None
+    with pytest.raises(_ReachedError):
+        wrapper.train(resume_from_checkpoint=legacy)
+    # a checkpoint the L2L run wrote afterwards is L2L, and refused with l2l off
+    with pytest.raises(ValueError) as caught:
+        wrapper.train(resume_from_checkpoint=str(out / "checkpoint-5"))
+    assert str(caught.value).startswith(
+        "cannot resume: the checkpoint was trained with training.l2l ("
+    )
