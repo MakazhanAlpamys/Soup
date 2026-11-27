@@ -70,13 +70,18 @@ def test_mbr_switches_require_bools(name: str, value: Any) -> None:
     )
 
 
-@pytest.mark.parametrize("value", [True, False, 1.0, "2"])
+@pytest.mark.parametrize("value", [1.0, "2"])
 def test_mbr_group_size_requires_an_integer(value: Any) -> None:
     _assert_config_error(
         f"training.{SIZE} must be an integer or null, got {type(value).__name__} {value!r}",
         field=SIZE,
         **{SIZE: value},
     )
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_mbr_group_size_refuses_a_bool_with_the_shared_wording(value: Any) -> None:
+    _assert_config_error(f"training.{SIZE} must be an int, not a bool", field=SIZE, **{SIZE: value})
 
 
 @pytest.mark.parametrize("value", [0, -1])
