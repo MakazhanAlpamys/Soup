@@ -97,8 +97,9 @@ class TestQuantizationReachesFromPretrained:
     @patch("transformers.AutoTokenizer.from_pretrained")
     @patch("transformers.AutoModelForCausalLM.from_pretrained")
     @patch("peft.PeftModel.from_pretrained")
+    @patch("soup_cli.utils.adapter_vocab._adapter_file", return_value=None)
     def test_4bit_with_an_adapter_attaches_to_the_quantized_base(
-        self, mock_peft, mock_model, mock_tok
+        self, mock_adapter_file, mock_peft, mock_model, mock_tok
     ):
         """Acceptance criterion 1: the base loads at the requested quantization
         AND the adapter attaches to it, in the same call."""
@@ -117,6 +118,11 @@ class TestQuantizationReachesFromPretrained:
         _, kwargs = mock_model.call_args
         assert kwargs["quantization_config"].load_in_4bit is True
         mock_peft.assert_called_once_with(base_model, "some/adapter")
+        assert [call.args for call in mock_adapter_file.call_args_list] == [
+            ("some/adapter", filename) for filename in (
+                "tokenizer_config.json", "adapter_model.safetensors", "adapter_model.bin",
+            )
+        ]
         assert model is adapted_model
         adapted_model.to.assert_not_called()
         base_model.to.assert_not_called()

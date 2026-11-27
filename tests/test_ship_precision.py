@@ -186,9 +186,11 @@ def test_dtype_reaches_both_from_pretrained_calls(
     majors: tuple[int, int], available: bool, expected: str, adapter: bool,
 ) -> None:
     from soup_cli.commands.ship import _resolve_generators
+    from soup_cli.utils import adapter_vocab
 
-    # Mock only the external model/tokenizer constructors, keeping Soup's
-    # make_generator and load_model_and_tokenizer paths real.
+    # Dummy adapters have no files; keep metadata resolution and model loads local.
+    adapter_file = MagicMock(return_value=None)
+    monkeypatch.setattr(adapter_vocab, "_adapter_file", adapter_file)
     transformers = ModuleType("transformers")
     tokenizer = MagicMock()
     tokenizer.pad_token = "<pad>"
@@ -216,6 +218,13 @@ def test_dtype_reaches_both_from_pretrained_calls(
     ]
     assert all("quantization_config" not in call.kwargs for call in load_model.call_args_list)
     assert attach_adapter.call_count == int(adapter)
+    expected_files = (
+        ["tokenizer_config.json", "adapter_model.safetensors", "adapter_model.bin"]
+        if adapter else []
+    )
+    assert [call.args for call in adapter_file.call_args_list] == [
+        ("owner/adapter", filename) for filename in expected_files
+    ]
     assert cuda.current == 0
 
 
