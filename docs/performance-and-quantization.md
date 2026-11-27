@@ -443,6 +443,20 @@ resolves the same card-aware `get_compute_dtype()`, rather than leaving those mo
 whatever `from_pretrained`'s bare default happened to pick.
 
 
+### Resident k-bit SFT memory
+
+With the Transformers backend, resident 4-bit and 8-bit text SFT on BF16 CUDA cards avoids
+PEFT's temporary FP32 copies of frozen weights that load and train in BF16. PEFT still freezes
+the base and sets up gradient checkpointing as configured. FP16 and CPU runs keep PEFT's
+existing preparation.
+
+Set `training.embed_on_host: true` to keep an untied, frozen input embedding on the CPU after
+model setup. With CUDA, Soup pins the weight in host memory and copies only the rows for the
+batch to the GPU. The output head stays resident. The base model still has to fit during loading.
+This option supports single-process resident text SFT with `backend: transformers` and
+`quantization: 4bit` or `8bit`. It requires a single-device model and is incompatible with
+layer streaming, packed LoRA, DeepSpeed, and FSDP.
+
 ## Activation Offloading (Small-VRAM Large-Batch)
 
 Offload saved activations to RAM or disk during the backward pass to fit bigger effective batch sizes on smaller GPUs:

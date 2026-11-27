@@ -10,11 +10,10 @@ Casting embeddings, head and norms back to bf16 after the call made the step 24.
 kept the loss inside the tolerance written down before the run
 (``benchmarks/gate-2609-kbit-fp32-ab.md``).
 
-``prepare_kbit_model`` is the one place Soup calls PEFT's function. It calls it and casts
-back exactly what PEFT upcast, so PEFT keeps owning the freezing, the input-grad hook, the
-``use_reentrant`` rule and the quantisation-method gates (GPTQ, AQLM, EETQ, HQQ and torchao
-models are not cast by PEFT and so are not touched here either). It restores only when the
-run computes in bf16:
+``prepare_kbit_model`` is the one place Soup calls PEFT's function. It casts back what PEFT
+upcast, or shields those weights during preparation for resident BF16 SFT. PEFT still owns
+freezing, the input-grad hook, the ``use_reentrant`` rule and quantisation-method gates such
+as GPTQ, AQLM, EETQ, HQQ and torchao. The following dtype policy applies to BF16 runs:
 
 - a parameter that loaded as bf16 and came back fp32 goes back to bf16;
 - a parameter that loaded as fp16 or fp32 keeps PEFT's result: the dtype it was loaded in
@@ -59,11 +58,13 @@ def prepare_kbit_model(
     use_gradient_checkpointing: bool,
     gradient_checkpointing_kwargs: Optional[dict] = None,
     compute_dtype: Any,
+    avoid_bf16_upcast: bool = False,
 ) -> Any:
-    """PEFT's k-bit preparation, then bf16 back where the run computes in bf16 (#2609).
+    """PEFT's k-bit preparation with Soup's BF16 dtype policy.
 
     ``compute_dtype`` is the dtype the run computes in (``kbit_compute_dtype``). Only
-    ``torch.bfloat16`` restores anything; every other dtype is PEFT's behaviour unchanged.
+    ``torch.bfloat16`` restores weights. Resident bitsandbytes SFT can also avoid creating
+    the temporary FP32 copies of plain BF16 base parameters that would be restored.
     Returns the prepared model (PEFT prepares it in place).
     """
     import torch
@@ -82,7 +83,33 @@ def prepare_kbit_model(
         return prepare_model_for_kbit_training(model, **kwargs)
 
     loaded = {name: param.dtype for name, param in model.named_parameters()}
-    prepared = prepare_model_for_kbit_training(model, **kwargs)
+    loaded_in_kbit = getattr(model, "is_loaded_in_4bit", False) or getattr(
+        model, "is_loaded_in_8bit", False
+    )
+    shielded = []
+    try:
+        if (
+            avoid_bf16_upcast
+            and loaded_in_kbit
+            and getattr(model, "quantization_method", None) in (None, "bitsandbytes")
+            and not getattr(model, "hqq_quantized", False)
+        ):
+            for name, param in model.named_parameters():
+                if (
+                    loaded[name] is torch.bfloat16
+                    and "lora_" not in name
+                    and type(param) is torch.nn.Parameter
+                    and not param.is_meta
+                ):
+                    data = param.data
+                    shielded.append((param, data))
+                    # PEFT still freezes the same Parameter and installs the same hooks.
+                    # Its dtype conversion touches zero elements for this weight.
+                    param.data = data.new_empty(0)
+        prepared = prepare_model_for_kbit_training(model, **kwargs)
+    finally:
+        for param, data in shielded:
+            param.data = data
 
     restored = 0
     for name, param in prepared.named_parameters():
