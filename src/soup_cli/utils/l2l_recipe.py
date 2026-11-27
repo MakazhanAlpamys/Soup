@@ -27,6 +27,8 @@ class L2LRecipe:
     effective_k: int
     activation_codec: str
     auto_k: bool
+    two_read_experts: bool = False
+    grouped_expert_routes: bool = False
 
 
 def validate_l2l_options(tcfg: Any) -> None:
@@ -87,6 +89,8 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
         effective_k=effective_k,
         activation_codec=str(tcfg.l2l_activation_codec),
         auto_k=auto_k,
+        two_read_experts=bool(getattr(tcfg, "l2l_two_read_experts", False)),
+        grouped_expert_routes=bool(getattr(tcfg, "l2l_grouped_expert_routes", False)),
     )
 
 
@@ -127,7 +131,7 @@ def validate_resume(output_dir: "str | os.PathLike[str]", recipe: L2LRecipe) -> 
     saved = load_recipe(output_dir)
     if saved is None:
         return
-    for name in ("effective_k", "activation_codec"):
+    for name in ("effective_k", "activation_codec", "two_read_experts", "grouped_expert_routes"):
         before, now = getattr(saved, name), getattr(recipe, name)
         if before != now:
             raise ValueError(

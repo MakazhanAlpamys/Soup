@@ -347,6 +347,44 @@ def _validate_stream_staging_ram_fit(
     )
 
 
+def _expert_buffer_requirements(shard_dir, index, *, device="cpu"):
+    """(arena bytes on the compute device, host staging bytes) of the expert buffer pool.
+
+    Reads the expert files' headers only: no expert is read and no arena is allocated. The
+    largest layer decides, because one pool serves every MoE layer. ``(0, 0)`` for a cache
+    that is not sharded ``per_expert``.
+    """
+    from soup_cli.utils.expert_shard import ExpertShardReader
+    from soup_cli.utils.expert_stream import (
+        EXPERT_LAYOUT_PER_EXPERT,
+        expert_allocation_budget,
+        plan_expert_buffer,
+    )
+    from soup_cli.utils.layer_shard import expert_paths
+
+    if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        return 0, 0
+    paths = expert_paths(shard_dir, index)
+    if not paths:
+        raise ValueError("the per_expert cache has no expert files; reshard the checkpoint")
+    weight_bytes = staging_bytes = 0
+    for path in paths.values():
+        reader = ExpertShardReader(
+            path,
+            count=index.expert_count,
+            shapes=index.expert_shapes,
+            quant_specs=index.expert_quant_specs,
+            dtype=index.dtype,
+        )
+        try:
+            plan = plan_expert_buffer(reader, dtype=index.dtype)
+            weight_bytes = max(weight_bytes, expert_allocation_budget(plan, device=device))
+            staging_bytes = max(staging_bytes, plan.host_staging_bytes)
+        finally:
+            reader.close()
+    return weight_bytes, staging_bytes
+
+
 def _warn_if_ngram_source_unused(*, arch: str, requested: str, ngram_bytes: int, notify) -> None:
     """Make a user-supplied PLE policy visible when the checkpoint has no PLE."""
     if arch == "qwen4_exp" and requested != "auto" and not ngram_bytes:
@@ -1130,6 +1168,26 @@ class StreamingSetupMixin:
                 f"per architecture; admitted: {', '.join(PER_EXPERT_LAYOUT_ARCHS)}; this "
                 f"base streams as {arch!r}. Use stream_expert_layout='fused'."
             )
+        # training.l2l on a per_expert cache reads every routed expert through one bounded
+        # buffer pool (``ExpertBufferPool``), which is what the L2L step budgets and counts.
+        # Without l2l a per_expert run keeps its per-use fetcher, bit for bit.
+        l2l_experts = bool(getattr(tcfg, "l2l", False)) and bool(expert_layout)
+        if getattr(tcfg, "l2l", False):
+            # The model and layout half of the launch refusal, before any weight is sharded.
+            from soup_cli.trainer.l2l_trainer import refuse_unsupported_l2l
+
+            refuse_unsupported_l2l(
+                model_config,
+                n_gpu=0,
+                expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
+            )
+        two_read_experts = bool(getattr(tcfg, "l2l_two_read_experts", False))
+        grouped_expert_routes = bool(getattr(tcfg, "l2l_grouped_expert_routes", False))
+        if (two_read_experts or grouped_expert_routes) and not l2l_experts:
+            raise ValueError(
+                "training.l2l_two_read_experts and training.l2l_grouped_expert_routes need "
+                "training.l2l=true and training.stream_expert_layout='per_expert'."
+            )
         # An FP8 block-quantised base (DeepSeek-V3's published format) is dequantised by
         # the sharder. A spelling it does not dequantise, an FP8 base on another
         # architecture, or any other declared quantiser (compressed-tensors, GPTQ, AWQ,
@@ -1468,6 +1526,13 @@ class StreamingSetupMixin:
         layer_store_bytes = sum(layer_byte_sizes)
         embed_bytes = extras_resident_bytes(shard_dir)
         large_store_bytes = large_layer_store_bytes(shard_dir, index)
+        # training.l2l on a per_expert cache: the expert pool's arena (device) and host staging,
+        # from the expert files' headers. Zero everywhere else.
+        expert_pool_bytes = expert_staging_bytes = 0
+        if l2l_experts:
+            expert_pool_bytes, expert_staging_bytes = _expert_buffer_requirements(
+                shard_dir, index, device=str(self.device)
+            )
         large_buffer_bytes = large_layer_buffer_bytes(shard_dir, index)
         large_budget_bytes = self._stream_large_budget_bytes(
             large_buffer_bytes, len(large_layer_specs(shard_dir, index))
@@ -1623,7 +1688,7 @@ class StreamingSetupMixin:
         # operator has to scroll past a summary to find reads as an afterthought.
         if plan.tier == TIER_DISK:
             _validate_stream_staging_ram_fit(
-                staging_bytes=plan.staging_bytes,
+                staging_bytes=plan.staging_bytes + expert_staging_bytes,
                 read_ahead=read_ahead,
                 free_ram=free_ram,
                 resident_ram=embed_bytes,
@@ -1657,6 +1722,7 @@ class StreamingSetupMixin:
             index=index,
             on_cuda=on_cuda,
             target_modules=target_modules,
+            expert_pool_bytes=expert_pool_bytes,
         )
         console.print(render_stream_panel(plan, forecast_lines))
         console.print(
@@ -1720,6 +1786,17 @@ class StreamingSetupMixin:
             ngram_source=ngram_source,
             refill_before_backward=self._STREAM_REFILL_BEFORE_BACKWARD,
             nf4_scale_cache=bool(getattr(tcfg, "stream_nf4_scale_cache", False)),
+            # Only under training.l2l on a per_expert cache: every other run builds the
+            # runtime it always built.
+            **(
+                {
+                    "expert_pool": True,
+                    "two_read_experts": two_read_experts,
+                    "grouped_expert_routes": grouped_expert_routes,
+                }
+                if l2l_experts
+                else {}
+            ),
         )
         self._stream_weight_dirs = tuple(
             stripe_dirs(shard_dir, tuple(getattr(index, "stripe_roots", None) or ()))
@@ -2008,6 +2085,8 @@ class StreamingSetupMixin:
             spill_dir=tcfg.l2l_spill_dir,
             weight_dirs=self._stream_weight_dirs,
             effective_k=effective_k,
+            two_read_experts=bool(getattr(tcfg, "l2l_two_read_experts", False)),
+            grouped_expert_routes=bool(getattr(tcfg, "l2l_grouped_expert_routes", False)),
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "
@@ -2072,6 +2151,7 @@ class StreamingSetupMixin:
         on_cuda,
         large_layer_bytes=0,
         target_modules=None,
+        expert_pool_bytes=0,
     ):
         """Predict peak VRAM + bracket throughput, and REFUSE a run that cannot fit.
 
@@ -2079,6 +2159,9 @@ class StreamingSetupMixin:
         unless ``training.stream_vram_probe`` asked for the measured gate (#349).
         ``target_modules`` is the resolved LoRA target list the attach will use
         (see :meth:`_estimate_adapter_params`).
+        ``expert_pool_bytes`` is the arena of the expert buffer pool that ``training.l2l``
+        reads a per_expert cache through; it replaces the single in-flight expert of the
+        fetcher path in the forecast. 0 keeps the fetcher figure.
 
         Raises when the step is predicted not to fit: on Linux that would be a
         hard OOM, and on Windows something worse — WDDM spills to host memory
@@ -2140,6 +2223,9 @@ class StreamingSetupMixin:
                 dtype_bytes=dtype_bytes(index.dtype),
                 quantised=bool(getattr(index, "expert_quant_specs", None)),
             )
+            if expert_pool_bytes:
+                # One pool arena serves every lease (forward, recompute and backward).
+                expert_bytes = int(expert_pool_bytes)
 
         shape_cfg = self._stream_shape_config(model_config)
         vocab = int(getattr(shape_cfg, "vocab_size", 0) or 0)
@@ -2261,8 +2347,10 @@ class StreamingSetupMixin:
             )
         if expert_bytes:
             lines.append(
-                f"  experts      {expert_bytes / 1e9:.3f} GB for the routed expert in flight "
-                "(training.stream_expert_layout='per_expert'), included above"
+                f"  experts      {expert_bytes / 1e9:.3f} GB for the "
+                + ("expert buffer pool arena (training.l2l)" if expert_pool_bytes
+                   else "routed expert in flight")
+                + " (training.stream_expert_layout='per_expert'), included above"
             )
         if calibrated > LOGITS_BYTES_PER_ELEMENT:
             lines.append(

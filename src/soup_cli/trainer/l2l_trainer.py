@@ -57,7 +57,6 @@ from soup_cli.utils.l2l_step import (
     LossHead,
     ReferencePass,
     as_passes,
-    refuse_moe_l2l,
     sft_head,
 )
 
@@ -126,7 +125,6 @@ def refuse_unsupported_l2l(
     ``expert_layout`` is ``training.stream_expert_layout``; DeepSeek-V3 needs ``per_expert``.
     """
     arch = str(getattr(model_config, "model_type", ""))
-    refuse_moe_l2l(arch)
     if arch in PER_EXPERT_ARCHS:
         if expert_layout != EXPERT_LAYOUT_PER_EXPERT:
             raise ValueError(

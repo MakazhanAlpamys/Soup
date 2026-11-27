@@ -61,25 +61,6 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 #: at launch under the rules in ``trainer.l2l_trainer.refuse_unsupported_l2l``.
 SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3")
 
-#: Architectures whose layers carry streamed routed experts. The MoE branches below are kept
-#: in place, but entry is refused until per-expert streaming parity lands.
-MOE_ARCHS = ("deepseek_v3",)
-
-#: Raised at every L2L entry for a MoE model (``model_parts`` and ``refuse_unsupported_l2l``).
-MOE_L2L_REFUSAL = (
-    "L2L on a MoE model needs per-expert streaming parity (not yet in this version)"
-)
-
-#: Flipped by the task that brings per-expert streaming parity; until then MoE is refused.
-MOE_L2L_ENABLED = False
-
-
-def refuse_moe_l2l(arch: str) -> None:
-    """Refuse a MoE architecture with :data:`MOE_L2L_REFUSAL` instead of failing deep inside
-    ``expert_stream``."""
-    if arch in MOE_ARCHS and not MOE_L2L_ENABLED:
-        raise ValueError(MOE_L2L_REFUSAL)
-
 
 @dataclass(frozen=True)
 class LayerCall:
@@ -161,7 +142,6 @@ def model_parts(model: Any) -> Tuple[Any, Any]:
     owner = decoder_owner(model)
     causal = model.get_base_model() if hasattr(model, "get_base_model") else model
     arch = str(getattr(getattr(causal, "config", None), "model_type", ""))
-    refuse_moe_l2l(arch)
     if arch not in SUPPORTED_ARCHS:
         raise ValueError(
             f"the L2L step re-implements the top-level forward of {SUPPORTED_ARCHS} only; "

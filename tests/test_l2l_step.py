@@ -269,11 +269,8 @@ def test_k1_loss_and_lora_gradients_equal_plain_streamed_sft(harness, streamed):
 
 
 # --------------------------------------------------------------------------
-# a MoE model is refused with one message, before anything reaches expert_stream
+# a MoE model is admitted; the launch rules live in trainer/l2l_trainer.py
 # --------------------------------------------------------------------------
-MOE_REFUSAL = "L2L on a MoE model needs per-expert streaming parity (not yet in this version)"
-
-
 class _FakeCausal:
     def __init__(self, model_type):
         self.config = type("Config", (), {"model_type": model_type})()
@@ -281,19 +278,13 @@ class _FakeCausal:
         self.loss_function = object()
 
 
-def test_the_refusal_text_is_the_one_users_grep_for():
-    from soup_cli.utils import l2l_step
-
-    assert l2l_step.MOE_L2L_REFUSAL == MOE_REFUSAL
-
-
-def test_model_parts_refuses_a_moe_model_with_the_refusal_message(monkeypatch):
+def test_model_parts_admits_a_moe_model(monkeypatch):
     from soup_cli.utils import l2l_step, layer_stream_runtime
 
-    monkeypatch.setattr(layer_stream_runtime, "decoder_owner", lambda model: object())
-    with pytest.raises(ValueError) as caught:
-        l2l_step.model_parts(_FakeCausal("deepseek_v3"))
-    assert str(caught.value) == MOE_REFUSAL
+    owner = object()
+    monkeypatch.setattr(layer_stream_runtime, "decoder_owner", lambda model: owner)
+    causal = _FakeCausal("deepseek_v3")
+    assert l2l_step.model_parts(causal) == (causal, owner)
 
 
 def test_model_parts_still_names_an_unknown_architecture(monkeypatch):
@@ -302,16 +293,6 @@ def test_model_parts_still_names_an_unknown_architecture(monkeypatch):
     monkeypatch.setattr(layer_stream_runtime, "decoder_owner", lambda model: object())
     with pytest.raises(ValueError, match="re-implements the top-level forward"):
         l2l_step.model_parts(_FakeCausal("gpt2"))
-
-
-@pytest.mark.parametrize("layout", ["fused", "per_expert"])
-def test_the_trainer_refuses_a_moe_model_before_it_checks_the_layout(layout):
-    from soup_cli.trainer.l2l_trainer import refuse_unsupported_l2l
-
-    config = type("Config", (), {"model_type": "deepseek_v3"})()
-    with pytest.raises(ValueError) as caught:
-        refuse_unsupported_l2l(config, n_gpu=1, expert_layout=layout)
-    assert str(caught.value) == MOE_REFUSAL
 
 
 def test_the_trainer_still_admits_a_dense_model():

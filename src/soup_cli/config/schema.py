@@ -4027,9 +4027,11 @@ class TrainingConfig(BaseModel):
             "BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each "
             "streamed decoder layer is loaded once per optimizer step and runs all "
             "k micro-batches, then the optimizer takes one step on the adapters. k is "
-            "gradient_accumulation_steps. Needs stream_layers=true and a Llama or "
-            "Mistral model on a single GPU; MoE models are refused. k=1 behaves like "
-            "plain streaming. A bool only: 1 or 'yes' is refused."
+            "gradient_accumulation_steps. Needs stream_layers=true and a Llama, "
+            "Mistral or (with stream_expert_layout='per_expert') DeepSeek-V3-family "
+            "model on a single GPU; a MoE model with the fused expert layout is "
+            "refused. k=1 behaves like plain streaming. A bool only: 1 or 'yes' is "
+            "refused."
         ),
     )
     l2l_spill_dir: Optional[str] = Field(
@@ -4058,10 +4060,30 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "BETA — let the memory planner pick the largest k that fits host RAM, up to "
-            "gradient_accumulation_steps. Plans the window of a MoE model, which L2L "
-            "does not run yet, so the launch refuses it for now. Off: k = "
+            "gradient_accumulation_steps. Plans the window of a MoE model, whose host "
+            "budget the launch does not resolve yet, so it refuses this for now. Off: k = "
             "gradient_accumulation_steps. Only valid with training.l2l=true. A bool "
             "only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_two_read_experts: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under training.l2l with a per_expert MoE cache, replay each "
+            "layer's routing decisions in the checkpoint recompute so a routed expert is "
+            "read in the forward and in its own backward, not a third time in the "
+            "recompute. Needs training.l2l=true and stream_expert_layout='per_expert'. "
+            "Off by default. A bool only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_grouped_expert_routes: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under training.l2l with a per_expert MoE cache, find each "
+            "streamed MoE layer's hit experts and their token rows with one nonzero "
+            "instead of one per expert. Needs training.l2l=true and "
+            "stream_expert_layout='per_expert'. Off by default. A bool only: 1 or 'yes' "
+            "is refused."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -4649,7 +4671,9 @@ class TrainingConfig(BaseModel):
             f"{type(v).__name__} {v!r}"
         )
 
-    @field_validator("l2l", "l2l_auto_k", mode="before")
+    @field_validator(
+        "l2l", "l2l_auto_k", "l2l_two_read_experts", "l2l_grouped_expert_routes", mode="before"
+    )
     @classmethod
     @_type_error_as_value_error
     def _validate_l2l_switch_is_bool(cls, v, info: ValidationInfo):
@@ -8364,6 +8388,8 @@ class SoupConfig(BaseModel):
             "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
             "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
             "l2l_auto_k": tcfg.l2l_auto_k,
+            "l2l_two_read_experts": tcfg.l2l_two_read_experts,
+            "l2l_grouped_expert_routes": tcfg.l2l_grouped_expert_routes,
         }
         if not tcfg.l2l:
             for name, is_set in options.items():
@@ -8378,6 +8404,13 @@ class SoupConfig(BaseModel):
                 "training.l2l requires training.stream_layers=true: L2L reuses the "
                 "streamed layer loads, and a resident model has none to reuse."
             )
+        for name in ("l2l_two_read_experts", "l2l_grouped_expert_routes"):
+            if options[name] and tcfg.stream_expert_layout != "per_expert":
+                raise ValueError(
+                    f"training.{name} acts on the routed experts of a per_expert cache and "
+                    "a fused layout has none to read: set "
+                    f"training.stream_expert_layout='per_expert' or drop {name}."
+                )
         if self.task not in L2L_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
