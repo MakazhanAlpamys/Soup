@@ -131,7 +131,11 @@ def test_input_without_rows_is_refused(tmp_path, command, content):
     extra = ["--benchmark-file", "benchmark.jsonl"] if command == "decontaminate" else []
     result = _run(command, *extra)
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "no extractable text in 0 input rows" in _plain(result)
+    if content.strip():
+        # #3376: every line was skipped, and the refusal says so.
+        assert "no object rows remain: 2 row(s) skipped (listed above)" in _plain(result)
+    else:
+        assert "no extractable text in 0 input rows" in _plain(result)
 
 
 def test_shared_extraction_retains_all_fields_and_expectations_alias():
