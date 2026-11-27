@@ -47,6 +47,7 @@ EXPECTED_QWEN35_TEXT_RECIPES = {
     "qwen3.6-35b-a3b-grpo",
     # Qwen3.8-27B exposes the same qwen3_5 text tower.
     "qwen3.8-27b-sft",
+    "qwen3.8-27b-dpo",
 }
 
 

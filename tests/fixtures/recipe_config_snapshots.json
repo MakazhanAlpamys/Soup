@@ -2159,6 +2159,17 @@
       "training.lr": 0.0001,
       "training.moe_lora": true
     },
+    "qwen3.8-27b-dpo": {
+      "base": "Qwen/Qwen3.8-27B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
     "qwen3.8-27b-sft": {
       "base": "Qwen/Qwen3.8-27B",
       "data.format": "auto",
