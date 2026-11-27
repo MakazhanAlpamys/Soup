@@ -42,7 +42,9 @@ def test_expert_gemm_refuses_values_outside_the_enum(value):
         _load(**{**PREREQUISITES, MBR: True, KEY: value})
 
 
-def test_expert_gemm_recipe_round_trip_and_resume(tmp_path):
+def test_expert_gemm_recipe_round_trip_and_resume(tmp_path, monkeypatch):
+    # The recipe writer keeps its file under the working directory.
+    monkeypatch.chdir(tmp_path)
     from soup_cli.utils.l2l_recipe import (
         RECIPE_NAME,
         resolve_l2l_recipe,

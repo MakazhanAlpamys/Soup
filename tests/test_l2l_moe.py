@@ -457,7 +457,9 @@ def test_the_setup_reads_the_levers_and_builds_the_pool_only_under_l2l_on_per_ex
     source = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
     text = (source / "stream_setup.py").read_text(encoding="utf-8")
     assert "l2l_experts = bool(getattr(tcfg, \"l2l\", False)) and bool(expert_layout)" in text
-    call = re.search(r"\*\*\(\s*\{\s*\"expert_pool\": True,.*?else \{\}\s*\)", text, re.S)
+    call = re.search(
+        r"\*\*\(\s*\{\s*\"expert_pool\": True,.*?\}\s*if l2l_experts\s*else \{\}\s*\)", text, re.S
+    )
     assert call is not None
     assert "if l2l_experts" in call.group(0)
     assert "two_read_experts" in call.group(0) and "grouped_expert_routes" in call.group(0)
