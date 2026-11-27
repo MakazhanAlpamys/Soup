@@ -80,10 +80,16 @@ def _text(excinfo):
 def test_residency_mode_error_names_the_accepted_values(mode):
     with pytest.raises(ValidationError) as excinfo:
         SoupConfig.model_validate(_payload(mode))
-    assert (
-        "training.stream_resident_layers must be 0, a positive int or 'auto'"
-        in _text(excinfo)
-    )
+    if isinstance(mode, bool):
+        expected = "stream_resident_layers must be an int, not a bool"
+    else:
+        expected = (
+            "training.stream_resident_layers must be 0, a positive int or 'auto'; "
+            f"got {type(mode).__name__} {mode!r}"
+        )
+    assert [(error["loc"], error["msg"]) for error in excinfo.value.errors()] == [
+        (("training", "stream_resident_layers"), f"Value error, {expected}")
+    ]
 
 
 @pytest.mark.parametrize("mode", [1, "auto"])

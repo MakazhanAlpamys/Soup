@@ -109,6 +109,87 @@ def test_repeated_reservation_requires_clear_and_clear_releases_wrapper_views():
     trajectory(model, runtime)
 
 
+@pytest.mark.parametrize("setup_fails", [False, True], ids=["trainer-retained", "setup-fails"])
+def test_runtime_close_drains_and_releases_resident_views(tmp_path, monkeypatch, setup_fails):
+    from types import SimpleNamespace
+    from weakref import ref
+
+    import torch
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.utils import layer_stream
+    from soup_cli.utils.layer_stream_runtime import decoder_owner
+    from tests.test_v07200 import TestStreamingEndToEndSetup
+
+    wrapper, dataset = TestStreamingEndToEndSetup()._wrapper(tmp_path, monkeypatch)
+    config = wrapper.config.model_dump()
+    config["training"].update(stream_source="ram", stream_pin=False, stream_resident_layers=1)
+    wrapper.config = SoupConfig.model_validate(config)
+    monkeypatch.setattr(layer_stream, "free_ram_bytes", lambda: 8 * 2**30)
+    monkeypatch.setattr(layer_stream, "total_ram_bytes", lambda: 16 * 2**30)
+
+    state = SimpleNamespace()
+    drained = []
+
+    def install_residency(model, runtime, *_args, **_kwargs):
+        pool = runtime.pool
+        state.rotating_bytes = pool.nbytes
+        pool.reserve_layers([1], runtime.source, runtime.prefetcher.stream)
+        buffers = pool.wait(1)
+        state.layer = decoder_owner(model).layers[1]
+        state.layer._substituted_weights(buffers)
+        state.tensor = ref(next(iter(buffers.values())))
+
+    def watch_drain():
+        runtime = wrapper._stream_runtime
+        pool = runtime.pool
+        native_cuda = pool.is_cuda
+        synchronize = torch.cuda.synchronize
+
+        def drain(device):
+            assert runtime.hook is not None
+            assert state.layer._cached_substitution_buffers is not None
+            assert state.tensor() is not None
+            assert pool.resident_slots == {1: pool.n}
+            if native_cuda:
+                synchronize(device)
+            drained.append(device)
+
+        # Exercise the CUDA ordering in CPU CI without allocating CUDA tensors.
+        monkeypatch.setattr(pool, "is_cuda", True)
+        monkeypatch.setattr(torch.cuda, "synchronize", drain)
+
+    def fail_finish(*_args, **_kwargs):
+        watch_drain()
+        raise RuntimeError("trainer initialization failed after residency")
+
+    monkeypatch.setattr(wrapper, "_configure_stream_residency", install_residency)
+    if setup_fails:
+        monkeypatch.setattr(wrapper, "_finish_setup", fail_finish)
+        with pytest.raises(RuntimeError) as excinfo:
+            wrapper.setup(dataset)
+        assert str(excinfo.value) == "trainer initialization failed after residency"
+    else:
+        wrapper.setup(dataset)
+        assert wrapper.trainer.model is wrapper.model
+        watch_drain()
+        wrapper._close_stream_runtime()
+
+    wrapper._close_stream_runtime()
+    runtime = wrapper._stream_runtime
+    pool = runtime.pool
+    assert drained == [pool.device]
+    assert wrapper.model is not None
+    assert state.layer._cached_substitution_buffers is None
+    assert state.layer._cached_substitution_weights is None
+    assert state.tensor() is None
+    assert pool.resident_slots == {}
+    assert pool.resident_bytes == 0
+    assert len(pool.buffers) == pool.n
+    assert pool.nbytes == state.rotating_bytes
+    assert runtime.hook is None
+
+
 def test_second_allocation_failure_leaves_pool_and_scheduler_usable(monkeypatch):
     import weakref
 

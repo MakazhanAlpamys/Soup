@@ -1062,6 +1062,7 @@ class StreamingSetupMixin:
             stripe_dirs,
         )
         from soup_cli.utils.layer_stream import (
+            PHYSICAL_RAM_TIER_HEADROOM,
             RAM_TIER_HEADROOM,
             TIER_DISK,
             build_stream_plan,
@@ -1490,17 +1491,33 @@ class StreamingSetupMixin:
         free_ram = free_ram_bytes()
         total_ram = total_ram_bytes()
         if free_ram is None:
+            if partial_config is not None:
+                raise ValueError("training.stream_partial_ram requires a known host RAM budget")
             console.print(
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
                 "proceeding and letting the allocation fail loudly if it must[/]"
             )
             free_ram = (layer_bytes * index.n_layers + large_store_bytes + embed_bytes) * 10
-        if getattr(tcfg, "stream_ram_cache_mb", 0):
+        if partial_config is not None or getattr(tcfg, "stream_ram_cache_mb", 0):
             from soup_cli.utils.stream_ram_cache import available_memory
 
             # A large host may give this process only a small cgroup. Do not
             # select a whole-model RAM store using physical-host availability.
-            free_ram = available_memory(host_available=free_ram)["available_bytes"]
+            memory = available_memory(host_available=free_ram)
+            free_ram = memory["available_bytes"]
+            if partial_config is not None:
+                if "error" in memory:
+                    raise ValueError(
+                        "training.stream_partial_ram requires a known host RAM budget"
+                    )
+                ceiling = int(free_ram * RAM_TIER_HEADROOM)
+                if total_ram is not None:
+                    ceiling = min(ceiling, int(total_ram * PHYSICAL_RAM_TIER_HEADROOM))
+                if partial_config.limit_bytes > ceiling:
+                    raise ValueError(
+                        "training.stream_partial_ram.limit_bytes exceeds the current safe "
+                        "host RAM budget"
+                    )
 
         store_total = layer_store_bytes + large_store_bytes
         ngram_source = "disk"
@@ -1713,17 +1730,8 @@ class StreamingSetupMixin:
             # Free RAM already excludes live allocations. This intentionally conservative
             # envelope also reserves the caller-declared host consumers plus the resident
             # extras.
-            from soup_cli.utils.layer_stream import (
-                PHYSICAL_RAM_TIER_HEADROOM,
-                RAM_TIER_HEADROOM,
-            )
             from soup_cli.utils.partial_ram_source import PartialRamBudget
 
-            ceiling = int(free_ram * RAM_TIER_HEADROOM)
-            if total_ram is not None:
-                ceiling = min(ceiling, int(total_ram * PHYSICAL_RAM_TIER_HEADROOM))
-            if partial_config.limit_bytes > ceiling:
-                raise ValueError("stream_partial_ram limit exceeds current safe host RAM budget")
             partial_budget = PartialRamBudget(
                 partial_config.limit_bytes,
                 partial_config.reserved_bytes

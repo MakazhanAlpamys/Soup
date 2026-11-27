@@ -1602,7 +1602,7 @@ class TestEveryRuntimeConsumerReleases:
     def test_the_scan_sees_both_shipped_consumers(self):
         """Positive control: a scan that finds nothing must FAIL, not pass."""
         found = self._functions_that_borrow()
-        assert "LayerBufferPool.load_async" in found, found
+        assert "LayerBufferPool._copy_layer" in found, found
         assert "LargeLayerBufferPool.load_async" in found, found
 
     def test_every_borrower_also_releases(self):

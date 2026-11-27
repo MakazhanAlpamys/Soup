@@ -36,6 +36,7 @@ from typing import (
     Tuple,
     Union,
 )
+from weakref import ReferenceType, ref
 
 from rich.text import Text
 
@@ -1420,11 +1421,10 @@ class LayerBufferPool:
         self.loads += len(chosen)
         return {"indices": list(chosen), "bytes": total_bytes, "resident_bytes": total_bytes}
 
-    def clear_resident_layers(self) -> None:
+    def clear_resident_layers(self, *, model: Any = None) -> None:
         """Release private slots between completed steps; safe to call repeatedly.
 
-        Call ``clear_stream_substitution_cache(model)`` first when wrappers have
-        visited these slots, otherwise their cached views still hold storage.
+        Pass the decoder owner to clear its cached views after device work drains.
         """
         if not self.resident_slots:
             return
@@ -1432,6 +1432,8 @@ class LayerBufferPool:
             import torch
 
             torch.cuda.synchronize(self.device)
+        if model is not None:
+            clear_stream_substitution_cache(model)
         del self.buffers[self.n :]
         del self.owner[self.n :]
         if self.is_cuda:
@@ -3932,17 +3934,21 @@ class StreamRuntime:
     scale_cache: Any = None
     #: Per MoE layer, the reader of its experts file (expert_layout "per_expert").
     expert_readers: Tuple[Any, ...] = ()
+    _decoder_owner_ref: Optional[ReferenceType[Any]] = None
 
     def close(self) -> None:
-        """Release the weight source and detach the prefetch hook.
+        """Release resident weights and the weight source, then detach the hook.
 
         On the disk tier this stops the reader THREAD and frees its host
         staging buffers, which on a pinned run are page-locked and so cost the
         box until they are released. It holds no shard handles to leak:
         ``AsyncDiskSource`` opens each shard per read precisely because a
         mapping charges Windows commit for the file's whole size (#926).
-        A no-op for the RAM tier, which owns neither a thread nor handles.
+        The RAM source owns neither a thread nor handles.
         """
+        if getattr(self.pool, "resident_slots", None):
+            owner = self._decoder_owner_ref() if self._decoder_owner_ref is not None else None
+            self.pool.clear_resident_layers(model=owner)
         try:
             source_close = getattr(self.source, "close", None)
             if callable(source_close):
@@ -4468,6 +4474,7 @@ def install_streaming(
             expert_readers=expert_readers,
             tier=tier,
             scale_cache=scale_cache,
+            _decoder_owner_ref=ref(owner),
         )
     except BaseException:
         # A source can own resident buffers and a running disk reader before the
