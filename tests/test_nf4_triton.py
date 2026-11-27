@@ -169,7 +169,7 @@ def test_unsafe_decode_metadata_goes_to_stock(monkeypatch):
         {"shape": (0, 64)},
         {"blocksize": 7},
         {"dtype": torch.float64},
-        {"packed": packed.view(torch.int16)},
+        {"packed": torch.zeros(256, 1, dtype=torch.int16)},
         {"scale": codes},
         {"scale": scale[:-1]},
         {"scale": scale.to("meta")},
