@@ -238,8 +238,9 @@ def test_the_table_title_is_italic_and_the_columns_keep_their_styles(monkeypatch
     result = _search("pip install")
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "\x1b[3m" in result.stdout.splitlines()[0]
-    assert "Documentation Search: 'pip install'" in result.stdout.splitlines()[0]
+    title = result.stdout.splitlines()[0]
+    assert "\x1b[3m" in title
+    assert "Documentation Search: 'pip install'" in strip_ansi(title)
     body = result.stdout.splitlines()[4]
     assert "\x1b[36mmodels\x1b[0m" in body
     assert "\x1b[1;32mThe extras table\x1b[0m" in body
