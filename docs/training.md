@@ -2766,6 +2766,10 @@ a conflicting combo is rejected loudly at config load. Scans cache under `~/.sou
 The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights score the same as
 Linear weights. (v0.71.23)
 
+Spectrum scans and layer-streamed training share Soup's local copies of Hugging Face snapshots.
+When two runs publish a copy at the same time, Soup reuses the first copy if its checkpoint
+files and revision match the snapshot the other run resolved.
+
 ## Training source identity
 
 Single-process native MLX `soup train` also records the actual Hugging Face base

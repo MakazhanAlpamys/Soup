@@ -9,7 +9,9 @@ that leave both stores.
 
 from __future__ import annotations
 
+import errno
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -175,3 +177,115 @@ def test_symlinked_store_directory_is_not_trusted(tmp_path, monkeypatch) -> None
     with pytest.raises(ValueError, match="outside the Hugging Face blob store"):
         materialize_model_weights(plan)
     assert not os.path.lexists(plan.weights_dir)
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("winerror", [None, 5], ids=["native-rename", "windows-access-denied"])
+def test_concurrent_materialization_uses_the_winners_copy(
+    tmp_path, monkeypatch, winerror: int | None
+) -> None:
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    snapshot, shared = _shared_store_snapshot(tmp_path)
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+    real_replace = os.replace
+    raced = False
+
+    def racing_replace(src: str, dst: str) -> None:
+        nonlocal raced
+        if not raced:
+            raced = True
+            materialize_model_weights(plan)
+            if winerror is not None:
+                collision = PermissionError(errno.EACCES, "Access is denied", dst)
+                collision.winerror = winerror
+                raise collision
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", racing_replace)
+    resolved = Path(materialize_model_weights(plan))
+
+    assert raced and resolved == Path(plan.weights_dir)
+    assert (resolved / "model.safetensors").read_bytes() == shared.read_bytes()
+    assert list(resolved.parent.iterdir()) == [resolved]
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize(
+    ("mismatch", "error", "message"),
+    [
+        ("revision", errno.EEXIST, "File exists"),
+        ("blob", errno.EEXIST, "File exists"),
+        ("manifest", errno.EEXIST, "File exists"),
+        (None, errno.EIO, "Input/output error"),
+    ],
+)
+def test_concurrent_materialization_propagates_publish_error(
+    tmp_path, monkeypatch, mismatch: str | None, error: int, message: str
+) -> None:
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    snapshot, shared = _shared_store_snapshot(tmp_path)
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+    target = Path(plan.weights_dir)
+    publish_error = OSError(error, message, str(target))
+    revision = "e" * 40 if mismatch == "revision" else COMMIT
+    blob = "f" * 64 if mismatch == "blob" else ETAG
+    weight = shared.read_bytes()
+    if mismatch == "manifest":
+        weight = weight[:-1]
+    metadata = f"{revision}\n{blob}\n0\n"
+    metadata_path = target / ".cache/huggingface/download/model.safetensors.metadata"
+
+    def racing_replace(src: str, dst: str) -> None:
+        metadata_path.parent.mkdir(parents=True)
+        metadata_path.write_text(metadata, encoding="utf-8")
+        (target / "model.safetensors").write_bytes(weight)
+        raise publish_error
+
+    monkeypatch.setattr(os, "replace", racing_replace)
+    with pytest.raises(OSError) as exc:
+        materialize_model_weights(plan)
+
+    assert exc.value is publish_error
+    assert exc.value.strerror == message
+    assert metadata_path.read_text(encoding="utf-8") == metadata
+    assert (target / "model.safetensors").read_bytes() == weight
+    assert list(target.parent.iterdir()) == [target]
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize(
+    ("redirect", "message"),
+    [
+        ("target", "materialized weights path must not be a symlink"),
+        ("parent", "materialized weights path changed during snapshot publish"),
+    ],
+)
+def test_concurrent_materialization_refuses_a_redirected_winner(
+    tmp_path, monkeypatch, redirect: str, message: str
+) -> None:
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    snapshot, shared = _shared_store_snapshot(tmp_path)
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+    target = Path(plan.weights_dir)
+    outside = tmp_path / "outside"
+    real_replace = os.replace
+
+    def racing_replace(src: str, dst: str) -> None:
+        if redirect == "target":
+            shutil.copytree(src, outside)
+            target.symlink_to(outside, target_is_directory=True)
+        else:
+            real_replace(target.parent, outside)
+            target.parent.symlink_to(outside, target_is_directory=True)
+            shutil.copytree(src, dst)
+        raise FileExistsError(errno.EEXIST, "File exists", dst)
+
+    monkeypatch.setattr(os, "replace", racing_replace)
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        materialize_model_weights(plan)
+
+    assert (target / "model.safetensors").read_bytes() == shared.read_bytes()
+    assert list(target.parent.iterdir()) == [target]
