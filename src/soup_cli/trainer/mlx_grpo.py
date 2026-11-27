@@ -217,9 +217,7 @@ def log_val_reward(tracker: Any, run_id: Optional[str], *, step: int, epoch: flo
     row measured neither. ``speed=None``, not the tracker's ``0.0`` default, so
     the row does not read as a measured zero speed (#2830).
     """
-    from soup_cli.utils.launcher import is_chief_rank
-
-    if tracker is None or not run_id or not is_chief_rank():
+    if tracker is None or not run_id:
         return
     try:
         tracker.log_metrics(run_id=run_id, step=step, epoch=epoch, loss=None, lr=lr,

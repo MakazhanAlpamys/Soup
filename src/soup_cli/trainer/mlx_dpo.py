@@ -878,10 +878,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 if "val_reward_accuracy" in val:
                     msg += f", val reward acc {val['val_reward_accuracy']:.2f}"
             console.print(f"[dim]{msg}[/]")
-        from soup_cli.utils.launcher import is_chief_rank
-
-        chief_rank = is_chief_rank()
-        if chief_rank and tracker is not None and run_id:
+        if tracker is not None and run_id:
             try:
                 tracker.log_metrics(
                     run_id=run_id, step=step, epoch=epoch, loss=loss, lr=lr,
@@ -890,7 +887,7 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 )
             except Exception:  # noqa: BLE001 — telemetry must not kill a run
                 pass
-        if chief_rank and display is not None:
+        if display is not None:
             # `soup ui` / GET /api/train/stream, in MLX SFT's shape. Only with a
             # display, as on the transformers path. Reward accuracy and margin
             # have no event field: they are printed without a display and
