@@ -1,1 +1,0 @@
-- Publish the DeepSeek-V3 giant-MoE acceptance, Moonlight adapter and Qwen RAM-tier, and synthetic 671B cold/warm benchmark records. (#PENDING by @kok-o, @M1kado0)
