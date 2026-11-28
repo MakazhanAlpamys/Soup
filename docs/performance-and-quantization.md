@@ -537,6 +537,25 @@ Limits and refusals:
 - **Adapters on routed experts.** `moe_lora` is refused with this layout, because a streamed expert has nowhere to keep an adapter between its visits. Adapt attention or the shared expert instead.
 - **Older Soup versions.** A Soup from before this layout accepts a per-expert cache as reusable and then fails at install ("shard is missing decoder weights"). Delete the cache directory, or re-shard with `fused`, before going back to an older version.
 
+**Giant MoE acceptance benchmark.** Install the training extras and `psutil`. From the
+repository root, use
+`python -m benchmarks.harness.giant_moe_source_plan --revision REVISION --output PLAN_DIR`
+to size the NF4 cache from pinned DeepSeek-V3 safetensors headers. Plan with the same
+compute dtype as the run. Download the full checkpoint separately. On one visible
+8 GB-class CUDA GPU, run `python -m benchmarks.harness.giant_moe_acceptance` with
+`--source SOURCE --cache CACHE --output NEW_RUN --data examples/giant-moe-pilot-data.json
+--revision REVISION`. Pass `--source-plan PLAN_DIR/plan.json` to check the downloaded
+headers and writer layout against the plan. Use `--reuse-cache` for a committed cache
+or `--restart-incomplete-cache` to restart a conversion that has yet to publish an index.
+
+For a standalone pilot, `--checkpoint-every N` saves optimizer-step checkpoints.
+`--resume PREVIOUS_RUN/checkpoints` requires the same source, committed cache, training
+data, total step count and runtime, with a fresh output directory. For the uninterrupted
+paired evaluation, pass both `--evaluation-protocol` and `--evaluation-data` from the
+[frozen protocol](../benchmarks/protocols/giant-moe-acceptance-2026-10-29/README.md).
+Its RAM monitor also takes the runner's `--ram-phase-file` path. The runner records optimizer
+steps, evaluation results and exact adapter reload in `events.jsonl`.
+
 **FP8 block-quantised bases (DeepSeek-V3 family).** Layer streaming keeps a frozen base off the card and streams it in layer by layer (layer-to-layer streaming, L2L: Pudipeddi et al. 2020). DeepSeek-V3 is published as an FP8 block-quantised checkpoint, and Kimi K2 uses the same format. Soup now shards such a checkpoint by dequantising it as it writes the layer cache, instead of refusing it. There is no config key for this: the format is detected from the checkpoint.
 
 What the format is:

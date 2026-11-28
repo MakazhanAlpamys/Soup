@@ -1,0 +1,1 @@
+- Add a DeepSeek-V3 giant MoE acceptance runner and header-only cache planner, with validated cache reuse, paired evaluation and optimizer-step checkpoints for the standalone pilot. (#PENDING by @kok-o)
