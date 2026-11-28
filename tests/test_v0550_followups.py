@@ -525,5 +525,5 @@ class TestCoverageMarkupEscape:
             Path(__file__).resolve().parent.parent
             / "src" / "soup_cli" / "commands" / "_eval_v0550.py"
         ).read_text(encoding="utf-8")
-        # The coverage table title must wrap report.task_category in escape().
-        assert "escape(report.task_category)" in src
+        # The coverage table title is built as Text, never read as markup (#2489).
+        assert 'f"Coverage — {report.task_category}", "table.title"' in src
