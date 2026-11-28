@@ -143,6 +143,18 @@ def _plain(text: str) -> str:
     return " ".join(_ANSI_RE.sub("", text).split())
 
 
+def test_export_help_output_describes_file_and_directory_outputs():
+    """--output is a file for GGUF but a directory for ONNX and TensorRT (#3279)."""
+    result = runner.invoke(app, ["export", "--help"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    # Rich draws the options in a box; drop the frame so a wrapped sentence reads as one line.
+    out = _plain(re.sub(r"[│┌┐└┘─]", " ", result.output))
+    assert "a file or a directory, depending on --format" in out, out
+    assert "GGUF writes a file (default: <model-name>.<quant>.gguf)" in out, out
+    assert "ONNX and TensorRT write a directory" in out, out
+    assert "<model-name>_onnx" in out and "<model-name>_trt" in out, out
+
+
 def test_export_help_names_every_supported_format():
     """The --format help lists every accepted format (torchao and gguf-ud were missing)."""
     result = runner.invoke(app, ["export", "--help"])

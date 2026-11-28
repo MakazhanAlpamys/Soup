@@ -5,6 +5,10 @@
 The main [README](../README.md) is the 5-minute front door. This directory holds the full
 feature reference — every `soup` capability, grouped by area.
 
+For contributor setup, local test selection and PR checks, see
+[CONTRIBUTING.md](../CONTRIBUTING.md). From the repository root,
+`python scripts/select_tests.py` prints a pytest command for your changes.
+
 | Guide | Covers |
 |---|---|
 | [Training tasks & methods](training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, tool-calling, PRM, pre-training, distillation, classification, vision/audio/TTS, unlearning, RAFT/RA-DIT, loop-hardening detectors, reward-verifier synthesis |

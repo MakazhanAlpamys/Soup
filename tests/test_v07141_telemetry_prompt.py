@@ -298,15 +298,19 @@ def test_send_telemetry_refuses_placeholder_key_with_notice(capsys, monkeypatch)
 
 def test_emit_telemetry_never_raises_on_broken_env(monkeypatch):
     """_emit_telemetry must swallow any exception even if consent check raises."""
-    from soup_cli.cli import _emit_telemetry
+    import soup_cli.cli as cli
+    from soup_cli.utils import trackers
 
-    monkeypatch.setattr(
-        "soup_cli.utils.trackers.is_telemetry_enabled",
-        MagicMock(side_effect=RuntimeError("unexpected crash")),
-    )
-    # Must not raise
-    _emit_telemetry(["soup", "train"], 1.0)
-    assert True
+    consent = MagicMock(side_effect=RuntimeError("unexpected crash"))
+    send = MagicMock()
+    monkeypatch.setattr(cli, "_telemetry_disabled", False)
+    monkeypatch.setattr(trackers, "is_telemetry_enabled", consent)
+    monkeypatch.setattr(trackers, "send_telemetry_payload", send)
+
+    cli._emit_telemetry(["soup", "train"], 1.0)
+
+    assert consent.call_count == 1
+    assert send.call_count == 0
 
 
 def test_every_test_in_this_file_has_load_bearing_assert():

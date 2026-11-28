@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -87,16 +88,19 @@ class TestCutCEApplication:
             result = apply_cut_ce("meta-llama/Llama-3.1-8B")
             assert result is False
 
-    def test_apply_cut_ce_available_tries_patching(self):
+    def test_apply_cut_ce_available_tries_patching(self, monkeypatch):
         from soup_cli.utils.cut_ce import apply_cut_ce
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ):
-            # With cut_cross_entropy not actually installed, patch should return
-            # False (can't import real module). Just verifying it doesn't crash.
-            result = apply_cut_ce("meta-llama/Llama-3.1-8B")
-            assert isinstance(result, bool)
+        package = ModuleType("cut_cross_entropy")
+        transformers = ModuleType("cut_cross_entropy.transformers")
+        transformers.cce_patch = MagicMock()
+        monkeypatch.setitem(sys.modules, package.__name__, package)
+        monkeypatch.setitem(sys.modules, transformers.__name__, transformers)
+
+        with patch("soup_cli.utils.cut_ce._detect_model_type", return_value="qwen2"):
+            assert apply_cut_ce("checkpoint-100") is True
+
+        transformers.cce_patch.assert_called_once_with("qwen2")
 
     def test_apply_cut_ce_calls_llama_patch_for_llama_model(self):
         """Verify the llama detector routes to cce_patch('llama').
@@ -635,13 +639,20 @@ class TestFP8Availability:
         result = is_fp8_available()
         assert isinstance(result, bool)
 
-    def test_fp8_requires_hopper_gpu_info(self):
-        """is_fp8_gpu_supported should check GPU compute capability."""
+    @pytest.mark.parametrize(
+        ("capability", "supported"),
+        [((8, 8), False), ((8, 9), True)],
+        ids=["below-floor", "at-floor"],
+    )
+    def test_fp8_gpu_support_capability_boundary(self, monkeypatch, capability, supported):
         from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
-        # Shouldn't crash even without CUDA
-        result = is_fp8_gpu_supported()
-        assert isinstance(result, bool)
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.get_device_capability.return_value = capability
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        assert is_fp8_gpu_supported() is supported
 
     def test_is_fp8_available_false_when_deps_missing(self):
         """Explicit false branch — both torchao.float8 and transformer_engine absent."""

@@ -33,6 +33,10 @@ from soup_cli.config.deprecation import (
     warn_unconsumed_field,
 )
 
+# The packed-LoRA kernels' settings and the reasons they refuse a run live with the kernels
+# (pure Python: no torch, no Triton).
+from soup_cli.kernels.packed_lora.config import PackedLoraConfig, packed_lora_problem
+
 # Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
 # leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
 # schema bound and the runtime validator's message are the same object, and the
@@ -3564,16 +3568,58 @@ class TrainingConfig(BaseModel):
             "target_parameters, Spectrum, LISA and FP8 training."
         ),
     )
+    packed_lora: Optional[PackedLoraConfig] = Field(
+        default=None,
+        description=(
+            "Triton kernels for the Qwen2 QLoRA SFT step (NF4 decode, RMSNorm, RoPE, "
+            "SwiGLU, a logit-free head and loss, an int8 MLP input gradient with a "
+            "start-up check, saved activations in GPU or pinned host memory instead of "
+            "gradient checkpointing). Off by default; yaml only. task='sft' on the "
+            "transformers backend with text, quantization 4bit and lora.dropout 0; "
+            "refused with the reason beside the other kernel switches."
+        ),
+    )
     # Performance — FlashAttention
     use_flash_attn: bool = Field(
         default=False,
         description="Enable FlashAttention (auto-detects v2/v3/v4 for faster attention)",
     )
-    # Performance — Ring FlashAttention (sequence parallelism)
+    # Performance — Ring FlashAttention (sequence parallelism). Refused at
+    # config load until a trainer applies it (#2044); see _refuse_ring_attention.
     use_ring_attention: bool = Field(
         default=False,
-        description="Enable Ring FlashAttention for sequence parallelism across GPUs",
+        description=(
+            "Refused at config load (#2044): no trainer sets up Ring "
+            "FlashAttention or sequence parallelism, so a run that asked for it "
+            "would train with ordinary attention. Use rope_scaling_type with "
+            "plain LoRA to extend the context."
+        ),
     )
+
+    @field_validator("use_ring_attention")
+    @classmethod
+    def _refuse_ring_attention(cls, value: bool) -> bool:
+        """#2044 — refuse ``use_ring_attention: true`` until a trainer applies it.
+
+        The field is validated in ``commands/train.py`` (CUDA, the extra, two
+        GPUs, max_length >= 8192) and then read by no trainer, so a run that
+        passes those checks trains each rank on the full sequence under
+        ordinary attention without saying the flag was ignored. Runs after
+        pydantic's bool coercion, so every true spelling is refused. The
+        validator and the mutual-exclusion checks stay in place for a real
+        implementation.
+        """
+        if value:
+            raise ValueError(
+                "training.use_ring_attention: true is refused (#2044): no "
+                "trainer sets up Ring FlashAttention or sequence parallelism, "
+                "so the run would train with ordinary attention while each rank "
+                "holds the full sequence. To extend the context, set "
+                "training.rope_scaling_type (linear, dynamic, yarn or llama3) "
+                "and train plain LoRA; remove use_ring_attention or set it to "
+                "false."
+            )
+        return value
     # Long-context — RoPE scaling
     rope_scaling_type: Optional[
         Literal["linear", "dynamic", "yarn", "llama3"]
@@ -7538,6 +7584,16 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_packed_lora_supported(self) -> "SoupConfig":
+        """``training.packed_lora``: the kernels run one Qwen2 QLoRA SFT step; every other
+        setting is refused with its reason (``kernels/packed_lora/config.py``) rather than
+        left unpatched."""
+        problem = packed_lora_problem(self, self.training.packed_lora)
+        if problem is not None:
+            raise ValueError(problem)
+        return self
+
+    @model_validator(mode="after")
     def _validate_kernel_flags_task_gate(self) -> "SoupConfig":
         """#806: use_flash_attn / use_liger are read only by the SFT-family
         trainer (sft.py, inherited by tts.py's ``TTSTrainerWrapper``); every
@@ -10958,7 +11014,7 @@ training:
   rope_scaling_type: dynamic
   use_flash_attn: true
   # use_liger: true       # pip install "soup-cli[liger]" for fused ops
-  # use_ring_attention: true  # Multi-GPU sequence parallelism
+  # use_ring_attention: true  # Refused (#2044): use rope_scaling_type instead
 
 output: ./output_longctx
 """,
