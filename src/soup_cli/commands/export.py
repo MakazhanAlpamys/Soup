@@ -544,29 +544,42 @@ def _remove_merge_dir(merge_dir: Optional[Path], *, announce: bool = True) -> No
     shutil.rmtree(merge_dir, ignore_errors=True)
 
 
+def _resolve_export_trust(base_model: str, tokenizer_path: str, requested: bool) -> bool:
+    """Check each loader's source before applying the shared export opt-in."""
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+        tokenizer_requires_trust_remote_code,
+    )
+
+    trust_remote_code = resolve_trust_remote_code(
+        base_model,
+        requested=requested,
+        console=console,
+        requires_remote_code=bool(model_requires_trust_remote_code(base_model)),
+    )
+    resolve_trust_remote_code(
+        tokenizer_path,
+        requested=requested,
+        console=console if tokenizer_path != base_model else None,
+        requires_remote_code=tokenizer_requires_trust_remote_code(tokenizer_path),
+        component="tokenizer",
+    )
+    return trust_remote_code
+
+
 def _merge_adapter(
     adapter_path: str,
     base_model: str,
     output_dir: str,
     trust_remote_code: bool = False,
-):
+) -> None:
     """Merge LoRA adapter with base model."""
+    trc = _resolve_export_trust(base_model, adapter_path, trust_remote_code)
+
     import torch
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    from soup_cli.utils.trust_remote import (
-        model_requires_trust_remote_code,
-        resolve_trust_remote_code,
-    )
-
-    requires = model_requires_trust_remote_code(adapter_path) or False
-    trc = resolve_trust_remote_code(
-        base_model,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=requires,
-    )
 
     console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
     from soup_cli.utils.run_provenance import recorded_base_kwargs
@@ -1400,8 +1413,17 @@ def _export_torchao_cli(
         ))
 
         try:
+            source_dir = str(source_model_dir)
+            if merge_dir is None:
+                from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+                enforce_under_cwd_and_no_symlink(source_dir, "model_dir")
+                enforce_under_cwd_and_no_symlink(str(output_path), "output_dir")
+                trust_remote_code = _resolve_export_trust(
+                    source_dir, source_dir, trust_remote_code,
+                )
             export_torchao(
-                model_dir=str(source_model_dir),
+                model_dir=source_dir,
                 output_dir=str(output_path),
                 scheme=scheme,
                 quant_config_data={k: v for k, v in cfg_data.items() if k != "scheme"},
@@ -1416,7 +1438,7 @@ def _export_torchao_cli(
 
     if failure is not None:
         code, message = failure
-        console.print(f"[red]{message}[/]")
+        console.print(Text(strip_control(message), style="red"))
         if code == 1:
             console.print(
                 "Try: [bold]pip install torchao[/] "

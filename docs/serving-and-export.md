@@ -149,6 +149,13 @@ soup export --model ./output --format gguf --no-install-deps --verbose
 
 Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
 
+When export merges a LoRA adapter, it checks the local base model's `config.json`
+and the adapter's `tokenizer_config.json` independently. TorchAO export of a full
+local checkpoint checks both files in that checkpoint. A model type built into
+Transformers can use its native config even when `config.json` contains an
+`auto_map` entry. A custom tokenizer mapping still requires explicit
+`--trust-remote-code`.
+
 GGUF export prints phase lines for toolchain lookup, dependency checking, adapter
 merge when needed, conversion and quantization when needed. `--verbose` additionally
 streams the converter and quantizer's combined stdout/stderr as lines arrive; the
