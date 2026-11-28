@@ -70,7 +70,7 @@ Usage: `soup [OPTIONS] <command> [ARGS]...`
 | [`soup data`](#soup-data) | Dataset tools: inspect, convert, merge, dedup, validate, stats. |
 | [`soup delinearize-llama4`](#soup-delinearize-llama4) | Delinearize Llama 4 fused expert weights to 3-D form. |
 | [`soup deploy`](#soup-deploy) | Deploy models: Ollama integration (deploy, list, remove). |
-| [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0). |
+| [`soup diagnose`](#soup-diagnose) | Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination / citation (v0.56.0; citation v0.71.10). |
 | [`soup diff`](#soup-diff) | Compare outputs of two models side-by-side on the same prompts. |
 | [`soup distill-prompt`](#soup-distill-prompt) | Distill prompt-heavy traces into a small FT plan (v0.68.0). |
 | [`soup docs`](#soup-docs) | Documentation search &amp; offline reference guides. |
@@ -1252,8 +1252,8 @@ Usage: `soup data filter [OPTIONS] PATH`
 |---|---|---|---|---|
 | `PATH` | text |  | yes | Path to dataset file |
 | `--output`, `-o` | text |  |  | Output file path (default: &lt;input>\_filtered.jsonl) |
-| `--perplexity`, `--ppl` | float |  |  | Max perplexity threshold (rows above this are removed) |
-| `--coherence`, `--min-coherence` | float |  |  | Min coherence threshold 0.0-1.0 (rows below this are removed) |
+| `--perplexity`, `--ppl` | float, at least 0.0 |  |  | Max perplexity threshold (rows above this are removed) |
+| `--coherence`, `--min-coherence` | float, 0.0 to 1.0 |  |  | Min coherence threshold 0.0-1.0 (rows below this are removed) |
 | `--ppl-model` | text | `gpt2` |  | Model for perplexity scoring (default: gpt2) |
 | `--field`, `-f` | text |  |  | Field to score (default: all text fields concatenated) |
 | `--score-only` | flag | off |  | Add scores to data without filtering (writes \_scored.jsonl) |
@@ -1396,6 +1396,10 @@ Usage: `soup data leakage [OPTIONS]`
 | `--eval` | text |  | yes | Evaluation JSONL under cwd. |
 | `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
 | `--json` | flag | off |  | Print a machine-readable JSON report. |
+| `--near-duplicates` | flag | off |  | Look for lexical near-duplicates with the optional data extra. |
+| `--threshold` | text |  |  | Minimum Jaccard score, greater than 0 and at most 1 (default 0.8). |
+| `--permutations` | text |  |  | MinHash permutations, 16 to 256 (default 128). |
+| `--seed` | text |  |  | MinHash seed, 0 to 4294967295 (default 1). |
 
 ### `soup data lint`
 
@@ -1752,7 +1756,7 @@ Usage: `soup deploy ollama [OPTIONS]`
 
 ## `soup diagnose`
 
-Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination (v0.56.0).
+Post-training report card: forgetting / refusal / format / mode_collapse / memorization / contamination / citation (v0.56.0; citation v0.71.10).
 
 Usage: `soup diagnose [OPTIONS] RUN_ID`
 
@@ -1765,8 +1769,8 @@ Usage: `soup diagnose [OPTIONS] RUN_ID`
 | `--output`, `-o` | text |  |  | Write the report JSON to this path. |
 | `--badge` | text |  |  | Write an SVG badge to this path. |
 | `--attach-to-registry` | text |  |  | Attach the --output report to a registry entry id (needs --output). Exits 1 when the attach fails. |
-| `--base-model` | text |  |  | Base model id to LOAD for a live diagnose run (e.g. HuggingFaceTB/SmolLM2-135M). When set, the 6 probes run live against the model instead of emitting neutral scores. |
-| `--dataset` | text |  |  | Training JSONL for live format / memorization / citation probes (must stay under cwd). |
+| `--base-model` | text |  |  | Base model id to LOAD for a live diagnose run (e.g. HuggingFaceTB/SmolLM2-135M). When set, the report's probes run live against the model instead of emitting neutral scores; format, mode_collapse, memorization and citation need --dataset, and citation only RAFT-shaped rows. |
+| `--dataset` | text |  |  | Training JSONL for live format / mode_collapse / memorization / citation probes (must stay under cwd). |
 | `--holdout` | text |  |  | Held-out evaluation JSONL for the live forgetting probe (must stay under cwd; falls back to built-in general prompts if unset). |
 | `--tokenizer` | text |  |  | Tokenizer id/path for a sub-word memorization probe (live). |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
@@ -2408,7 +2412,7 @@ Usage: `soup export [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model directory (full model or LoRA adapter) |
 | `--format`, `-f` | text | `gguf` |  | Export format: gguf, onnx, tensorrt, bitnet, tq1_0, torchao, gguf-ud (torchao needs --quant-config) |
 | `--quant`, `-q` | text | `q4_k_m` |  | Quantization type: q4_0, q4_k_m, q5_k_m, q8_0, f16, f32 |
-| `--output`, `-o` | text |  |  | Output file path. Default: &lt;model-name>.&lt;quant>.gguf |
+| `--output`, `-o` | text |  |  | Output path: a file or a directory, depending on --format. GGUF writes a file (default: &lt;model-name>.&lt;quant>.gguf). ONNX and TensorRT write a directory (default: &lt;model-name>\_onnx or &lt;model-name>\_trt, next to the model). |
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
@@ -3361,7 +3365,7 @@ Usage: `soup registry list [OPTIONS]`
 | `--tag`, `-t` | text |  |  | Filter by tag. |
 | `--base`, `-b` | text |  |  | Filter by base model. |
 | `--task` | text |  |  | Filter by training task. |
-| `--limit`, `-l` | integer | `100` |  | Maximum number of entries to show. |
+| `--limit`, `-l` | integer | `100` |  | Maximum number of entries to show (1-1000; out-of-range values are clamped). |
 
 ### `soup registry promote`
 
@@ -3398,7 +3402,7 @@ Usage: `soup registry search [OPTIONS] QUERY`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `QUERY` | text |  | yes | Keyword to search for |
-| `--limit`, `-l` | integer | `50` |  | Maximum number of matching entries to show. |
+| `--limit`, `-l` | integer | `50` |  | Maximum number of matching entries to show (1-500; out-of-range values are clamped). |
 
 ### `soup registry show`
 

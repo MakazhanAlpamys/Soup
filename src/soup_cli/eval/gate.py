@@ -121,27 +121,40 @@ class GateTask(BaseModel):
     def _valid_judge_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        # Allowlist of schemes — SSRF hardening consistent with the project.
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        # A private IP literal is refused when the suite is parsed, so a
+        # suite file cannot name one any more than --judge-model can.
+        # (Kept inline here: the net-guard contract test requires this
+        # validator itself to call the shared refusal.)
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
 
         parsed = parse_url_with_safe_error(value, label="judge_model URL")
-
-        if parsed.scheme == "ollama":
-            return value
-
         if parsed.scheme == "https":
-            # A private IP literal is refused when the suite is parsed, so a
-            # suite file cannot name one any more than --judge-model can.
             refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
-            return value
+        return _check_judge_model_url(value)
 
-        if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
-            return value
 
-        raise ValueError(
-            f"judge_model URL '{url_without_userinfo(value)}' uses disallowed scheme - "
-            "use ollama://, https://, or http://localhost"
-        )
+def _check_judge_model_url(value: Optional[str]) -> Optional[str]:
+    # Allowlist of schemes — SSRF hardening consistent with the project.
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
+    parsed = parse_url_with_safe_error(value, label="judge_model URL")
+
+    if parsed.scheme == "ollama":
+        return value
+
+    if parsed.scheme == "https":
+        # A private IP literal is refused when the suite is parsed, so a
+        # suite file cannot name one any more than --judge-model can.
+        refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
+        return value
+
+    if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
+        return value
+
+    raise ValueError(
+        f"judge_model URL '{url_without_userinfo(value)}' uses disallowed scheme - "
+        "use ollama://, https://, or http://localhost"
+    )
 
 
 class EvalSuite(BaseModel):
@@ -195,6 +208,10 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
                 f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
             )
         names.add(task.name)
+        # #3241: a judge_model assigned after the suite is parsed is re-checked
+        # with the load-time rule, before any generator call in run_gate.
+        if task.judge_model is not None:
+            _check_judge_model_url(task.judge_model)
 
 
 def _suite_error_location(loc: tuple[object, ...]) -> str:
@@ -589,6 +606,36 @@ def resolve_baseline(
             warn=warn,
         )
     return scores
+
+
+def lost_baseline_coverage(
+    scores: Mapping[str, float],
+    *,
+    required: set[str],
+    reference: Mapping[str, float],
+    output: str,
+) -> list[str]:
+    """Tasks whose baseline coverage this write would drop (#2951).
+
+    ``reference`` is the map the run compared against (a ``--baseline`` file or
+    ``registry://`` entry), and ``output`` is the file about to be replaced. A
+    task the suite still runs that either source already covers, but this run
+    could not score, must not disappear from the baseline: the next run would
+    have nothing to compare it with, so a regression there would pass.
+
+    The output path is read with the same rules as ``--baseline``; an absent or
+    unreadable file counts as no prior coverage, so a corrupt baseline can still
+    be replaced.
+    """
+    if not scores:
+        return []
+    prior = {name for name in reference if name in required}
+    try:
+        previous = resolve_baseline(output, warn=lambda _message: None)
+    except (FileNotFoundError, ValueError, OSError):
+        previous = {}
+    prior.update(name for name in previous if name in required)
+    return sorted(prior - set(scores))
 
 
 def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:

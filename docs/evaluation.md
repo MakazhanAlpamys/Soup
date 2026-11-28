@@ -393,7 +393,8 @@ Each JSONL row's text is read from `output`, `response` or `text`. A file in whi
 # Neutral report (no model load — runs as a sanity check)
 soup diagnose my-run-id
 
-# LIVE (v0.71.7): load the model and run all six probes for real
+# LIVE (v0.71.7): load the model and run the probes for real (format, mode_collapse,
+# memorization and citation need --dataset; citation only RAFT-shaped rows)
 soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M \
     --adapter ./out --dataset train.jsonl --tokenizer HuggingFaceTB/SmolLM2-135M
 
@@ -424,11 +425,12 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 when it fails (unknown or ambiguous entry, unreadable registry), with the report left on disk,
 and exits 3 before anything runs when the flag is given without `--output`.
 
-**Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
-(+ optional `--adapter` LoRA path, `--dataset` for format / memorization / citation probes,
+**Live runners (v0.71.7).** With `--base-model` the report's probes run against the loaded model
+(+ optional `--adapter` LoRA path, `--dataset` for format / mode_collapse / memorization / citation probes,
 `--holdout` for the forgetting probe using the first 12 usable rows and falling back to built-in general prompts if unset,
 `--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
+`citation` only scores RAFT-shaped rows;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
 The memorization probe measures clipped completion-bigram precision against the held-out suffix,
 so its 64-token live generation limit does not dilute the overlap score for long training rows.
@@ -988,7 +990,14 @@ The file is
 and is consumed later by `soup ship --baseline baseline.json` or
 `soup eval gate --baseline baseline.json`. Shared helpers
 `stamp_baseline_scores` / `write_baseline_file` are the only writers;
-`write_baseline_file` refuses an empty score map. Baseline scores must be finite
+`write_baseline_file` refuses an empty score map. A refresh is also refused when
+it could not score a task the suite still runs and that task is already covered
+by the `--baseline` map the run compared against or by the file being replaced
+(#2951): the missing task names are printed and the previous file is kept
+byte-for-byte, because the next run would otherwise have no reference for that
+task and a regression there would pass. An unreadable existing file is replaced,
+because it covers nothing. A fresh output path with no reference still records
+the measured subset. Baseline scores must be finite
 numbers — non-finite values (`NaN`, `+inf`, `-inf`) are refused at read
 (`resolve_baseline`), write (`stamp_baseline_scores`, `write_baseline_file`),
 and gate (`run_gate`) boundaries (#1773). `resolve_baseline`

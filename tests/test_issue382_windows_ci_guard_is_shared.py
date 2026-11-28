@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._source_scan import memoized_scan, parse_source, walk_nodes
 from tests._windows_ci import _windows_ci, skip_on_windows_ci
 
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -40,18 +41,33 @@ _HOME = _TESTS_DIR / "_windows_ci.py"
 KNOWN_CALL_SITES = ("test_v07202.py",)
 
 
+@memoized_scan
+def _windows_ci_guard_sites(source: str) -> tuple[int, int]:
+    """Count predicate definitions and marker assignments in the current source text."""
+    try:
+        nodes = walk_nodes(parse_source(source))
+    except SyntaxError:
+        return 0, 0
+    definitions = 0
+    builders = 0
+    for node in nodes:
+        if isinstance(node, ast.FunctionDef) and node.name == "_windows_ci":
+            definitions += 1
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "skip_on_windows_ci"
+            for target in node.targets
+        ):
+            builders += 1
+    return definitions, builders
+
+
 class TestThereIsExactlyOneDefinition:
     def test_the_predicate_is_defined_only_in_the_shared_module(self):
         """A second ``def _windows_ci`` anywhere under tests/ is the drift."""
         definers = []
         for path in sorted(_TESTS_DIR.rglob("*.py")):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) and node.name == "_windows_ci":
-                    definers.append(path.name)
+            count, _ = _windows_ci_guard_sites(path.read_text(encoding="utf-8"))
+            definers.extend([path.name] * count)
         assert definers == [_HOME.name], (
             f"_windows_ci must be defined only in {_HOME.name}; found in {definers}"
         )
@@ -59,16 +75,8 @@ class TestThereIsExactlyOneDefinition:
     def test_the_marker_is_built_only_in_the_shared_module(self):
         builders = []
         for path in sorted(_TESTS_DIR.rglob("*.py")):
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assign) and any(
-                    isinstance(t, ast.Name) and t.id == "skip_on_windows_ci"
-                    for t in node.targets
-                ):
-                    builders.append(path.name)
+            _, count = _windows_ci_guard_sites(path.read_text(encoding="utf-8"))
+            builders.extend([path.name] * count)
         assert builders == [_HOME.name], (
             f"skip_on_windows_ci must be built only in {_HOME.name}; found in {builders}"
         )

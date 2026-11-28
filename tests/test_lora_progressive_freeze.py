@@ -39,7 +39,8 @@ def _step(callback, args, state, norms, optimizer=None):
 
     for idx in callback.selection.layers:
         param = callback.by_layer[idx][0][1]
-        param.grad = torch.full_like(param, norms(idx, state.global_step + 1))
+        norm = norms(idx, state.global_step + 1)
+        param.grad = None if norm is None else torch.full_like(param, norm)
     callback.on_pre_optimizer_step(args, state)
     state.global_step += 1
     callback.on_step_end(args, state, optimizer=optimizer)
@@ -165,6 +166,55 @@ def test_resume_restores_rule_history_and_partial_window(tmp_path, checkpoint_st
     resumed.on_train_end(resume_args, resume_state)
     assert _record(tmp_path) == _record(tmp_path / "resumed")
     assert cb.selection.history[-1] == (8 if skipped else 6, [3, 4, 5])
+
+
+@pytest.mark.parametrize("smoothing, freeze_step", [(0.0, 6), (0.8, 8)])
+@pytest.mark.parametrize(
+    ("checkpoint_step", "legacy_empty_entry"), [(3, False), (4, False), (4, True), (5, False)]
+)
+def test_empty_windows_do_not_advance_rule_across_resume(
+    tmp_path, smoothing, freeze_step, checkpoint_step, legacy_empty_entry
+):
+    settings = {"interval_steps": 2, "freeze_smoothing": smoothing}
+    cb = _callback(tmp_path, **settings)
+    args, state = _start(cb, _model(), tmp_path)
+
+    def norms(_idx, step):
+        if step in (3, 4, 5):
+            return None
+        return 2.0 if step == 6 else 1.0
+
+    for _ in range(checkpoint_step):
+        _step(cb, args, state, norms)
+    cb.on_save(args, state)
+    checkpoint = tmp_path / f"checkpoint-{checkpoint_step}"
+    record = _record(checkpoint)
+    assert record["pending_norms"] == {}
+    if legacy_empty_entry:
+        record["norms"] = [record["norms"][0], {"step": 4, "layers": {}}]
+        record["skipped_windows"] = []
+        (checkpoint / "lora_layers.json").write_text(json.dumps(record), encoding="utf-8")
+
+    resumed = _callback(tmp_path / "resumed", **settings)
+    resumed.resume_checkpoint = str(checkpoint)
+    resume_args, resume_state = _start(
+        resumed, _model(), tmp_path / "resumed", step=checkpoint_step
+    )
+    for step in range(checkpoint_step + 1, freeze_step + 1):
+        _step(cb, args, state, norms)
+        _step(resumed, resume_args, resume_state, norms)
+        if step < freeze_step:
+            assert resumed.selection.layers == list(range(6))
+    cb.on_train_end(args, state)
+    resumed.on_train_end(resume_args, resume_state)
+    record = _record(tmp_path / "resumed")
+    assert record["history"] == [
+        {"step": 0, "layers": list(range(6))},
+        {"step": freeze_step, "layers": [3, 4, 5]},
+    ]
+    assert record["skipped_windows"] == [4]
+    assert [entry["step"] for entry in record["norms"]] == [2, *range(6, freeze_step + 1, 2)]
+    assert record == _record(tmp_path)
 
 
 @pytest.mark.parametrize(

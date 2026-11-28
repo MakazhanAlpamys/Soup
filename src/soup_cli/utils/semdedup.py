@@ -88,11 +88,16 @@ def greedy_semdedup(
     kept: list[int] = []
     dropped: list[int] = []
     pairs: list[tuple[int, int, float]] = []
+    # Advanced indexing (arr[kept]) copies every kept row on every iteration.
+    # Store them once in the same C-contiguous layout and multiply a view;
+    # retain matrix-vector products so the raw audit scores are unchanged.
+    kept_vectors = np.empty(arr.shape, dtype=np.float32, order="C")
     for idx in range(n_rows):
         if not kept:
+            kept_vectors[0] = arr[idx]
             kept.append(idx)
             continue
-        sims = arr[kept] @ arr[idx]
+        sims = kept_vectors[:len(kept)] @ arr[idx]
         best = int(np.argmax(sims))
         best_sim = float(sims[best])
         if thresh == 0.0:
@@ -105,6 +110,7 @@ def greedy_semdedup(
             dropped.append(idx)
             pairs.append((idx, kept[best], best_sim))
         else:
+            kept_vectors[len(kept)] = arr[idx]
             kept.append(idx)
     return DedupReport(
         kept=tuple(kept),

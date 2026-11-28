@@ -846,6 +846,14 @@ def verify_prefix_tree_model(
             worst = max(worst, float((got - want).abs().max()))
         return worst
 
+    # ``max`` drops a NaN, so a nonfinite forward is named before anything is reduced.
+    nonfinite: List[str] = []
+
+    def finite(what: str, values: Any) -> Any:
+        if not bool(torch.isfinite(values).all()):
+            nonfinite.append(what)
+        return values
+
     was_training = bool(getattr(model, "training", False))
     model.eval()
     try:
@@ -853,13 +861,19 @@ def verify_prefix_tree_model(
             plain = logits(input_ids=plain_ids, attention_mask=plain_mask)
             noise = 0.0
             for index, (ids, _labels) in enumerate(examples):
-                alone = logits(input_ids=torch.tensor([ids]))
+                finite(f"example {index} in the ordinary batch", plain[index, : len(ids)])
+                alone = finite(
+                    f"example {index} run alone", logits(input_ids=torch.tensor([ids]))
+                )
                 noise = max(noise, float((alone[0] - plain[index, : len(ids)]).abs().max()))
             error = difference(
-                logits(
-                    input_ids=packed["input_ids"],
-                    attention_mask=packed["attention_mask"],
-                    position_ids=packed["position_ids"],
+                finite(
+                    "the prefix-tree row",
+                    logits(
+                        input_ids=packed["input_ids"],
+                        attention_mask=packed["attention_mask"],
+                        position_ids=packed["position_ids"],
+                    ),
                 )
             )
 
@@ -895,7 +909,12 @@ def verify_prefix_tree_model(
         return value is not None and value == value and value > bound
 
     reason = ""
-    if not (error == error and error <= bound):
+    if nonfinite:
+        reason = (
+            f"the logits of {', '.join(nonfinite)} are not finite (NaN or infinite), "
+            "so nothing can be compared"
+        )
+    elif not (error == error and error <= bound):
         reason = (
             f"its logits differ from the ordinary batch's by {error:.3g}, more than "
             f"{bound:.3g} (this model's own layout noise is {noise:.3g})"

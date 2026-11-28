@@ -1,0 +1,33 @@
+{
+  "model": "unsloth/mistral-7b-instruct-v0.3",
+  "data": "glaive-fixed",
+  "stream": true,
+  "quant": "4bit",
+  "prefix_tree": true,
+  "batch_size": 1,
+  "max_length": 512,
+  "epochs": 2,
+  "lr": 0.0001,
+  "seed": 3,
+  "train_examples": 300,
+  "held_out_examples": 100,
+  "planned": {
+    "examples": 300,
+    "rows": 86,
+    "source_tokens": 113287,
+    "tree_tokens": 41984,
+    "ratio": 2.698337461890244,
+    "examples_per_row": 3.488372093023256
+  },
+  "optimizer_steps": 172,
+  "wall_seconds": 867.1447725002654,
+  "train_runtime": 752.7439,
+  "first_logged_loss": 2.152238368988037,
+  "last_logged_loss": 0.02955138124525547,
+  "held_out_loss_before": 2.837787389755249,
+  "held_out_loss_after": 0.13399872183799744,
+  "peak_gb": 1.215813632,
+  "in_training_eval_seconds": 228.0,
+  "training_seconds": 524.7,
+  "system_in_user": true
+}

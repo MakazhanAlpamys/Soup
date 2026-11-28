@@ -246,15 +246,14 @@ def choose(
     import torch
 
     device = torch.device(device)
-    cuda = (
-        [device.index if device.index is not None else torch.cuda.current_device()]
-        if (device.type == "cuda")
-        else []
-    )
+    if device.type in ("cuda", "mps"):
+        rng_fork = torch.random.fork_rng(devices=[device], device_type=device.type)
+    else:
+        rng_fork = torch.random.fork_rng(devices=[])
     was_training = model.training
     python_state = random.getstate()
     try:
-        with torch.random.fork_rng(devices=cuda):
+        with rng_fork:
             if policy.method == "grad":
                 model.train()
                 scores = grad_scores(model, by_layer, batches, device)
@@ -500,6 +499,7 @@ class _LayerSelectCallback:
         if self._window_skipped:
             return None
         if not self._window:
+            # A pending window can still collect gradients after a checkpoint.
             return {}
 
         import torch
@@ -519,11 +519,16 @@ class _LayerSelectCallback:
             or selection.layers != selection.history[-1][1]
         ):
             raise ValueError("the saved progressive mask differs from the model or last freeze")
+        windows = record["norms"]
+        # Older checkpoints may have counted empty windows as gradient observations.
         selection.norms = [
             (entry["step"], {int(idx): norm for idx, norm in entry["layers"].items()})
-            for entry in record["norms"]
+            for entry in windows
+            if entry["layers"]
         ]
-        selection.skipped_windows = record["skipped_windows"]
+        selection.skipped_windows = sorted(
+            record["skipped_windows"] + [entry["step"] for entry in windows if not entry["layers"]]
+        )
         if self.policy.freeze_smoothing:
             for _, window in selection.norms:
                 self._smooth(window)
@@ -546,7 +551,7 @@ class _LayerSelectCallback:
             window = self._window_norms()
             self._window.clear()
             self._window_skipped = False
-            if window is None:
+            if not window:
                 self.selection.skipped_windows.append(step)
             else:
                 self.selection.norms.append((step, window))
@@ -638,6 +643,22 @@ def __getattr__(name: str) -> Any:
         globals()[name] = cls
         return cls
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def validate_resume_selection(checkpoint: str, *, enabled: bool) -> None:
+    """Require layer selection to be enabled on both sides of a checkpoint resume."""
+    path = Path(checkpoint) / RECORD_NAME
+    has_record = path.exists()
+    if has_record and not enabled:
+        raise ValueError(
+            f"training.lora_layers cannot resume from {path}: "
+            "the checkpoint used layer selection but the current run has no policy"
+        )
+    if enabled and not has_record:
+        raise ValueError(
+            f"training.lora_layers cannot resume from {path}: "
+            "the checkpoint has no layer selection metadata"
+        )
 
 
 def attach_layer_select_callback(

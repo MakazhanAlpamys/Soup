@@ -96,8 +96,9 @@ committed changes, or pass specific repository-relative files to choose the inpu
 The selector follows static imports and string references to Soup modules. It
 uses test names when the import graph finds no tests, with a stop list for
 generic stems. If transitive links select more than 300 files, the selector uses
-the complete set of direct imports and their test-helper links. The status reports
-which scope ran.
+the complete set of direct imports and their test-helper links. This direct scope
+can omit tests that only reach the changed files through intermediate source
+modules. The status reports which scope the selector chose.
 Shared files (including a changed `conftest.py`), deletions, and uncertain or still
 too-large selections request the full suite. Focused commands use `--no-cov`
 because coverage is measured on the full suite.
@@ -183,7 +184,7 @@ src/soup_cli/
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   bench/              - Benchmark instruments behind `soup bench train` (collector, train_report, train_run) (#836)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (184 recipes)
+  recipes/            - Ready-made configs for popular models (185 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -750,14 +751,10 @@ bound in `pyproject.toml` past one of those pins, move the pin in the same pull
 request: `tests/test_ci_pinned_upstream.py` names the pin, and the header of the
 constraints file says how to pick the new version.
 
-**CI reuses pip downloads selectively.** Only the Ubuntu / Python 3.12 test cell
-caches pip's downloads and wheels via `setup-python`, keyed by `pyproject.toml`
-and `.github/constraints/*.txt`. Other test cells and the smoke/contract jobs
-leave pip caching disabled to limit large dependency archives competing with
-the HF model caches. Every job still runs its installation command on a cache
-hit, so the nightly run continues to resolve the newest allowed packages and
-the floor job keeps its constraints. Retained entries can still vary by
-dependency inputs and Git refs; virtual environments and HF caches are separate.
+**CI installs dependencies for each test run.** Jobs that run tests install
+their dependencies without a pip download cache. Restoring the former cache
+took longer than the download time it saved, and the large wheel archives
+competed for space with the separate Hugging Face model caches.
 
 **CI runs the tests in parallel.** Every `test (...)` cell runs the suite with
 `pytest-xdist`, one test file per worker process (`-n logical --dist loadfile`).
@@ -774,9 +771,10 @@ changes is under `docs/` or `changelog.d/`, or is `CONTRIBUTORS.md` or
 `CONTRIBUTING.md` (a renamed file counts under both names; `README*.md`,
 `benchmarks/` and everything else do not count), the `plan` job marks the run
 docs-only: `test (ubuntu-latest, 3.12)` runs the whole suite as always, and the
-other test cells and the three smoke jobs still report, as success, without
-running a step. If the file list cannot be read, or is not the whole list, the
-full set runs. A push, the nightly run and a release branch are never docs-only.
+other test cells and the three smoke jobs report success without running a step
+when a maintainer requests the full matrix. If GitHub returns an incomplete
+file list, CI runs every step in the matrix selected for that event. The docs-only
+shortcut applies to pull-request runs.
 
 **A maintainer can run the approval matrix by hand.** `gh workflow run ci.yml
 --ref <branch> -f matrix=approval` starts the four required test cells and the
@@ -791,15 +789,13 @@ about 95 of the 215 minutes of such a run. On a pull request's branch the dispat
 tests the branch tip, not its merge with `main`, and does not replace the label
 run: the pull request's required checks come from its own pull-request run alone.
 
-**A green `test (ubuntu-latest, 3.12)` is reused at approval.** The quick run and
-the approval run of a pull request check out the same merge commit:
-`github.sha` of a pull-request run is the merge commit GitHub built when the run
-was created, and adding `ci:full` does not rebuild it (14 of 14 sampled pairs, up
-to six hours apart, logged the same `HEAD is now at ... Merge <head> into
-<main>`). So the approval run's cell would test exactly what the quick run
-tested, and when that run ended green the approval run reuses its result instead
-of repeating it. The quick run's cell leaves a few bytes in the Actions cache
-under `suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
+**A green `test (ubuntu-latest, 3.12)` is reused at approval.** Reuse requires both
+runs to use the same merge commit. The `github.sha` of each pull-request run
+identifies its synthetic merge commit. In a sample of 14 pairs, both runs logged
+the same commit, up to six hours apart. When adding `ci:full` does not rebuild it,
+the approval cell would test exactly what the quick run tested and can reuse its
+green result. The quick run's cell leaves a few bytes in the
+Actions cache under `suite-green-v1-<merge sha>-ubuntu-latest-3.12` (the key is `github.sha`,
 the runner and the Python version, with no prefix match), and the approval run's
 cell looks for that key before it does anything else. On a hit it runs no other
 step and still reports `test (ubuntu-latest, 3.12)` as success under the same

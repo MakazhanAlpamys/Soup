@@ -269,14 +269,15 @@ def doctor(
                         # CUDA wheel index in its own step; the ``[train]`` extra is
                         # then resolved against PyPI with torch already satisfied.
                         issues.append(
-                            "Training stack not installed:\n"
+                            "Training stack not installed (optional for core commands):\n"
                             f"  pip install torch --index-url {url}\n"
                             '  pip install "soup-cli[train]"'
                         )
                         fix_pre.append(f"pip install torch --index-url {url}")
                     else:
                         issues.append(
-                            'Training stack not installed: pip install "soup-cli[train]"'
+                            "Training stack not installed (optional for core commands): "
+                            'pip install "soup-cli[train]"'
                         )
                 elif url is not None:
                     issues.append(
@@ -727,9 +728,17 @@ def _check_gpu():
                 )
             )
     except ImportError:
+        # #3266 - PyTorch is needed for the GPU check and for training with the
+        # transformers or unsloth backend; core commands and MLX training run
+        # without it, so this is not an error.
+        train_install = escape('pip install "soup-cli[train]"')
         console.print(
             Panel(
-                "Backend:  [red]unknown (torch not installed)[/]",
+                "Backend:  [yellow]not checked (PyTorch not installed)[/]\n"
+                "[dim]The GPU check needs PyTorch, and so does training with the "
+                "transformers or unsloth backend. Core commands and MLX training "
+                "run without it.\n"
+                f"For training: {train_install} (see the summary below)[/]",
                 title="GPU",
             )
         )
