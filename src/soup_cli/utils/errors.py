@@ -299,7 +299,7 @@ _STATUS_DECLINE_TYPES = ("GatedRepoError", "RepositoryNotFoundError")
 def _exception_chain(exc: Exception):
     """Yield exc and the exceptions it wraps, without looping."""
     seen = set()
-    current = exc
+    current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         yield current
@@ -319,6 +319,14 @@ def _safe_str(exc: BaseException) -> str:
         return ""
 
 
+def _safe_error_attribute(value: object, name: str) -> object | None:
+    """Read optional error metadata even when a proxy or property fails."""
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        return None
+
+
 def _auth_status(exc: Exception) -> int | None:
     """Return 401/403 when the exception is genuinely an auth failure.
 
@@ -328,7 +336,7 @@ def _auth_status(exc: Exception) -> int | None:
     transformers wrap hub errors. Only when no object in the chain carries a
     401/403 status does the HTTP-phrasing text fallback apply; an object
     carrying some other status (a 404, say) still falls through to the text
-    check.
+    check. Unreadable attributes are skipped.
 
     The fallback walks the chain the same way, exception-major: the outermost
     exception that carries a status phrase decides, so a wrapper that says
@@ -341,17 +349,18 @@ def _auth_status(exc: Exception) -> int | None:
     if any(type(e).__name__ in _STATUS_DECLINE_TYPES for e in chain):
         return None
     for e in chain:
-        status = getattr(getattr(e, "response", None), "status_code", None)
+        response = _safe_error_attribute(e, "response")
+        status = _safe_error_attribute(response, "status_code")
         if isinstance(status, int) and status in _AUTH_HINTS:
             return status
         for attr in ("code", "status_code"):
-            status = getattr(e, attr, None)
+            status = _safe_error_attribute(e, attr)
             if isinstance(status, int) and status in _AUTH_HINTS:
                 return status
     for e in chain:
-        for pattern, status in _AUTH_STATUS_TEXT:
+        for pattern, text_status in _AUTH_STATUS_TEXT:
             if pattern.search(_safe_str(e)):
-                return status
+                return text_status
     return None
 
 
