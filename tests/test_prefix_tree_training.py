@@ -19,11 +19,16 @@ from __future__ import annotations
 import io
 import re
 from array import array
-from typing import Any
+from copy import copy
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from soup_cli.utils.prefix_tree import IGNORE_INDEX
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 X = IGNORE_INDEX
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -575,6 +580,7 @@ def _wrapper(
     turns=_TURNS,
     max_length=64,
     responses_only=True,
+    accumulation: int = 1,
 ):
     import yaml
 
@@ -601,7 +607,7 @@ def _wrapper(
                 },
                 "training": {
                     "batch_size": batch_size,
-                    "gradient_accumulation_steps": 1,
+                    "gradient_accumulation_steps": accumulation,
                     "quantization": "none",
                     "stream_layers": stream,
                     "prefix_tree": prefix_tree,
@@ -921,3 +927,124 @@ class TestARealRun:
                 assert prefix_tree_state(wrapper.trainer) is None
             finally:
                 wrapper._close_stream_runtime()
+
+
+@pytest.mark.parametrize(
+    "stream, accumulation",
+    [(False, 1), (False, 2), (True, 2)],
+    ids=["resident-accum1", "resident-accum2", "streamed-accum2"],
+)
+def test_prefix_tree_resumes_the_exact_batches_and_adapters(
+    tmp_path: Path, stream: bool, accumulation: int
+) -> None:
+    import torch
+
+    from soup_cli.utils.prefix_tree_trainer import TREE_MASK_KEY
+    from tests.test_stream_resume_exact import _adapters, _cpu_only
+
+    def snapshot(inputs: dict[str, Tensor]) -> tuple[Tensor, ...]:
+        return tuple(
+            inputs[key].detach().cpu().clone()
+            for key in ("input_ids", "labels", "attention_mask", "position_ids", TREE_MASK_KEY)
+        )
+
+    def same_bits(actual: Tensor, expected: Tensor) -> bool:
+        return (
+            actual.dtype == expected.dtype
+            and actual.shape == expected.shape
+            and torch.equal(
+                actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8)
+            )
+        )
+
+    def same_batch(actual: tuple[Tensor, ...], expected: tuple[Tensor, ...]) -> bool:
+        return all(
+            same_bits(tensor, want) for tensor, want in zip(actual, expected, strict=True)
+        )
+
+    def run(
+        root: Path, checkpoint: Path | None = None
+    ) -> tuple[Any, list[tuple[int, tuple[Tensor, ...]]], dict[str, Tensor]]:
+        with _cpu_only() as monkeypatch:
+            wrapper = _wrapper(
+                root, monkeypatch, stream=stream, turns=_MORE_TURNS, accumulation=accumulation
+            )
+            trainer = wrapper.trainer
+            trainer.args.save_steps = 1
+            trainer.args.save_total_limit = None
+            trainer.args.num_train_epochs = 3
+            batches = []
+            training_step = trainer.training_step
+
+            def record_step(
+                model: Any, inputs: dict[str, Tensor], *args: Any, **kwargs: Any
+            ) -> Tensor:
+                batches.append((trainer.state.global_step, snapshot(inputs)))
+                return training_step(model, inputs, *args, **kwargs)
+
+            trainer.training_step = record_step
+            assert (getattr(wrapper, "_stream_runtime", None) is not None) is stream
+            try:
+                wrapper.train(resume_from_checkpoint=str(checkpoint) if checkpoint else None)
+                return trainer, batches, _adapters(wrapper.model)
+            finally:
+                wrapper._close_stream_runtime()
+
+    full_trainer, batches, adapters = run(tmp_path / "full")
+    final_step = full_trainer.state.global_step
+    loader = full_trainer.get_train_dataloader()
+    sampler = copy(loader.batch_sampler)
+    rows = len(sampler)
+    steps_per_epoch = (rows + accumulation - 1) // accumulation
+    assert rows > accumulation and len(batches) == rows * 3
+    assert final_step == steps_per_epoch * 3
+    assert len(adapters) == 8
+
+    # Check the uninterrupted run against explicit epoch numbers, without using the
+    # Trainer's epoch hook. Otherwise the same offset in both arms could pass.
+    planned = []
+    for epoch in range(3):
+        sampler.set_epoch(epoch)
+        planned.extend(
+            snapshot(loader.collate_fn([loader.dataset[index] for index in indices]))
+            for indices in sampler
+        )
+    assert any(
+        not same_batch(first, second)
+        for first, second in zip(planned[:rows], planned[rows : 2 * rows], strict=True)
+    ), "fixture must shuffle differently in epoch 2"
+    assert all(
+        same_batch(actual, expected)
+        for (_, actual), expected in zip(batches, planned, strict=True)
+    ), "uninterrupted batches must use the absolute sampler epoch"
+
+    mismatches = {}
+    for cut in (1, steps_per_epoch, steps_per_epoch + 1):
+        checkpoint = tmp_path / "full" / "out" / f"checkpoint-{cut}"
+        for name in (
+            "adapter_model.safetensors",
+            "optimizer.pt",
+            "scheduler.pt",
+            "trainer_state.json",
+            "rng_state.pth",
+        ):
+            assert (checkpoint / name).is_file()
+        resumed, resumed_batches, resumed_adapters = run(tmp_path / f"cut-{cut}", checkpoint)
+        expected = [(step, tensors) for step, tensors in batches if step >= cut]
+        assert resumed.state.global_step == final_step
+        assert len(resumed_batches) == len(expected)
+        assert resumed_adapters.keys() == adapters.keys()
+
+        batch_differences = [
+            index
+            for index, ((step, tensors), (want_step, want_tensors)) in enumerate(
+                zip(resumed_batches, expected, strict=True), start=1
+            )
+            if step != want_step or not same_batch(tensors, want_tensors)
+        ]
+        adapter_differences = [
+            key for key, value in adapters.items() if not same_bits(resumed_adapters[key], value)
+        ]
+        if batch_differences or adapter_differences:
+            mismatches[cut] = (batch_differences, adapter_differences)
+    assert not mismatches, mismatches
