@@ -1142,6 +1142,13 @@ def sample_data(
             console.print("[red]--pct must be a finite number in (0, 100].[/]")
             raise typer.Exit(1)
 
+    # Both sizes given: --pct used to win and --n was dropped silently (#3436).
+    if num is not None and pct is not None:
+        console.print(
+            "[red]Cannot use --n (count) and --pct (percentage) together. Pick one.[/]"
+        )
+        raise typer.Exit(1)
+
     if strategy not in ("random", "diverse", "hard"):
         console.print(
             f"[red]Unknown strategy: {for_terminal(strategy)}[/]\n"
