@@ -130,6 +130,8 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
 
   `--repair-json` and `--drop-invalid-json` read every call the tool-calling loader reads: the row's top-level `tool_calls` and each assistant turn's `tool_calls`, in the documented `{"function": {"name": ..., "arguments": ...}}` shape or flat. Arguments given as a JSON object are left as they are.
 
+Rows the loader skips (a line that is not valid JSON, or a value that is not an object) are counted apart from `Dropped`, as `Skipped: N` in the summary header and `skipped_rows` in the `--json` result (0 when none). The loader prints a warning for each of the first three skipped rows of each kind and one summary line for the rest of that kind (`... and 2 more lines skipped (invalid JSON)`); the count includes every skipped row. When every row is skipped, the command exits 1 with `no object rows remain: N row(s) skipped (listed above)`.
+
 Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
 ## Topic map (`soup data topics`)
@@ -1784,4 +1786,49 @@ The JSON report includes counts, percentage and up to `--samples` example pairs
 matching train records. Record numbers are one-based logical JSONL records,
 excluding blank lines. Examples use the first matching train record and follow
 eval order. Exit codes: **0** clean, **2** any overlap, **3** unusable input/options.
-There is no automatic training hook or dataset filtering.
+
+Both modes run only on explicit invocation of `soup data leakage`. The command
+reads the two datasets and only reports overlaps.
+
+### Lexical near-duplicates
+
+Install the optional data dependencies and use `--near-duplicates` to include
+similar inputs in the leakage check.
+
+```bash
+pip install "soup-cli[data]"
+soup data leakage --train train.jsonl --eval eval.jsonl --near-duplicates --json
+```
+
+Exact text matches take priority. For other eval rows, MinHash/LSH looks up
+candidates using sets of overlapping three-word shingles. It lowercases text
+and splits on whitespace. A shorter input contributes one shingle with all its
+words. The index **may miss** some near matches. For each candidate the tool
+computes exact Jaccard similarity, the number of shared shingles divided by
+the number of distinct shingles across both inputs.
+
+With `--near-duplicates`, `--threshold` sets the minimum Jaccard score (default
+0.8, greater than 0 and at most 1), `--permutations` sets the size of the MinHash
+signature (default 128, 16–256), and `--seed` fixes the candidate search (default
+1, 0–4294967295). Each eval record counts once. For a near match the sample uses
+the highest-scoring candidate and then the earliest train record to break ties.
+Its `train_matches` counts the candidate train records that passed the threshold.
+In lexical-mode JSON, the report's `matching` text describes both checks, and
+`near_duplicates` records the effective `threshold`, `permutations` and `seed`.
+Samples add `method` (`exact` or `near`) and `score` (1 for an exact match). Empty
+or unusable input still exits 3.
+
+The lexical mode accepts up to 10,000 records and 16 MiB per JSONL file. It
+retains the parsed rows, the train shingles and up to one LSH table per
+permutation. Hashing work scales with the distinct shingles per row times
+the permutation count. The candidate scoring budget across the run is
+50,000,000 shingle comparisons, charged by the smaller shingle set in each
+candidate pair. Above any of these limits, the command exits 3. Use a smaller
+split or run the exact check.
+
+The limit-size benchmark used an Intel Xeon Platinum 8558 CPU, Python 3.12.3
+and datasketch 2.0.0. Each split had 10,000 rows of 236 words and occupied
+16 MiB with blank padding. Three runs with the default options took 9.50,
+9.06 and 9.43 seconds, each with 415.5 MiB peak process RSS. One run on the
+same files with `--permutations 256` took 10.80 seconds and peaked
+at 450.0 MiB RSS.

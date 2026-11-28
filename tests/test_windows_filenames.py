@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests._source_scan import memoized_scan, parse_source, walk_nodes
+
 _TESTS = Path(__file__).resolve().parent
 _HELPER = "_windows_filenames.py"
 
@@ -31,12 +33,14 @@ def _dotted_name(node: ast.AST) -> str:
     return ""
 
 
-def _colon_skip_builders(source: str) -> list[int]:
-    """Find pytest skip constructors for this filename restriction, not all win32 skips."""
-    tree = ast.parse(source)
+@memoized_scan
+def _colon_filename_guard_sites(source: str) -> tuple[tuple[int, ...], int]:
+    """Find filename skip builders and predicate definitions in the current source text."""
+    nodes = walk_nodes(parse_source(source))
     aliases = {"pytest": "pytest"}
     strings = {}
-    for node in ast.walk(tree):
+    predicate_count = 0
+    for node in nodes:
         if isinstance(node, ast.Import):
             for name in node.names:
                 if name.name == "pytest":
@@ -49,9 +53,12 @@ def _colon_skip_builders(source: str) -> list[int]:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         strings[target.id] = node.value.value
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "_windows_colon_filename":
+                predicate_count += 1
 
     builders = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Call):
             continue
         parts = _dotted_name(node.func).split(".")
@@ -71,7 +78,11 @@ def _colon_skip_builders(source: str) -> list[int]:
         filename = any(word in lower for word in ("filename", "file name", "windows name"))
         if colon and filename:
             builders.append(node.lineno)
-    return builders
+    return tuple(builders), predicate_count
+
+
+def _colon_skip_builders(source: str) -> list[int]:
+    return list(_colon_filename_guard_sites(source)[0])
 
 
 def test_only_the_shared_helper_constructs_the_colon_filename_skip():
@@ -89,11 +100,9 @@ def test_only_the_shared_helper_constructs_the_colon_filename_skip():
 def test_the_platform_predicate_is_defined_only_in_the_helper():
     definers = []
     for path in sorted(_TESTS.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if node.name == "_windows_colon_filename":
-                    definers.append(str(path.relative_to(_TESTS)))
+        _, count = _colon_filename_guard_sites(path.read_text(encoding="utf-8"))
+        if count:
+            definers.extend([str(path.relative_to(_TESTS))] * count)
     assert definers == [_HELPER], f"Do not copy the shared Windows predicate: {definers}"
 
 

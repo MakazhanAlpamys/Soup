@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.fsdp_consolidate import consolidate_shards, plan_consolidation
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -44,15 +45,15 @@ def merge_sharded_fsdp_weights(
     try:
         plan = plan_consolidation(shard_dir, output)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(code=2) from exc
 
     if plan_only:
-        body = (
-            f"Shards found:    {len(plan.shard_files)}\n"
-            f"Source dir:      {escape(plan.shard_dir)}\n"
-            f"Output (target): {escape(plan.output_path)}\n\n"
-            "Plan-only run — pass without --plan-only to write the file."
+        body = Text.assemble(
+            f"Shards found:    {len(plan.shard_files)}\n",
+            "Source dir:      ", strip_control(plan.shard_dir), "\n",
+            "Output (target): ", strip_control(plan.output_path), "\n\n",
+            "Plan-only run — pass without --plan-only to write the file.",
         )
         console.print(
             Panel(body, title="FSDP Consolidation Plan", border_style="cyan")
@@ -65,7 +66,7 @@ def merge_sharded_fsdp_weights(
     try:
         result = consolidate_shards(plan)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(code=2) from exc
     except ImportError as exc:
         console.print(
@@ -74,11 +75,11 @@ def merge_sharded_fsdp_weights(
         )
         raise typer.Exit(code=1) from exc
 
-    body = (
+    body = Text.assemble(
         f"Tensors written: {result.num_tensors}\n"
         f"Shards merged:   {result.num_shards}\n"
-        f"Size:            {result.total_bytes / 1e6:.2f} MB\n"
-        f"Output:          {escape(result.output_path)}"
+        f"Size:            {result.total_bytes / 1e6:.2f} MB\n",
+        "Output:          ", strip_control(result.output_path),
     )
     console.print(
         Panel(body, title="[bold green]FSDP Consolidation Done[/]", border_style="green")

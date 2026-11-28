@@ -925,13 +925,14 @@ of the logits term alone; the measured peaks are at the end of this section. The
 takes an explicit number of tokens from 16 to 8192; there is no default and no `true`, and
 unset is off.
 
-**What it costs.** Two `[batch, seq, hidden]` tensors in the stream dtype, which the
-pre-flight adds to its estimate: the gradient on the hidden states, filled chunk by chunk in
-the forward and handed to the backward, and its product with the incoming gradient. At
-2048 tokens, hidden 4096 and bf16 that charge is 34 MB for the two. They are not live at the
-same time as a chunk's logits, so charging both beside the logits term errs high. And a loop
-over the head, one matmul per chunk instead of one over the sequence; what that does to speed
+**What it costs.** The pre-flight adds two `[batch, seq, hidden]` tensors in the stream dtype
+to its estimate. The usual path fills the hidden-state gradient in forward and multiplies it
+by the incoming gradient in backward. With FP16 head logits, backward holds the hidden states
+and fills their gradient by recomputing the head one chunk at a time. That extra pass applies
+loss scaling before rounding to FP16 and keeps the live logits bounded by the chunk width.
+Recomputing the head adds backward compute. The end-to-end GPU training throughput impact
 has not been measured.
+At batch size 1, 2048 tokens and hidden size 4096, two 16-bit tensors cost about 34 MB.
 
 **What it gives up.**
 

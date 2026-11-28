@@ -157,7 +157,7 @@ soup data score --input rows.jsonl            Composite quality scorecard (PII +
 soup data score --input rows.jsonl --benchmark-file benchmark.jsonl --threshold 0.8  Score with real n-gram comparison texts
 soup data score ... -b gsm8k --benchmark-file benchmark.jsonl  Labels are validated only, not corpus selectors; all file texts are compared
 soup data decontaminate --input rows.jsonl --benchmark-file benchmarks.jsonl  Drop rows overlapping the benchmark texts in that file
-soup data leakage --train train.jsonl --eval eval.jsonl [--json] [--samples 5]  Read-only exact input-text overlap (0 clean, 2 overlap, 3 input)
+soup data leakage --train train.jsonl --eval eval.jsonl [--near-duplicates] [--json]  Read-only input-text overlap (0 clean, 2 overlap, 3 input)
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
 soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
 soup data pii --input rows.jsonl -o pii.jsonl  Flag rows containing email/phone/SSN/credit-card
@@ -194,7 +194,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 184 ready-made recipes
+soup recipes list                             List all 185 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes show qwen3.5-0.8b-dpo           Print the tiny Qwen3.5 text-preference recipe
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml

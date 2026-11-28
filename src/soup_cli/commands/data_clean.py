@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from soup_cli.data.formats import detect_format
-from soup_cli.data.loader import load_raw_data
+from soup_cli.data.loader import SkippedRows, load_raw_data
 from soup_cli.utils.data_clean import CleanReport, clean_dataset
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 from soup_cli.utils.terminal import for_terminal, strip_control
@@ -167,16 +167,25 @@ def clean(
         )
         raise typer.Exit(1)
 
+    # #3363: count the rows the loader skips (not JSON, or not an object), as
+    # `soup data validate` does (#1887); the cleaning report never sees them.
+    load_issues = SkippedRows()
     try:
         with _loader_warnings_to_stderr(json_output):
-            data = load_raw_data(file_path)
+            data = load_raw_data(file_path, issues=load_issues)
     except Exception as exc:
         console.print(Text.assemble(("Failed to load dataset:", "red"),
                                     f" {strip_control(str(exc))}"))
         raise typer.Exit(1) from exc
 
+    skipped = load_issues.total
     if not data:
-        console.print("[red]Dataset is empty.[/]")
+        if skipped:
+            console.print(
+                f"[red]no object rows remain: {skipped} row(s) skipped (listed above)[/]"
+            )
+        else:
+            console.print("[red]Dataset is empty.[/]")
         raise typer.Exit(1)
 
     try:
@@ -247,6 +256,7 @@ def clean(
             "total_modified": report.total_modified,
             "total_dropped": report.total_dropped,
             "output_rows": len(cleaned_data),
+            "skipped_rows": skipped,
             "rule_counts": report.rule_counts,
             "dry_run": dry_run,
         }
@@ -256,7 +266,8 @@ def clean(
     # Render Rich header panel
     header_text = (
         f"Scanned: [bold]{report.total_scanned}[/] rows | "
-        f"Modified: [yellow]{report.total_modified}[/] | "
+        + (f"Skipped: [red]{skipped}[/] | " if skipped else "")
+        + f"Modified: [yellow]{report.total_modified}[/] | "
         f"Dropped: [red]{report.total_dropped}[/] | "
         f"Clean: [green]{report.total_clean}[/]"
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,21 @@ def _same(first, second):
     return first == second
 
 
-def _fixture(rank, task="grpo", sharding=None, mock_trainer=False, **training):
+def _callback_path_snapshot(output_dir):
+    cwd = os.getcwd()
+    return {
+        "cwd": cwd,
+        "cwd_realpath": os.path.realpath(cwd),
+        "parent_exists": os.path.exists(output_dir),
+        "parent_realpath": os.path.realpath(output_dir),
+        "leaf_realpath": os.path.realpath(os.path.join(output_dir, "mitigation_log.jsonl")),
+    }
+
+
+def _fixture(
+    rank, task="grpo", sharding=None, mock_trainer=False, *, output_dir="run",
+    expect_callback_pair=False, **training,
+):
     from types import SimpleNamespace
 
     import torch
@@ -80,8 +95,15 @@ def _fixture(rank, task="grpo", sharding=None, mock_trainer=False, **training):
                   reward_hack_rollback=True, reward_hack_rollback_patience=1,
                   reward_hack_max_recovery_attempts=1, rl_checkpoint_save_every_steps=1)
     config = TrainingConfig(**(fields | training))
+    before = _callback_path_snapshot(output_dir) if expect_callback_pair else None
     attach_rl_callbacks(trainer, config, buffer=SimpleNamespace(snapshot=lambda: {}),
-                        output_dir="run", task=task)
+                        output_dir=output_dir, task=task)
+    if expect_callback_pair:
+        assert len(callbacks) == 2, (
+            f"rank={rank} expected checkpoint and mitigation callbacks, got "
+            f"{[type(callback).__name__ for callback in callbacks]!r}; "
+            f"before_attach={before!r}; after_attach={_callback_path_snapshot(output_dir)!r}"
+        )
     return model, optimizer, trainer, callbacks
 
 
@@ -115,7 +137,11 @@ def _worker(rank, directory, case):
             options["sharding"] = f"is_{case}_enabled"
         options["mock_trainer"] = case == "mock_flags"
         task = "ppo" if case == "unequal_ppo" else "grpo"
-        model, optimizer, trainer, callbacks = _fixture(rank, task=task, **options)
+        # Both spellings go through the real containment check for the shared directory.
+        output_dir = "run" if rank == 0 else (Path.cwd() / "run").as_posix()
+        model, optimizer, trainer, callbacks = _fixture(
+            rank, task=task, output_dir=output_dir, expect_callback_pair=True, **options
+        )
         checkpoint, controller = callbacks
         handler = CallbackHandler(callbacks, trainer.model, None, optimizer, None)
         state = SimpleNamespace(global_step=1)
@@ -363,29 +389,86 @@ def _run_workers(tmp_path, case):
         pytest.importorskip("trl", reason="PPO wrapper recovery requires TRL")
     if not torch.distributed.is_available() or not torch.distributed.is_gloo_available():
         pytest.skip("installed torch has no CPU Gloo backend")
+    # A peer creating run during realpath() can change the Windows error for the
+    # missing log file from PATH_NOT_FOUND to FILE_NOT_FOUND, leaving a \\?\ prefix.
+    (tmp_path / "run").mkdir()
+    expected = (0, 17 if case == "hard_exit" else 0)
     processes = []
     try:
         for rank in range(2):
-            output = (tmp_path / f"worker-{rank}.log").open("w", encoding="utf-8")
-            environment = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
-            processes.append((subprocess.Popen(
-                [sys.executable, __file__, str(rank), str(tmp_path), case],
-                stdout=output, stderr=subprocess.STDOUT, env=environment,
-            ), output))
-        for rank, (process, _output) in enumerate(processes):
-            try:
-                process.wait(timeout=45)
-            except subprocess.TimeoutExpired:
-                pytest.fail(f"Gloo worker {rank} timed out for {case}")
-        logs = [(tmp_path / f"worker-{rank}.log").read_text() for rank in range(2)]
-        expected = [0, 17] if case == "hard_exit" else [0, 0]
-        assert [process.returncode for process, _output in processes] == expected, "\n".join(logs)
+            environment = dict(
+                os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", PYTHONIOENCODING="utf-8"
+            )
+            with (tmp_path / f"worker-{rank}.log").open("w", encoding="utf-8") as output:
+                processes.append(subprocess.Popen(
+                    [sys.executable, __file__, str(rank), str(tmp_path), case],
+                    stdout=output, stderr=subprocess.STDOUT, env=environment,
+                ))
+
+        waiting_for = 0
+        deadline = time.monotonic() + 45
+        while True:
+            returncodes = [process.poll() for process in processes]
+            unexpected = next((
+                rank for rank, code in enumerate(returncodes)
+                if code is not None and code != expected[rank]
+            ), None)
+            if unexpected is not None:
+                failure = f"Gloo worker {unexpected} exited {returncodes[unexpected]} for {case}"
+                break
+            if None not in returncodes:
+                return
+            pending_rank = returncodes.index(None)
+            if pending_rank != waiting_for:
+                waiting_for = pending_rank
+                deadline = time.monotonic() + 45
+            if time.monotonic() >= deadline:
+                failure = f"Gloo worker {pending_rank} timed out for {case}"
+                break
+            time.sleep(0.05)
     finally:
-        for process, output in processes:
+        for process in processes:
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=10)
-            output.close()
+    logs = [
+        (tmp_path / f"worker-{rank}.log").read_text(encoding="utf-8", errors="replace")
+        for rank in range(len(processes))
+    ]
+    pytest.fail("\n".join([failure, *logs]))
+
+
+def test_callback_setup_failure_is_reported_while_peer_is_running(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    peer = Mock()
+    peer.poll.return_value = None
+    peer.wait.side_effect = subprocess.TimeoutExpired("worker 0", 45)
+
+    def stop_peer():
+        peer.poll.return_value = -1
+        peer.wait.side_effect = None
+
+    peer.kill.side_effect = stop_peer
+    failed_worker = Mock()
+    failed_worker.poll.return_value = 1
+    path_context = f"rank=1 callback setup failed: cwd={tmp_path}, output=run"
+
+    def start_worker(command, *, stdout, **_kwargs):
+        assert (tmp_path / "run").is_dir()
+        if command[2] == "0":
+            return peer
+        stdout.write(path_context + "\n")
+        stdout.flush()
+        return failed_worker
+
+    monkeypatch.setattr(subprocess, "Popen", start_worker)
+    with pytest.raises(pytest.fail.Exception) as error:
+        _run_workers(tmp_path, "manifest_invisible")
+
+    assert path_context in str(error.value)
+    assert "timed out" not in str(error.value)
+    peer.kill.assert_called_once()
 
 
 @pytest.mark.parametrize("case", ["restore", "unequal_grpo", "unequal_ppo", "mock_flags",

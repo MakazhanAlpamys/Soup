@@ -1252,8 +1252,8 @@ Usage: `soup data filter [OPTIONS] PATH`
 |---|---|---|---|---|
 | `PATH` | text |  | yes | Path to dataset file |
 | `--output`, `-o` | text |  |  | Output file path (default: &lt;input>\_filtered.jsonl) |
-| `--perplexity`, `--ppl` | float |  |  | Max perplexity threshold (rows above this are removed) |
-| `--coherence`, `--min-coherence` | float |  |  | Min coherence threshold 0.0-1.0 (rows below this are removed) |
+| `--perplexity`, `--ppl` | float, at least 0.0 |  |  | Max perplexity threshold (rows above this are removed) |
+| `--coherence`, `--min-coherence` | float, 0.0 to 1.0 |  |  | Min coherence threshold 0.0-1.0 (rows below this are removed) |
 | `--ppl-model` | text | `gpt2` |  | Model for perplexity scoring (default: gpt2) |
 | `--field`, `-f` | text |  |  | Field to score (default: all text fields concatenated) |
 | `--score-only` | flag | off |  | Add scores to data without filtering (writes \_scored.jsonl) |
@@ -1396,6 +1396,10 @@ Usage: `soup data leakage [OPTIONS]`
 | `--eval` | text |  | yes | Evaluation JSONL under cwd. |
 | `--samples` | integer, 0 to 20 | `5` |  | Maximum example pairs. |
 | `--json` | flag | off |  | Print a machine-readable JSON report. |
+| `--near-duplicates` | flag | off |  | Look for lexical near-duplicates with the optional data extra. |
+| `--threshold` | text |  |  | Minimum Jaccard score, greater than 0 and at most 1 (default 0.8). |
+| `--permutations` | text |  |  | MinHash permutations, 16 to 256 (default 128). |
+| `--seed` | text |  |  | MinHash seed, 0 to 4294967295 (default 1). |
 
 ### `soup data lint`
 
@@ -2129,7 +2133,7 @@ Usage: `soup eval benchmark [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model or LoRA adapter directory |
 | `--benchmarks`, `-b` | text | `mmlu` |  | Comma-separated benchmark names (mmlu, gsm8k, hellaswag, etc.) |
 | `--fewshot`, `-f` | integer |  |  | Number of few-shot examples (benchmark default if not set) |
-| `--batch-size` | integer | `8` |  | Batch size for evaluation |
+| `--batch-size` | integer, at least 1 | `8` |  | Batch size for evaluation (at least 1) |
 | `--run-id` | text |  |  | Link results to an existing training run |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
