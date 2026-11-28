@@ -842,6 +842,56 @@ Known limitation: a `target_modules` entry spelled as a full module path, such a
 accepts an exact module name before it reads `layers_to_transform`. Use module-name suffixes such
 as `q_proj` with `freeze_layers` / `freeze_ratio`.
 
+### Select trainable LoRA layers
+
+In single-device Transformers text SFT, `training.lora_layers` selects which numbered
+decoder layers train. Soup attaches and saves all matched LoRA adapters. Trainable
+targets outside the numbered decoder layers, such as an adapter on the head, keep
+their existing behavior. Layer streaming and `training.l2l` support this policy.
+
+```yaml
+training:
+  lora_layers:
+    method: fixed
+    layers: [16, 20, 23]  # Zero-based decoder indices
+```
+
+- `fixed` uses the specified `layers`.
+- `random` draws `k` adapted layers once, using an optional `seed` (default 0).
+- `grad` and `angular` select the top `k` by mean squared adapter gradient or by the
+  angular distance between a block's input and output. They use the first
+  `probe_rows` prepared training rows (default 64) and preserve the training RNG
+  on CPU, CUDA, and MPS.
+- `lisa` draws `k` adapted layers every `interval_steps` optimizer steps (default 20),
+  using an optional `seed` (default 0). It clears optimizer state for adapters that freeze.
+- `progressive` starts with all matched adapters trainable and freezes the bottom up.
+  Set `freeze_step` and `freeze_below` to freeze adapted layer indices below the cutoff
+  after that step. With both omitted, Soup compares the sums of adapter gradient norms
+  over `interval_steps` optimizer steps (default 20). The rule freezes consecutive
+  bottom layers while their relative norm change is below `freeze_threshold` (default
+  0.10), up to `max_freeze_below` (default half the decoder depth inferred from adapted
+  indices). It leaves at least one adapted layer trainable.
+
+For the progressive rule, `freeze_smoothing` sets an optional exponential moving average
+decay. The smoothed comparison starts at the third valid window. Set `freeze_deadline`
+and `min_freeze_below` together to enforce a minimum cutoff at that step. The minimum
+can exceed the default cap. If you set an explicit cap, it must cover the minimum.
+Windows without adapter gradient observations, with non-finite norms, or with skipped
+optimizer updates are recorded in `skipped_windows`. Completed valid windows are written
+to `norms` in `lora_layers.json`, including when the cutoff never changes. Frozen adapters
+retain their weights and drop their optimizer state.
+
+The policy needs `lora.r > 0`. Use one of `lora_layers`, `freeze_layers`,
+`freeze_ratio`, `unfrozen_parameters`, or full-fine-tuning `lisa_enabled` at a time.
+Selections, probe scores, and sampling history are written to `lora_layers.json` in
+the output directory and in each Trainer checkpoint. Resume with the policy recorded
+in the source checkpoint. For checkpoints without selection metadata, leave
+`training.lora_layers` unset.
+
+Backward stops at the lowest trainable decoder layer when the input embedding is
+frozen. Resident reentrant checkpointing keeps input gradients. L2L also skips
+activation writes and reverse reads below the cutoff.
+
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
 LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout by default (set `lisa_train_embeddings: false` to freeze that group too — see [the memory trade-off](#reclaiming-the-always-on-overhead-lisa_train_embeddings) below).

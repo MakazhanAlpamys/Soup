@@ -153,6 +153,7 @@ def rewind_skip_reason(
     vision: bool,
     audio: bool,
     prefix_tree: bool = False,
+    l2l: bool = False,
 ) -> str:
     """Why this run takes no rewind recorder, in words a user can act on.
 
@@ -173,6 +174,8 @@ def rewind_skip_reason(
         return "vision runs a custom collator"
     if audio:
         return "audio runs a custom collator"
+    if l2l:
+        return "L2L runs the layers outside the loss path the recorder wraps"
     if task != "sft":
         return f"the recorder is SFT-only and this is task {task!r}"
     return "this run does not take the recording trainer path"
@@ -670,10 +673,31 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         cfg = self.config
         tcfg = cfg.training
 
+        if getattr(tcfg, "lora_layers", None) is not None:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+
+            if self.deepspeed_config or self.fsdp_config or _distributed_launch():
+                raise ValueError(
+                    "training.lora_layers requires single-device training without "
+                    "DeepSpeed or FSDP"
+                )
+
         # #353: seed before the model exists. Threading `seed` into
         # TrainingArguments is not enough on its own, because `get_peft_model`
         # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
         apply_training_seed(tcfg)
+
+        # Refuse unsupported L2L options before any model load: a closed codec, an
+        # auto-k this version cannot plan.
+        self._l2l_recipe = None
+        if tcfg.l2l:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+            from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
+
+            refuse_distributed_l2l(
+                _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
+            )
+            self._l2l_recipe = resolve_l2l_recipe(tcfg)
 
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
@@ -1199,6 +1223,8 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                 processor=self.processor,
                 max_length=cfg.data.max_length,
             )
+        elif tcfg.l2l:
+            self.trainer = self._build_l2l_trainer(sft_cls, trainer_kwargs, training_args)
         elif (
             tcfg.rewind_log
             and cfg.task == "sft"
@@ -1237,6 +1263,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                         vision=use_vision,
                         audio=use_audio,
                         prefix_tree=use_prefix_tree,
+                        l2l=tcfg.l2l,
                     )
                 )
 
@@ -1255,6 +1282,15 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
 
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
+        self._layer_select_callback = None
+        if getattr(tcfg, "lora_layers", None) is not None:
+            from soup_cli.utils.layer_select import attach_layer_select_callback
+
+            if self.trainer.args.n_gpu > 1:
+                raise ValueError("training.lora_layers requires single-device training")
+            self._layer_select_callback = attach_layer_select_callback(
+                self.trainer, tcfg, self._output_dir, console
+            )
 
         # #351: normalise every `checkpoint-*` adapter as the Trainer writes it.
         # The final save is repaired at the end of `train()`; HF dispatches
@@ -2612,6 +2648,13 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
     ) -> dict:
         """Run training and return results summary."""
         start = time.time()
+        layer_select = getattr(self, "_layer_select_callback", None)
+        if resume_from_checkpoint is not None:
+            from soup_cli.utils.layer_select import validate_resume_selection
+
+            validate_resume_selection(resume_from_checkpoint, enabled=layer_select is not None)
+        if layer_select is not None:
+            layer_select.resume_checkpoint = resume_from_checkpoint
 
         # Add callback for live display and experiment tracking
         if display:
@@ -2697,6 +2740,15 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             # rejected resume must not overwrite the root artifact's previous
             # route declaration during setup.
             write_metadata(self._output_dir, self._quest_metadata)
+        l2l_recipe = getattr(self, "_l2l_recipe", None)
+        if l2l_recipe is not None:
+            from soup_cli.utils.l2l_recipe import validate_resume, write_recipe
+
+            # Same order as the QuEST metadata: a rejected resume must not overwrite the
+            # recipe the checkpoint was trained with.
+            if resume_from_checkpoint is not None:
+                validate_resume(self._output_dir, l2l_recipe)
+            write_recipe(self._output_dir, l2l_recipe)
         offload_save_dir: Optional[str] = None
         if tcfg.activation_offloading == "disk":
             candidate = str(Path(self._output_dir) / "_activation_offload")
