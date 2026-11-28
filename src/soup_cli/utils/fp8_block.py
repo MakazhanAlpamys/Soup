@@ -431,6 +431,34 @@ def check_source_quantization(
     return block
 
 
+def resolve_fp8_double_quant(
+    requested: Optional[bool], *, fp8_block: Optional[Tuple[int, int]], quant_nf4: bool
+) -> bool:
+    """The NF4 double-quant setting a layer-streamed run uses.
+
+    ``requested`` is ``training.bnb_4bit_use_double_quant`` as written (``None`` when
+    unset). Every source but a block-scaled FP8 one, and every run that does not shard
+    NF4, keeps the shipped default: on unless ``False``. For an FP8 block source sharded
+    NF4 the supported setting is double-quant OFF: with it on, the nested absmax
+    quantisation exceeds the per-block reconstruction bound on a block-scaled weight whose
+    block scales span a wide range and stays within it with double-quant off
+    (``tests/test_fp8_nf4_double_quant_bound.py``), so unset resolves to off and an explicit
+    ``True`` is refused by name rather than overridden.
+    """
+    if fp8_block is None or not quant_nf4:
+        return requested is not False
+    if requested is True:
+        raise ValueError(
+            "training.bnb_4bit_use_double_quant=true is not supported for an FP8 "
+            "block-quantised base sharded as NF4: with double-quant on, the NF4 codec "
+            "exceeds the per-block reconstruction bound on a block-scaled weight whose "
+            "block scales span a wide range, and stays within it with double-quant off. "
+            "Leave it unset or set "
+            "it to false; the cost is about 0.37 bit per parameter of extra NF4 statistics."
+        )
+    return False
+
+
 def quantised_format_of(key: str) -> Optional[str]:
     """The quantiser a key's suffix belongs to (:data:`QUANTISED_KEY_SUFFIXES`), or None."""
     for suffix, name in QUANTISED_KEY_SUFFIXES:

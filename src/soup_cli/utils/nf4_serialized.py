@@ -74,10 +74,9 @@ _MAX_SKIP_MODULES = 4096
 #: ``training.bnb_4bit_use_double_quant`` and ``training.bnb_4bit_quant_storage`` fields, which
 #: this module does NOT read. They are named once, here, and read through the constant, because
 #: tests/test_issue748_config_fields_reach_a_consumer.py counts a literal ``.get("<name>")`` in
-#: ``src/`` as a consumer of the Soup field of that name (the
-#: ``test_the_gate_is_what_retires_the_double_quant_entry`` pin says nothing outside
-#: ``config/schema.py`` may name ``bnb_4bit_use_double_quant``, so the field stays visible to the
-#: guard only through ``double_quant_on``). The four are kept together so the check reads alike.
+#: ``src/`` as a consumer of the Soup field of that name. The property-folding test isolates
+#: the raw FP8 setup reader so it can still verify consumption through ``double_quant_on``.
+#: The four are kept together so the check reads alike.
 HF_QUANT_TYPE_KEY = "bnb_4bit_quant_type"
 HF_DOUBLE_QUANT_KEY = "bnb_4bit_use_double_quant"
 HF_QUANT_STORAGE_KEY = "bnb_4bit_quant_storage"

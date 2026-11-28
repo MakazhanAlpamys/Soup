@@ -991,14 +991,20 @@ class TestSchemaSideResolvers:
         )
 
     def test_the_gate_is_what_retires_the_double_quant_entry(self):
-        """End to end on the real schema: the property is called, so its field
-        is consumed and needs no allowlist entry."""
+        """Isolate the raw FP8 reader so the remaining scan still needs the property."""
+        stream_setup = SRC / "trainer" / "stream_setup.py"
+        stream_reads = _consumed_cached((str(stream_setup),))
+        assert "bnb_4bit_use_double_quant" in stream_reads, (
+            "FP8 setup must distinguish unset from explicitly enabled double quantization"
+        )
+        assert "double_quant_on" in stream_reads, "other streamed sources use the schema default"
+
         props = schema_property_reads(SCHEMA_PATH)
-        raw = set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
+        paths = tuple(sorted(str(p) for p in _consumer_modules() if p != stream_setup))
+        raw = set(_consumed_cached(paths))
 
         assert "bnb_4bit_use_double_quant" not in raw, (
-            "nothing outside schema.py names the field -- that is why the "
-            "property pass exists"
+            "the scan without FP8 setup must only see this field through double_quant_on"
         )
         assert "double_quant_on" in raw, "the property itself is called"
         assert "bnb_4bit_use_double_quant" in fold_property_reads(raw, props)
