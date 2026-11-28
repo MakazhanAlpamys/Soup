@@ -132,18 +132,15 @@ class TestUnslothDetection:
         """Should return False when unsloth is not importable."""
         from soup_cli.utils.unsloth import is_unsloth_available
 
-        # Default environment doesn't have unsloth
-        # This test works because unsloth isn't installed in test env
-        result = is_unsloth_available()
-        assert isinstance(result, bool)
+        with patch.dict("sys.modules", {"unsloth": None}):
+            assert is_unsloth_available() is False
 
     def test_get_unsloth_version_when_not_installed(self):
         """Should return None when unsloth is not installed."""
         from soup_cli.utils.unsloth import get_unsloth_version
 
-        result = get_unsloth_version()
-        # In test env, unsloth is not installed
-        assert result is None or isinstance(result, str)
+        with patch.dict("sys.modules", {"unsloth": None}):
+            assert get_unsloth_version() is None
 
     def test_get_unsloth_version_when_installed(self):
         """Should return version string when unsloth is installed."""

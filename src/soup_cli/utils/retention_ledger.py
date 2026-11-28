@@ -662,8 +662,11 @@ def changed_message(name: str, expected: str, actual: str, path: str) -> str:
     return (
         f"control task {_show(name)} changed: the ledger recorded sha256 {expected} but "
         f"{quote_path(path)} now hashes to {actual}. A silently swapped control set would "
-        "fake retention; restore the original file, or register the new one under a new "
-        "task name."
+        "fake retention. Restore the exact original bytes to keep using this ledger. "
+        "You can add another task name once all original controls match their registered "
+        "bytes and pass validation. To replace an unusable control, start a new ledger "
+        "(--ledger NEW.json), register the controls, and record the first version with "
+        "--record and without --require-history."
     )
 
 
