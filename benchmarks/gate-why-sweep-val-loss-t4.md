@@ -16,7 +16,7 @@ quoted unchanged below. All four passed.
 ## Environment and method
 
 **Hardware and software**
-- Kaggle kernel `arttts/ew-main` v1: 2x Tesla T4, driver 580.178.04, CUDA 13.0, 2026-11-25.
+- Kaggle kernel `<kaggle-user>/ew-main` v1: 2x Tesla T4, driver 580.178.04, CUDA 13.0, 2026-11-25.
 - Stack pinned to what the T4 runs in this repository's earlier work used: torch
   2.11.0+cu130, transformers 5.20.2, peft 0.21.2, trl 0.29.1, bitsandbytes 0.50.2,
   lm_eval 0.4.13.
@@ -67,7 +67,7 @@ soup sweep --config soup.yaml --param training.epochs=1,2,3 --name s<seed> --yes
 - `kaggle quota` read 10.97 h used before the first smoke kernel and 15.92 h after this
   one, so 4.95 h of quota in total. A 2x T4 session counts once.
 
-**Analysis** ran on a CPU kernel (`arttts/ew-analyze` v1). The paired bootstrap is over the
+**Analysis** ran on a CPU kernel (`<kaggle-user>/ew-analyze` v1). The paired bootstrap is over the
 1,319 questions: per-question scores averaged over the two seeds, 10,000 resamples, seed 0,
 95% percentile interval.
 

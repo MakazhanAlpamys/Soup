@@ -1370,9 +1370,10 @@ Every arm builds the trainer `soup train` builds for the config's `task` and
 
 The summary ranks the arms by their last validation loss when every ranked arm
 recorded one (`data.val_split` above 0, the default 0.1). It ranks by final training
-loss, as before, in two cases. One is when any ranked arm has no validation loss. The
-other is when the sweep changes a `data.` setting such as `data.val_split` or
-`data.max_length`, because then each arm measures validation loss on different rows.
+loss, as before, in two cases. One is when any ranked arm has no validation loss, or its
+last one is not a finite number. The other is when the sweep changes a `data.` setting
+such as `data.val_split` or `data.max_length`, because then each arm measures
+validation loss on different rows.
 The `data.replay` settings are the exception: replay rows go into the training split
 only, so every arm keeps the same validation rows and the ranking stays on validation
 loss.

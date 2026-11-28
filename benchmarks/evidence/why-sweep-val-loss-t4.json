@@ -5,8 +5,8 @@
   "sha256": "089db9fb770c7ad1fc43997e740915ebfea0a6df37ab5cfd4b68486bef864cac"
  },
  "kernels": {
-  "main": "Kaggle arttts/ew-main v1 (2x Tesla T4, driver 580.178.04, CUDA 13.0), 2026-11-25 09:12-13:57 UTC",
-  "analysis": "Kaggle arttts/ew-analyze v1 (CPU)"
+  "main": "Kaggle <kaggle-user>/ew-main v1 (2x Tesla T4, driver 580.178.04, CUDA 13.0), 2026-11-25 09:12-13:57 UTC",
+  "analysis": "Kaggle <kaggle-user>/ew-analyze v1 (CPU)"
  },
  "provenance": {
   "pin": "a75ff9726f0a49ba86f6b728447ba6628be4c2ea",

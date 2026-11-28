@@ -126,7 +126,8 @@ def sweep(db, tmp_path, monkeypatch):
 
     `_run_single` (config, data, training, tracker bookkeeping) is replaced by a stub that
     writes the arm's recorded tracker rows and returns the recorded final training loss and
-    last validation loss. The sweep loop, the ranking and the summary are the real code.
+    the last validation loss read back by `_last_val_loss`, as `_run_single` does. The sweep
+    loop, the ranking and the summary are the real code.
     """
     monkeypatch.chdir(tmp_path)
     (tmp_path / "soup.yaml").write_text(
@@ -138,10 +139,11 @@ def sweep(db, tmp_path, monkeypatch):
 
         def replay(cfg, combo, name, path):
             entry = next(recorded)
-            val_losses = [row["val_loss"] for row in entry["metrics"]
-                          if row["val_loss"] is not None]
-            return {"run_id": _load(db, entry), "final_loss": entry["run"]["final_loss"],
-                    "val_loss": val_losses[-1] if val_losses else None, "duration": "-"}
+            run_id = _load(db, entry)
+            with closing(ExperimentTracker()) as tracker:
+                val_loss = sweep_mod._last_val_loss(tracker, run_id)
+            return {"run_id": run_id, "final_loss": entry["run"]["final_loss"],
+                    "val_loss": val_loss, "duration": "-"}
 
         monkeypatch.setattr(sweep_mod, "_run_single", replay)
         result = make_cli_runner().invoke(
@@ -176,8 +178,37 @@ def test_sweep_falls_back_to_training_loss_when_an_arm_has_no_validation_loss(sw
                "metrics": [row for row in THREE["metrics"] if row["val_loss"] is None]}
     text = sweep([ONE, TWO, no_eval])
 
-    assert "Ranked by: final training loss. Not every ranked run recorded a validation " \
-           "loss." in text
+    assert "Ranked by: final training loss. Not every ranked run ended with a finite " \
+           "validation loss." in text
+    assert "Best run: s0_3 (loss: 0.0689)" in text
+
+
+def _ends_in_infinity(entry: dict) -> dict:
+    """The arm with its last evaluation replaced by infinity; the earlier ones stay finite."""
+    last = max(i for i, row in enumerate(entry["metrics"]) if row["val_loss"] is not None)
+    metrics = [dict(row, val_loss=float("inf")) if i == last else row
+               for i, row in enumerate(entry["metrics"])]
+    return {"run": entry["run"], "metrics": metrics}
+
+
+def test_last_val_loss_is_none_when_the_final_evaluation_is_infinite(db):
+    run_id = _load(db, _ends_in_infinity(THREE))
+    with closing(ExperimentTracker()) as tracker:
+        rows = [row["val_loss"] for row in tracker.get_metrics(run_id)
+                if row["val_loss"] is not None]
+        assert rows[-2] == pytest.approx(0.18143340945243835) and rows[-1] == float("inf")
+        assert sweep_mod._last_val_loss(tracker, run_id) is None
+
+
+def test_sweep_falls_back_to_training_loss_when_an_arm_ends_on_an_infinite_validation_loss(
+    sweep,
+):
+    """The 3-epoch arm's earlier evaluations are finite and its last is infinite. The sweep
+    must not rank it by an earlier evaluation: it ranks every arm by final training loss."""
+    text = sweep([ONE, TWO, _ends_in_infinity(THREE)])
+
+    assert "Ranked by: final training loss. Not every ranked run ended with a finite " \
+           "validation loss." in text
     assert "Best run: s0_3 (loss: 0.0689)" in text
 
 

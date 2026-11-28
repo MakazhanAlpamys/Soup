@@ -72,16 +72,18 @@ def _ranking_metric(results: list[dict]) -> str:
 
 
 def _last_val_loss(tracker: "ExperimentTracker", run_id: str) -> Optional[float]:
-    """The run's last finite ``val_loss`` row in the tracker, or ``None``.
+    """The run's last recorded ``val_loss`` in the tracker, or ``None``.
 
     Soup evaluates the validation split at the end of every epoch (#1223); the last of
-    those evaluations is the number the summary ranks by when every arm has one.
+    those evaluations is the number the summary ranks by when every arm has one. A last
+    evaluation that is not finite gives ``None``, so the sweep falls back to training loss
+    instead of ranking the arm by an earlier evaluation.
     """
     val_losses = [
         row["val_loss"] for row in tracker.get_metrics(run_id)
-        if _finite_loss(row.get("val_loss")) is not None
+        if row.get("val_loss") is not None
     ]
-    return val_losses[-1] if val_losses else None
+    return _finite_loss(val_losses[-1]) if val_losses else None
 
 
 def _exceeds_early_stop(final_loss: object, best_loss: float, factor: float) -> bool:
@@ -805,7 +807,10 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
                 "validation loss on different rows."
             )
         elif show_val:
-            reason = "final training loss. Not every ranked run recorded a validation loss."
+            reason = (
+                "final training loss. Not every ranked run ended with a finite "
+                "validation loss."
+            )
         else:
             reason = "final training loss (no run recorded a validation loss)."
         console.print(f"Ranked by: {reason}")
