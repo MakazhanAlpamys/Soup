@@ -98,6 +98,11 @@ def _count_safetensors_tensors(path: str) -> int:
 MLX_DEFAULT_TARGET_KEYS = ["self_attn.q_proj", "self_attn.v_proj"]
 
 
+def _uses_default_mlx_targets(targets: object) -> bool:
+    """Keep unset, empty and auto requests on the existing default-matching path."""
+    return not targets or targets in ("auto", ["auto"])
+
+
 def resolve_mlx_target_keys(lora_cfg: object) -> list[str]:
     """THE answer to "which modules does this MLX run train?" (#392).
 
@@ -109,7 +114,7 @@ def resolve_mlx_target_keys(lora_cfg: object) -> list[str]:
     an adapter whose generations are bit-identical to the base model.
     """
     raw = getattr(lora_cfg, "target_modules", None)
-    if not raw or raw in (["auto"], "auto"):
+    if _uses_default_mlx_targets(raw):
         return list(MLX_DEFAULT_TARGET_KEYS)
     return list(raw) if isinstance(raw, list) else [raw]
 
@@ -713,18 +718,31 @@ class MLXSFTTrainerWrapper:
         cfg = self.config
         lora_cfg = cfg.training.lora
         target_keys = resolve_mlx_target_keys(lora_cfg)
-        if target_keys == MLX_DEFAULT_TARGET_KEYS and lora_cfg.target_modules in (
-            None,
-            [],
-            "auto",
-            ["auto"],
-        ):
+        implicit_targets = _uses_default_mlx_targets(lora_cfg.target_modules)
+        if implicit_targets:
             console.print(
                 "[yellow]MLX backend: target_modules: auto cannot be resolved for "
                 f"all architectures; defaulting to {target_keys}[/]"
             )
         keys = set(target_keys)
         use_dora = bool(lora_cfg.use_dora)
+        # Explicit ordinary targets and DoRA need the same layer/root lookup
+        # as mlx-lm. Implicit ordinary targets keep the converter's matching.
+        matches = []
+        if use_dora or not implicit_targets:
+            matches = [
+                (name, module)
+                for parent in [*model.layers, model]
+                for name, module in parent.named_modules()
+                if name in keys
+            ]
+        missing = keys - {name for name, _ in matches}
+        if missing and not use_dora and not implicit_targets:
+            self._applied_lora = False
+            raise ValueError(
+                f"MLX LoRA unmatched targets: {sorted(missing)}; "
+                "correct or remove these target_modules names before training."
+            )
         if use_dora:
             import mlx.nn as nn
 
@@ -732,13 +750,6 @@ class MLXSFTTrainerWrapper:
             # DoRA path qualifies dense linear targets only. Check every target
             # before freezing/converting so a typo or unsupported layer cannot
             # silently train a subset or leave a partly converted model.
-            matches = [
-                (name, module)
-                for parent in [*model.layers, model]
-                for name, module in parent.named_modules()
-                if name in keys
-            ]
-            missing = keys - {name for name, _ in matches}
             unsupported = [
                 name for name, module in matches
                 if not isinstance(module, (nn.Linear, nn.QuantizedLinear))

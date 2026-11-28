@@ -455,7 +455,7 @@ def _install_fake_mlx(monkeypatch):
 
 class _FakeMlxModel:
     """Duck-types just what train() touches on the model: freeze(),
-    layers, and load_weights(). Records whether freeze() (part of
+    named_modules(), layers, and load_weights(). Records whether freeze() (part of
     _apply_lora) ran before load_weights() — the real ordering
     constraint, checked behaviourally instead of by source position."""
 
@@ -466,6 +466,11 @@ class _FakeMlxModel:
 
     def freeze(self):
         self.frozen = True
+
+    def named_modules(self) -> list[tuple[str, object]]:
+        # Explicit Q/V requests resolve before the fake conversion records
+        # its ordering; this fixture does not emulate native tensor operations.
+        return [("self_attn.q_proj", object()), ("self_attn.v_proj", object())]
 
     def load_weights(self, path, strict=True):
         self.load_weights_calls.append((path, strict, self.frozen))
