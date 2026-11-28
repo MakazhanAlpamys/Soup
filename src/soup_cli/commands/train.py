@@ -1931,7 +1931,7 @@ def train(
         from soup_cli.trainer.stream_setup import refuse_if_distributed_launch
 
         try:
-            refuse_if_distributed_launch()
+            refuse_if_distributed_launch(getattr(cfg.training, "l2l_split_gpus", 1), gpus=gpus)
         except ValueError as exc:
             console.print(f"[red]{markup_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc

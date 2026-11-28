@@ -690,9 +690,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # auto-k this version cannot plan.
         self._l2l_recipe = None
         if tcfg.l2l:
-            from soup_cli.trainer.stream_setup import _distributed_launch
+            from soup_cli.trainer.stream_setup import (
+                _distributed_launch,
+                refuse_if_distributed_launch,
+            )
             from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
 
+            split_gpus = getattr(tcfg, "l2l_split_gpus", 1)
+            if split_gpus > 1:
+                refuse_if_distributed_launch(split_gpus)
             refuse_distributed_l2l(
                 _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
             )

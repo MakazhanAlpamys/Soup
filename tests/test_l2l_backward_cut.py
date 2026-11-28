@@ -17,12 +17,15 @@ def _grads(model):
 
 
 @pytest.mark.parametrize("layers", [[0, 2], [1, 2], [2], []])
-@pytest.mark.parametrize("train_embedding", [False, True])
+@pytest.mark.parametrize(
+    ("train_embedding", "split"), [(False, ()), (True, ()), (False, ("cpu",))]
+)
 def test_cut_step_matches_accumulation_and_skips_prefix(
     streamed,  # noqa: F811
     monkeypatch,
     layers,
     train_embedding,
+    split,
 ):
     import torch
 
@@ -47,7 +50,7 @@ def test_cut_step_matches_accumulation_and_skips_prefix(
         monkeypatch.setattr(owner, "embed_tokens", AdaptedEmbedding(owner.embed_tokens))
 
     batches = _micro_batches(2)
-    step = L2LStep(model, runtime, capture_layer_call(model, batches[0]))
+    step = L2LStep(model, runtime, capture_layer_call(model, batches[0]), split_devices=split)
     with closing(_store(2)) as full_store:
         step.run(batches, full_store)
     full_loads = step.counters.layer_loads

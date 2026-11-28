@@ -821,7 +821,7 @@ def _distributed_launch() -> bool:
     return _world_size() > 1
 
 
-def refuse_if_distributed_launch() -> None:
+def refuse_if_distributed_launch(split_gpus: int = 1, *, gpus: Optional[str] = None) -> None:
     """Refuse layer streaming in a process that is one rank of a multi-process launch (#2585).
 
     ``refuse_if_data_parallel`` steps aside under torchrun / accelerate / deepspeed,
@@ -839,6 +839,9 @@ def refuse_if_distributed_launch() -> None:
     are not refused.
     """
     world_size = _world_size()
+    if split_gpus > 1 and (world_size > 1 or gpus is not None):
+        launch = f"WORLD_SIZE={world_size}" if world_size > 1 else "--gpus"
+        raise ValueError(f"training.l2l_split_gpus requires one process for SFT; remove {launch}.")
     if world_size <= 1:
         return
     raise ValueError(
@@ -1012,19 +1015,20 @@ class StreamingSetupMixin:
         # FIRST, ahead of every import and every other check: this configuration is not
         # supported across processes (#2585), and a refusal must not cost a tokenizer
         # load, a weight resolve or a shard write.
-        refuse_if_distributed_launch()
+        split_gpus = getattr(tcfg, "l2l_split_gpus", 1)
+        refuse_if_distributed_launch(split_gpus)
+
+        if split_gpus > 1:
+            from soup_cli.utils.l2l_split import split_devices
+
+            split_devices(self.device, split_gpus)
+        else:
+            refuse_if_data_parallel(self.device)
 
         from dataclasses import replace
 
         from peft import TaskType
         from transformers import AutoTokenizer
-
-        from soup_cli.utils.kimi_k2 import load_stream_model_config
-
-        # BEFORE the tokenizer load, the weight resolve and the shard write:
-        # this configuration cannot work, and finding out minutes into disk I/O
-        # is worse than finding out now.
-        refuse_if_data_parallel(self.device)
 
         from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
         from soup_cli.utils.fp8_block import (
@@ -1032,6 +1036,7 @@ class StreamingSetupMixin:
             is_serialized_nf4_config,
             quantization_config_of,
         )
+        from soup_cli.utils.kimi_k2 import load_stream_model_config
         from soup_cli.utils.layer_shard import (
             PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
@@ -1092,6 +1097,13 @@ class StreamingSetupMixin:
             cfg.base, trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
             **base_revision_kwargs(cfg.base),
         )
+        arch = stream_arch_of(model_config)
+        if split_gpus > 1:
+            from soup_cli.utils.l2l_split import ROUTED_EXPERTS_REFUSAL
+            from soup_cli.utils.l2l_step import MOE_ARCHS
+
+            if arch in MOE_ARCHS or self._stream_total_experts(model_config):
+                raise ValueError(ROUTED_EXPERTS_REFUSAL)
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         try:
@@ -1115,7 +1127,6 @@ class StreamingSetupMixin:
 
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.
-        arch = stream_arch_of(model_config)
         # training.stream_expert_layout, in the sharder's spelling ("" = fused).
         # Refused here for an architecture the layout is not gated on: before any
         # weight is resolved, downloaded or sharded.
@@ -1967,12 +1978,17 @@ class StreamingSetupMixin:
             unready_task_warning,
         )
         from soup_cli.utils.l2l_recipe import AVAILABLE_CODECS, refuse_distributed_l2l
+        from soup_cli.utils.l2l_split import refuse_unsupported_split_model, split_devices
+        from soup_cli.utils.l2l_step import model_parts
         from soup_cli.utils.layer_stream import resolve_stream_dtype
 
         # `_distributed_stream` is set by the data-parallel layer stream (#3267); absent
         # until that lands, so this is a no-op here.
-        refuse_distributed_l2l(bool(getattr(self, "_distributed_stream", False)))
         tcfg = self.config.training
+        split_gpus = getattr(tcfg, "l2l_split_gpus", 1)
+        if split_gpus > 1:
+            refuse_if_distributed_launch(split_gpus)
+        refuse_distributed_l2l(bool(getattr(self, "_distributed_stream", False)))
         codec = str(tcfg.l2l_activation_codec)
         if codec not in AVAILABLE_CODECS:
             raise ValueError(
@@ -1980,12 +1996,20 @@ class StreamingSetupMixin:
                 f"supports {', '.join(repr(c) for c in AVAILABLE_CODECS)}. Set it to 'none'."
             )
         base = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
+        devices = split_devices(self.device, split_gpus)
+        # Reading n_gpu resolves HF's device before the override. Its batch size and model
+        # wrapping must both see one GPU even though the window step uses additional cards.
+        n_gpu = int(training_args.n_gpu)
         refuse_unsupported_l2l(
             base.config,
-            n_gpu=int(training_args.n_gpu),
+            n_gpu=1 if devices else n_gpu,
             fp16=bool(training_args.fp16),
             expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
         )
+        if devices:
+            causal, owner = model_parts(self.model)
+            refuse_unsupported_split_model(causal, owner, self._stream_runtime)
+            training_args._n_gpu = 1
         warning = unready_task_warning(getattr(self.config, "task", None))
         if warning is not None:
             console.print(f"[yellow]Warning:[/] {warning}")
@@ -2008,10 +2032,12 @@ class StreamingSetupMixin:
             spill_dir=tcfg.l2l_spill_dir,
             weight_dirs=self._stream_weight_dirs,
             effective_k=effective_k,
+            split_devices=devices,
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "
             f"{effective_k} micro-batch(es)"
+            + (f", split over {split_gpus} GPUs" if devices else "")
         )
         return trainer
 

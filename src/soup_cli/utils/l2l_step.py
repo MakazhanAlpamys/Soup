@@ -853,6 +853,8 @@ class L2LStep:
         model: Any,
         runtime: Any,
         call: LayerCall,
+        *,
+        split_devices: Sequence[Any] = (),
     ) -> None:
         self.causal, self.owner = model_parts(model)
         self.model = model
@@ -867,6 +869,8 @@ class L2LStep:
             )
         self._prime = prime
         self.runtime = runtime
+        self.split_devices = tuple(split_devices)
+        self._replicas: Dict[int, Any] = {}
         #: Loads and restores of the last ``run``; ``None`` before the first.
         self.counters: Optional[LoadCounters] = None
         #: Per-layer phase counters from the opt-in route-preserving MBR path.
@@ -1198,6 +1202,12 @@ class L2LStep:
             or any(type(value) is not int or value < 0 for value in routing_budget)
         ):
             raise ValueError("routing budget needs nonnegative record and comparison bytes")
+        if self.split_devices and (
+            route_preserving_mbr or routing_budget is not None or collect_phase_stats
+        ):
+            from soup_cli.utils.l2l_split import ROUTED_EXPERTS_REFUSAL
+
+            raise ValueError(ROUTED_EXPERTS_REFUSAL)
         if route_preserving_mbr:
             _validate_route_preserving_mbr(self.layers, self.causal)
             if mbr_group_size is not None and (
@@ -1222,7 +1232,11 @@ class L2LStep:
             expert_pool.phase_read_tracking = True
         try:
             with count_loads(self.runtime) as counters:
-                if route_preserving_mbr:
+                if self.split_devices:
+                    losses = self._run_split(
+                        micro_batches, store, n_items, labels, calls, head, reference, floor
+                    )
+                elif route_preserving_mbr:
                     losses = self._run(
                         micro_batches,
                         store,
@@ -1264,6 +1278,145 @@ class L2LStep:
             if previous_phase_tracking is not None:
                 expert_pool.phase_read_tracking = previous_phase_tracking
         self.counters = counters
+        return losses
+
+    def _run_split(
+        self,
+        micro_batches: Sequence[Any],
+        store: Any,
+        n_items: Optional[int],
+        labels: Optional[Sequence[Any]],
+        calls: Optional[Sequence[LayerCall]],
+        head: Optional[LossHead],
+        reference: Union[ReferencePass, Sequence[ReferencePass], None],
+        backward_floor: int,
+    ) -> List[Any]:
+        """Run dense decoder layers on round-robin devices, with the head on the primary."""
+        import torch
+
+        from soup_cli.utils import l2l_rng
+        from soup_cli.utils.l2l_split import (
+            DROPOUT_REFUSAL,
+            ROUTED_EXPERTS_REFUSAL,
+            DeviceReplica,
+            device_context,
+            refuse_unsupported_split_model,
+            to_device,
+        )
+
+        k = len(micro_batches)
+        if k < 1:
+            raise ValueError("an L2L step needs at least one micro-batch")
+        if k > store.k:
+            raise ValueError(f"{k} micro-batches, but the activation store holds {store.k}")
+        if calls is None:
+            calls = [self.call] * k
+        elif len(calls) != k:
+            raise ValueError(f"{len(calls)} layer calls for {k} micro-batches")
+        if as_passes(reference):
+            raise ValueError(
+                "training.l2l_split_gpus does not support reference passes (SFT only)."
+            )
+        if any(l2l_rng.has_draws((*call.draws, call.head_draws)) for call in calls):
+            raise ValueError(DROPOUT_REFUSAL)
+        refuse_unsupported_split_model(self.causal, self.owner, self.runtime)
+        if any(_streamed_moe_experts(layer) is not None for layer in self.layers):
+            raise ValueError(ROUTED_EXPERTS_REFUSAL)
+        if head is None:
+            if labels is None:
+                labels = micro_batches
+            elif len(labels) != k:
+                raise ValueError(f"{len(labels)} label tensors for {k} micro-batches")
+            total = label_tokens(micro_batches) if n_items is None else int(n_items)
+            head = sft_head(labels, total)
+
+        main = micro_batches[0].device
+        n_devices = 1 + len(self.split_devices)
+        owners = [mb % n_devices for mb in range(k)]
+        replicas = {}
+        for index in range(1, min(k, n_devices)):
+            if index not in self._replicas:
+                self._replicas[index] = DeviceReplica(self.layers, self.split_devices[index - 1])
+            replica = self._replicas[index]
+            replica.refresh()
+            replicas[index] = replica
+        devices = [replicas[index].device if index else main for index in owners]
+        moved_calls = {}
+        for mb, (index, call) in enumerate(zip(owners, calls)):
+            key = (index, id(call))
+            if index and key not in moved_calls:
+                moved_calls[key] = to_device((call.args, call.kwargs), devices[mb])
+
+        def copy_layer(layer: Any) -> Dict[int, Any]:
+            if not replicas:
+                return {}
+            # The primary wrapper advances the prefetcher. Queue all secondary copies
+            # from the current slot before either device computes this layer.
+            buffers = layer.pool.wait(layer.idx)
+            return {index: replica.weights(layer, buffers) for index, replica in replicas.items()}
+
+        def run_layer(layer: Any, weights: Dict[int, Any], mb: int, hidden: Any) -> Any:
+            index = owners[mb]
+            if index == 0:
+                return self._layer(layer, hidden, None, calls[mb])
+            args, kwargs = moved_calls[index, id(calls[mb])]
+            return replicas[index].forward(layer, weights[index], hidden, args, kwargs)
+
+        with device_context(main):
+            self._prime(self.owner, ())
+            with torch.no_grad():
+                hidden = [
+                    self.owner.embed_tokens(ids).to(device, non_blocking=True)
+                    for ids, device in zip(micro_batches, devices)
+                ]
+                for idx, layer in enumerate(self.layers):
+                    weights = copy_layer(layer)
+                    if idx >= backward_floor:
+                        for mb in range(k):
+                            store.put(idx, mb, hidden[mb].to(main, non_blocking=True))
+                    for mb in range(k):
+                        hidden[mb] = run_layer(layer, weights, mb, hidden[mb])
+                    del weights
+
+            losses: List[Any] = []
+            grads: List[Any] = []
+            for mb, device in enumerate(devices):
+                last = hidden[mb].to(main, non_blocking=True).detach().requires_grad_(True)
+                hidden[mb] = None
+                with torch.enable_grad():
+                    loss = head(self.causal, self.owner, last, mb)
+                with self._backward_context(last):
+                    loss.backward()
+                losses.append(loss.detach())
+                grads.append(
+                    last.grad.to(device, non_blocking=True) if backward_floor < len(self.layers)
+                    else None
+                )
+                del last, loss
+
+            store.begin_backward()
+            for idx in range(len(self.layers) - 1, backward_floor - 1, -1):
+                layer = self.layers[idx]
+                weights = copy_layer(layer)
+                saved = layer.use_checkpoint
+                layer.use_checkpoint = False
+                try:
+                    for mb, device in enumerate(devices):
+                        inputs = store.get(idx, mb).to(device, non_blocking=True).requires_grad_()
+                        with torch.enable_grad():
+                            out = run_layer(layer, weights, mb, inputs)
+                        # Separate calls prevent concurrent autograd callbacks from tuning
+                        # the same kernel on different devices.
+                        with device_context(device), self._backward_context(inputs):
+                            torch.autograd.backward(out, grad_tensors=grads[mb])
+                        grads[mb] = inputs.grad
+                        del inputs, out
+                finally:
+                    layer.use_checkpoint = saved
+                del weights
+            store.end_step()
+            for replica in replicas.values():
+                replica.merge_grads()
         return losses
 
     def _run(

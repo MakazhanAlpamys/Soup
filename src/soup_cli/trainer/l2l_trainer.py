@@ -52,6 +52,7 @@ from typing import (
 
 from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
 from soup_cli.utils.host_memory_budget import HostMemoryBudget, MemoryLease
+from soup_cli.utils.l2l_split import has_dropout as _has_dropout
 from soup_cli.utils.l2l_step import (
     LoadCounters,
     LossHead,
@@ -191,6 +192,7 @@ class L2LState:
     _routing_lease: Optional[MemoryLease] = field(default=None, init=False, repr=False)
     #: The recipe's effective k (``soup_cli.utils.l2l_recipe``); None when the caller gave none.
     effective_k: Optional[int] = None
+    split_devices: Tuple[str, ...] = ()
     two_read_experts: bool = False
     grouped_expert_routes: bool = False
     route_preserving_mbr: bool = False
@@ -281,6 +283,8 @@ class L2LState:
     def close(self) -> None:
         """Release the routing reservation only after activation users have drained."""
         self.close_store()
+        if self.split_devices:
+            self.stepper = None
         if self._routing_lease is not None:
             self._routing_lease.close()
             self._routing_lease = None
@@ -421,21 +425,6 @@ SFT_WINDOW_LOSS = WindowLoss(
 )
 
 
-def _has_dropout(model: Any) -> bool:
-    """True when a forward in training draws dropout masks: any ``nn.Dropout`` with p > 0
-    (LoRA dropout) or a non-zero ``attention_dropout`` on the config or a module."""
-    import torch
-
-    config = getattr(model, "config", None)
-    if float(getattr(config, "attention_dropout", 0.0) or 0.0) != 0:
-        return True
-    return any(
-        (isinstance(module, torch.nn.Dropout) and module.p > 0)
-        or float(getattr(module, "attention_dropout", 0.0) or 0.0) != 0
-        for module in model.modules()
-    )
-
-
 @contextmanager
 def _timed_capture(state: L2LState) -> Iterator[None]:
     """Add one capture, its layer loads and its wall time to the state's totals."""
@@ -488,7 +477,7 @@ def _l2l_step_for(state: L2LState, model: Any, ids_list: List[Any]) -> Tuple[Any
 
     calls = _calls_for(state, model, ids_list)
     if state.stepper is None:
-        state.stepper = L2LStep(model, state.runtime, calls[0])
+        state.stepper = L2LStep(model, state.runtime, calls[0], split_devices=state.split_devices)
     return state.stepper, calls
 
 
@@ -853,6 +842,7 @@ def attach_l2l_state(
     spill_dir: Optional[str] = None,
     weight_dirs: Sequence[str] = (),
     effective_k: Optional[int] = None,
+    split_devices: Sequence[str] = (),
     two_read_experts: bool = False,
     grouped_expert_routes: bool = False,
     route_preserving_mbr: bool = False,
@@ -885,6 +875,7 @@ def attach_l2l_state(
         memory_plan=memory_plan,
         host_budget=host_budget,
         effective_k=effective_k,
+        split_devices=tuple(split_devices),
         spill_dir=spill_dir,
         weight_dirs=tuple(str(path) for path in weight_dirs),
         two_read_experts=two_read_experts,

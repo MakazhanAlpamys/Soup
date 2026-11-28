@@ -4078,7 +4078,8 @@ class TrainingConfig(BaseModel):
             "streamed decoder layer is loaded once per optimizer step and runs all "
             "k micro-batches, then the optimizer takes one step on the adapters. k is "
             "gradient_accumulation_steps. Needs stream_layers=true and a Llama or "
-            "Mistral model on a single GPU; MoE models are refused. k=1 behaves like "
+            "Mistral model. Set l2l_split_gpus to use multiple CUDA devices. "
+            "MoE models are refused. k=1 behaves like "
             "plain streaming. A bool only: 1 or 'yes' is refused."
         ),
     )
@@ -4091,6 +4092,16 @@ class TrainingConfig(BaseModel):
             "(realpath, so symlinks and Windows short names cannot step outside), and "
             "is refused at launch on RAM-backed, overlay and network filesystems and on "
             "a drive without room. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_split_gpus: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        description=(
+            "BETA. Split a dense SFT L2L window across this many visible CUDA devices in "
+            "one process. Values above 1 require training.l2l=true and zero dropout. "
+            "Launch without --gpus."
         ),
     )
     l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
@@ -8453,6 +8464,7 @@ class SoupConfig(BaseModel):
             "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
             "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
             "l2l_auto_k": tcfg.l2l_auto_k,
+            "l2l_split_gpus": tcfg.l2l_split_gpus != 1,
         }
         if not tcfg.l2l:
             for name, is_set in options.items():
@@ -8467,6 +8479,10 @@ class SoupConfig(BaseModel):
                 "training.l2l requires training.stream_layers=true: L2L reuses the "
                 "streamed layer loads, and a resident model has none to reuse."
             )
+        if tcfg.l2l_split_gpus > 1 and self.task != "sft":
+            raise ValueError(
+                f"training.l2l_split_gpus requires task='sft'; got task={self.task!r}."
+            )
         if self.task not in L2L_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
@@ -8477,6 +8493,8 @@ class SoupConfig(BaseModel):
                 "training.l2l requires backend='transformers' and modality='text'; "
                 f"got backend={self.backend!r}, modality={self.modality!r}."
             )
+        if tcfg.l2l_split_gpus > 1 and tcfg.lora.dropout:
+            raise ValueError("training.l2l_split_gpus requires training.lora.dropout=0 for SFT.")
         own_trainer = [
             name
             for name, is_set in (

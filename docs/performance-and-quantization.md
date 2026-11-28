@@ -1209,10 +1209,21 @@ training:
 |-----|---------|---------|
 | `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
 | `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
+| `l2l_split_gpus` | `1` | Number of visible CUDA devices sharing one dense SFT window in one process (1–8). |
 | `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
 | `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
 
-- **Scope.** Llama and Mistral models on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model is refused with `L2L on a MoE model needs per-expert streaming parity (not yet in this version)`. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
+- **Scope.** Llama and Mistral models with bf16 or fp32. The existing L2L loss also
+  requires `task: sft` and refuses `data.format: raft`, `prefix_tree`, `multipack` and
+  `stream_loss_chunk`.
+- **Split a window.** Set `l2l_split_gpus: 2` and make two CUDA devices visible to
+  `soup train`. Leave out `--gpus` and start one process. Each layer is read into the
+  primary GPU's pool and copied to the other GPU, and the GPUs run alternating
+  micro-batches. The primary runs the embedding and loss and receives the adapter
+  gradients for one optimizer update. Each participating GPU needs room for a decoder
+  layer and its share of the compute. Split windows require `lora.dropout: 0`, zero model
+  dropout and a frozen embedding. Routed experts, reference passes and frozen-prefix
+  caching are refused.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`

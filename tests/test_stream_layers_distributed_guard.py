@@ -276,9 +276,10 @@ class TestSetupRefusesBeforeAnyModelWork:
 # ==========================================================================
 # soup train: the earliest point that knows WORLD_SIZE
 # ==========================================================================
-def _write_config(tmp_path, *, stream_layers: bool) -> str:
+def _write_config(tmp_path, *, stream_layers: bool, split: bool = False) -> str:
     cfg = tmp_path / "soup.yaml"
     streaming = "  stream_layers: true\n" if stream_layers else ""
+    split_options = "  l2l: true\n  l2l_split_gpus: 2\n  lora: {dropout: 0}\n" if split else ""
     cfg.write_text(
         "base: smollm2-135m\n"
         "task: sft\n"
@@ -287,6 +288,7 @@ def _write_config(tmp_path, *, stream_layers: bool) -> str:
         "  train: /dev/null\n"
         "training:\n"
         f"{streaming}"
+        f"{split_options}"
         "  batch_size: 1\n"
     )
     return str(cfg)
@@ -312,6 +314,24 @@ def _no_run_record(monkeypatch):
 
 
 class TestTrainCommandRefusesEarly:
+    @pytest.mark.parametrize(
+        ("world_size", "options", "launch"),
+        [("2", [], "WORLD_SIZE=2"), ("1", ["--gpus", "2"], "--gpus")],
+    )
+    def test_split_refuses_distributed_launch(
+        self, tmp_path, monkeypatch, world_size, options, launch
+    ):
+        monkeypatch.setenv("WORLD_SIZE", world_size)
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        _sentinel_after_the_guard(monkeypatch)
+        cfg = _write_config(tmp_path, stream_layers=True, split=True)
+        result = CliRunner().invoke(app, ["train", "--config", cfg, "--yes", *options])
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert (
+            f"training.l2l_split_gpus requires one process for SFT; remove {launch}."
+            in _plain(result.output)
+        ), result.output
+
     @pytest.mark.parametrize("dry_run", [False, True], ids=["train", "dry-run"])
     def test_refused_right_after_the_config_is_loaded(self, tmp_path, monkeypatch, dry_run):
         monkeypatch.setenv("WORLD_SIZE", "2")
