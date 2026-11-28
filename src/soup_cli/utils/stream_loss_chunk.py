@@ -26,6 +26,15 @@ from typing import Any, Callable, Optional
 
 IGNORE_INDEX = -100
 
+#: Positions the pre-flight charges for the logits of a Cut Cross-Entropy step. The kernel
+#: never builds the logits; one chunk's worth keeps the forecast conservative.
+CCE_CHARGE_CHUNK = 256
+
+#: The two losses the hook can run: ``chunked`` (``training.stream_loss_chunk``) and ``cce``
+#: (``training.use_cut_ce`` under ``stream_layers``).
+IMPL_CHUNKED = "chunked"
+IMPL_CCE = "cce"
+
 
 @dataclass(frozen=True)
 class ChunkedStep:
@@ -222,6 +231,70 @@ def chunked_causal_lm_loss(
     return loss, step
 
 
+def head_weight(head: Any) -> Any:
+    """The output projection's weight, also when the head is a streamed large layer.
+
+    A streamed ``lm_head`` (``StreamedLargeLayer``) holds no parameter of its own; its weight
+    is a view of the shared device slot, which ``pool.wait(key)`` returns once the copy
+    landed.
+    """
+    pool, key = getattr(head, "pool", None), getattr(head, "key", None)
+    if pool is not None and key is not None:
+        return pool.wait(key)
+    return head.weight
+
+
+def cce_causal_lm_loss(
+    hidden: Any,
+    head: Any,
+    labels: Any,
+    num_items_in_batch: Any = None,
+    *,
+    shift_labels: Any = None,
+) -> Any:
+    """Causal-LM loss through Apple's Cut Cross-Entropy kernel (``cut_cross_entropy``).
+
+    The same shift, ``-100`` ignore and normalisation as :func:`chunked_causal_lm_loss`; the
+    logits are never materialised. The kernel's default gradient filtering is kept, so the
+    gradient is the kernel's, not equal to the full-logits one to the last bit.
+    """
+    import torch
+    from cut_cross_entropy import linear_cross_entropy
+
+    weight = head_weight(head)
+    target = shift_labels if shift_labels is not None else shift_for_next_token(labels)
+    target = target.to(hidden.device)
+    with torch.autocast(device_type=hidden.device.type, enabled=False):
+        total = linear_cross_entropy(
+            hidden.to(weight.dtype),
+            weight,
+            target,
+            ignore_index=IGNORE_INDEX,
+            reduction="sum",
+        ).float()
+    if num_items_in_batch is None:
+        denominator = (target != IGNORE_INDEX).sum()
+    else:
+        denominator = num_items_in_batch
+    if torch.is_tensor(denominator):
+        denominator = denominator.to(total.device)
+    return total / denominator
+
+
+def stream_loss_impl(tcfg: Any) -> Optional[str]:
+    """Which loss a streamed config selects for the hook, or None for the model's own.
+
+    The schema refuses setting both fields, so at most one applies.
+    """
+    if tcfg is None or not getattr(tcfg, "stream_layers", False):
+        return None
+    if getattr(tcfg, "stream_loss_chunk", None) is not None:
+        return IMPL_CHUNKED
+    if getattr(tcfg, "use_cut_ce", False):
+        return IMPL_CCE
+    return None
+
+
 class ChunkedHeadLoss:
     """A causal LM whose labelled forward runs its head and loss in chunks.
 
@@ -233,33 +306,59 @@ class ChunkedHeadLoss:
     labels (generation, ``predict``) is untouched.
     """
 
-    def __init__(self, causal_lm: Any, chunk: int) -> None:
-        if isinstance(chunk, bool) or not isinstance(chunk, int) or chunk < 1:
+    def __init__(
+        self, causal_lm: Any, chunk: Optional[int], impl: str = IMPL_CHUNKED
+    ) -> None:
+        if impl not in (IMPL_CHUNKED, IMPL_CCE):
+            raise ValueError(f"impl must be {IMPL_CHUNKED!r} or {IMPL_CCE!r}, got {impl!r}")
+        if impl == IMPL_CHUNKED and (
+            isinstance(chunk, bool) or not isinstance(chunk, int) or chunk < 1
+        ):
             raise ValueError(f"chunk must be a positive integer, got {chunk!r}")
+        field = "training.stream_loss_chunk" if impl == IMPL_CHUNKED else "training.use_cut_ce"
         head = causal_lm.get_output_embeddings()
         if head is None:
             raise ValueError(
-                "training.stream_loss_chunk needs a model with an output head "
+                f"{field} needs a model with an output head "
                 f"(get_output_embeddings); {type(causal_lm).__name__} has none."
             )
         cap = getattr(getattr(causal_lm, "config", None), "final_logit_softcapping", None)
         if cap is not None:
             # Known before the first step; `_chunked_forward` checks any model.
             raise ValueError(
-                "training.stream_loss_chunk cannot be used with "
+                f"{field} cannot be used with "
                 f"{type(causal_lm).__name__}: it soft-caps its logits after the "
                 f"output head (final_logit_softcapping={cap}), so the loss cannot be "
-                "rebuilt chunk by chunk from the head alone. Remove "
-                "training.stream_loss_chunk."
+                f"rebuilt chunk by chunk from the head alone. Remove {field}."
             )
         trainable = [name for name, param in head.named_parameters() if param.requires_grad]
-        if trainable:
+        if impl == IMPL_CCE:
+            # The kernel reads the head's base ``weight`` and nothing else (for a streamed
+            # head, the view in the shared slot), so any other trainable parameter on the
+            # head module, an adapter above all, would get no gradient. A plain trainable
+            # ``weight`` (a resident head fine-tuned in full) is what the kernel trains.
+            streamed = getattr(head, "pool", None) is not None
+            adapter = [
+                name
+                for name, param in head.named_parameters()
+                if param.requires_grad and (streamed or name != "weight")
+            ]
+            if adapter:
+                raise ValueError(
+                    "training.use_cut_ce cannot train an adapter on the output head: the "
+                    "kernel reads only the head's base weight, so these parameters would "
+                    f"get no gradient: {', '.join(sorted(adapter))}. Remove the head from "
+                    "the LoRA targets or set use_cut_ce=false."
+                )
+        if trainable and impl == IMPL_CHUNKED:
             raise ValueError(
                 "training.stream_loss_chunk takes the gradient on the hidden states "
                 "only, so the output head must be frozen; trainable: "
                 f"{', '.join(sorted(trainable))}."
             )
         self.chunk = chunk
+        self.impl = impl
+        self._field = field
         self.last_step: Optional[ChunkedStep] = None
         self._causal_lm = causal_lm
         self._head = head
@@ -308,12 +407,24 @@ class ChunkedHeadLoss:
         held, self._held = self._held, None
         if held is None or getattr(outputs, "logits", None) is not held[1]:
             raise ValueError(
-                "training.stream_loss_chunk cannot be used with "
+                f"{self._field} cannot be used with "
                 f"{type(self._causal_lm).__name__}: its forward does not hand the "
                 "output head's result back unchanged (for example a final logit "
-                "soft-cap), so the loss cannot be rebuilt chunk by chunk. Remove "
-                "training.stream_loss_chunk."
+                f"soft-cap), so the loss cannot be rebuilt chunk by chunk. Remove "
+                f"{self._field}."
             )
+        rest = {key: value for key, value in outputs.items() if key not in ("loss", "logits")}
+        if self.impl == IMPL_CCE:
+            # The kernel returns the loss and nothing else: no entropy or accuracy columns.
+            self.last_step = None
+            loss = cce_causal_lm_loss(
+                held[0],
+                self._head,
+                labels,
+                kwargs.get("num_items_in_batch"),
+                shift_labels=kwargs.get("shift_labels"),
+            )
+            return type(outputs)(loss=loss, **rest)
         loss, self.last_step = chunked_causal_lm_loss(
             held[0],
             self._head_forward,
@@ -322,7 +433,6 @@ class ChunkedHeadLoss:
             num_items_in_batch=kwargs.get("num_items_in_batch"),
             shift_labels=kwargs.get("shift_labels"),
         )
-        rest = {key: value for key, value in outputs.items() if key not in ("loss", "logits")}
         return type(outputs)(loss=loss, **rest)
 
 

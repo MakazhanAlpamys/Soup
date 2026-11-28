@@ -106,6 +106,10 @@ _MAX_LORA_PATTERN_KEY_LEN = 512
 # which key it was, not enough to paste kilobytes into a terminal or a log.
 _MAX_LORA_PATTERN_KEY_SHOWN = 80
 
+# Tasks that training.l2l accepts. A task joins the tuple when its L2L window loss
+# (trainer/l2l_trainer.py WindowLoss) ships; the refusal below reads the tuple.
+L2L_SUPPORTED_TASKS = ("sft",)
+
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
 _MAX_UNFROZEN_PATTERN_LEN = 512
@@ -3669,7 +3673,10 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable Cut Cross-Entropy (CCE) for large-vocab models. "
             "Saves 8-24GB VRAM on Llama 3.1 128k vocab. Requires cut_cross_entropy. "
-            "Mutually exclusive with Unsloth/MLX backends."
+            "Mutually exclusive with Unsloth/MLX backends. Under stream_layers "
+            "(task='sft' only, not with l2l, raft or stream_loss_chunk) the kernel "
+            "computes the loss from the hidden states and the streamed output head; "
+            "no logits are returned, so the rewind log is off for the run."
         ),
     )
     # v0.28.0 — reserved compatibility field; the implementation never applied
@@ -4063,6 +4070,49 @@ class TrainingConfig(BaseModel):
             "Weighted preference_loss_weights do not stream yet."
         ),
     )
+    l2l: bool = Field(
+        default=False,
+        description=(
+            "BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each "
+            "streamed decoder layer is loaded once per optimizer step and runs all "
+            "k micro-batches, then the optimizer takes one step on the adapters. k is "
+            "gradient_accumulation_steps. Needs stream_layers=true and a Llama or "
+            "Mistral model on a single GPU; MoE models are refused. k=1 behaves like "
+            "plain streaming. A bool only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_spill_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "BETA — where training.l2l spills activations that do not fit the host-RAM "
+            "budget. Default: a '_l2l_spill' folder in the run's output directory. It "
+            "must resolve under $HOME, the working directory or the temp directory "
+            "(realpath, so symlinks and Windows short names cannot step outside), and "
+            "is refused at launch on RAM-backed, overlay and network filesystems and on "
+            "a drive without room. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
+        default="none",
+        description=(
+            "BETA — how training.l2l stores the activations between layers. 'none' keeps "
+            "them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the "
+            "launch refuses it until it is shown to be safe for training: it is lossy "
+            "and its gradients are not yet checked against the accumulation baseline. "
+            "The value is recorded in the run's l2l_recipe.json, and a resume with "
+            "another codec is refused. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_auto_k: bool = Field(
+        default=False,
+        description=(
+            "BETA — let the memory planner pick the largest k that fits host RAM, up to "
+            "gradient_accumulation_steps. Plans the window of a MoE model, which L2L "
+            "does not run yet, so the launch refuses it for now. Off: k = "
+            "gradient_accumulation_steps. Only valid with training.l2l=true. A bool "
+            "only: 1 or 'yes' is refused."
+        ),
+    )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
@@ -4308,7 +4358,8 @@ class TrainingConfig(BaseModel):
             "outputs.logits on a labelled forward, and equality to the last "
             "bit with an unchunked step: the per-token terms are the same, the "
             "order of the final sum is not. task='sft' only; refused beside "
-            "use_cut_ce."
+            "use_cut_ce. With training.l2l the L2L window's head runs the same "
+            "chunked loss."
         ),
     )
 
@@ -4648,6 +4699,35 @@ class TrainingConfig(BaseModel):
             f"{type(v).__name__} {v!r}"
         )
 
+    @field_validator("l2l", "l2l_auto_k", mode="before")
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_l2l_switch_is_bool(cls, v, info: ValidationInfo):
+        """``l2l: 1`` or ``yes`` is refused instead of being coerced to ``true``: the
+        switch replaces the training step, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
+
+    @field_validator("l2l_spill_dir")
+    @classmethod
+    def _validate_l2l_spill_dir(cls, value: Optional[str]) -> Optional[str]:
+        # Shape only. Where the directory may live (realpath + commonpath against
+        # $HOME, $CWD and $TMPDIR) is checked at launch by utils/l2l_spill.py, which
+        # also needs the filesystem.
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("training.l2l_spill_dir must be a non-empty path")
+        if "\x00" in value:
+            raise ValueError("training.l2l_spill_dir must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("training.l2l_spill_dir must be <= 4096 chars")
+        return value
+
     @model_validator(mode="after")
     def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
         """``prefix_tree`` decides which examples share a row, as packing and
@@ -4674,6 +4754,12 @@ class TrainingConfig(BaseModel):
                 "training.prefix_tree cannot be combined with training.stream_loss_chunk "
                 "yet: the chunked loss has not been checked on prefix-tree rows. "
                 "Remove one of the two."
+            )
+        if self.stream_layers and self.use_cut_ce:
+            raise ValueError(
+                "training.prefix_tree cannot be combined with training.use_cut_ce under "
+                "training.stream_layers yet: the streamed Cut Cross-Entropy loss has not "
+                "been checked on prefix-tree rows. Remove one of the two."
             )
         if self.neftune_alpha is not None:
             raise ValueError(
@@ -8154,14 +8240,12 @@ class SoupConfig(BaseModel):
                 "training.stream_loss_chunk."
             )
         if tcfg.stream_loss_chunk is not None and tcfg.use_cut_ce:
-            # #1693 — two mechanisms over the same loss. Checked before the
-            # refusal of use_cut_ce under streaming (#2023), so that the
-            # message names both fields.
+            # #1693 — two mechanisms over the same loss; the message names both
+            # fields.
             raise ValueError(
                 "training.stream_loss_chunk and training.use_cut_ce cannot be "
                 "combined: each replaces how the loss over the logits is "
-                "computed. Keep stream_loss_chunk and set use_cut_ce=false; "
-                "streaming refuses use_cut_ce on its own."
+                "computed. Keep stream_loss_chunk and set use_cut_ce=false."
             )
         if self.backend != "transformers":
             raise ValueError(
@@ -8257,12 +8341,29 @@ class SoupConfig(BaseModel):
                 f"is on the meta device under streaming."
             )
         if tcfg.use_cut_ce:
-            raise ValueError(
-                "training.stream_layers cannot be combined with training.use_cut_ce: "
-                "the streamed setup never installs the resident Cut Cross-Entropy patch. "
-                "Set use_cut_ce=false to stream with the conservative logits budget, "
-                "or disable stream_layers to use resident CCE."
-            )
+            # Cut Cross-Entropy under streaming runs through the same hook as
+            # stream_loss_chunk (utils/stream_loss_chunk.py), not the resident patch.
+            if stream_task != "sft":
+                raise ValueError(
+                    f"training.use_cut_ce with training.stream_layers supports task='sft' "
+                    f"only; got task={stream_task!r}. A preference loss reduces the logits "
+                    f"to per-token log-probs instead of a cross-entropy, which the kernel "
+                    f"does not compute. Set use_cut_ce=false or use task='sft'."
+                )
+            if self.data.format == "raft":
+                raise ValueError(
+                    "training.use_cut_ce with training.stream_layers cannot be combined with "
+                    "data.format='raft': the RAFT loss weights every token and is computed "
+                    "from the full logits, which the kernel does not return. Set "
+                    "use_cut_ce=false."
+                )
+            if tcfg.l2l:
+                raise ValueError(
+                    "training.use_cut_ce with training.stream_layers cannot be combined with "
+                    "training.l2l: the L2L window computes its own head and loss, and the "
+                    "kernel is not wired into it. Set use_cut_ce=false (training."
+                    "stream_loss_chunk bounds the logits under l2l)."
+                )
         conflicts = []
         if tcfg.unfrozen_parameters:
             conflicts.append("unfrozen_parameters")
@@ -8328,6 +8429,60 @@ class SoupConfig(BaseModel):
                     f"{'it' if len(dropped) == 1 else 'them'}."
                 )
             raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_l2l_compat(self) -> "SoupConfig":
+        """``training.l2l`` and its options: each refusal names the field and the gate.
+
+        ``l2l`` reuses the streamed layer loads, so it needs ``stream_layers`` and a task
+        whose L2L window loss ships. The options only change how L2L runs, so each is
+        refused while ``l2l`` is off. The codec gate itself (``fp8_e4m3``) is closed at
+        launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
+        """
+        tcfg = self.training
+        options = {
+            "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
+            "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
+            "l2l_auto_k": tcfg.l2l_auto_k,
+        }
+        if not tcfg.l2l:
+            for name, is_set in options.items():
+                if is_set:
+                    raise ValueError(
+                        f"training.{name} is set but training.l2l is false: it changes how "
+                        f"L2L runs and nothing else reads it. Set l2l=true or drop {name}."
+                    )
+            return self
+        if not tcfg.stream_layers:
+            raise ValueError(
+                "training.l2l requires training.stream_layers=true: L2L reuses the "
+                "streamed layer loads, and a resident model has none to reuse."
+            )
+        if self.task not in L2L_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
+                f"got task={self.task!r}."
+            )
+        if self.backend != "transformers" or self.modality != "text":
+            raise ValueError(
+                "training.l2l requires backend='transformers' and modality='text'; "
+                f"got backend={self.backend!r}, modality={self.modality!r}."
+            )
+        own_trainer = [
+            name
+            for name, is_set in (
+                ("data.format='raft'", self.data.format == "raft"),
+                ("training.prefix_tree", bool(tcfg.prefix_tree)),
+            )
+            if is_set
+        ]
+        if own_trainer:
+            raise ValueError(
+                f"training.l2l cannot be combined with {' / '.join(own_trainer)}: each "
+                "builds its own trainer, so L2L would skip it. "
+                "Remove one of the two."
+            )
         return self
 
     @model_validator(mode="after")

@@ -153,6 +153,8 @@ def rewind_skip_reason(
     vision: bool,
     audio: bool,
     prefix_tree: bool = False,
+    l2l: bool = False,
+    cut_ce: bool = False,
 ) -> str:
     """Why this run takes no rewind recorder, in words a user can act on.
 
@@ -173,6 +175,13 @@ def rewind_skip_reason(
         return "vision runs a custom collator"
     if audio:
         return "audio runs a custom collator"
+    if l2l:
+        return "L2L runs the layers outside the loss path the recorder wraps"
+    if cut_ce:
+        return (
+            "Cut Cross-Entropy under layer streaming returns neither logits nor "
+            "per-token losses, which the recorder reads"
+        )
     if task != "sft":
         return f"the recorder is SFT-only and this is task {task!r}"
     return "this run does not take the recording trainer path"
@@ -675,6 +684,18 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
         apply_training_seed(tcfg)
 
+        # Refuse unsupported L2L options before any model load: a closed codec, an
+        # auto-k this version cannot plan.
+        self._l2l_recipe = None
+        if tcfg.l2l:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+            from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
+
+            refuse_distributed_l2l(
+                _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
+            )
+            self._l2l_recipe = resolve_l2l_recipe(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
 
@@ -1084,10 +1105,10 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         # TRL's `compute_loss` reads for its metrics. The schema keeps the
         # option to the two branches below that build `sft_cls`.
         sft_cls = SFTTrainer
+        stream_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        cut_ce_hook = stream_hook is not None and getattr(stream_hook, "impl", None) == "cce"
         # ... and so does training.packed_lora (the packed step returns the loss and no logits).
-        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None) or getattr(
-            self, "_packed_lora_hook", None
-        )
+        chunk_hook = stream_hook or getattr(self, "_packed_lora_hook", None)
         if chunk_hook is not None:
             from soup_cli.utils.stream_loss_chunk import (
                 HOOK_ATTR,
@@ -1199,8 +1220,11 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                 processor=self.processor,
                 max_length=cfg.data.max_length,
             )
+        elif tcfg.l2l:
+            self.trainer = self._build_l2l_trainer(sft_cls, trainer_kwargs, training_args)
         elif (
             tcfg.rewind_log
+            and not cut_ce_hook
             and cfg.task == "sft"
             and pretok is None
             and not use_vision
@@ -1237,6 +1261,8 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                         vision=use_vision,
                         audio=use_audio,
                         prefix_tree=use_prefix_tree,
+                        l2l=tcfg.l2l,
+                        cut_ce=cut_ce_hook,
                     )
                 )
 
@@ -2697,6 +2723,15 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             # rejected resume must not overwrite the root artifact's previous
             # route declaration during setup.
             write_metadata(self._output_dir, self._quest_metadata)
+        l2l_recipe = getattr(self, "_l2l_recipe", None)
+        if l2l_recipe is not None:
+            from soup_cli.utils.l2l_recipe import validate_resume, write_recipe
+
+            # Same order as the QuEST metadata: a rejected resume must not overwrite the
+            # recipe the checkpoint was trained with.
+            if resume_from_checkpoint is not None:
+                validate_resume(self._output_dir, l2l_recipe)
+            write_recipe(self._output_dir, l2l_recipe)
         offload_save_dir: Optional[str] = None
         if tcfg.activation_offloading == "disk":
             candidate = str(Path(self._output_dir) / "_activation_offload")
