@@ -45,6 +45,13 @@ _CUE_RE = re.compile(
 )
 # Parenthesised choice marker: "(B)" or "B)".
 _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
+# Letter-first commitment: "A is the correct answer.", "(B) is correct", "C is right". The cue
+# regex above only reads the cue-first order ("the answer is A"), and the leading-letter rule
+# below only reads it at the very start of the output. Upper-case only, and the letter must be
+# followed directly by "is (the) correct/right", so prose ("A dog is ...") cannot match.
+_LETTER_FIRST_CUE_RE = re.compile(
+    r"(?<![A-Za-z0-9])\(?([A-J])\)?\s+is\s+(?:the\s+)?(?:correct|right)\b"
+)
 # A lone uppercase letter wrapped in markdown emphasis, quotes or square
 # brackets: "**B**", "__B__", "*B*", "_B_", "`B`", "\"B\"", "'B'", "[B]".
 # Deliberate markup of a single letter is an explicit commitment like "(B)",
@@ -55,12 +62,12 @@ _WRAPPED_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:\*{1,2}|_{1,2}|[`\"'\[])\s*([A-J])\s*"
     r"(?:\*{1,2}|_{1,2}|[`\"'\]])(?![A-Za-z0-9])"
 )
-# Standalone uppercase letter LEADING the output, followed by a line break
+# Standalone uppercase letter LEADING the output (after any whitespace), followed by a line break
 # or " is" / " -" — the model led with its answer then explained itself
 # ("B is the correct answer.", "B\n\nBecause ..."). Restricted to the start
 # so a stray "B is" mid-prose cannot claim the slot, and kept uppercase so
 # the article "a" still cannot. (#1442)
-_LEADING_RE = re.compile(r"^([A-J])(?=\r?\n| is\b| -)")
+_LEADING_RE = re.compile(r"^\s*([A-J])(?=\r?\n| is\b| -)")
 # LaTeX ``\boxed{C}`` — how a reasoning-tuned model states its final answer.
 # Read through ``utils.final_answer``'s shared scan instead of a local regex: the
 # box counts as an OPTION LETTER when the scan's normalised content is a single
@@ -129,6 +136,11 @@ def extract_mcq_letter(output: str) -> Optional[str]:
     ("(A) x (B) y. Answer: \\boxed{A}") chose A. Ranking the boxed FORM above
     the others would get the first of those backwards.
 
+    A letter-first statement ("A is the correct answer.") counts as a cue. An output whose only
+    markers are the option list itself, in order from (A), with no box, cue or wrapped letter, is
+    an echo of the question: its markers are ignored, so it returns ``None`` unless a bare letter
+    follows.
+
     Only if none of the four appears (the wrapped-letter form counts as an
     explicit commitment too — ``**B**``/``[B]``/``"B"`` and friends, #1442)
     does the bare tier apply: a standalone uppercase letter leading the
@@ -146,12 +158,25 @@ def extract_mcq_letter(output: str) -> Optional[str]:
         return None
     output = output[:_MAX_SCORE_OUTPUT]
     latest: Optional[Tuple[int, str]] = None
+    committed = False
     for box in iter_boxed_answers(output):
         letter = box.answer.upper()
         if len(letter) == 1 and letter in _MCQ_OPTIONS and (latest is None or box.end > latest[0]):
             latest = (box.end, letter)
-    for regex in (_CUE_RE, _PAREN_RE, _WRAPPED_RE):
+            committed = True
+    for regex in (_CUE_RE, _LETTER_FIRST_CUE_RE, _WRAPPED_RE):
         for match in regex.finditer(output):
+            committed = True
+            if latest is None or match.end() > latest[0]:
+                latest = (match.end(), match.group(1))
+    markers = [match.group(1).upper() for match in _PAREN_RE.finditer(output)]
+    # An output whose markers are only the option list "(A) x (B) y (C) z", in order from (A)
+    # with no box, cue or wrapped letter, repeats the question. Reading its last marker as the
+    # choice credited a model that never answered whenever the key was the last option. Its
+    # markers are skipped; a bare letter after the list still counts (the bare tier below).
+    echo = not committed and len(markers) >= 2 and markers == list(_MCQ_OPTIONS[: len(markers)])
+    if not echo:
+        for match in _PAREN_RE.finditer(output):
             if latest is None or match.end() > latest[0]:
                 latest = (match.end(), match.group(1))
     if latest is not None:
