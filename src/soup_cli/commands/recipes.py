@@ -1,5 +1,6 @@
 """soup recipes — browse and use ready-made configs for popular models."""
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +11,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR, GateCommand
+from soup_cli.utils.paths import paste_arg
 from soup_cli.utils.terminal import for_terminal, strip_control, terminal_text
 
 console = Console()
@@ -115,9 +117,16 @@ def use(
 
     console.print(
         f"[green]\u2713[/] Recipe [bold]{for_terminal(name)}[/] "
-        f"written to [bold]{for_terminal(output)}[/]", emoji=False,
+        f"written to [bold]{for_terminal(output, single_line=True)}[/]", emoji=False,
     )
-    console.print(f"[dim]Next: soup train --config {for_terminal(output)}[/]", emoji=False)
+    spelled = paste_arg(output, windows_separators=os.sep == "\\")
+    if spelled is None:
+        console.print(
+            "[dim]Next: pass the path above as --config to soup train. "
+            "Quote it for your shell.[/]"
+        )
+    else:
+        console.print(terminal_text(f"Next: soup train --config {spelled}", "dim"), soft_wrap=True)
 
 
 @app.command()

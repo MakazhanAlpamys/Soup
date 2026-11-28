@@ -1364,6 +1364,10 @@ class TestControlFileIntegrity:
         output = _check(result, 3)
         assert "control task 'alpha' changed" in output
         assert old in output and new in output
+        assert "Restore the exact original bytes to keep using this ledger." in output
+        assert "all original controls match their registered bytes and pass validation." in output
+        assert "start a new ledger (--ledger NEW.json)" in output
+        assert "--record and without --require-history" in output
         assert fake_model["loads"] == [], "refused before any model load"
         assert len(_read_ledger()["versions"]) == 1
 

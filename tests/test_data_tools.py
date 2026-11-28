@@ -307,6 +307,42 @@ def test_convert_alpaca_all_multiturn_rows_fail(multiturn_chatml_file, tmp_path,
 
 
 @patch("soup_cli.commands.data._hf_download_dataset")
+@pytest.mark.parametrize(
+    ("rows", "diagnostic"),
+    [
+        ([{"label": 1, "score": 0.9}], "Cannot detect format at row 0"),
+        ([_SINGLE_TURN, {"instruction": "Return 4", "output": "4"}], "mixes unrelated shapes"),
+    ],
+    ids=["unrecognized", "mixed"],
+)
+@pytest.mark.parametrize("target_given", [True, False], ids=["convert", "raw"])
+def test_download_requires_detectable_source_only_for_conversion(
+    mock_download, tmp_path, monkeypatch, rows, diagnostic, target_given,
+):
+    monkeypatch.chdir(tmp_path)
+    mock_download.return_value = rows
+    output = tmp_path / "downloaded.jsonl"
+    existing = b'{"existing": true}\n'
+    output.write_bytes(existing)
+    args = ["data", "download", "test/dataset", "-o", str(output)]
+    if target_given:
+        args.extend(["--format", "alpaca"])
+
+    result = runner.invoke(app, args)
+
+    if target_given:
+        assert result.exit_code == 1, (result.output, result.exception)
+        message = _collapsed(result.output)
+        assert diagnostic in message
+        assert "Omit --format" in message
+        assert output.read_bytes() == existing
+    else:
+        assert result.exit_code == 0, (result.output, result.exception)
+        written = output.read_text(encoding="utf-8").splitlines()
+        assert [json.loads(line) for line in written] == rows
+
+
+@patch("soup_cli.commands.data._hf_download_dataset")
 def test_download_alpaca_reports_left_out_rows(mock_download, tmp_path, monkeypatch):
     """download --format alpaca says how many rows it left out."""
     monkeypatch.chdir(tmp_path)

@@ -187,6 +187,77 @@ def test_scored_choice_restores_the_rng_and_the_mode(method):
     assert set(sel.layers) == set(sorted(sel.scores, key=lambda i: -sel.scores[i])[:2])
 
 
+@pytest.mark.parametrize("method", ["grad", "angular"])
+@pytest.mark.parametrize("probe_fails", [False, True])
+def test_scored_choice_restores_mps_rng_without_hardware(monkeypatch, method, probe_fails):
+    import torch
+
+    from soup_cli.utils import layer_select
+
+    # Stand in for the MPS default generator on any platform, independently of CPU RNG.
+    mps = torch.Generator().manual_seed(17)
+    monkeypatch.setattr(torch.mps, "get_rng_state", lambda device=None: mps.get_state())
+    monkeypatch.setattr(torch.mps, "set_rng_state", lambda state, device=None: mps.set_state(state))
+    model = torch.nn.Linear(2, 2).eval()
+    cpu_before = torch.random.get_rng_state()
+    mps_before = mps.get_state()
+    python_before = random.getstate()
+
+    def score(probe_model, _layers, _batches, device):
+        assert device.type == "mps"
+        assert probe_model.training == (method == "grad")
+        torch.rand(8)
+        torch.rand(8, generator=mps)
+        random.random()
+        assert not torch.equal(mps.get_state(), mps_before)
+        if probe_fails:
+            raise RuntimeError("probe failed")
+        return {0: 1.0}
+
+    monkeypatch.setattr(layer_select, f"{method}_scores", score)
+
+    def choose():
+        return layer_select.choose(
+            layer_select.LayerSelectPolicy(method, k=1), model, {0: []}, [], "mps", random.Random(0)
+        )
+
+    if probe_fails:
+        with pytest.raises(RuntimeError) as exc_info:
+            choose()
+        assert str(exc_info.value) == "probe failed"
+    else:
+        assert choose().layers == [0]
+    assert torch.equal(torch.random.get_rng_state(), cpu_before)
+    assert torch.equal(mps.get_state(), mps_before)
+    assert random.getstate() == python_before
+    assert not model.training
+
+
+@pytest.mark.parametrize("method", ["grad", "angular"])
+def test_scored_choice_restores_real_mps_rng(method):
+    import torch
+
+    from soup_cli.utils.layer_select import LayerSelectPolicy, adapter_params_by_layer, choose
+
+    if not torch.backends.mps.is_available():
+        pytest.skip("requires an MPS device")
+    model = _model().to("mps")
+    before = torch.mps.get_rng_state()
+
+    def stochastic_batches():
+        # Score both methods with a probe that consumes the real device RNG.
+        torch.rand(8, device="mps")
+        assert not torch.equal(torch.mps.get_rng_state(), before)
+        yield from _batches(n=1)
+
+    selection = choose(
+        LayerSelectPolicy(method, k=2), model, adapter_params_by_layer(model),
+        stochastic_batches(), "mps", random.Random(0),
+    )
+    assert len(selection.layers) == 2
+    assert torch.equal(torch.mps.get_rng_state(), before)
+
+
 def test_policy_validation():
     from soup_cli.utils.layer_select import LayerSelectPolicy
 
@@ -498,6 +569,143 @@ def test_lisa_checkpoint_restores_mask_and_next_draw(tmp_path):
     cb.on_step_end(args, state, model=model)
     resumed.on_step_end(args, state, model=new_model)
     assert _trainable_layers(new_model) == _trainable_layers(model)
+
+
+@pytest.fixture
+def layer_sft(tmp_path, monkeypatch):
+    pytest.importorskip("peft")
+    pytest.importorskip("trl")
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from tests.test_freeze_lora_layers import _dataset, _tiny_llama_dir
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ACCELERATE_USE_CPU", "true")
+    base = _tiny_llama_dir(tmp_path, n_layers=4)
+
+    def build(output, policy):
+        cfg = _cfg(
+            lora_layers=policy,
+            quantization="none",
+            batch_size=1,
+            gradient_accumulation_steps=1,
+            epochs=1,
+            lr=1e-3,
+            save_steps=1,
+            rewind_log=False,
+        )
+        cfg = cfg.model_copy(
+            update={
+                "base": base,
+                "output": str(output),
+                "data": cfg.data.model_copy(update={"val_split": 0.0, "max_length": 64}),
+            }
+        )
+        wrapper = SFTTrainerWrapper(cfg, device="cpu")
+        wrapper.setup(_dataset())
+        return wrapper
+
+    return build
+
+
+@pytest.mark.parametrize("method", ["fixed", "lisa"])
+def test_sft_wrapper_resumes_selection_and_optimizer(tmp_path, layer_sft, method):
+    import torch
+    from transformers import TrainerCallback
+
+    from soup_cli.utils.layer_select import RECORD_NAME
+
+    policy = (
+        {"method": "fixed", "layers": [2]}
+        if method == "fixed"
+        else {"method": "lisa", "k": 1, "interval_steps": 2, "seed": 1}
+    )
+    source = tmp_path / "source"
+    dest = tmp_path / "resumed"
+    original = layer_sft(source, policy)
+    assert original.train()["total_steps"] == 3
+    checkpoint = source / "checkpoint-1"
+    assert (checkpoint / "optimizer.pt").is_file()
+    saved = json.loads((checkpoint / RECORD_NAME).read_text(encoding="utf-8"))
+
+    class ObserveResume(TrainerCallback):
+        def on_train_begin(self, args, state, control, model, optimizer, **kwargs):
+            assert state.global_step == 1
+            assert _trainable_layers(model) == saved["layers"]
+            assert {int(entry["step"]) for entry in optimizer.state.values()} == {1}
+
+    resumed = layer_sft(dest, policy)
+    resumed.trainer.add_callback(ObserveResume())
+    assert resumed.train(resume_from_checkpoint=str(checkpoint))["total_steps"] == 3
+    expected = json.loads((source / "checkpoint-3" / RECORD_NAME).read_text(encoding="utf-8"))
+    actual = json.loads((dest / "checkpoint-3" / RECORD_NAME).read_text(encoding="utf-8"))
+    assert actual == expected
+    if method == "lisa":
+        assert [draw["step"] for draw in actual["history"]] == [0, 2]
+        assert actual["layers"] != saved["layers"]
+    original_parameters = dict(original.model.named_parameters())
+    for name, param in resumed.model.named_parameters():
+        if "lora_" in name:
+            torch.testing.assert_close(param, original_parameters[name])
+
+
+def test_sft_wrapper_refuses_removing_policy_on_resume(tmp_path, layer_sft):
+    from soup_cli.utils.layer_select import RECORD_NAME
+
+    source = tmp_path / "source"
+    original = layer_sft(source, {"method": "fixed", "layers": [2]})
+    original.train()
+    checkpoint = source / "checkpoint-1"
+    assert (checkpoint / RECORD_NAME).is_file()
+    resumed = layer_sft(tmp_path / "resumed", None)
+
+    with pytest.raises(ValueError) as exc_info:
+        resumed.train(resume_from_checkpoint=str(checkpoint))
+    assert str(exc_info.value) == (
+        f"training.lora_layers cannot resume from {checkpoint / RECORD_NAME}: "
+        "the checkpoint used layer selection but the current run has no policy"
+    )
+
+
+@pytest.mark.parametrize("enable_policy", [False, True])
+def test_sft_wrapper_resumes_legacy_checkpoint_only_without_policy(
+    tmp_path, layer_sft, enable_policy
+):
+    from soup_cli.utils.layer_select import RECORD_NAME
+
+    source = tmp_path / "source"
+    original = layer_sft(source, None)
+    assert original.train()["total_steps"] == 3
+    checkpoint = source / "checkpoint-1"
+    assert not (checkpoint / RECORD_NAME).exists()
+    # The run root can carry a record from a separate invocation.
+    (source / RECORD_NAME).write_text("{}", encoding="utf-8")
+
+    policy = {"method": "fixed", "layers": [2]} if enable_policy else None
+    resumed = layer_sft(tmp_path / "resumed", policy)
+    if enable_policy:
+        with pytest.raises(ValueError) as exc_info:
+            resumed.train(resume_from_checkpoint=str(checkpoint))
+        assert str(exc_info.value) == (
+            f"training.lora_layers cannot resume from {checkpoint / RECORD_NAME}: "
+            "the checkpoint has no layer selection metadata"
+        )
+    else:
+        assert resumed.train(resume_from_checkpoint=str(checkpoint))["total_steps"] == 3
+        assert _trainable_layers(resumed.model) == list(range(4))
+
+
+@pytest.mark.parametrize("method", ["grad", "angular"])
+def test_sft_wrapper_scores_prepared_training_data(tmp_path, layer_sft, method):
+    from soup_cli.utils.layer_select import RECORD_NAME
+
+    wrapper = layer_sft(tmp_path / "scored", {"method": method, "k": 2, "probe_rows": 2})
+    assert wrapper.train()["total_steps"] == 3
+    checkpoint = tmp_path / "scored" / "checkpoint-1"
+    record = json.loads((checkpoint / RECORD_NAME).read_text(encoding="utf-8"))
+    assert record["method"] == method
+    assert len(record["layers"]) == 2
+    assert set(record["scores"]) == {"0", "1", "2", "3"}
+    assert _trainable_layers(wrapper.model) == record["layers"]
 
 
 def test_resident_cut_keeps_trainable_embedding_adapter():

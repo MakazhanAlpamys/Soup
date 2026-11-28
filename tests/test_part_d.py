@@ -69,61 +69,31 @@ class TestBuildLogitsProcessors:
 
 
 class TestGenerateResponseLogitsProcessorPlumb:
-    def test_logits_processor_forwarded_to_generate(self, monkeypatch):
+    def test_logits_processor_forwarded_to_generate(self):
         """Verify _generate_response forwards logits_processor to model.generate."""
         from soup_cli.commands import serve
 
-        # Mock torch
-        fake_torch = MagicMock()
-        fake_torch.no_grad = lambda: _NoCtx()
-        monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
-
-        # Mock model + tokenizer
-        model = MagicMock()
-        model.device = "cpu"
-        captured: dict = {}
-
-        def _gen(**kwargs):
-            captured.update(kwargs)
-            mock_out = MagicMock()
-            mock_out.__getitem__ = lambda self, idx: MagicMock(
-                shape=[5], __getitem__=lambda s, j: MagicMock(),
-            )
-            return mock_out
-
-        model.generate = _gen
-        # Build mock tokenizer
-        tok = MagicMock()
-        tok.chat_template = None
-        tok.pad_token_id = 0
-        tok.return_value = {
-            "input_ids": MagicMock(shape=[1, 3], to=lambda d: MagicMock(shape=[1, 3])),
-            "attention_mask": MagicMock(to=lambda d: MagicMock()),
+        torch = pytest.importorskip("torch")
+        model = MagicMock(device="cpu")
+        model.generate.return_value = torch.tensor([[1, 2, 3, 4]])
+        tokenizer = MagicMock(chat_template=None, pad_token_id=0, eos_token_id=0)
+        tokenizer.return_value = {
+            "input_ids": torch.tensor([[1, 2, 3]]),
+            "attention_mask": torch.ones((1, 3), dtype=torch.long),
         }
-        tok.decode = MagicMock(return_value="ok")
-        tok.apply_chat_template = MagicMock()
+        tokenizer.decode.return_value = "ok"
 
-        sentinel = ["my-processor"]
-        try:
-            serve._generate_response(
-                model, tok, [{"role": "user", "content": "hi"}],
-                max_tokens=4, temperature=0.5, top_p=0.9,
-                logits_processor=sentinel,
-            )
-        except Exception:  # tokenizer mock approximation may explode in decode
-            pass
-        # Either generate was called with logits_processor, or torch path
-        # short-circuited via mock — accept both as long as the kwarg flowed.
-        if "logits_processor" in captured:
-            assert captured["logits_processor"] is sentinel
+        processors = [object()]
+        serve._generate_response(
+            model,
+            tokenizer,
+            [{"role": "user", "content": "hi"}],
+            max_tokens=4,
+            logits_processor=processors,
+        )
 
-
-class _NoCtx:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
+        model.generate.assert_called_once()
+        assert model.generate.call_args.kwargs.get("logits_processor") is processors
 
 
 class TestGenerateResponseSignature:
