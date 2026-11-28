@@ -1,7 +1,7 @@
 """soup mcp - Model Context Protocol server (v0.71.28; network transports #296).
 
-``soup mcp serve`` exposes Soup's read-only commands (plus two plan-only
-mutating tools) to any MCP client (Claude Code / Cursor / Cline / Continue).
+``soup mcp serve`` makes the ungated tools callable by default. Separate
+startup flags enable planning and confirmed execution.
 stdio remains the default and is unchanged; ``--transport sse`` and
 ``--transport http`` add a local listener for remote or multi-client setups.
 The heavy ``mcp`` SDK is behind the ``[mcp]`` extra and imported lazily, so this
@@ -49,9 +49,10 @@ def reconcile(
 ) -> None:
     """Recover execution capacity left blocked by a crashed MCP server."""
     from rich.console import Console
-    from rich.markup import escape
+    from rich.text import Text
 
     from soup_cli.experiment.tracker import ActiveLaunchingRunError, ExperimentTracker
+    from soup_cli.utils.terminal import strip_control
 
     console = Console()
     if not expunge_launching:
@@ -65,9 +66,14 @@ def reconcile(
             older_than_seconds=older_than_seconds
         )
     except ActiveLaunchingRunError as exc:
+        # A Text is not parsed as markup and has no emoji codes, so the id is shown as stored.
         console.print(
-            "[red]Refusing to expunge launching run[/] "
-            f"[bold]{escape(exc.run_id)}[/]: PID {exc.pid} is still alive."
+            Text.assemble(
+                ("Refusing to expunge launching run", "red"),
+                " ",
+                (strip_control(exc.run_id), "bold"),
+                f": PID {exc.pid} is still alive.",
+            )
         )
         raise typer.Exit(1) from exc
 
@@ -78,7 +84,9 @@ def reconcile(
         )
         return
     for run_id in removed:
-        console.print(f"[green]Expunged launching run:[/] {escape(run_id)}")
+        console.print(
+            Text.assemble(("Expunged launching run:", "green"), " ", strip_control(run_id))
+        )
 
 
 def _resolve_auth_token(auth_token: Optional[str]) -> str:
@@ -151,7 +159,7 @@ def serve(
         ),
     ),
 ) -> None:
-    """Start the MCP server (read-only tools by default).
+    """Start the MCP server (ungated tools available by default).
 
     Under the default stdio transport, stdout is the JSON-RPC channel - all
     human-facing output goes to stderr. Wire it into a client, e.g. `.mcp.json`:
@@ -163,14 +171,19 @@ def serve(
     """
     from rich.console import Console
     from rich.markup import escape
+    from rich.text import Text
+
+    from soup_cli.utils.terminal import strip_control
 
     # stderr-only: stdout is reserved for the MCP JSON-RPC stream.
     console = Console(stderr=True)
 
     if transport not in _TRANSPORTS:
         console.print(
-            f"[red]--transport must be one of: {', '.join(_TRANSPORTS)}[/] "
-            f"(got '{escape(str(transport))}')"
+            Text.assemble(
+                (f"--transport must be one of: {', '.join(_TRANSPORTS)}", "red"),
+                f" (got '{strip_control(transport)}')",
+            )
         )
         raise typer.Exit(2)
 
@@ -231,7 +244,7 @@ def serve(
     elif allow_mutating:
         mode = "mutating tools ENABLED (plan-only)"
     else:
-        mode = "read-only"
+        mode = "ungated tools (some can write state)"
 
     if transport == _STDIO:
         console.print(
@@ -269,16 +282,26 @@ def serve(
     # Route from the server module, so the printed URL cannot drift from it.
     path = SSE_PATH if transport == "sse" else HTTP_PATH
     console.print(
-        f"[dim]soup mcp serve - {transport} transport - {mode}[/]\n"
-        f"[dim]URL:[/]   http://{bind_host}:{bind_port}{path}\n"
-        f"[dim]Token:[/] {token}\n"
-        f"[dim]Every request needs: Authorization: Bearer {token}[/]"
+        Text.assemble(
+            (f"soup mcp serve - {transport} transport - {mode}", "dim"),
+            "\n",
+            ("URL:", "dim"),
+            "   ",
+            (f"http://{strip_control(bind_host)}:{bind_port}{path}", "repr.url"),
+            "\n",
+            ("Token:", "dim"),
+            f" {token}\n",
+            (f"Every request needs: Authorization: Bearer {token}", "dim"),
+        )
     )
     if is_wildcard_host(bind_host) or bind_host not in _LOOPBACK:
         console.print(
-            f"[yellow]WARNING:[/] bound to {escape(bind_host)}, not loopback - this "
-            "server is reachable from the network and the Bearer token is the "
-            "only thing standing in front of it."
+            Text.assemble(
+                ("WARNING:", "yellow"),
+                f" bound to {strip_control(bind_host)}, not loopback - this "
+                "server is reachable from the network and the Bearer token is the "
+                "only thing standing in front of it.",
+            )
         )
     if is_wildcard_host(bind_host):
         console.print(

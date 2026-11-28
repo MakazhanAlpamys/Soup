@@ -6,6 +6,8 @@ import re
 from collections.abc import Collection
 from dataclasses import dataclass
 
+from soup_cli.cloud._local_inputs import LocalTrainInput
+
 _MAX_NAME_LEN = 32
 _MAX_PATH_LEN = 4096
 _MAX_VERSION_LEN = 64
@@ -23,6 +25,7 @@ class CloudPlan:
     stub_path: str
     stub_text: str
     run_command: str
+    local_train_inputs: tuple[LocalTrainInput, ...] = ()
 
 
 def validate_choice(value: object, field: str, allowed: Collection[str]) -> str:

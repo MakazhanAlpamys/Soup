@@ -13,7 +13,7 @@ from fractions import Fraction
 from pathlib import Path
 from statistics import mean
 from typing import TYPE_CHECKING, Optional, Protocol, Sequence
-from urllib.parse import urlparse
+from unicodedata import normalize
 
 from soup_cli.eval.judge_templates import (
     JUDGE_SCORE_PREFERENCE,
@@ -22,7 +22,8 @@ from soup_cli.eval.judge_templates import (
     PAIRWISE_REFERENCE,
     reference_fence,
 )
-from soup_cli.utils.redaction import redact_url
+from soup_cli.utils.redaction import parse_url_with_safe_error, redact_url, url_without_userinfo
+from soup_cli.utils.terminal import strip_control
 
 if TYPE_CHECKING:
     from trl import BasePairwiseJudge
@@ -240,6 +241,19 @@ def load_rubric(path: Path) -> dict:
     return rubric
 
 
+def judge_model_label(model: str) -> str:
+    """Derive the terminal and tracker label without changing opaque model IDs."""
+    if "://" not in model:
+        return model
+    try:
+        parsed = parse_url_with_safe_error(model, label="--model")
+    except ValueError:
+        return "<invalid URL>"
+    if not parsed.netloc and "@" in normalize("NFKC", model):
+        return "<invalid URL>"
+    return strip_control(url_without_userinfo(model), single_line=True)
+
+
 def validate_judge_api_base(api_base: Optional[str]) -> None:
     """SSRF protection for judge API base URL.
 
@@ -252,11 +266,10 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
 
     from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
-    parsed = urlparse(api_base)
+    parsed = parse_url_with_safe_error(api_base, label="--api-base")
     if parsed.scheme not in ("http", "https"):
         raise ValueError(
-            f"Invalid scheme '{parsed.scheme}' in --api-base. "
-            "Only http:// and https:// are allowed."
+            "Invalid scheme in --api-base. Only http:// and https:// are allowed."
         )
 
     # Block non-HTTPS for remote URLs (allow HTTP only for localhost)
