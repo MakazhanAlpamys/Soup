@@ -400,15 +400,137 @@ class TestApplyKvCacheType:
         from soup_cli.utils.kv_cache import apply_kv_cache_type
 
         with pytest.raises(RuntimeError):
-            apply_kv_cache_type(
-                "fp8", backend="transformers", compute_capability=None
-            )
+            apply_kv_cache_type("fp8", backend="transformers", compute_capability=None)
 
-    def test_vllm_backend_deferred(self):
+    def test_vllm_q8_0_unsupported(self):
         from soup_cli.utils.kv_cache import apply_kv_cache_type
 
-        with pytest.raises(NotImplementedError, match="vLLM|transformers"):
+        with pytest.raises(NotImplementedError, match="different quantization scheme"):
             apply_kv_cache_type("q8_0", backend="vllm")
+
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [("bf16", "bfloat16"), ("f16", "float16")],
+    )
+    def test_vllm_dtype_resolves_cache_dtype(self, monkeypatch, requested, expected):
+        import sys
+        from types import ModuleType
+        from typing import Literal
+
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        monkeypatch.setattr(
+            "soup_cli.utils.vllm.is_vllm_available",
+            lambda: True,
+        )
+
+        vllm_module = ModuleType("vllm")
+        config_module = ModuleType("vllm.config")
+        cache_module = ModuleType("vllm.config.cache")
+
+        cache_module.CacheDType = Literal["auto", "bfloat16", "float16", "fp8"]
+
+        monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+        monkeypatch.setitem(sys.modules, "vllm.config", config_module)
+        monkeypatch.setitem(sys.modules, "vllm.config.cache", cache_module)
+
+        runtime = apply_kv_cache_type(requested, backend="vllm")
+
+        assert runtime.vllm_cache_dtype == expected
+        assert runtime.model_dtype is None
+
+    def test_vllm_unsupported_dtype(self, monkeypatch):
+        monkeypatch.setattr(
+            "soup_cli.utils.vllm.is_vllm_available",
+            lambda: True,
+        )
+        import sys
+        from types import ModuleType
+        from typing import Literal
+
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        vllm_module = ModuleType("vllm")
+        config_module = ModuleType("vllm.config")
+        cache_module = ModuleType("vllm.config.cache")
+
+        cache_module.CacheDType = Literal["auto", "bfloat16"]
+
+        monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+        monkeypatch.setitem(sys.modules, "vllm.config", config_module)
+        monkeypatch.setitem(sys.modules, "vllm.config.cache", cache_module)
+
+        with pytest.raises(RuntimeError, match="does not support"):
+            apply_kv_cache_type("f16", backend="vllm")
+
+    def test_vllm_fp8_requires_hopper(self):
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        with pytest.raises(RuntimeError, match="requires Hopper"):
+            apply_kv_cache_type(
+                "fp8",
+                backend="vllm",
+                compute_capability=(8, 6),
+            )
+
+    def test_vllm_fp8_requires_known_compute_capability(self):
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        with pytest.raises(RuntimeError, match="requires Hopper"):
+            apply_kv_cache_type(
+                "fp8",
+                backend="vllm",
+                compute_capability=None,
+            )
+
+    def test_vllm_fp8_resolves_on_hopper(self, monkeypatch):
+        monkeypatch.setattr(
+            "soup_cli.utils.vllm.is_vllm_available",
+            lambda: True,
+        )
+        import sys
+        from types import ModuleType
+        from typing import Literal
+
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        vllm_module = ModuleType("vllm")
+        config_module = ModuleType("vllm.config")
+        cache_module = ModuleType("vllm.config.cache")
+
+        cache_module.CacheDType = Literal["auto", "bfloat16", "float16", "fp8"]
+
+        monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+        monkeypatch.setitem(sys.modules, "vllm.config", config_module)
+        monkeypatch.setitem(sys.modules, "vllm.config.cache", cache_module)
+
+        runtime = apply_kv_cache_type(
+            "fp8",
+            backend="vllm",
+            compute_capability=(9, 0),
+        )
+
+        assert runtime.vllm_cache_dtype == "fp8"
+
+    def test_vllm_unreadable_dtype_list(self, monkeypatch):
+        monkeypatch.setattr(
+            "soup_cli.utils.vllm.is_vllm_available",
+            lambda: True,
+        )
+        import sys
+        from types import ModuleType
+
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        vllm_module = ModuleType("vllm")
+        config_module = ModuleType("vllm.config")
+
+        monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+        monkeypatch.setitem(sys.modules, "vllm.config", config_module)
+        monkeypatch.delitem(sys.modules, "vllm.config.cache", raising=False)
+
+        with pytest.raises(RuntimeError, match="Cannot verify vLLM"):
+            apply_kv_cache_type("bf16", backend="vllm")
 
     def test_sglang_backend_deferred(self):
         from soup_cli.utils.kv_cache import apply_kv_cache_type
@@ -457,7 +579,9 @@ class TestApplyKvCacheType:
 
         with pytest.raises((TypeError, ValueError)):
             apply_kv_cache_type(
-                "fp8", backend="transformers", compute_capability=(9,)  # type: ignore[arg-type]
+                "fp8",
+                backend="transformers",
+                compute_capability=(9,),  # type: ignore[arg-type]
             )
 
     def test_runtime_frozen(self):
@@ -475,6 +599,30 @@ class TestApplyKvCacheType:
         with pytest.raises(TypeError):
             rt.generate_kwargs["x"] = 1  # type: ignore[index]
 
+    def test_vllm_unsupported_dtype_reports_version(self, monkeypatch):
+        import sys
+        from types import ModuleType
+        from typing import Literal
+
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        vllm_module = ModuleType("vllm")
+        config_module = ModuleType("vllm.config")
+        cache_module = ModuleType("vllm.config.cache")
+
+        cache_module.CacheDType = Literal["auto", "bfloat16"]
+
+        monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+        monkeypatch.setitem(sys.modules, "vllm.config", config_module)
+        monkeypatch.setitem(sys.modules, "vllm.config.cache", cache_module)
+        monkeypatch.setattr(
+            "soup_cli.utils.vllm.get_vllm_version",
+            lambda: "0.33.0",
+        )
+
+        with pytest.raises(RuntimeError, match="Installed vLLM 0.33.0"):
+            apply_kv_cache_type("f16", backend="vllm")
+
     def test_quantized_cache_backend_available(self):
         from soup_cli.utils.kv_cache import quantized_cache_backend_available
 
@@ -484,14 +632,27 @@ class TestApplyKvCacheType:
         got = quantized_cache_backend_available()
         assert got is None or isinstance(got, str)
 
+    def test_vllm_not_installed(self, monkeypatch):
+        from soup_cli.utils.kv_cache import apply_kv_cache_type
+
+        monkeypatch.setattr(
+            "soup_cli.utils.vllm.is_vllm_available",
+            lambda: False,
+        )
+
+        with pytest.raises(RuntimeError, match="pip install"):
+            apply_kv_cache_type("bf16", backend="vllm")
+
 
 class TestPlainKvKwargs:
     def test_deep_converts_nested_mappingproxy(self):
         from soup_cli.commands.serve import _plain_kv_kwargs
 
         nested = MappingProxyType(
-            {"cache_implementation": "quantized",
-             "cache_config": MappingProxyType({"backend": "hqq", "nbits": 8})}
+            {
+                "cache_implementation": "quantized",
+                "cache_config": MappingProxyType({"backend": "hqq", "nbits": 8}),
+            }
         )
         out = _plain_kv_kwargs(nested)
         assert isinstance(out, dict)
@@ -554,8 +715,9 @@ class TestServeKvCacheCli:
         )
         assert result.exit_code == 2
 
-    def test_vllm_backend_deferred_exit_2(self, tmp_path, monkeypatch):
+    def test_vllm_missing_install_hint_exit_1(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("soup_cli.utils.vllm.is_vllm_available", lambda: False)
         model = tmp_path / "model"
         model.mkdir()
         result = runner.invoke(
@@ -570,7 +732,10 @@ class TestServeKvCacheCli:
                 "q8_0",
             ],
         )
-        assert result.exit_code == 2
+        assert result.exit_code == 1
+        assert "requires vLLM" in result.output
+        assert "pip install" in result.output
+        assert "vllm" in result.output
 
 
 # =====================================================================
@@ -580,11 +745,7 @@ class TestServeKvCacheCli:
 
 class TestOnnxQaLog:
     def test_qa_log_exists(self):
-        log = (
-            Path(__file__).resolve().parent
-            / "qa"
-            / "v07114_qa.md"
-        )
+        log = Path(__file__).resolve().parent / "qa" / "v07114_qa.md"
         assert log.exists(), "v07114 QA log missing"
         body = log.read_text(encoding="utf-8")
         assert "#71" in body

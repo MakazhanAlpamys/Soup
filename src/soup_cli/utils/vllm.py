@@ -273,6 +273,7 @@ def create_vllm_engine(
     quantization: Optional[str] = None,
     sleep_mode: bool = False,
     trust_remote_code: bool = False,
+    vllm_cache_dtype: Optional[str] = None,
 ):
     """Create a vLLM AsyncLLMEngine for serving.
 
@@ -292,11 +293,20 @@ def create_vllm_engine(
             False — the caller (``serve``) resolves this through the shared
             v0.36.0 ``resolve_trust_remote_code`` gate (flag + warning panel)
             so an untrusted HF repo never runs code silently.
+        vllm_cache_dtype: KV-cache dtype accepted by the installed vLLM
+            version (for example, ``bfloat16``, ``float16``, or ``fp8``).
+            None uses vLLM's default.
 
     Returns:
         (engine, engine_model_name) tuple.
     """
     from vllm import AsyncEngineArgs, AsyncLLMEngine
+
+    kv_cache_kwargs = (
+        {"kv_cache_dtype": vllm_cache_dtype}
+        if vllm_cache_dtype is not None
+        else {}
+    )
 
     # For LoRA adapters, load the base model and apply LoRA at request time
     if is_adapter and base_model:
@@ -309,6 +319,7 @@ def create_vllm_engine(
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
+            **kv_cache_kwargs,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len
@@ -321,6 +332,7 @@ def create_vllm_engine(
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             enable_prefix_caching=enable_prefix_caching,
+            **kv_cache_kwargs,
         )
         if max_model_len is not None:
             engine_args.max_model_len = max_model_len
@@ -339,6 +351,7 @@ def create_vllm_engine(
     # Speculative decoding — use a smaller draft model for faster inference
     if speculative_model:
         import re
+
         # SSRF protection: block URL-based model paths
         if re.match(r'^https?://', speculative_model):
             raise ValueError(
