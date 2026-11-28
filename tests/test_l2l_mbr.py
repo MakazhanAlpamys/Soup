@@ -249,13 +249,23 @@ def test_l2l_trainer_dispatches_mbr_settings_to_the_step(
 def window(tmp_path, request):
     from soup_cli.utils import l2l_rng
     from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
+    from soup_cli.utils.layer_stream_runtime import decoder_owner
 
     options = getattr(request, "param", {})
     model, runtime = _build(tmp_path, **LEVERS["pool-all-levers"], **options)
     try:
+        assert not model.peft_config["default"].target_parameters
+        layer = decoder_owner(model).layers[1].inner
         dropout = options.get("dropout", 0.0)
         if dropout:
             model.train()
+            assert layer.self_attn.q_b_proj.lora_dropout["default"].p == dropout
+        if options.get("shared_adapters"):
+            for name in ("gate_proj", "up_proj", "down_proj"):
+                projection = getattr(layer.mlp.shared_experts, name)
+                assert "default" in projection.lora_A
+                if dropout:
+                    assert projection.lora_dropout["default"].p == dropout
         lengths = (5,) * 5 if dropout else (3, 6, 4, 5, 3)
         batches = [
             ids[:, :length].contiguous()

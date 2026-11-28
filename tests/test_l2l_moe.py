@@ -648,7 +648,12 @@ def _build(
     lora = _lora()
     lora.lora_dropout = dropout
     if shared_adapters:
-        lora.target_modules = set(lora.target_modules) | {"gate_proj", "up_proj", "down_proj"}
+        # Bare projection names also match fused routed-expert parameters in PEFT.
+        lora.target_modules = set(lora.target_modules) | {
+            "shared_experts.gate_proj",
+            "shared_experts.up_proj",
+            "shared_experts.down_proj",
+        }
     model, runtime = build_streamed_model(
         model_id=weights, shard_dir=str(tmp_path / "shards"), index=index,
         lora_config=lora, device="cpu", dtype=dtype, quant=quant, buffers=2, pin=False, seed=3,
