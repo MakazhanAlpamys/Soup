@@ -684,7 +684,7 @@ class TestPartEVocabExpansion:
         with pytest.raises(ValueError) as excinfo:
             load_config_from_string(yaml_str)
         assert str(excinfo.value) == (
-            "data -> remove_unused_columns: Value error, data.remove_unused_columns: "
+            "Value error, data.remove_unused_columns: "
             "true never had an effect (no trainer reads it; the trainers that set it "
             "pass false). Delete the line. "
             f"Refused as of Soup v{DEPRECATED_VALUE_REJECTION_VERSION}."

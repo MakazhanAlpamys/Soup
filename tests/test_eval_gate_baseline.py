@@ -110,9 +110,7 @@ def test_previous_baseline_is_refused_from_soup_yaml():
 
     with pytest.raises(ValueError) as exc_info:
         load_config_from_string(_SOUP_YAML.format(baseline="previous"))
-    assert str(exc_info.value) == (
-        f"training -> eval_gate -> baseline: Value error, {_PREVIOUS_REFUSED}"
-    )
+    assert str(exc_info.value) == f"Value error, {_PREVIOUS_REFUSED}"
 
 
 @pytest.mark.parametrize(
