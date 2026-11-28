@@ -457,6 +457,7 @@ class _LayerSelectCallback:
         if self._window_skipped:
             return None
         if not self._window:
+            # A pending window can still collect gradients after a checkpoint.
             return {}
 
         import torch
@@ -476,11 +477,16 @@ class _LayerSelectCallback:
             or selection.layers != selection.history[-1][1]
         ):
             raise ValueError("the saved progressive mask differs from the model or last freeze")
+        windows = record["norms"]
+        # Older checkpoints may have counted empty windows as gradient observations.
         selection.norms = [
             (entry["step"], {int(idx): norm for idx, norm in entry["layers"].items()})
-            for entry in record["norms"]
+            for entry in windows
+            if entry["layers"]
         ]
-        selection.skipped_windows = record["skipped_windows"]
+        selection.skipped_windows = sorted(
+            record["skipped_windows"] + [entry["step"] for entry in windows if not entry["layers"]]
+        )
         if self.policy.freeze_smoothing:
             for _, window in selection.norms:
                 self._smooth(window)
@@ -503,7 +509,7 @@ class _LayerSelectCallback:
             window = self._window_norms()
             self._window.clear()
             self._window_skipped = False
-            if window is None:
+            if not window:
                 self.selection.skipped_windows.append(step)
             else:
                 self.selection.norms.append((step, window))

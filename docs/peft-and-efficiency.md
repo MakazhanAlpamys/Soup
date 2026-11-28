@@ -849,10 +849,10 @@ For the progressive rule, `freeze_smoothing` sets an optional exponential moving
 decay. The smoothed comparison starts at the third valid window. Set `freeze_deadline`
 and `min_freeze_below` together to enforce a minimum cutoff at that step. The minimum
 can exceed the default cap. If you set an explicit cap, it must cover the minimum.
-Windows with non-finite norms or skipped optimizer updates are recorded in
-`skipped_windows`. Completed valid windows are written to `norms` in `lora_layers.json`,
-including when the cutoff never changes. Frozen adapters retain their weights and drop
-their optimizer state.
+Windows without adapter gradient observations, with non-finite norms, or with skipped
+optimizer updates are recorded in `skipped_windows`. Completed valid windows are written
+to `norms` in `lora_layers.json`, including when the cutoff never changes. Frozen adapters
+retain their weights and drop their optimizer state.
 
 The policy needs `lora.r > 0`. Use one of `lora_layers`, `freeze_layers`,
 `freeze_ratio`, `unfrozen_parameters`, or full-fine-tuning `lisa_enabled` at a time.
