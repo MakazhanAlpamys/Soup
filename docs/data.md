@@ -1320,6 +1320,13 @@ output: an existing file stays unchanged, and no new file is created.
 `--score-only` requests both perplexity and coherence scores; it does not fall
 back to coherence-only output. `--coherence` alone works without these packages.
 
+`soup data filter --field NAME` scores only that field. A `NAME` that no row has
+exits 1 before anything is scored or written. A row that lacks `NAME`, or holds
+`null` there, is not scored on its other fields: the command warns with the
+count, leaves the row out of the filtered output and counts it in the summary
+(`3 -> 1 rows (-2 removed; 1 has no 'output')`), and `--score-only` writes it
+with `null` scores. The averages cover the scored rows only.
+
 `soup data validate` exits with code `0` when at least one row is usable and the
 optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
