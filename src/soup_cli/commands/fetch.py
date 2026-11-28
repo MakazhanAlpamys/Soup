@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.fetch_examples import (
     fetch_examples_dir,
@@ -17,7 +18,7 @@ from soup_cli.utils.fetch_examples import (
     list_entries,
 )
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal, terminal_text
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 console = Console()
 
@@ -50,7 +51,7 @@ def fetch(
         except ValueError as exc:
             # The message quotes the namespace with repr(), which already shows
             # control characters as escapes.
-            console.print(f"[red]{escape(str(exc))}[/]", emoji=False)
+            console.print(Text(strip_control(exc), style="red"))
             raise typer.Exit(code=2) from exc
         if not entries:
             console.print(f"[yellow]No entries in namespace {namespace!r}.[/]")
@@ -70,8 +71,7 @@ def fetch(
     entry = get_entry(name)
     if entry is None or entry.namespace != namespace:
         console.print(
-            f"[red]Unknown {for_terminal(namespace)} entry: {for_terminal(name)}.[/]",
-            emoji=False,
+            Text(f"Unknown {strip_control(namespace)} entry: {strip_control(name)}.", style="red")
         )
         raise typer.Exit(code=2)
     bundled_root = os.path.realpath(fetch_examples_dir())
@@ -90,9 +90,10 @@ def fetch(
     target_path = output or entry.filename
     if not is_under_cwd(target_path):
         console.print(
-            f"[red]--output must stay under cwd: "
-            f"{for_terminal(os.path.basename(target_path))}.[/]",
-            emoji=False,
+            Text(
+                f"--output must stay under cwd: {strip_control(os.path.basename(target_path))}.",
+                style="red",
+            )
         )
         raise typer.Exit(code=2)
     real_target = os.path.realpath(target_path)
@@ -108,16 +109,19 @@ def fetch(
         link_stat = None
     except OSError as exc:
         console.print(
-            f"[red]Cannot stat target {for_terminal(os.path.basename(real_target))}: "
-            f"{escape(type(exc).__name__)}[/]",
-            emoji=False,
+            Text(
+                f"Cannot stat target {strip_control(os.path.basename(real_target))}: "
+                f"{type(exc).__name__}",
+                style="red",
+            )
         )
         raise typer.Exit(code=1) from exc
     if link_stat is not None and stat.S_ISLNK(link_stat.st_mode):
         console.print(
-            f"[red]Refusing to overwrite symlink at "
-            f"{for_terminal(os.path.basename(real_target))}[/]",
-            emoji=False,
+            Text(
+                f"Refusing to overwrite symlink at {strip_control(os.path.basename(real_target))}",
+                style="red",
+            )
         )
         raise typer.Exit(code=1)
     if link_stat is not None and stat.S_ISDIR(link_stat.st_mode):
@@ -127,9 +131,11 @@ def fetch(
         raise typer.Exit(code=1)
     if link_stat is not None and not force:
         console.print(
-            f"[red]{for_terminal(os.path.basename(real_target))} already exists. "
-            "Use --force to overwrite.[/]",
-            emoji=False,
+            Text(
+                f"{strip_control(os.path.basename(real_target))} already exists. "
+                "Use --force to overwrite.",
+                style="red",
+            )
         )
         raise typer.Exit(code=1)
     parent = os.path.dirname(real_target)
@@ -141,7 +147,7 @@ def fetch(
         console.print(terminal_text(f"Cannot write --output {target_path}: {exc}", "red"))
         raise typer.Exit(code=1) from exc
     console.print(
-        f"[green]Wrote[/] {for_terminal(real_target)}\n"
-        f"[dim]{escape(entry.description)}[/]",
-        emoji=False,
+        Text.assemble(
+            ("Wrote", "green"), " ", strip_control(real_target), "\n", (entry.description, "dim")
+        )
     )
