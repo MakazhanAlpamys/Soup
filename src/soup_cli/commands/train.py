@@ -1282,6 +1282,25 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     return type(cfg)(**payload)
 
 
+@contextlib.contextmanager
+def _resident_nf4_dequantizer(cfg, device, *, announce=False):
+    if (
+        cfg.backend != "transformers"
+        or device != "cuda"
+        or cfg.training.quantization != "4bit"
+        or getattr(cfg.training, "stream_layers", False)
+    ):
+        yield
+        return
+
+    from soup_cli.utils.nf4_triton import ENV, patch_from_env
+
+    with patch_from_env(device=device) as active:
+        if active and announce:
+            console.print(f"[green]NF4 dequantization:[/] Triton kernel ({ENV}=1)")
+        yield
+
+
 def _record_run_failure(tracker: Any, run_id: str, exc: BaseException) -> None:
     """``tracker.fail_run`` that can never replace the original error with its own.
 
@@ -2996,7 +3015,9 @@ def train(
             binding_supported = mlx_binding_reason is None
         base_identity = _base_identity_for_run(run_base, binding_supported, fit_identity)
         synchronize_base_revision(base_identity, cpu=device == "cpu")
-        with base_revision_scope(base_identity):
+        with base_revision_scope(base_identity), _resident_nf4_dequantizer(
+            cfg, device, announce=True,
+        ):
             trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
             trainer_wrapper.setup(dataset)
         confirm_distributed_base_revision(
@@ -3121,6 +3142,7 @@ def train(
             energy_ctx,
             base_revision_scope(base_identity),
             capture_manual_stop() as manual_stop,
+            _resident_nf4_dequantizer(cfg, device),
         ):
             if profile_run and profiler is not None:
                 from soup_cli.utils.profiling import attach_profile_callback
