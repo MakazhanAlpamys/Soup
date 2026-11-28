@@ -578,6 +578,9 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         self.model = None
         self.tokenizer = None
         self.trainer = None
+        # Layers below this index are frozen by the freeze plan; read by the
+        # frozen-prefix cache. None until a plan resolves.
+        self._frozen_prefix_cutoff: Optional[int] = None
         self._is_raft = False  # set in setup() when data.format == 'raft'
         self._quest_metadata: Optional[dict[str, Any]] = None
         self._quest_base_identity_before: Optional[str] = None
@@ -1962,6 +1965,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             if plan is not None:
                 cutoff, total_layers = plan
                 lora_freeze_plan = plan
+                self._frozen_prefix_cutoff = cutoff
                 # #1432: a zero cutoff freezes nothing, but peft still reads
                 # any layers_to_transform list as "restrict to these numbered
                 # layers only", which silently drops a target outside a
@@ -2719,6 +2723,49 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # training.packed_lora: the hook comes off and the pinned memory goes back.
             train_ctx.callback(self._close_packed_lora)
+            use_frozen_prefix_cache = getattr(tcfg, "frozen_prefix_cache", False)
+            if use_frozen_prefix_cache:
+                from soup_cli.utils.frozen_prefix_forward import frozen_prefix_session
+
+                # The cache is keyed per batch: with a larger batch the data order
+                # must be fixed, or no batch ever repeats and the cache only writes.
+                # Config load covers a sorted curriculum; pre-tokenised data and
+                # other paths can still hand the Trainer a random sampler.
+                if (
+                    self.trainer.args.per_device_train_batch_size > 1
+                    and getattr(self.trainer.args, "train_sampling_strategy", None)
+                    != "sequential"
+                ):
+                    raise ValueError(
+                        "training.frozen_prefix_cache with a batch size above 1 needs a "
+                        "fixed data order, but this run reads its rows in random order "
+                        "(a pre-tokenized dataset does this even with a curriculum), so "
+                        "no batch would repeat. Set training.batch_size: 1."
+                    )
+                try:
+                    train_rows = len(self.trainer.train_dataset)
+                except TypeError:
+                    train_rows = None
+                prefix_runner = train_ctx.enter_context(
+                    frozen_prefix_session(
+                        self.trainer.model,
+                        cutoff=self._frozen_prefix_cutoff or 0,
+                        output_dir=self._output_dir,
+                        rows=train_rows,
+                        max_length=self.config.data.max_length,
+                        console=console,
+                        model_revision=str(self.config.base),
+                        n_gpu=self.trainer.args.n_gpu,
+                        quantized=bool(
+                            getattr(self.trainer.model, "is_loaded_in_8bit", False)
+                            or getattr(self.trainer.model, "is_loaded_in_4bit", False)
+                        ),
+                    )
+                )
+                console.print(
+                    "[green]Frozen-prefix cache enabled:[/] "
+                    f"{self._frozen_prefix_cutoff} frozen layers"
+                )
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped
@@ -2749,6 +2796,18 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                 keep_trainable_dtype_on_resume(self.trainer)
             with manual_save_context(self.trainer):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            if use_frozen_prefix_cache:
+                lookups = prefix_runner.hits + prefix_runner.misses
+                console.print(
+                    "[green]Frozen-prefix cache:[/] "
+                    f"hits={prefix_runner.hits}, misses={prefix_runner.misses}, "
+                    f"hit_rate={100 * prefix_runner.hits / lookups if lookups else 0:.1f}%"
+                )
+                if prefix_runner.cache.stop_reason is not None:
+                    console.print(
+                        "[yellow]The cache stopped writing during this run: "
+                        f"{for_terminal(prefix_runner.cache.stop_reason)}.[/]"
+                    )
         duration = time.time() - start
         self._report_rewind()
 

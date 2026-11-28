@@ -3220,6 +3220,16 @@ class TrainingConfig(BaseModel):
             )
         return v
 
+    @field_validator("frozen_prefix_cache", mode="before")
+    @classmethod
+    def _validate_frozen_prefix_cache_is_bool(cls, v):
+        """A boolean switch: an int or a string is a typo, not a setting."""
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"training.frozen_prefix_cache must be bool, got {type(v).__name__}"
+            )
+        return v
+
     @field_validator("distill_checkpoint", mode="before")
     @classmethod
     def _validate_distill_checkpoint(cls, v):
@@ -3932,6 +3942,18 @@ class TrainingConfig(BaseModel):
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
             "Applied by tasks sft and tts on the text path with backend "
             "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
+        ),
+    )
+    frozen_prefix_cache: bool = Field(
+        default=False,
+        description=(
+            "Cache the output of the frozen bottom layers on disk and reuse it in "
+            "later epochs instead of running those layers again. Needs "
+            "training.freeze_layers or training.freeze_ratio with LoRA on the layers "
+            "above them, and task sft + backend transformers on a resident text "
+            "model (no layer streaming); Mistral and OLMoE decoders only. The "
+            "entries are written under the output directory and take disk space "
+            "in proportion to the training set."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -10360,6 +10382,75 @@ class SoupConfig(BaseModel):
                 "the vision and audio setup paths load through transformers and "
                 f"do not use Unsloth; got modality={self.modality!r}. "
                 "Use backend: transformers for multimodal SFT."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_frozen_prefix_cache(self) -> "SoupConfig":
+        """``training.frozen_prefix_cache`` runs only where its frozen prefix is real.
+
+        The cache holds the output of the bottom layers, so it needs a freeze
+        plan to say where they end, a LoRA adapter (not full fine-tuning) to keep
+        them frozen, and a forward pass that nothing else rewrites. The backend,
+        modality and layer-streaming gates are not repeated here:
+        :meth:`_validate_freeze_is_applied` refuses a freeze plan on those paths
+        first, and that refusal is the one a user sees.
+        """
+        tcfg = self.training
+        if not tcfg.frozen_prefix_cache:
+            return self
+        if self.task != "sft":
+            raise ValueError(
+                "training.frozen_prefix_cache requires task='sft'; "
+                f"got task={self.task!r}."
+            )
+        if tcfg.freeze_layers is None and tcfg.freeze_ratio is None:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.freeze_layers or "
+                "training.freeze_ratio: the cache holds the output of the frozen "
+                "bottom layers, so it needs to know where they end."
+            )
+        if tcfg.lora.r < 1:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.lora.r >= 1: full "
+                "fine-tuning (r=0) trains the embeddings and every layer, so no "
+                "prefix stays frozen."
+            )
+        if tcfg.packing or tcfg.multipack:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.packing or "
+                "training.multipack: a packed batch differs every epoch."
+            )
+        if tcfg.gradient_checkpointing is not False:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.gradient_checkpointing=false."
+            )
+        if tcfg.neftune_alpha is not None:
+            raise ValueError(
+                "training.frozen_prefix_cache cannot be combined with "
+                "training.neftune_alpha: NEFTune adds fresh noise to the embeddings "
+                "on every step, so the cache would keep the first epoch's noise for "
+                "all later epochs. Remove one of them."
+            )
+        if tcfg.batch_size != 1 and not (
+            tcfg.curriculum and tcfg.curriculum_metric == "length"
+        ):
+            raise ValueError(
+                "training.frozen_prefix_cache with training.batch_size above 1 (or "
+                "'auto') needs a fixed data order: the cache is keyed per batch, and "
+                "a shuffled order makes every batch new, so it would only write. Set "
+                "training.batch_size: 1, or turn on training.curriculum with "
+                "training.curriculum_metric: length, which reads the rows in a fixed "
+                "order."
+            )
+        if tcfg.lora.use_vera:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.lora.use_vera."
+            )
+        if tcfg.lora.target_parameters is not None:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support "
+                "training.lora.target_parameters."
             )
         return self
 
