@@ -620,18 +620,38 @@ def _micro_batches(count: int) -> List[Any]:
     ]
 
 
-def _build(tmp_path: Any, **levers: Any) -> Any:
+def _build(
+    tmp_path: Any, *, dtype: str = "float32", quant: str = "none",
+    dropout: float = 0.0, shared_adapters: bool = False, **levers: Any,
+) -> Any:
     pytest.importorskip("peft")
     import torch
 
-    from soup_cli.utils.layer_stream_runtime import build_streamed_model
+    from soup_cli.utils.layer_stream_runtime import (
+        build_meta_skeleton,
+        build_streamed_model,
+        quantised_layer_suffixes,
+    )
     from tests.test_expert_stream import _lora, _shard, _tiny_deepseek_v3
 
     weights, _ = _tiny_deepseek_v3(tmp_path)
-    index = _shard(tmp_path, weights, expert_layout="per_expert")
+    shard_options = {}
+    if quant == "nf4":
+        pytest.importorskip("bitsandbytes")
+        probe = build_meta_skeleton(weights, dtype=dtype, quant=quant)
+        shard_options = {
+            "quant": quant, "quant_suffixes": quantised_layer_suffixes(probe),
+            "quant_device": "cpu",
+        }
+        del probe
+    index = _shard(tmp_path, weights, dtype=dtype, expert_layout="per_expert", **shard_options)
+    lora = _lora()
+    lora.lora_dropout = dropout
+    if shared_adapters:
+        lora.target_modules = set(lora.target_modules) | {"gate_proj", "up_proj", "down_proj"}
     model, runtime = build_streamed_model(
         model_id=weights, shard_dir=str(tmp_path / "shards"), index=index,
-        lora_config=_lora(), device="cpu", dtype="float32", buffers=2, pin=False, seed=3,
+        lora_config=lora, device="cpu", dtype=dtype, quant=quant, buffers=2, pin=False, seed=3,
         **levers,
     )
     with torch.no_grad():  # integer-arithmetic adapter values: every lora_B is non-zero

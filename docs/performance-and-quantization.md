@@ -1234,6 +1234,14 @@ results. The CPU parity test checks exact losses and LoRA gradients in fp32 and 
 autocast over five micro-batches, using group size 1 with both switches off and group size 3
 with each switch enabled separately.
 
+For CPU validation, callers of `L2LStep.run` can opt in with `mbr_decoupled_subwindow=True`.
+This backward mode leases each routed expert once per MBR group and preserves per-micro-batch
+expert math shapes. `mbr_recompute_subwindow` bounds the number of live attention, router and
+shared-expert graphs and defaults to one micro-batch. Detached activations are held for one
+expert group. The mode requires the native pooled expert path and refuses batch-invariant GEMM,
+grouped expert compute, fused expert nodes, split or ordered backward, and deferred decoder
+forward hooks. This experimental mode is exposed through the step API pending GPU review.
+
 - **Scope.** Llama and Mistral models, and DeepSeek-V3-family MoE models streamed with `stream_expert_layout: per_expert`, on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model with the fused expert layout is refused at launch, before any weight is sharded, naming `stream_expert_layout`. On a MoE model every routed expert is read through one bounded buffer pool (the pre-flight charges its arena in place of the single in-flight expert), the backward leases each hit expert again, and a routing guard stops a step whose recompute routed tokens differently from its forward. Only the stateless SiLU activation can be recomputed. `l2l_auto_k` stays refused on a MoE model: its host-RAM window planner is not wired into the launch. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.

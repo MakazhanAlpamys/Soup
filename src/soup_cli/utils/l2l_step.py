@@ -450,7 +450,9 @@ def mbr_deferred_forward_hook(hook: Callable[..., Any]) -> Callable[..., Any]:
     return hook
 
 
-def _validate_route_preserving_mbr(layers: Sequence[Any], causal: Any) -> None:
+def _validate_route_preserving_mbr(
+    layers: Sequence[Any], causal: Any, *, decoupled_backward: bool = False,
+) -> None:
     """Refuse unsupported models before the first streamed layer is loaded."""
     import torch.nn.modules.module as module_hooks
 
@@ -503,6 +505,10 @@ def _validate_route_preserving_mbr(layers: Sequence[Any], causal: Any) -> None:
                         f"route-preserving MBR layer {index} requires explicitly marked "
                         "deferred decoder forward hooks without always_call"
                     )
+                if decoupled_backward and hooks:
+                    raise ValueError(
+                        "mbr_decoupled_subwindow does not support deferred decoder forward hooks"
+                    )
         if not experts.two_reads:
             raise ValueError(f"route-preserving MBR layer {index} requires two_read_experts=True")
         if not experts.grouped_expert_routes:
@@ -511,6 +517,8 @@ def _validate_route_preserving_mbr(layers: Sequence[Any], causal: Any) -> None:
             )
         if experts.pool is None:
             raise ValueError(f"route-preserving MBR layer {index} requires an expert buffer pool")
+        if decoupled_backward:
+            experts.validate_decoupled_backward()
         if any(
             getattr(experts, name, None)
             for name in (
@@ -533,6 +541,7 @@ def _route_preserving_deepseek_forward(
     capture: List[Dict[str, Any]],
     hidden_states: Any,
     *args: Any,
+    skip_shared_experts: bool = False,
     **kwargs: Any,
 ) -> Any:
     """DeepSeek-V3 decoder forward with the routed FFN deferred to its window."""
@@ -612,7 +621,9 @@ def _route_preserving_deepseek_forward(
     if flat_input.shape[0] != topk_index.shape[0]:
         raise RuntimeError("DeepSeek-V3 router token count differs from its MoE input")
     shared_output = (
-        moe.shared_experts(moe_input) if getattr(moe, "shared_experts", None) is not None else None
+        moe.shared_experts(moe_input)
+        if not skip_shared_experts and getattr(moe, "shared_experts", None) is not None
+        else None
     )
     capture.append(
         {
@@ -635,14 +646,18 @@ def _route_preserving_deepseek_forward(
 
 
 @contextmanager
-def _patched_route_preserving_forward(layer: Any, capture: List[Dict[str, Any]]) -> Iterator[None]:
+def _patched_route_preserving_forward(
+    layer: Any, capture: List[Dict[str, Any]], *, skip_shared_experts: bool = False,
+) -> Iterator[None]:
     """Temporarily split a pinned DeepSeek-V3 layer around its routed expert call."""
     inner = getattr(layer, "inner", layer)
     had_instance_forward = "forward" in inner.__dict__
     old_instance_forward = inner.__dict__.get("forward")
 
     def forward(module: Any, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
-        return _route_preserving_deepseek_forward(module, capture, hidden_states, *args, **kwargs)
+        return _route_preserving_deepseek_forward(
+            module, capture, hidden_states, *args, skip_shared_experts=skip_shared_experts, **kwargs
+        )
 
     inner.forward = MethodType(forward, inner)
     try:
@@ -828,6 +843,40 @@ def _split_grad(leaf: Any, sizes: List[int]) -> List[Any]:
     if leaf is None or leaf.grad is None:
         return [None] * len(sizes)
     return list(leaf.grad.split(sizes, dim=0))
+
+
+def _check_mbr_routes(
+    before_ids: Any, route_ids: Any, layer_idx: int, mb: int,
+    routing_budget: Optional[Tuple[int, int]],
+) -> None:
+    import torch
+
+    current_bytes = route_ids.numel() * route_ids.element_size()
+    if routing_budget is not None and current_bytes > routing_budget[1]:
+        raise ValueError(
+            "route-preserving MBR route comparison exceeds the resolved routing comparison budget"
+        )
+    current_ids = route_ids.detach().to("cpu")
+    if before_ids.shape != current_ids.shape:
+        raise RuntimeError(
+            f"route-preserving MBR route shape changed at layer {layer_idx}, "
+            f"micro-batch {mb}: {tuple(before_ids.shape)} -> {tuple(current_ids.shape)}"
+        )
+    if not torch.equal(before_ids, current_ids):
+        changed_slots = int((before_ids != current_ids).sum().item())
+        raise RuntimeError(
+            f"route-preserving MBR recompute changed {changed_slots} route "
+            f"slots at layer {layer_idx}, micro-batch {mb}"
+        )
+
+
+def _mbr_gate_weight_error(expected: List[Any], recomputed: List[Any]) -> Tuple[float, float]:
+    import torch
+
+    expected_flat = torch.cat(expected)
+    delta = torch.cat(recomputed) - expected_flat
+    norm = torch.linalg.vector_norm(expected_flat).clamp_min(1e-30)
+    return float((torch.linalg.vector_norm(delta) / norm).item()), float(delta.abs().max().item())
 
 
 class L2LStep:
@@ -1024,6 +1073,139 @@ class L2LStep:
             },
         )
 
+    def _decoupled_mbr_layer_backward(
+        self, idx: int, layer: Any, experts: Any, store: Any, states: Optional[Sequence[Any]],
+        calls: Sequence[LayerCall], grads: List[Any], group_size: int, subwindow_size: int,
+        expected_routes: Sequence[Tuple[Any, Any]], replay: Any,
+        routing_budget: Optional[Tuple[int, int]], collect_phase_stats: bool,
+    ) -> None:
+        """Replay expert inputs without a graph, then rebuild the decoder in subwindows."""
+        import torch
+
+        device_type = grads[0].device.type
+        autocast_kwargs = {
+            "enabled": torch.is_autocast_enabled(device_type),
+            "dtype": torch.get_autocast_dtype(device_type),
+            "cache_enabled": False,
+        }
+        capture: List[Dict[str, Any]] = []
+        inner = getattr(layer, "inner", layer)
+        expected_weights, replayed_weights = [], []
+
+        def capture_batch(mb: int, inputs: Any) -> Tuple[Any, Dict[str, Any]]:
+            state = states[mb][idx] if states is not None else None
+            output = self._layer(layer, inputs, state, calls[mb])
+            if len(capture) != 1:
+                raise RuntimeError(
+                    "route-preserving MBR expected one routed-expert call per micro-batch; "
+                    f"captured {len(capture)} for 1 micro-batch"
+                )
+            if layer._forward_hooks or inner._forward_hooks:
+                raise RuntimeError(
+                    "route-preserving MBR does not support adding decoder forward hooks "
+                    "during a grouped layer call"
+                )
+            row = capture.pop()
+            _check_mbr_routes(expected_routes[mb][0], row["route_ids"], idx, mb, routing_budget)
+            return output, row
+
+        with replay if replay is not None else nullcontext():
+            for start in range(0, len(grads), group_size):
+                group = range(start, min(start + group_size, len(grads)))
+                group_cursor = replay.record.cursor if replay is not None else None
+                before_replay = self._expert_read_snapshot() if collect_phase_stats else None
+                # The activation store streams reads in order. Keep detached inputs for this
+                # group so the second pass doesn't queue a read behind later, unread chunks.
+                inputs, hidden, ids, weights = [], [], [], []
+                with (
+                    torch.no_grad(),
+                    _patched_route_preserving_forward(layer, capture, skip_shared_experts=True),
+                ):
+                    for mb in group:
+                        inputs.append(store.get(idx, mb))
+                        placeholder, row = capture_batch(mb, inputs[-1])
+                        hidden.append(row["expert_input"])
+                        ids.append(row["route_ids"])
+                        weights.append(row["route_weights"])
+                        if collect_phase_stats:
+                            expected_weights.append(expected_routes[mb][1].reshape(-1))
+                            replayed_weights.append(weights[-1].float().to("cpu").reshape(-1))
+                        del placeholder, row
+
+                sizes = [value.shape[0] for value in hidden]
+                tokens = sum(sizes)
+                before_experts = self._expert_read_snapshot() if collect_phase_stats else None
+                d_hidden, d_weights, expert_count = experts.backward_from_inputs(
+                    torch.cat(hidden), torch.cat(ids), torch.cat(weights),
+                    torch.cat([grads[mb].flatten(0, -2) for mb in group]).to(hidden[0].dtype),
+                    group_sizes=sizes, autocast_kwargs=autocast_kwargs,
+                )
+                del hidden, ids
+                after_experts = self._expert_read_snapshot() if collect_phase_stats else None
+                hidden_seeds, weight_seeds = d_hidden.split(sizes), d_weights.split(sizes)
+
+                if replay is not None:
+                    replay.record.cursor = group_cursor
+                for first in range(0, len(group), subwindow_size):
+                    positions = range(first, min(first + subwindow_size, len(group)))
+                    with (
+                        torch.enable_grad(),
+                        torch.autocast(device_type, **autocast_kwargs),
+                        _patched_route_preserving_forward(layer, capture),
+                    ):
+                        rebuilt = [
+                            capture_batch(group[pos], inputs[pos].requires_grad_(True))
+                            for pos in positions
+                        ]
+                    with torch.autocast(device_type, enabled=False):
+                        for pos, (output, row) in zip(positions, rebuilt):
+                            mb = group[pos]
+                            if not torch.equal(row["route_weights"], weights[pos]):
+                                raise RuntimeError(
+                                    "decoupled MBR gate weights changed between replays at "
+                                    f"layer {idx}, micro-batch {mb}"
+                                )
+                            roots, seeds = [output], [grads[mb]]
+                            for root, seed in (
+                                (row["expert_input"], hidden_seeds[pos]),
+                                (row["route_weights"], weight_seeds[pos]),
+                            ):
+                                if root.requires_grad:
+                                    roots.append(root)
+                                    seeds.append(seed)
+                            torch.autograd.backward(roots, grad_tensors=seeds)
+                            grads[mb] = inputs[pos].grad
+                            inputs[pos] = None
+                            del output, row, root, roots, seeds
+                    del rebuilt
+                del d_hidden, d_weights, hidden_seeds, weight_seeds
+
+                if collect_phase_stats:
+                    after_rebuild = self._expert_read_snapshot()
+                    self._record_expert_phase(
+                        idx, "recompute_forward", before_replay, before_experts,
+                        layer_calls=len(group), tokens=tokens,
+                    )
+                    self._record_expert_phase(
+                        idx, "recompute_forward", after_experts, after_rebuild,
+                        layer_calls=len(group), tokens=tokens,
+                    )
+                    self._record_expert_phase(
+                        idx, "backward_dX", before_experts, after_experts, layer_calls=1,
+                        tokens=tokens, extra={
+                            "grouped_expert_dispatch_calls": 1,
+                            "unique_experts_by_group": [expert_count],
+                            "unique_expert_count": expert_count,
+                        },
+                    )
+        if collect_phase_stats:
+            stats = self.expert_phase_stats["layers"][idx]
+            stats["route_id_mismatch_slots"] = 0
+            stats["route_id_slots"] = sum(ids.numel() for ids, _ in expected_routes)
+            stats["gate_weight_rel_l2"], stats["gate_weight_max_abs"] = _mbr_gate_weight_error(
+                expected_weights, replayed_weights
+            )
+
     def _expert_read_snapshot(self) -> Dict[int, Dict[str, Dict[str, int]]]:
         pool = getattr(self.runtime, "expert_pool", None)
         snapshot = getattr(pool, "phase_read_snapshot", None)
@@ -1129,6 +1311,8 @@ class L2LStep:
         collect_phase_stats: bool = False,
         mbr_split_backward: bool = False,
         mbr_ordered_backward: bool = False,
+        mbr_decoupled_subwindow: bool = False,
+        mbr_recompute_subwindow: Optional[int] = None,
     ) -> List[Any]:
         """``labels`` defaults to the input ids; pass them for SFT rows with ``-100``.
 
@@ -1152,6 +1336,10 @@ class L2LStep:
         recompute builds the micro-batches from the last to the first, so the engine
         (highest sequence number first) meets micro-batch 0's nodes first and adds every
         weight's contributions in micro-batch order. It excludes ``mbr_split_backward``.
+        ``mbr_decoupled_subwindow`` leases each routed expert once per group in backward and
+        limits attention, router and shared-expert recompute graphs to
+        ``mbr_recompute_subwindow`` micro-batches (default 1). It requires native pooled experts
+        and excludes the split and ordered modes and deferred decoder forward hooks.
         """
         if type(route_preserving_mbr) is not bool:
             raise ValueError("route_preserving_mbr must be a bool")
@@ -1167,13 +1355,34 @@ class L2LStep:
             raise ValueError("mbr_ordered_backward is only valid with route_preserving_mbr=True")
         if mbr_ordered_backward and mbr_split_backward:
             raise ValueError("mbr_ordered_backward and mbr_split_backward exclude each other")
+        if type(mbr_decoupled_subwindow) is not bool:
+            raise ValueError("mbr_decoupled_subwindow must be a bool")
+        if mbr_decoupled_subwindow:
+            if not route_preserving_mbr:
+                raise ValueError(
+                    "mbr_decoupled_subwindow is only valid with route_preserving_mbr=True"
+                )
+            if mbr_split_backward or mbr_ordered_backward:
+                raise ValueError(
+                    "mbr_decoupled_subwindow excludes mbr_split_backward and mbr_ordered_backward"
+                )
+            if mbr_recompute_subwindow is not None and (
+                type(mbr_recompute_subwindow) is not int or mbr_recompute_subwindow < 1
+            ):
+                raise ValueError("mbr_recompute_subwindow must be a positive integer or None")
+        elif mbr_recompute_subwindow is not None:
+            raise ValueError(
+                "mbr_recompute_subwindow is only valid with mbr_decoupled_subwindow=True"
+            )
         if routing_budget is not None and (
             len(routing_budget) != 2
             or any(type(value) is not int or value < 0 for value in routing_budget)
         ):
             raise ValueError("routing budget needs nonnegative record and comparison bytes")
         if route_preserving_mbr:
-            _validate_route_preserving_mbr(self.layers, self.causal)
+            _validate_route_preserving_mbr(
+                self.layers, self.causal, decoupled_backward=mbr_decoupled_subwindow
+            )
             if mbr_group_size is not None and (
                 isinstance(mbr_group_size, bool)
                 or not isinstance(mbr_group_size, int)
@@ -1207,6 +1416,8 @@ class L2LStep:
                         routing_budget=routing_budget,
                         mbr_split_backward=mbr_split_backward,
                         mbr_ordered_backward=mbr_ordered_backward,
+                        mbr_decoupled_subwindow=mbr_decoupled_subwindow,
+                        mbr_recompute_subwindow=mbr_recompute_subwindow or 1,
                     )
                 else:
                     guard = (
@@ -1249,6 +1460,8 @@ class L2LStep:
         routing_budget: Optional[Tuple[int, int]] = None,
         mbr_split_backward: bool = False,
         mbr_ordered_backward: bool = False,
+        mbr_decoupled_subwindow: bool = False,
+        mbr_recompute_subwindow: int = 1,
     ) -> List[Any]:
         import torch
 
@@ -1265,7 +1478,9 @@ class L2LStep:
         # The final optimizer window can contain fewer micro-batches than the configured
         # capacity; run that shorter window as one group instead of rejecting it.
         group_size = k if mbr_group_size is None else min(mbr_group_size, k)
-        preserve_expert_shapes = mbr_split_backward or mbr_ordered_backward
+        preserve_expert_shapes = (
+            mbr_split_backward or mbr_ordered_backward or mbr_decoupled_subwindow
+        )
         if k > store.k:
             raise ValueError(f"{k} micro-batches, but the activation store holds {store.k}")
         if calls is None:
@@ -1448,9 +1663,29 @@ class L2LStep:
             saved = layer.use_checkpoint
             layer.use_checkpoint = False
             try:
-                if route_preserving_mbr and _streamed_moe_experts(layer) is not None:
-                    inputs = [store.get(idx, mb).requires_grad_(True) for mb in range(k)]
+                experts = _streamed_moe_experts(layer) if route_preserving_mbr else None
+                if experts is not None:
                     pair = contexts.pop(idx, None)
+                    expected_routes = mbr_routes.pop(idx, None)
+                    if expected_routes is None or len(expected_routes) != k:
+                        raise RuntimeError(
+                            "route-preserving MBR has no complete forward route record "
+                            f"for layer {idx}"
+                        )
+                    mbr_route_record_bytes -= sum(
+                        int(ids.numel() * ids.element_size()) for ids, _ in expected_routes
+                    )
+                    if mbr_route_record_bytes < 0:
+                        raise RuntimeError("route-preserving MBR route-record accounting underflow")
+                    if mbr_decoupled_subwindow:
+                        self._decoupled_mbr_layer_backward(
+                            idx, layer, experts, store, states, calls, grads, group_size,
+                            mbr_recompute_subwindow, expected_routes, pair[1] if pair else None,
+                            routing_budget, collect_phase_stats,
+                        )
+                        del expected_routes
+                        continue
+                    inputs = [store.get(idx, mb).requires_grad_(True) for mb in range(k)]
                     before_recompute = (
                         self._expert_read_snapshot() if phase_stats is not None else None
                     )
@@ -1489,40 +1724,11 @@ class L2LStep:
                     after_recompute = (
                         self._expert_read_snapshot() if phase_stats is not None else None
                     )
-                    expected_routes = mbr_routes.pop(idx, None)
-                    if expected_routes is None or len(expected_routes) != k:
-                        raise RuntimeError(
-                            "route-preserving MBR has no complete forward route record "
-                            f"for layer {idx}"
-                        )
-                    mbr_route_record_bytes -= sum(
-                        int(ids.numel() * ids.element_size()) for ids, _ in expected_routes
-                    )
-                    if mbr_route_record_bytes < 0:
-                        raise RuntimeError("route-preserving MBR route-record accounting underflow")
                     expected_weights = []
                     recompute_weights = []
                     for mb, (route_ids, route_weights) in enumerate(layer_routes):
                         before_ids, before_weights = expected_routes[mb]
-                        current_bytes = int(route_ids.numel() * route_ids.element_size())
-                        if routing_budget is not None and current_bytes > routing_budget[1]:
-                            raise ValueError(
-                                "route-preserving MBR route comparison exceeds the resolved "
-                                "routing comparison budget"
-                            )
-                        current_ids = route_ids.detach().to("cpu")
-                        if before_ids.shape != current_ids.shape:
-                            raise RuntimeError(
-                                f"route-preserving MBR route shape changed at layer {idx}, "
-                                f"micro-batch {mb}: {tuple(before_ids.shape)} -> "
-                                f"{tuple(current_ids.shape)}"
-                            )
-                        if not torch.equal(before_ids, current_ids):
-                            changed_slots = int((before_ids != current_ids).sum().item())
-                            raise RuntimeError(
-                                f"route-preserving MBR recompute changed {changed_slots} route "
-                                f"slots at layer {idx}, micro-batch {mb}"
-                            )
+                        _check_mbr_routes(before_ids, route_ids, idx, mb, routing_budget)
                         if phase_stats is not None:
                             if before_weights is None:
                                 raise RuntimeError(
@@ -1533,14 +1739,9 @@ class L2LStep:
                                 route_weights.detach().float().to("cpu").reshape(-1)
                             )
                     if phase_stats is not None:
-                        expected_flat = torch.cat(expected_weights)
-                        recompute_flat = torch.cat(recompute_weights)
-                        weight_delta = recompute_flat - expected_flat
-                        weight_norm = torch.linalg.vector_norm(expected_flat).clamp_min(1e-30)
-                        gate_weight_rel_l2 = float(
-                            (torch.linalg.vector_norm(weight_delta) / weight_norm).item()
+                        gate_weight_rel_l2, gate_weight_max_abs = _mbr_gate_weight_error(
+                            expected_weights, recompute_weights
                         )
-                        gate_weight_max_abs = float(weight_delta.abs().max().item())
                         before_backward = self._expert_read_snapshot()
                     # One ordered backward over the layer preserves the running sum across
                     # group boundaries as well as within each group.

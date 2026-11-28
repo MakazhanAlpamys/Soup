@@ -1,5 +1,6 @@
 """Micro-batch routing under layer-to-layer execution."""
 
+import inspect
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -245,22 +246,32 @@ def test_l2l_trainer_dispatches_mbr_settings_to_the_step(
 
 
 @pytest.fixture
-def window(tmp_path):
+def window(tmp_path, request):
+    from soup_cli.utils import l2l_rng
     from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
 
-    model, runtime = _build(tmp_path, **LEVERS["pool-all-levers"])
+    options = getattr(request, "param", {})
+    model, runtime = _build(tmp_path, **LEVERS["pool-all-levers"], **options)
     try:
+        dropout = options.get("dropout", 0.0)
+        if dropout:
+            model.train()
+        lengths = (5,) * 5 if dropout else (3, 6, 4, 5, 3)
         batches = [
             ids[:, :length].contiguous()
-            for ids, length in zip(_micro_batches(5), (3, 6, 4, 5, 3))
+            for ids, length in zip(_micro_batches(5), lengths)
         ]
         calls = [capture_layer_call(model, ids) for ids in batches]
+        if dropout:
+            assert l2l_rng.has_draws(calls[0].draws)
         yield model, L2LStep(model, runtime, calls[0]), batches, calls
     finally:
         runtime.close()
 
 
-def _run(window: Any, bf16: bool = False, **options: Any) -> Any:
+def _run(
+    window: Any, bf16: bool = False, *, store_options: dict | None = None, **options: Any,
+) -> Any:
     import torch
 
     from soup_cli.utils.l2l_activations import ActivationStore
@@ -271,10 +282,14 @@ def _run(window: Any, bf16: bool = False, **options: Any) -> Any:
     store = ActivationStore(
         n_layers=len(stepper.layers), k=len(batches), chunk_shape=(1, SEQ, HIDDEN),
         mb_shapes=[(*ids.shape, HIDDEN) for ids in batches],
-        dtype=torch.float32, device="cpu", pin=False,
+        dtype=stepper.owner.embed_tokens.weight.dtype, device="cpu", pin=False,
+        **(store_options or {}),
     )
-    with context:
-        losses = stepper.run(batches, store, calls=calls, **options)
+    try:
+        with context:
+            losses = stepper.run(batches, store, calls=calls, **options)
+    finally:
+        store.close()
     grads = _grads(model)
     assert len(grads) == sum(
         "lora_" in name and parameter.requires_grad for name, parameter in model.named_parameters()
@@ -385,3 +400,255 @@ def test_mbr_requires_a_pooled_expert_runtime(window, monkeypatch) -> None:
     with pytest.raises(ValueError) as caught:
         _run(window, route_preserving_mbr=True)
     assert str(caught.value) == "route-preserving MBR layer 1 requires an expert buffer pool"
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ({"mbr_decoupled_subwindow": 1}, "mbr_decoupled_subwindow must be a bool"),
+        (
+            {"route_preserving_mbr": False, "mbr_decoupled_subwindow": True},
+            "mbr_decoupled_subwindow is only valid with route_preserving_mbr=True",
+        ),
+        (
+            {"mbr_recompute_subwindow": 1},
+            "mbr_recompute_subwindow is only valid with mbr_decoupled_subwindow=True",
+        ),
+        (
+            {"mbr_decoupled_subwindow": True, "mbr_split_backward": True},
+            "mbr_decoupled_subwindow excludes mbr_split_backward and mbr_ordered_backward",
+        ),
+        (
+            {"mbr_decoupled_subwindow": True, "mbr_ordered_backward": True},
+            "mbr_decoupled_subwindow excludes mbr_split_backward and mbr_ordered_backward",
+        ),
+    ],
+)
+def test_decoupled_backward_refuses_incompatible_options(window, options, error) -> None:
+    options = {"route_preserving_mbr": True, **options}
+    with pytest.raises(ValueError) as caught:
+        _run(window, **options)
+    assert str(caught.value) == error
+
+
+@pytest.mark.parametrize("size", [True, 0, -1, 1.5])
+def test_decoupled_backward_requires_a_positive_integer_subwindow(window, size) -> None:
+    with pytest.raises(ValueError) as caught:
+        _run(
+            window, route_preserving_mbr=True, mbr_decoupled_subwindow=True,
+            mbr_recompute_subwindow=size,
+        )
+    assert str(caught.value) == "mbr_recompute_subwindow must be a positive integer or None"
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "error"),
+    [
+        ("expert_gemm", "batch_invariant", "requires native expert GEMM"),
+        ("group_compute", object(), "does not support grouped expert compute"),
+    ],
+)
+def test_decoupled_backward_refuses_non_native_expert_compute(
+    window, monkeypatch, setting, value, error,
+) -> None:
+    experts = window[1].layers[1].inner.mlp.experts
+    owner = experts.pool if setting == "group_compute" else experts
+    monkeypatch.setattr(owner, setting, value, raising=False)
+    with pytest.raises(ValueError) as caught:
+        _run(window, route_preserving_mbr=True, mbr_decoupled_subwindow=True)
+    assert str(caught.value) == f"mbr_decoupled_subwindow {error}"
+
+
+def test_decoupled_backward_requires_per_expert_layout(window, monkeypatch) -> None:
+    from torch.nn import Identity
+
+    mlp = window[1].layers[1].inner.mlp
+    monkeypatch.setattr(mlp, "experts", Identity())
+    with pytest.raises(ValueError) as caught:
+        _run(window, route_preserving_mbr=True, mbr_decoupled_subwindow=True)
+    assert str(caught.value) == (
+        "route-preserving MBR layer 1 requires a streamed "
+        "DeepseekV3DecoderLayer with per-expert routed weights"
+    )
+
+
+@pytest.mark.parametrize("method", ["forward", "backward"])
+def test_decoupled_backward_refuses_an_overridden_expert_node(window, monkeypatch, method) -> None:
+    experts = window[1].layers[1].inner.mlp.experts
+    node = inspect.getclosurevars(type(experts)._forward_pooled).nonlocals["PooledWeightedExpert"]
+    original = getattr(node, method)
+
+    def override(*args: Any) -> Any:
+        return original(*args)
+
+    monkeypatch.setattr(node, method, staticmethod(override))
+    with pytest.raises(ValueError) as caught:
+        _run(window, route_preserving_mbr=True, mbr_decoupled_subwindow=True)
+    assert str(caught.value) == (
+        f"mbr_decoupled_subwindow requires the native pooled expert {method}"
+    )
+
+
+def test_decoupled_backward_refuses_deferred_decoder_hooks(window) -> None:
+    from soup_cli.utils.l2l_step import mbr_deferred_forward_hook
+
+    @mbr_deferred_forward_hook
+    def observe(_module: Any, _args: Any, _output: Any) -> None:
+        pytest.fail("the hook ran before the mode was refused")
+
+    layer = window[1].layers[1].inner
+    handle = layer.register_forward_hook(observe)
+    try:
+        with pytest.raises(ValueError) as caught:
+            _run(window, route_preserving_mbr=True, mbr_decoupled_subwindow=True)
+        assert str(caught.value) == (
+            "mbr_decoupled_subwindow does not support deferred decoder forward hooks"
+        )
+    finally:
+        handle.remove()
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ("ids", "route-preserving MBR recompute changed 1 route slots at layer 2, micro-batch 0"),
+        ("weights", "decoupled MBR gate weights changed between replays at layer 2, micro-batch 0"),
+    ],
+)
+def test_decoupled_backward_checks_routes_again_when_building_the_graph(
+    window, change, error,
+) -> None:
+    import torch
+
+    def change_routes(module: Any, _args: Any, output: Any) -> Any:
+        if not torch.is_grad_enabled():
+            return output
+        if change == "weights":
+            return (*output[:-2], output[-2] + 0.25, output[-1])
+        ids = output[-1].clone()
+        ids[0, 0] = (ids[0, 0] + 1) % module.num_experts
+        return (*output[:-1], ids)
+
+    handle = window[1].layers[2].inner.mlp.gate.register_forward_hook(change_routes)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            _run(window, route_preserving_mbr=True, mbr_decoupled_subwindow=True)
+        assert str(caught.value) == error
+    finally:
+        handle.remove()
+
+
+@pytest.mark.parametrize(
+    ("window", "group_size", "subwindow", "autocast"),
+    [
+        ({}, 1, None, False),
+        ({"shared_adapters": True}, 3, 2, False),
+        ({}, 3, 1, True),
+        ({"dtype": "bfloat16", "quant": "nf4"}, 3, 2, False),
+        ({"dropout": 0.15, "shared_adapters": True}, 3, None, False),
+    ],
+    indirect=["window"],
+    ids=["single", "mixed-length", "bf16-autocast", "nf4-bf16", "dropout"],
+)
+def test_decoupled_backward_preserves_losses_and_lora_gradients(
+    window, group_size, subwindow, autocast,
+) -> None:
+    import torch
+
+    torch.manual_seed(42)
+    expected_losses, expected_grads = _run(window, autocast)
+    expected_rng = torch.get_rng_state()
+    torch.manual_seed(42)
+    losses, grads = _run(
+        window, autocast, route_preserving_mbr=True, mbr_group_size=group_size,
+        mbr_decoupled_subwindow=True, mbr_recompute_subwindow=subwindow, collect_phase_stats=True,
+    )
+    assert torch.equal(torch.get_rng_state(), expected_rng)
+    torch.testing.assert_close(torch.stack(losses), torch.stack(expected_losses), atol=0, rtol=0)
+    assert grads.keys() == expected_grads.keys()
+    for name in expected_grads:
+        torch.testing.assert_close(grads[name], expected_grads[name], atol=1e-6, rtol=0, msg=name)
+    for idx in (1, 2):
+        stats = window[1].route_preserving_mbr_stats["layers"][idx]
+        assert stats["recompute_forward"]["expert_fetches"] == 0
+        assert stats["recompute_forward"]["expert_bytes_read"] == 0
+        assert (
+            stats["backward_dX"]["expert_fetches"] == stats["init_forward"]["unique_expert_count"]
+        )
+        assert stats["route_id_mismatch_slots"] == 0
+
+
+def test_decoupled_expert_vjp_matches_each_native_microbatch_segment(window) -> None:
+    import torch
+
+    experts = window[1].layers[1].inner.mlp.experts
+    generator = torch.Generator().manual_seed(17)
+    hidden = torch.randn(5, HIDDEN, generator=generator)
+    weights = torch.rand(5, 2, generator=generator)
+    grad = torch.randn(5, HIDDEN, generator=generator)
+    ids = torch.tensor([[0, 1], [2, 0], [1, 0], [1, 2], [0, 2]])
+    sizes = [2, 3]
+    expected = [
+        torch.autograd.grad(
+            experts(rows.requires_grad_(), routes, routing.requires_grad_()),
+            (rows, routing), seed,
+        )
+        for rows, routes, routing, seed in zip(
+            hidden.split(sizes), ids.split(sizes), weights.split(sizes), grad.split(sizes)
+        )
+    ]
+    before = experts.pool.fetches
+    d_hidden, d_weights, expert_count = experts.backward_from_inputs(
+        hidden, ids, weights, grad, group_sizes=sizes, autocast_kwargs={"enabled": False},
+    )
+    assert expert_count == experts.pool.fetches - before == 3
+    for actual, segments in zip((d_hidden, d_weights), zip(*expected)):
+        assert torch.equal(actual, torch.cat(segments))
+
+
+@pytest.mark.parametrize("subwindow", [None, 2])
+def test_decoupled_backward_bounds_live_attention_graphs_with_spill(
+    window, tmp_path, monkeypatch, subwindow,
+) -> None:
+    import torch
+
+    from soup_cli.utils.l2l_activations import ActivationStore, BufferedSpillFile
+
+    reads = set()
+    get = ActivationStore.get
+
+    def read_once(store, layer, mb):
+        assert (layer, mb) not in reads, "a spill read was requested out of order"
+        reads.add((layer, mb))
+        return get(store, layer, mb)
+
+    monkeypatch.setattr(ActivationStore, "get", read_once)
+    active = peak = 0
+
+    def finished(_grad: Any) -> None:
+        nonlocal active
+        active -= 1
+
+    def observe(_module: Any, _args: Any, kwargs: Any) -> None:
+        nonlocal active, peak
+        if torch.is_grad_enabled():
+            active += 1
+            peak = max(peak, active)
+            kwargs["hidden_states"].register_hook(finished)
+
+    layer = window[1].layers[1].inner
+    handle = layer.self_attn.register_forward_pre_hook(observe, with_kwargs=True)
+    try:
+        _run(
+            window, route_preserving_mbr=True, mbr_group_size=3,
+            mbr_decoupled_subwindow=True, mbr_recompute_subwindow=subwindow,
+            store_options={
+                "spill_layers": 2, "ring": 2,
+                "spill_factory": lambda size: BufferedSpillFile(str(tmp_path / "spill.bin"), size),
+            },
+        )
+    finally:
+        handle.remove()
+    assert active == 0
+    assert peak == (subwindow or 1)
+    assert len(reads) == 3 * 5
