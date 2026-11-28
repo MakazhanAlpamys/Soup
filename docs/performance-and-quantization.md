@@ -1198,6 +1198,43 @@ output: ./output
 - **The pre-flight reports the whole card on a capped or shared GPU** — `torch.cuda.mem_get_info()` is a device-level driver query and cannot see `set_per_process_memory_fraction`, a MIG slice, or another process on the same card. Set `training.stream_vram_override` to what your process may actually use; the check then refuses configurations that would exceed *that*, which is also how you rehearse a 4 GB card on a 16 GB one.
 - **Slower than you expected** — layer streaming trades time for memory. If the model already fits resident on your card, do not enable it.
 
+### Layer-to-layer execution (`training.l2l`, BETA)
+
+A streamed run with `gradient_accumulation_steps: k` reads every layer once per micro-batch, so k times per optimizer step. `training.l2l: true` runs the step layer-major instead: each streamed layer is loaded once and runs all k micro-batches, the micro-batch activations wait in host memory between layers, and the backward walks the layers in reverse. The loss, the gradients and the random stream are those of gradient accumulation; only the number of weight reads changes. `l2l: false` (the default) leaves a `stream_layers` run exactly as it was.
+
+```yaml
+training:
+  stream_layers: true
+  l2l: true
+  batch_size: 1
+  gradient_accumulation_steps: 8      # k micro-batches per layer load
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
+| `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
+| `l2l_split_gpus` | `1` | Number of visible CUDA devices sharing one dense SFT window in one process (1–8). |
+| `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
+| `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
+
+- **Scope.** Llama and Mistral models with bf16 or fp32. The existing L2L loss also
+  requires `task: sft` and refuses `data.format: raft`, `prefix_tree`, `multipack` and
+  `stream_loss_chunk`.
+- **Split a window.** Set `l2l_split_gpus: 2` and make two CUDA devices visible to
+  `soup train`. Leave out `--gpus` and start one process. Each layer is read into the
+  primary GPU's pool and copied to the other GPU, and the GPUs run alternating
+  micro-batches. The primary runs the embedding and loss and receives the adapter
+  gradients for one optimizer update. Each participating GPU needs room for a decoder
+  layer and its share of the compute. Split windows require `lora.dropout: 0`, zero model
+  dropout and a frozen embedding. Routed experts, reference passes and frozen-prefix
+  caching are refused.
+- **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
+- **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
+- **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
+- **Recipe and resume.** The run writes `l2l_recipe.json` (requested and effective k, codec) to its output directory. A resume whose k or codec differs from the checkpoint's is refused, because a different k moves the optimizer-step boundaries.
+- **k = 1** behaves like plain streaming.
+
 ### Preference losses over streaming (v0.72.4)
 
 `dpo`, `orpo`, `simpo`, `kto`, `bco` and `ipo` use the shared streaming setup.

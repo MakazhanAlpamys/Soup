@@ -14,6 +14,7 @@ from soup_cli.config.schema import (
     DataConfig,
     EvalGateConfig,
     LoraConfig,
+    LoraLayersConfig,
     ShipConfig,
     TrainingConfig,
 )
@@ -161,6 +162,12 @@ def test_actual_boolean_fields_still_accept_booleans():
 
     training = TrainingConfig(mask_truncated_completions=True, tis_threshold=2.0)
     assert training.mask_truncated_completions is True
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_lora_layer_indices_reject_booleans(value):
+    with pytest.raises(ValidationError, match="layers entries must be ints, not bools"):
+        LoraLayersConfig(method="fixed", layers=[0, value])
 
 
 @pytest.mark.parametrize("yaml_value", ["true", "yes"], ids=["true", "yaml-yes"])
