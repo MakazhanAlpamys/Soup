@@ -1,7 +1,7 @@
 """Reserve the public L2L RAM activation window before streaming weights."""
 
 from dataclasses import dataclass
-from typing import ClassVar, Sequence
+from typing import Sequence
 
 from soup_cli.utils.host_memory_budget import HostMemoryBudget
 from soup_cli.utils.partial_ram_source import PartialRamBudget
@@ -20,7 +20,7 @@ class L2LHostBudgetPlan:
     max_microbatches: int
     dtype: str
     pinned: bool
-    routing_bytes: ClassVar[int] = 0  # This plan is for dense models.
+    routing_bytes: int = 0
 
     def validate_microbatches(
         self,
@@ -51,9 +51,10 @@ class L2LHostBudgetPlan:
                 for batch, sequence, width in shapes
             )
         ):
+            option = "training.l2l_auto_k" if self.routing_bytes else "training.stream_partial_ram"
             raise ValueError(
                 "training.l2l activation window exceeds or differs from the window "
-                "reserved by training.stream_partial_ram"
+                f"reserved by {option}"
             )
 
 
@@ -67,8 +68,10 @@ def plan_l2l_host_budget(
     microbatches: int,
     dtype: str,
     pin: bool,
+    shape_round: int = ACTIVATION_LENGTH_BUCKET,
+    routing_bytes: int = 0,
 ) -> L2LHostBudgetPlan:
-    """Partition the budget before any optional decoder layers are cached."""
+    """Reserve activations and any resolved MoE routing in one host partition."""
     from soup_cli.utils.budgeted_activations import activation_allocation_bytes
     from soup_cli.utils.layer_stream import dtype_bytes
 
@@ -77,12 +80,14 @@ def plan_l2l_host_budget(
             "training.stream_partial_ram with training.l2l requires a fixed "
             "positive integer training.batch_size"
         )
-    dimensions = (n_layers, max_length, hidden_size, microbatches)
+    dimensions = (n_layers, max_length, hidden_size, microbatches, shape_round)
     if any(type(size) is not int or size < 1 for size in dimensions) or type(pin) is not bool:
         raise ValueError("training.l2l requires positive activation dimensions and boolean pin")
     if dtype not in ("float32", "bfloat16"):
         raise ValueError("training.l2l requires float32 or bfloat16 activations")
-    sequence = -(-max_length // ACTIVATION_LENGTH_BUCKET) * ACTIVATION_LENGTH_BUCKET
+    if type(routing_bytes) is not int or routing_bytes < 0:
+        raise ValueError("training.l2l routing_bytes must be a non-negative integer")
+    sequence = -(-max_length // shape_round) * shape_round
     allocation = activation_allocation_bytes(
         n_layers=n_layers,
         k=microbatches,
@@ -90,7 +95,7 @@ def plan_l2l_host_budget(
         spill_layers=0,
         ring=1,
         pin=pin,
-    )
+    ) + routing_bytes
     reserved = weights.reserved_bytes + allocation
     if reserved > weights.limit_bytes:
         raise ValueError(
@@ -105,4 +110,5 @@ def plan_l2l_host_budget(
         max_microbatches=microbatches,
         dtype=dtype,
         pinned=pin,
+        routing_bytes=routing_bytes,
     )

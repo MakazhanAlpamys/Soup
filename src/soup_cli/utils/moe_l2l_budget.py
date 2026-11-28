@@ -1,7 +1,7 @@
 """Memory estimates for MoE L2L windows, including FP8 boundary storage."""
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from soup_cli.utils.budgeted_activations import activation_allocation_bytes
 from soup_cli.utils.host_memory_budget import HostMemoryBudget
@@ -174,3 +174,42 @@ def plan_moe_l2l(
         saved_expert_input_bytes=saved_expert_input_bytes,
         window_host_bytes=effective_k * host_workspace_bytes_per_batch,
     )
+
+
+def estimate_moe_l2l_optimizer_host_bytes(model: Any, tcfg: Any) -> int:
+    """Budget gradients and optimizer tensors from the live trainable parameters."""
+    from soup_cli.utils.vram_estimate import (
+        OPTIMIZER_BYTES_PER_PARAM,
+        OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM,
+    )
+
+    optimizer = tcfg.optimizer
+    if (
+        optimizer not in ("adamw_torch", "sgd", "adagrad", "rmsprop", "adafactor")
+        or getattr(tcfg, "use_galore", False)
+        or getattr(tcfg, "use_lorafa", False)
+        or getattr(tcfg, "loraplus_lr_ratio", None) is not None
+    ):
+        raise ValueError("training.l2l_auto_k requires a known optimizer host budget")
+
+    state_bytes = int(OPTIMIZER_BYTES_PER_PARAM.get(optimizer, 4))
+    scratch_bytes = int(OPTIMIZER_STEP_SCRATCH_BYTES_PER_PARAM.get(optimizer, 0))
+    host_bytes = 0
+    for param in model.parameters():
+        if not param.requires_grad:
+            continue
+        on_cpu = param.device.type == "cpu"
+        if optimizer in ("adamw_torch", "adagrad", "rmsprop") or (
+            optimizer == "adafactor" and on_cpu
+        ):
+            host_bytes += 4  # CPU scalar step or RMS state.
+        if on_cpu:
+            # Optimizer states follow the parameter dtype or use FP32.
+            size, elements = param.element_size(), param.numel()
+            scale = max(4, size) // 4
+            state_elements = elements
+            if optimizer == "adafactor" and param.ndim >= 2:
+                state_elements = elements // param.shape[-1] + elements // param.shape[-2]
+            host_bytes += elements * (size + scale * scratch_bytes)
+            host_bytes += state_elements * scale * state_bytes
+    return host_bytes

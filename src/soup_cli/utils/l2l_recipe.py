@@ -49,6 +49,18 @@ def validate_l2l_options(tcfg: Any) -> None:
             f"supports {', '.join(repr(c) for c in AVAILABLE_CODECS)}. Set it to 'none'."
         )
     spill_dir = getattr(tcfg, "l2l_spill_dir", None)
+    if tcfg.l2l_auto_k:
+        if (
+            getattr(tcfg, "stream_expert_layout", "fused") != "per_expert"
+            or type(tcfg.batch_size) is not int
+            or tcfg.batch_size < 1
+        ):
+            raise ValueError(
+                "training.l2l_auto_k requires DeepSeek-V3 per_expert streaming "
+                "and a fixed batch_size"
+            )
+        if spill_dir is not None:
+            raise ValueError("training.l2l_auto_k uses RAM only; unset training.l2l_spill_dir")
     if spill_dir is not None:
         # Checked here, before the trainer's `train` sweeps the directory: the spill may live
         # only under $HOME, $CWD or $TMPDIR (realpath + commonpath, see utils/l2l_spill.py).
@@ -60,13 +72,6 @@ def validate_l2l_options(tcfg: Any) -> None:
                 f"training.l2l_spill_dir is refused: {reason}. Set it to a directory under "
                 "$HOME, the working directory or the temp directory."
             )
-    if tcfg.l2l_auto_k:
-        raise ValueError(
-            "training.l2l_auto_k is not available yet for this model: the launch cannot plan "
-            "the window automatically. Unset training.l2l_auto_k and set "
-            "training.gradient_accumulation_steps to the k you want: L2L runs that many "
-            "micro-batches per layer load."
-        )
 
 
 def refuse_distributed_l2l(distributed: bool) -> None:

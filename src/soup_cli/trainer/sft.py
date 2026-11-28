@@ -678,17 +678,23 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
         apply_training_seed(tcfg)
 
-        # Refuse unsupported L2L options before any model load: a closed codec, an
-        # auto-k this version cannot plan.
+        # Auto-k resolves its recipe once the fixed streaming allocations are live.
         self._l2l_recipe = None
         if tcfg.l2l:
             from soup_cli.trainer.stream_setup import _distributed_launch
-            from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
+            from soup_cli.utils.l2l_recipe import (
+                refuse_distributed_l2l,
+                resolve_l2l_recipe,
+                validate_l2l_options,
+            )
 
             refuse_distributed_l2l(
                 _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
             )
-            self._l2l_recipe = resolve_l2l_recipe(tcfg)
+            if tcfg.l2l_auto_k:
+                validate_l2l_options(tcfg)
+            else:
+                self._l2l_recipe = resolve_l2l_recipe(tcfg)
 
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
@@ -916,7 +922,10 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             "output_dir": str(output_dir),
             "num_train_epochs": tcfg.epochs,
             "per_device_train_batch_size": batch_size,
-            "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
+            "gradient_accumulation_steps": (
+                self._l2l_recipe.effective_k if self._l2l_recipe is not None
+                else tcfg.gradient_accumulation_steps
+            ),
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
             "weight_decay": tcfg.weight_decay,

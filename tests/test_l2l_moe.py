@@ -152,11 +152,11 @@ def _tcfg(**overrides: Any) -> Any:
     return SimpleNamespace(**values)
 
 
-def test_the_auto_k_planner_stays_refused_on_a_moe_run():
-    from soup_cli.utils.l2l_recipe import validate_l2l_options
+def test_the_auto_k_recipe_retains_the_requested_moe_window():
+    from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
 
-    with pytest.raises(ValueError, match="training.l2l_auto_k is not available yet"):
-        validate_l2l_options(_tcfg(l2l_auto_k=True))
+    recipe = resolve_l2l_recipe(_tcfg(l2l_auto_k=True), effective_k=2)
+    assert (recipe.requested_k, recipe.effective_k, recipe.auto_k) == (4, 2, True)
 
 
 def test_the_recipe_records_the_expert_levers():

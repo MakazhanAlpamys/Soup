@@ -68,21 +68,49 @@ def test_the_effective_k_is_the_configured_accumulation():
 
 
 _AUTO_K = (
-    "training.l2l_auto_k is not available yet for this model: the launch cannot plan the "
-    "window automatically. Unset training.l2l_auto_k and set "
-    "training.gradient_accumulation_steps to the k you want: L2L runs that many "
-    "micro-batches per layer load."
+    "training.l2l_auto_k requires DeepSeek-V3 per_expert streaming and a fixed batch_size"
 )
 
 
-@pytest.mark.parametrize("layout", ["fused", "per_expert"])
-def test_auto_k_is_refused_with_the_exact_message_and_no_deepseek_detour(layout):
+@pytest.mark.parametrize("layout,batch_size", [("fused", 1), ("per_expert", "auto")])
+def test_auto_k_requires_per_expert_streaming_and_a_fixed_batch(layout, batch_size):
+    tcfg = _tcfg(l2l_auto_k=True, stream_expert_layout=layout, batch_size=batch_size)
     with pytest.raises(ValueError) as caught:
-        validate_l2l_options(_tcfg(l2l_auto_k=True, stream_expert_layout=layout))
+        validate_l2l_options(tcfg)
     assert str(caught.value) == _AUTO_K
-    assert "DeepSeek" not in str(caught.value)
-    with pytest.raises(ValueError, match="is not available yet for this model"):
-        resolve_l2l_recipe(_tcfg(l2l_auto_k=True), effective_k=2)
+    with pytest.raises(ValueError) as caught:
+        resolve_l2l_recipe(tcfg, effective_k=2)
+    assert str(caught.value) == _AUTO_K
+
+
+@pytest.mark.parametrize("effective_k", [None, 0, 9, True])
+def test_auto_k_requires_a_resolved_window_within_the_requested_limit(effective_k):
+    with pytest.raises(ValueError) as caught:
+        resolve_l2l_recipe(
+            _tcfg(l2l_auto_k=True, stream_expert_layout="per_expert"), effective_k=effective_k
+        )
+    assert str(caught.value) == (
+        "training.l2l_auto_k requires a resolved, RAM-fitting effective k"
+    )
+
+
+def test_auto_k_refuses_an_explicit_spill_directory():
+    with pytest.raises(ValueError) as caught:
+        validate_l2l_options(
+            _tcfg(l2l_auto_k=True, stream_expert_layout="per_expert", l2l_spill_dir="spill")
+        )
+    assert str(caught.value) == "training.l2l_auto_k uses RAM only; unset training.l2l_spill_dir"
+
+
+def test_auto_k_refuses_an_mbr_group_that_exceeds_the_resolved_window():
+    with pytest.raises(ValueError) as caught:
+        resolve_l2l_recipe(
+            _tcfg(l2l_auto_k=True, stream_expert_layout="per_expert", l2l_mbr_group_size=4),
+            effective_k=2,
+        )
+    assert str(caught.value) == (
+        "training.l2l_mbr_group_size=4 exceeds the effective L2L window of 2 micro-batches"
+    )
 
 
 def test_a_spill_dir_outside_the_allowed_roots_is_refused(tmp_path, monkeypatch):

@@ -78,10 +78,13 @@ def test_fp8_is_refused_before_the_model_load_with_the_exact_message(monkeypatch
     )
 
 
-def test_auto_k_is_refused_before_the_model_load(monkeypatch):
+def test_auto_k_without_per_expert_streaming_is_refused_before_model_load(monkeypatch):
     wrapper = _wrapper(monkeypatch, l2l=True, l2l_auto_k=True)
-    with pytest.raises(ValueError, match="l2l_auto_k is not available yet for this model"):
+    with pytest.raises(ValueError) as caught:
         wrapper.setup({})
+    assert str(caught.value) == (
+        "training.l2l_auto_k requires DeepSeek-V3 per_expert streaming and a fixed batch_size"
+    )
 
 
 _DISTRIBUTED = (
