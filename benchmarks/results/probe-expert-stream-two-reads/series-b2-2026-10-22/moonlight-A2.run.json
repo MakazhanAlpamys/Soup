@@ -1,0 +1,195 @@
+{
+  "schema": "two-read-cgroup-run/2",
+  "status": "ok",
+  "reason": null,
+  "name": "moonlight-A2",
+  "run_id": "acae180b507545c5b348a468da2344da",
+  "command": [
+    "python",
+    "benchmarks/harness/moe_stream_step.py",
+    "--seq",
+    "512",
+    "--batch",
+    "1",
+    "--lora-r",
+    "8",
+    "--buffers",
+    "2",
+    "--seed",
+    "3",
+    "--nvml-interval-ms",
+    "25",
+    "--require-direct-io",
+    "--drop-caches",
+    "--require-cgroup-memory-max",
+    "34359738368",
+    "--require-cgroup-swap-max",
+    "0",
+    "--deterministic",
+    "strict",
+    "--memory-mode",
+    "emulated",
+    "--vram-envelope-mib",
+    "8151",
+    "--model",
+    "/workspace/data/moonlight",
+    "--store",
+    "/workspace/data/moonlight-nf4",
+    "--tier",
+    "ram",
+    "--route",
+    "model",
+    "--steps",
+    "5",
+    "--label",
+    "real Moonlight weights; random token IDs; A2",
+    "--out",
+    "/workspace/out/moonlight-A2.json"
+  ],
+  "cwd": "/workspace/soup",
+  "started_utc": "2026-10-22T05:49:00Z",
+  "finished_utc": "2026-10-22T05:50:10Z",
+  "host": {
+    "hostname": "ubuntu",
+    "kernel": "6.8.0-59-generic",
+    "mem_total_bytes": 79250264064,
+    "swaps": []
+  },
+  "cgroup": {
+    "path": "/sys/fs/cgroup/soup-bench/moonlight-A2",
+    "requested": {
+      "memory_max": 34359738368,
+      "swap_max": 0
+    },
+    "readback": {
+      "memory.max": "34359738368",
+      "memory.swap.max": "0",
+      "memory.oom.group": "1"
+    },
+    "ancestors": [
+      {
+        "path": "/sys/fs/cgroup/soup-bench",
+        "memory.max": "34359738368",
+        "memory.swap.max": "0"
+      },
+      {
+        "path": "/sys/fs/cgroup",
+        "memory.max": null,
+        "memory.swap.max": null
+      }
+    ],
+    "effective_memory_max": 34359738368,
+    "memory_peak_available": true,
+    "leftover_pids": [],
+    "removed": true,
+    "remove_error": null
+  },
+  "series": {
+    "path": "/sys/fs/cgroup/soup-bench",
+    "required": {
+      "memory_max": 34359738368,
+      "swap_max": 0
+    },
+    "readback": {
+      "memory.max": "34359738368",
+      "memory.swap.max": "0"
+    },
+    "memory_current_before": 677851136,
+    "memory_peak_after": 34359738368,
+    "events_before": {
+      "low": 0,
+      "high": 0,
+      "max": 1733,
+      "oom": 1,
+      "oom_kill": 2,
+      "oom_group_kill": 1
+    },
+    "events_after": {
+      "low": 0,
+      "high": 0,
+      "max": 1733,
+      "oom": 1,
+      "oom_kill": 2,
+      "oom_group_kill": 1
+    }
+  },
+  "preflight": {
+    "min_free": [],
+    "not_after_utc": "2026-10-22T11:09:32Z",
+    "estimate_seconds": 900
+  },
+  "membership": {
+    "child_pid": 5579,
+    "samples": 70,
+    "max_processes": 1,
+    "escaped": []
+  },
+  "tree": {
+    "child_exit_utc": "2026-10-22T05:50:10Z",
+    "tree_exit_utc": "2026-10-22T05:50:10Z",
+    "outlived_child": false
+  },
+  "survival": {
+    "supervisor_oom_score_adj": "-1000",
+    "child_oom_score_adj": "0",
+    "sighup": "ignored"
+  },
+  "samples": {
+    "count": 70,
+    "memory_current_max_bytes": 4391075840
+  },
+  "events_before": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "events_after": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "events_local_after": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "memory_peak_bytes": 5285068800,
+  "swap_peak_bytes": 0,
+  "exit": {
+    "returncode": 0,
+    "signal": null
+  },
+  "stdout_path": "/workspace/out/moonlight-A2.run.stdout",
+  "stderr_path": "/workspace/out/moonlight-A2.run.stderr",
+  "stderr_tail": "[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n",
+  "kernel_oom_log": {
+    "source": "journalctl",
+    "lines": [],
+    "error": null
+  },
+  "expect_json": {
+    "path": "/workspace/out/moonlight-A2.json",
+    "exists": true,
+    "sha256": "a59d355a65106e1ba3dee11a055a7bb59fa43e91fcb0bf815f72f7a251aab63c",
+    "run_verdict": {
+      "status": "ok",
+      "steps": 5
+    },
+    "memory_verdict": {
+      "mode": "emulated",
+      "status": "ok",
+      "step": null,
+      "reason": null
+    },
+    "error": null
+  }
+}
