@@ -1,0 +1,50 @@
+{
+  "repo": "unsloth/Meta-Llama-3.1-8B",
+  "revision": "e9a141a2091ea561b96483212645a2a05e6f99fc",
+  "files": {
+    "config.json": {
+      "bytes": 947,
+      "sha256": "0ea2186ccf686654fea498aae830b9de201334432b24b07f031d80b76dd928f0"
+    },
+    "generation_config.json": {
+      "bytes": 235,
+      "sha256": "46097458fa97e44251c131fb384df37a37ec0a9334d7a001100782fc9f1fc0bd"
+    },
+    "model.safetensors.index.json": {
+      "bytes": 23950,
+      "sha256": "146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b"
+    },
+    "special_tokens_map.json": {
+      "bytes": 459,
+      "sha256": "32f404d626cf7b1b6eea36c241ae7cbd6ec29c777a8701ea48c0fe9ebb94c9b1"
+    },
+    "tokenizer.json": {
+      "bytes": 17209920,
+      "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b"
+    },
+    "tokenizer_config.json": {
+      "bytes": 50642,
+      "sha256": "590b9837d3c2a8790e2aaf920f4c69f9181c3ca8fe52e6579ad3a3f654e59a9b"
+    },
+    "README.md": {
+      "bytes": 3123,
+      "sha256": "974704ccfbaf56d35fb13c231f43594a635f949be402bdd237deb7220cd90301"
+    },
+    "model-00001-of-00004.safetensors": {
+      "bytes": 4976698672,
+      "sha256": "f8b9704ab09cdeb097aa4a0a24bca96f906eec36bad63ab495bc21475058601b"
+    },
+    "model-00002-of-00004.safetensors": {
+      "bytes": 4999802720,
+      "sha256": "c28b25e7541751056ee126627e007f8d4288319733285e9f7b17b9ff6eb313f0"
+    },
+    "model-00003-of-00004.safetensors": {
+      "bytes": 4915916176,
+      "sha256": "d8e9504dd4e4a146d484c52a97584ec14dac92237c46b064934af67a85e7d383"
+    },
+    "model-00004-of-00004.safetensors": {
+      "bytes": 1168138808,
+      "sha256": "e4486f35c040f683f7d790354f66c169c109eb9fa0954a4a35d7c458a108405d"
+    }
+  }
+}
