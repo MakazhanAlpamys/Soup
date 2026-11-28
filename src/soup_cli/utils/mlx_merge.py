@@ -39,6 +39,12 @@ def merge_native_adapter(
     dequantize: bool = False, trust_remote_code: bool = False,
 ) -> Path:
     """Write a complete dense model, publishing the staged directory only on success."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    for reward_path in (adapter, base):
+        if isinstance(reward_path, (str, Path)):
+            refuse_reward_artifact(reward_path)
+
     from soup_cli.utils.mlx_generation import load_native_model, read_native_adapter
 
     if dtype not in ("float16", "bfloat16", "float32"):

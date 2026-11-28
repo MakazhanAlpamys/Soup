@@ -122,6 +122,12 @@ def read_native_adapter(
     validate_base: Callable[[str], None] | None = None,
 ) -> dict | None:
     """Validate metadata and the selected base spelling before announcing or loading it."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    for reward_path in (path, base):
+        if isinstance(reward_path, (str, Path)):
+            refuse_reward_artifact(reward_path)
+
     if (path / "added_tokens.safetensors").exists():
         raise ValueError(
             "Native MLX generation does not currently support artifacts "
@@ -217,6 +223,12 @@ def load_native_model(
     require_dense: bool = False, return_config: bool = False,
 ) -> tuple[Any, Any] | tuple[Any, Any, dict]:
     """Load a base and strictly apply every saved ordinary linear LoRA tensor."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    for reward_path in (model_path, base_model):
+        if isinstance(reward_path, (str, Path)):
+            refuse_reward_artifact(reward_path)
+
     path = Path(model_path)
     config = read_native_adapter(path, base_model)
     from rich.console import Console
@@ -227,6 +239,7 @@ def load_native_model(
     )
 
     base = config["model"] if config else model_path
+    refuse_reward_artifact(base)
     trust_remote_code = resolve_trust_remote_code(
         base, requested=trust_remote_code, console=Console(),
         requires_remote_code=bool(model_requires_trust_remote_code(base)),

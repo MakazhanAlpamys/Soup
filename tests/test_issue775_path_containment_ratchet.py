@@ -42,9 +42,9 @@ bug — it is also the normal way to shorten a path for display):
 Everything else — ``rel = p.relative_to(root)`` with no ``ValueError`` guard —
 is left alone.
 
-At the time of writing the scan finds **two** sites, both in
-``commands/adapters.py``, both benign and both allowlisted below with their
-reason. There is no cleanup left, which makes ``TestTheScannerCanActuallyFail``
+At the time of writing the scan finds **one** site in ``commands/adapters.py``,
+a benign display-only conversion allowlisted below with its reason. There is
+no cleanup left, which makes ``TestTheScannerCanActuallyFail``
 load-bearing: a scanner whose only findings are allowlisted must be shown
 capable of finding something, or it is indistinguishable from one that matches
 nothing at all.
@@ -67,18 +67,11 @@ _CONTAINMENT_METHODS = frozenset({"relative_to", "is_relative_to"})
 _CATCHES_VALUE_ERROR = frozenset({"ValueError", "Exception", "BaseException"})
 
 #: Benign call sites, each with the reason it does not decide containment.
-#: Keyed by ``(path relative to src/soup_cli, line)``. Both entries are
+#: Keyed by ``(path relative to src/soup_cli, line)``. Entries are
 #: verified live by ``test_the_allowlist_has_no_dead_entries`` — a moved or
 #: deleted site fails there rather than rotting into a silent hole.
 ALLOWLIST: dict[tuple[str, int], str] = {
-    ("commands/adapters.py", 29): (
-        "depth counter, not a gate. The paths come from "
-        "`directory.rglob('adapter_config.json')`, so they are already under "
-        "`directory` by construction; the result is only measured for its "
-        "`.parts` length against max_depth, and the `except ValueError: "
-        "continue` is unreachable for rglob output rather than a denial."
-    ),
-    ("commands/adapters.py", 98): (
+    ("commands/adapters.py", 108): (
         "display-only shortening. On ValueError it falls back to the full "
         "`adapter_path` and still renders the row — the value reaches "
         "`table.add_row` and nothing else, so a short-name mismatch costs a "

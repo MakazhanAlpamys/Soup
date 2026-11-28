@@ -36,16 +36,20 @@ class _MLXRegistry(dict):
             from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
 
             return MLXGRPOTrainerWrapper
+        if task == "reward_model":
+            from soup_cli.trainer.mlx_reward_model import MLXRewardModelTrainerWrapper
+
+            return MLXRewardModelTrainerWrapper
         raise KeyError(task)
 
     def __contains__(self, key: object) -> bool:
-        return key in ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
+        return key in ("sft", "dpo", "orpo", "simpo", "kto", "grpo", "reward_model")
 
     def __getitem__(self, key: str):
         return self._resolve(key)
 
     def keys(self):  # noqa: D401
-        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
+        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo", "reward_model")
 
 
 MLX_TRAINER_REGISTRY: _MLXRegistry = _MLXRegistry()

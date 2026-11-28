@@ -84,7 +84,10 @@ def _forwards_resume(func: ast.FunctionDef) -> bool:
 
 #: Wrappers allowed to refuse ``--resume`` inside ``train()``: a task refused on
 #: one backend only. Keep this list explicit; a new entry needs a reason.
-_BODY_REFUSAL_ALLOWED = frozenset({"mlx_grpo.py"})  # #1976: MLX GRPO saves the adapter only
+_BODY_REFUSAL_ALLOWED = frozenset({
+    "mlx_grpo.py",  # #1976: MLX GRPO saves the adapter only
+    "mlx_reward_model.py",  # #2003: scoring bundles omit optimizer/RNG state
+})
 
 
 def _refuses_resume(func: ast.FunctionDef) -> bool:
@@ -108,7 +111,7 @@ def _refuses_resume(func: ast.FunctionDef) -> bool:
 
 
 def _handles_resume(file_name: str, func: ast.FunctionDef) -> bool:
-    """Forwards the checkpoint, or (MLX GRPO only, #1976) refuses it in its body."""
+    """Forwards the checkpoint, or explicitly refuses it on the named MLX backend."""
     if _forwards_resume(func):
         return True
     return file_name in _BODY_REFUSAL_ALLOWED and _refuses_resume(func)
@@ -137,6 +140,7 @@ class TestTrainerScanInvariants:
             "kto.py": "kto",
             "mlx_dpo.py": "dpo",
             "mlx_grpo.py": "grpo",
+            "mlx_reward_model.py": "reward_model",
             "mlx_sft.py": "sft",
             "mole_routing.py": "moe_lora_routing",
             "online_dpo.py": "online_dpo",
@@ -492,7 +496,8 @@ def test_only_the_listed_wrapper_may_refuse_resume_in_its_body():
     """))
     func = tree.body[0]
     assert _refuses_resume(func) and not _forwards_resume(func)
-    assert _BODY_REFUSAL_ALLOWED == {"mlx_grpo.py"}
+    assert _BODY_REFUSAL_ALLOWED == {"mlx_grpo.py", "mlx_reward_model.py"}
     assert _handles_resume("mlx_grpo.py", func)
+    assert _handles_resume("mlx_reward_model.py", func)
     assert not _handles_resume("mlx_dpo.py", func)
     assert not _handles_resume("sft.py", func)

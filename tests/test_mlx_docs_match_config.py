@@ -59,12 +59,14 @@ def test_mlx_eval_steps_docs_cover_supported_tasks() -> None:
     )
     assert preference_passage is not None, "Missing MLX eval_steps preference-task passage"
     documented_preferences = set(re.findall(r"`([a-z_]+)`", preference_passage.group(1)))
-    # GRPO also refuses eval_steps but is documented in its own section below; SFT honors it.
-    expected_preferences = MLX_TASKS - {"sft", "grpo"}
+    # GRPO and reward_model document their distinct loops in their own sections.
+    expected_preferences = MLX_TASKS - {"sft", "grpo", "reward_model"}
     assert documented_preferences == expected_preferences
     grpo_section = _mlx_section(backends, "grpo")
     assert re.search(r"MLX GRPO refuses\s+`training\.eval_steps`", grpo_section)
-    assert documented_preferences | {"grpo"} == MLX_TASKS - {"sft"}
+    reward_section = _mlx_section(backends, "reward_model")
+    assert re.search(r"MLX reward_model refuses\s+`training\.eval_steps`", reward_section)
+    assert documented_preferences | {"grpo", "reward_model"} == MLX_TASKS - {"sft"}
 
 
 @pytest.mark.parametrize("task", sorted(NON_SFT_MLX_TASKS))
@@ -95,6 +97,6 @@ def test_mlx_dora_refusal_is_listed_in_each_non_sft_task_section() -> None:
 def test_mlx_extra_lists_the_tasks_from_config() -> None:
     models = (DOCS / "models.md").read_text(encoding="utf-8")
     row = next(line for line in models.splitlines() if line.startswith("| `mlx` |"))
-    documented = set(re.findall(r"\bSFT\b|\bDPO\b|\bORPO\b|\bSimPO\b|\bKTO\b|\bGRPO\b", row))
+    documented = set(re.findall(r"\b(SFT|DPO|ORPO|SimPO|KTO|GRPO|reward_model)\b", row))
     assert {task.lower() for task in documented} == MLX_TASKS
     assert "`[train]` is not required" in row

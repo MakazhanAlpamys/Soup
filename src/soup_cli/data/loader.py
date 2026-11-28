@@ -11,7 +11,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from soup_cli.config.schema import DataConfig
+from soup_cli.config.schema import DataConfig, SoupConfig
 from soup_cli.data.formats import (
     MAX_DETECT_ROWS,
     detect_format,
@@ -311,6 +311,17 @@ _last_load = LoadOutcome()
 def last_load_outcome() -> LoadOutcome:
     """The :class:`LoadOutcome` of the most recent :func:`load_dataset` call."""
     return _last_load
+
+
+def validate_mlx_reward_load(cfg: SoupConfig, outcome: LoadOutcome) -> None:
+    """Before training, refuse even a single preference row dropped by the converter."""
+    if outcome.first_drop is None or cfg.task != "reward_model" or cfg.backend != "mlx":
+        return
+    _, index, _, _ = outcome.first_drop
+    raise ValueError(
+        f"MLX reward_model: malformed preference row {index} was dropped. "
+        "Supply string prompt, chosen and rejected fields in every row."
+    )
 
 
 # Tasks that require source columns preserved across dataset format normalisation (#1219).

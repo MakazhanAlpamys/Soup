@@ -421,6 +421,9 @@ def _load_measure_model(
     :func:`soup_cli.utils.live_eval.make_generator`'s ``loaded=`` kwarg.
     ``quantization='none'`` loads the plain baseline. Heavy imports are lazy.
     """
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    refuse_reward_artifact(base)
     from soup_cli.config.schema import TrainingConfig
     from soup_cli.utils.live_eval import resolve_device
     from soup_cli.utils.quant_menu import build_quantization_config_for_loader

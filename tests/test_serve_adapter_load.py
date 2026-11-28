@@ -598,6 +598,32 @@ def test_a_directory_without_adapter_config_is_400(root, served, loader):
     assert loader.calls == []
 
 
+@pytest.mark.parametrize("artifact", ["root", "payload", "recorded-base"])
+def test_reward_artifacts_are_refused_before_loading_a_runtime_adapter(
+    root, served, loader, artifact,
+):
+    reward = root / "reward"
+    reward.mkdir()
+    marker = "reward.safetensors" if artifact == "payload" else "reward_model.json"
+    (reward / marker).write_text("reward marker", encoding="utf-8")
+    path = reward
+    if artifact == "recorded-base":
+        path = _adapter(root, "with-reward-base")
+        (path / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": str(reward)}), encoding="utf-8",
+        )
+
+    response = served.load("reward", path)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == (
+        "MLX reward: scoring-only bundle; use load_reward_scorer/score_completions."
+    )
+    assert loader.calls == []
+    assert served.listed() == []
+    assert served.load("ordinary", _adapter(root, "ordinary")).status_code == 200
+
+
 def test_a_missing_path_inside_the_adapter_dir_is_400(root, served, loader):
     resp = served.load("v2", root / "nope")
 

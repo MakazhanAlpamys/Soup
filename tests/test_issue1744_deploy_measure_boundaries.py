@@ -162,3 +162,64 @@ def test_deploy_measure_cli_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert result.exit_code == 0, result.output
     clean_out = strip_ansi(result.output)
     assert "verdict=MAJOR" in clean_out
+
+
+def test_reward_deploy_measure_refused_before_recipe_side_effects(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from soup_cli.utils.mlx_reward import SCORING_ONLY
+    from tests.conftest import strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    tasks = tmp_path / 'tasks.jsonl'
+    tasks.write_text('{"prompt":"x","expected":"x"}\n')
+    result = CliRunner().invoke(app, ['deploy', 'autopilot', '--target', 'mac-m3',
+                                     '--base', str(root), '--measure', '--tasks', str(tasks)])
+    assert result.exit_code == 1, result.output
+    assert SCORING_ONLY in ' '.join(strip_ansi(result.output).split())
+    assert not (tmp_path / 'deploy_autopilot.yaml').exists()
+    assert not (tmp_path / 'deploy_autopilot.sh').exists()
+
+
+def test_reward_direct_measure_helpers_refused_before_work(tmp_path):
+    from types import SimpleNamespace
+
+    from soup_cli.commands.deploy import _run_deploy_autopilot_measure
+    from soup_cli.utils.deploy_measure import _load_measure_model
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    assert_reward_guard(
+        _run_deploy_autopilot_measure,
+        dict(profile=SimpleNamespace(quant='4bit'), base=str(root), tasks_file='unused',
+             measure_candidates=None), 'import hashlib',
+    )
+    assert_reward_guard(_load_measure_model, dict(base=str(root), quantization='none'),
+                        'from soup_cli.config.schema import TrainingConfig')
+
+
+def test_ordinary_measure_base_reaches_existing_work():
+    from soup_cli.utils.deploy_measure import _load_measure_model
+    from tests.reward_guard_helpers import assert_reward_guard
+
+    assert_reward_guard(_load_measure_model, dict(base='ordinary', quantization='none'),
+                        'from soup_cli.config.schema import TrainingConfig', refused=False)
+
+
+def test_recipe_only_deploy_keeps_remote_or_local_id_planning(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / 'reward'
+    root.mkdir()
+    (root / 'reward_model.json').write_text('broken')
+    result = CliRunner().invoke(app, ['deploy', 'autopilot', '--target', 'mac-m3',
+                                     '--base', str(root)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / 'deploy_autopilot.yaml').exists()

@@ -56,6 +56,21 @@ def test_matching_record_pins_harness_and_reports_commit(benchmark_case):
     assert f"Base revision: {SHA} (recorded run)" in output
 
 
+@pytest.mark.parametrize("base", [None, ""], ids=["null", "empty"])
+def test_adapter_without_a_base_evaluates_its_own_path(benchmark_case, base):
+    adapter, _path, _metadata, calls = benchmark_case
+    (adapter / "adapter_config.json").write_text(
+        json.dumps({"base_model_name_or_path": base}), encoding="utf-8"
+    )
+    # An empty base must not resolve to an unrelated bundle in the working directory.
+    (adapter.parent / "reward_model.json").write_text("{}", encoding="utf-8")
+
+    result = invoke(adapter)
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert [call["model_args"] for call in calls] == [f"pretrained={adapter}"]
+
+
 @pytest.mark.parametrize(
     "case", ["legacy", "mismatch", "override", "local", "invalid", "equals", "null"]
 )

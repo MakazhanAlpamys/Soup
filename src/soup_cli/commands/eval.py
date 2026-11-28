@@ -112,6 +112,16 @@ def benchmark(
     ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     # Resolve the run before anything is loaded: a bad --run-id must not cost
     # a model load (#2742).
     resolved_run_id = _resolve_run_id(run_id)
@@ -133,6 +143,12 @@ def benchmark(
         adapter_info = json.loads(adapter_config.read_text())
         base_model = adapter_info.get("base_model_name_or_path", "")
         if base_model:
+            if isinstance(base_model, str):
+                try:
+                    refuse_reward_artifact(base_model)
+                except ValueError as exc:
+                    console.print(str(exc), markup=False)
+                    raise typer.Exit(1) from exc
             _reject_lm_eval_injection(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
@@ -426,6 +442,16 @@ def custom(
     ),
 ):
     """Run custom evaluation tasks from a JSONL file."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.eval.custom import load_eval_tasks
 
     # Resolve the run before anything is loaded: a bad --run-id must not cost
@@ -570,6 +596,16 @@ def judge(
     ),
 ):
     """Evaluate model outputs using LLM-as-a-judge."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (target,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.eval.judge import (
         JudgeDownError,
         JudgeEvaluator,
@@ -771,6 +807,14 @@ def auto(
         raise typer.Exit(1)
 
     soup_config = load_config(str(config_path))
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        refuse_reward_artifact(soup_config.output)
+        refuse_reward_artifact(soup_config.base)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
     output_dir = Path(soup_config.output)
 
     if not output_dir.exists():
@@ -1041,6 +1085,16 @@ def human(
     ),
 ):
     """Run human A/B evaluation between two models."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model_a, model_b):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.eval.human import (
         HumanEvalResults,
         HumanJudgment,
@@ -1371,6 +1425,16 @@ def gate_cmd(
     ),
 ) -> None:
     """Run an eval-gate suite standalone (post-hoc verdict)."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     if not 0.0 <= regression_threshold <= 1.0:
         console.print(
             "[red]--regression-threshold must be between 0.0 and 1.0[/]"
@@ -1549,6 +1613,16 @@ def quant_check_cmd(
     Exits with code 0 on OK / MINOR, code 2 on MAJOR, code 1 on model loading
     or runtime errors, and code 3 on usage or input validation errors.
     """
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (before, after):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     from soup_cli.eval.quant_check import (
         ensure_format,
         is_under_cwd,

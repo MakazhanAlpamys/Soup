@@ -25,6 +25,7 @@ from soup_cli.data.loader import (
     data_config_for_task,
     load_dataset,
     task_preserves_source_columns,
+    validate_mlx_reward_load,
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
@@ -238,6 +239,10 @@ def _resume_refusal(cfg: "SoupConfig", flag: str) -> str | None:
         # #1976: the native MLX GRPO loop saves the adapter only. The message
         # lives with the trainer (imported lazily: it pulls in mlx-free code only).
         from soup_cli.trainer.mlx_grpo import RESUME_REFUSAL
+
+        return RESUME_REFUSAL.replace("--resume", flag, 1)
+    if cfg.task == "reward_model" and cfg.backend == "mlx":
+        from soup_cli.trainer.mlx_reward_model import RESUME_REFUSAL
 
         return RESUME_REFUSAL.replace("--resume", flag, 1)
     if cfg.task == "ppo":
@@ -498,6 +503,11 @@ def _validate_preference_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     from soup_cli.data.loader import last_load_outcome
 
     outcome = last_load_outcome()
+    try:
+        validate_mlx_reward_load(cfg, outcome)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
     fmt = outcome.fmt or cfg.data.format
 
     # kto rows must be {prompt, completion, label}; auto-detection may pick a
@@ -1798,6 +1808,23 @@ def train(
         if receipt is not None and exc.code == 1:
             receipt.refuse("soup.config.invalid", exc)
         raise
+
+    # #2003: resume outranks every incompatible language-model operation.
+    if cfg.task == "reward_model" and cfg.backend == "mlx":
+        for flag, enabled in (("--resume", resume), ("--hf-resume", hf_resume)):
+            if enabled:
+                console.print(_resume_refusal(cfg, flag), markup=False)
+                raise typer.Exit(1)
+        for flag, enabled in (
+            ("--push-as", push_as), ("--gate", gate),
+            ("--diagnose-gate", diagnose_gate), ("--capture-activations", capture_activations),
+        ):
+            if enabled:
+                console.print(
+                    f"MLX reward_model does not support {flag}. Remove {flag}; "
+                    "use load_reward_scorer/score_completions for scoring.", markup=False,
+                )
+                raise typer.Exit(1)
 
     # --- v0.71.36 replay passthrough ---
     try:
@@ -3222,12 +3249,18 @@ def train(
 
     from soup_cli.utils.terminal import for_terminal as _for_terminal
 
-    completion_commands = _completion_commands(
-        result["output_dir"],
-        merge_note,
-        backend_hint=backend_hint,
-        dequantize_hint=dequantize_hint,
-    )
+    if cfg.task == "reward_model" and cfg.backend == "mlx":
+        completion_commands = (
+            "Python scoring: [bold]soup_cli.utils.mlx_reward.load_reward_scorer[/] "
+            "and [bold]score_completions[/]"
+        )
+    else:
+        completion_commands = _completion_commands(
+            result["output_dir"],
+            merge_note,
+            backend_hint=backend_hint,
+            dequantize_hint=dequantize_hint,
+        )
 
     if manual_stop.stopped:
         title = "[bold yellow]Training Stopped — Ctrl+C[/]"

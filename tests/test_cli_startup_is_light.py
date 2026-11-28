@@ -30,12 +30,14 @@ def _plain(text: str) -> str:
 
 # Heavy deps that the documented "light core" (v0.71.0 deps-split) excludes.
 # These live behind the [train] extra; the CLI must import without them.
-HEAVY = ("torch", "transformers", "accelerate", "peft", "trl", "datasets", "bitsandbytes")
+HEAVY = ("torch", "transformers", "accelerate", "peft", "trl", "datasets", "bitsandbytes",
+         "mlx", "mlx_lm", "safetensors")
 
 _PROBE = (
     "import sys\n"
     "import soup_cli.cli\n"
-    "print(','.join(sorted(m for m in {heavy!r} if m in sys.modules)))\n"
+    "print(','.join(sorted(m for m in {heavy!r} "
+    "if any(n == m or n.startswith(m + '.') for n in sys.modules))))\n"
 )
 
 
@@ -89,6 +91,7 @@ def test_probe_would_catch_a_regression():
     [
         # Modules CLAUDE.md documents as "NO top-level torch". Each is reachable
         # from a light command or is a pure planner/verdict half.
+        "soup_cli.utils.mlx_reward",
         "soup_cli.utils.reward_stress",
         "soup_cli.utils.reward_synth",
         "soup_cli.utils.ship_verdict",
@@ -116,7 +119,7 @@ def test_documented_light_module_stays_light(module: str):
             "-c",
             f"import sys, {module}; "
             "print(','.join(sorted(m for m in "
-            f"{HEAVY!r} if m in sys.modules)))",
+            f"{HEAVY!r} if any(n == m or n.startswith(m + '.') for n in sys.modules))))",
         ],
         capture_output=True,
         text=True,
@@ -190,7 +193,7 @@ def test_light_command_invocation_stays_light(argv: list[str]):
         "from soup_cli.cli import app\n"
         f"r = CliRunner().invoke(app, {argv!r})\n"
         "print('SOUPPROBE|%s|%s' % (r.exit_code, ','.join(sorted(m for m in "
-        f"{HEAVY!r} if m in sys.modules))))\n"
+        f"{HEAVY!r} if any(n == m or n.startswith(m + '.') for n in sys.modules)))))\n"
     )
     proc = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, timeout=300
@@ -234,7 +237,7 @@ def test_callback_module_imports_without_transformers(module: str):
             "-c",
             f"import sys, {module}; "
             "print(','.join(sorted(m for m in "
-            f"{HEAVY!r} if m in sys.modules)))",
+            f"{HEAVY!r} if any(n == m or n.startswith(m + '.') for n in sys.modules))))",
         ],
         capture_output=True,
         text=True,
@@ -265,7 +268,8 @@ def _invoke_with_probe(argv: list[str], monkey_patch_code: str = "") -> tuple[in
         "from typer.testing import CliRunner\n"
         "from soup_cli.cli import app\n"
         f"r = CliRunner().invoke(app, {argv!r})\n"
-        "leaked = ','.join(sorted(m for m in " + repr(HEAVY) + " if m in sys.modules))\n"
+        "leaked = ','.join(sorted(m for m in " + repr(HEAVY)
+        + " if any(n == m or n.startswith(m + '.') for n in sys.modules)))\n"
         "print('---SOUPPROBE---')\n"
         "print(r.exit_code)\n"
         "print(leaked)\n"

@@ -84,6 +84,16 @@ def push(
     ),
 ):
     """Push a trained model to HuggingFace Hub (or alternate hub)."""
+    from soup_cli.utils.mlx_reward import refuse_reward_artifact
+
+    try:
+        for reward_path in (model,):
+            if isinstance(reward_path, (str, Path)):
+                refuse_reward_artifact(reward_path)
+    except ValueError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
     # v0.53.10 #152 — validate hub at the CLI boundary; only HF is the
     # default. Non-HF hubs upload via :func:`utils.hubs.upload_repo` after
     # the standard model-dir validation completes.

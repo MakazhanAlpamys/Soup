@@ -34,7 +34,7 @@ def test_mlx_cli_route_does_not_touch_transformers_training_stack(
     without attempting datasets, TRL, PEFT, accelerate, or bitsandbytes.
     """
     data_path = tmp_path / "train.jsonl"
-    if task in {"dpo", "orpo", "simpo"}:
+    if task in {"dpo", "orpo", "simpo", "reward_model"}:
         row = {"prompt": "Say hi", "chosen": "Hi", "rejected": "Bye"}
         data_format = "dpo"
     elif task == "kto":

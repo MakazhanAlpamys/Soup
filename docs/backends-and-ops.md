@@ -153,7 +153,7 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT, DPO, ORPO, SimPO, KTO and GRPO. `task: preference`
+MLX backend supports SFT, DPO, ORPO, SimPO, KTO, GRPO and reward_model. `task: preference`
 with `training.preference_loss: dpo`, `orpo` or `simpo` selects the corresponding
 native MLX trainer, with the same load-time restrictions and doctor support
 report as the explicit native task. The configured task remains `preference`;
@@ -204,7 +204,7 @@ dense text models plus optional ordinary native LoRA; native batch inference's
 [native MLX HTTP serving](serving-and-export.md#native-mlx-http-serving) for the
 three routes, streaming, admission limits and supported request controls.
 
-`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO and GRPO ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
+`training.lora.rank_pattern` and `training.lora.alpha_pattern` are refused on `backend: mlx` for SFT, DPO, ORPO, SimPO, KTO, GRPO and reward_model ([#1996](https://github.com/MakazhanAlpamys/Soup/issues/1996)): the MLX trainer builds every adapter from the one scalar `lora.r` and `lora.alpha`, so per-module ranks and alphas would be dropped without a word. Remove them, or use `backend: transformers`, which applies them. An empty `{}` sets nothing and still loads.
 
 #### Vocabulary Expansion on MLX
 
@@ -680,6 +680,15 @@ The loader does not auto-detect bare `{"prompt", "answer"}` rows; use `messages`
   trainable once the adapter is attached is refused before the first update.
   `quantization: 4bit` is Soup's default and, on MLX, only names a pre-quantized
   base, so a dense base trains with it too.
+
+#### reward_model on MLX
+
+`task: reward_model` trains ordinary LoRA and a scalar reward head on a dense
+Llama-compatible text base. See [MLX reward models](training.md#native-mlx-reward-model-training) for
+raw preference pairs, validation, the scoring bundle and the Python scoring API.
+MLX reward_model refuses `training.eval_steps` because it validates per epoch.
+
+- **Refused at load:** Quantization, DoRA, full fine-tuning and non-text inputs.
 
 #### DoRA on MLX
 

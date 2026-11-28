@@ -585,8 +585,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.config.schema import SoupConfig
     from soup_cli.data.loader import (
         data_config_for_task,
+        last_load_outcome,
         load_dataset,
         task_preserves_source_columns,
+        validate_mlx_reward_load,
     )
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.display import TrainingDisplay
@@ -626,6 +628,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         data_config_for_task(loader_data_config(cfg), cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
+    validate_mlx_reward_load(cfg, last_load_outcome())
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
     # #2047 -- the judge_rank cost guard, between the data load and the model load.
     from soup_cli.trainer.grpo_judge import check_judge_rank_budget

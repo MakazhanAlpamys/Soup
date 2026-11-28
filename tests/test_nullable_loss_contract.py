@@ -957,6 +957,7 @@ _WRITER_KINDS = {
     "monitoring/callback.py": ["summary", "<row_kind>"],
     "trainer/mlx_dpo.py": ["metric_row_kind(val_loss=val_loss)"],
     "trainer/mlx_grpo.py": ["eval"],
+    "trainer/mlx_reward_model.py": ["train"],
     "trainer/mlx_sft.py": ["eval", "train"],
     "trainer/ppo.py": ["train"],
 }
