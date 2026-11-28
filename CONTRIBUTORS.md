@@ -1756,6 +1756,9 @@ Listed by first contribution. PR numbers link the work.
 - **S Niwas** ([@sniwas](https://github.com/sniwas))
   - Clarified the file and directory destinations in `soup export --help` and added a CLI help regression. ([#3280](https://github.com/MakazhanAlpamys/Soup/pull/3280))
 
+- **D Zayed Aman** ([@Zayed024](https://github.com/Zayed024))
+  - Reused the shared NaN validator for data filter thresholds and TUI refresh, enforced the documented coherence range, and covered the refusals in the CLI. ([#3007](https://github.com/MakazhanAlpamys/Soup/pull/3007))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
