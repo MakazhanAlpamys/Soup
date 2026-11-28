@@ -155,6 +155,38 @@ def test_valid_numeric_controls_remain_valid():
     assert ShipConfig(forgetting_threshold=0.1).forgetting_threshold == 0.1
 
 
+@pytest.mark.parametrize(
+    "location",
+    [
+        ("training", "stream_resident_layers"),
+        ("training", "stream_ram_cache_mb"),
+        ("training", "stream_partial_ram", "limit_bytes"),
+        ("training", "stream_partial_ram", "reserved_bytes"),
+        ("training", "stream_partial_ram", "cache_bytes"),
+    ],
+)
+@pytest.mark.parametrize("value", [True, False], ids=["true", "false"])
+def test_stream_placement_numeric_bool_messages(location, value):
+    from soup_cli.config.schema import SoupConfig
+
+    field_name = location[-1]
+    if len(location) == 3:
+        budget = {"limit_bytes": 1024, "reserved_bytes": 0, "cache_bytes": 0}
+        budget[field_name] = value
+        fields = {"stream_partial_ram": budget}
+    else:
+        fields = {field_name: value}
+
+    with pytest.raises(ValidationError) as exc_info:
+        SoupConfig.model_validate(
+            {"base": "local-model", "data": {"train": "unused.jsonl"}, "training": fields}
+        )
+
+    assert [(error["loc"], error["msg"]) for error in exc_info.value.errors()] == [
+        (location, f"Value error, {field_name} must be an int, not a bool")
+    ]
+
+
 def test_actual_boolean_fields_still_accept_booleans():
     assert LoraConfig(use_dora=True).use_dora is True
     assert DataConfig(train="unused.jsonl", streaming=True).streaming is True

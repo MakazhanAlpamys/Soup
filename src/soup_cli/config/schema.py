@@ -106,6 +106,10 @@ _MAX_LORA_PATTERN_KEY_LEN = 512
 # which key it was, not enough to paste kilobytes into a terminal or a log.
 _MAX_LORA_PATTERN_KEY_SHOWN = 80
 
+# Tasks that training.l2l accepts. A task joins the tuple when its L2L window loss
+# (trainer/l2l_trainer.py WindowLoss) ships; the refusal below reads the tuple.
+L2L_SUPPORTED_TASKS = ("sft",)
+
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
 _MAX_UNFROZEN_PATTERN_LEN = 512
@@ -192,6 +196,12 @@ def _reject_boolean_numeric_field(
 
     return value
 
+
+# Optimizers whose moment allocation ``stream_resident_layers`` can budget up
+# front (two fp32 moments per trainable parameter).
+_STREAM_RESIDENCY_OPTIMIZERS = frozenset(
+    {"adamw_torch", "adamw_torch_fused", "adamw_8bit", "paged_adamw_8bit"}
+)
 
 _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
     "seed",
@@ -1342,6 +1352,40 @@ class EvalGateConfig(BaseModel):
             raise ValueError(
                 "eval_gate.suite is required when eval_gate.enabled=true"
             )
+        return self
+
+
+class StreamPartialRamConfig(BaseModel):
+    """Experimental host envelope for ``training.stream_partial_ram``: explicit bytes only."""
+
+    model_config = {"extra": "forbid"}
+    limit_bytes: int = Field(
+        gt=0, strict=True,
+        description="Total host bytes the weights, staging and reservations may account for",
+    )
+    reserved_bytes: int = Field(
+        ge=0, strict=True,
+        description=(
+            "Reserve host bytes for other consumers and safety headroom. "
+            "With training.l2l enabled, Soup reserves the RAM activation window separately. "
+            "Otherwise, include activation memory in reserved_bytes."
+        ),
+    )
+    cache_bytes: int = Field(
+        ge=0, strict=True,
+        description="Allocation cap, in bytes, for the decoder layers kept in RAM",
+    )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
+    @model_validator(mode="after")
+    def _check_budget(self) -> "StreamPartialRamConfig":
+        from soup_cli.utils.partial_ram_source import PartialRamBudget
+
+        PartialRamBudget(self.limit_bytes, self.reserved_bytes, self.cache_bytes)
         return self
 
 
@@ -4063,6 +4107,49 @@ class TrainingConfig(BaseModel):
             "Weighted preference_loss_weights do not stream yet."
         ),
     )
+    l2l: bool = Field(
+        default=False,
+        description=(
+            "BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each "
+            "streamed decoder layer is loaded once per optimizer step and runs all "
+            "k micro-batches, then the optimizer takes one step on the adapters. k is "
+            "gradient_accumulation_steps. Needs stream_layers=true and a Llama or "
+            "Mistral model on a single GPU; MoE models are refused. k=1 behaves like "
+            "plain streaming. A bool only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_spill_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "BETA — where training.l2l spills activations that do not fit the host-RAM "
+            "budget. Default: a '_l2l_spill' folder in the run's output directory. It "
+            "must resolve under $HOME, the working directory or the temp directory "
+            "(realpath, so symlinks and Windows short names cannot step outside), and "
+            "is refused at launch on RAM-backed, overlay and network filesystems and on "
+            "a drive without room. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
+        default="none",
+        description=(
+            "BETA — how training.l2l stores the activations between layers. 'none' keeps "
+            "them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the "
+            "launch refuses it until it is shown to be safe for training: it is lossy "
+            "and its gradients are not yet checked against the accumulation baseline. "
+            "The value is recorded in the run's l2l_recipe.json, and a resume with "
+            "another codec is refused. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_auto_k: bool = Field(
+        default=False,
+        description=(
+            "BETA — let the memory planner pick the largest k that fits host RAM, up to "
+            "gradient_accumulation_steps. Plans the window of a MoE model, which L2L "
+            "does not run yet, so the launch refuses it for now. Off: k = "
+            "gradient_accumulation_steps. Only valid with training.l2l=true. A bool "
+            "only: 1 or 'yes' is refused."
+        ),
+    )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
@@ -4271,6 +4358,72 @@ class TrainingConfig(BaseModel):
                 f"got {type(v).__name__} {v!r}"
             )
         return v
+
+    stream_resident_layers: Union[int, Literal["auto"]] = Field(
+        default=0,
+        description=(
+            "Opt-in persistent decoder weights for streamed text SFT. 0 (the "
+            "default) keeps ordinary streaming; a positive integer keeps a centred "
+            "block of that many decoder layers resident on the GPU, so they are "
+            "never re-read; 'auto' measures the configured forward+backward peak "
+            "and selects the layers that fit a conservative VRAM budget (the "
+            "smaller of 85% of the card and free + reserved VRAM, or "
+            "stream_vram_override, minus the measured peak, a setup reserve and an "
+            "estimated optimizer state). CUDA with the RAM tier or the async SSD "
+            "source, dense decoders only. A GPU-resident layer skips its SSD reads "
+            "and is excluded from the stream_ram_cache_mb hotset. 'auto' falls back "
+            "to ordinary streaming where it cannot measure, a positive count refuses "
+            "instead. The RAM-tier host store is retained. Setup probes preserve RNG "
+            "and do not update adapters. No speed guarantee. task='sft' with an AdamW "
+            "optimizer only, and refused beside activation_offloading and a "
+            "non-default stream_recompute."
+        ),
+    )
+
+    @field_validator("stream_resident_layers", mode="before")
+    @classmethod
+    def _validate_stream_resident_layers(cls, v: Any) -> Any:
+        """A count is an int, never a bool (``True`` would read as one layer)."""
+        v = _reject_boolean_numeric_field(cls, "stream_resident_layers", v)
+        if v == "auto" and isinstance(v, str):
+            return v
+        if type(v) is not int or v < 0:
+            raise ValueError(
+                "training.stream_resident_layers must be 0, a positive int or 'auto'; "
+                f"got {type(v).__name__} {v!r}"
+            )
+        return v
+
+    stream_partial_ram: Optional[StreamPartialRamConfig] = Field(
+        default=None,
+        description=(
+            "Experimental: keep a bounded prefix of the decoder layers in host RAM beside "
+            "the async SSD reader, under an explicit host envelope. limit_bytes is the "
+            "total allocation envelope. With training.l2l, Soup reserves the maximum "
+            "RAM activation window in addition to reserved_bytes for other host consumers. "
+            "Otherwise reserved_bytes also covers activations. cache_bytes caps the "
+            "allocation for the cached layers. Dense Llama, unquantized, task='sft', "
+            "stream_source='disk' only; an allocation envelope, not a process-RSS limit. "
+            "Refused beside stream_ram_cache_mb and stream_resident_layers."
+        ),
+    )
+
+    stream_ram_cache_mb: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Optional allocation ceiling in MiB for a persistent RAM hotset on the "
+            "SSD streaming tier: the layers most re-read are loaded once and served "
+            "from host RAM instead of the disk. 0 (the default) disables it. The "
+            "layer count is selected automatically from the real allocation "
+            "(arena rounding included), the current cgroup limits, 30% available-RAM "
+            "slack and a 512 MiB runtime reserve, never above this ceiling. Does not "
+            "change weights or GPU buffers. Refused with stream_source='ram', which "
+            "already holds the complete store; on the 'auto' tier it applies only "
+            "when the store spills to the disk tier."
+        ),
+    )
 
     stream_expert_layout: Literal["fused", "per_expert"] = Field(
         default="fused",
@@ -4647,6 +4800,35 @@ class TrainingConfig(BaseModel):
             f"training.{info.field_name} must be true or false, got "
             f"{type(v).__name__} {v!r}"
         )
+
+    @field_validator("l2l", "l2l_auto_k", mode="before")
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_l2l_switch_is_bool(cls, v, info: ValidationInfo):
+        """``l2l: 1`` or ``yes`` is refused instead of being coerced to ``true``: the
+        switch replaces the training step, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
+
+    @field_validator("l2l_spill_dir")
+    @classmethod
+    def _validate_l2l_spill_dir(cls, value: Optional[str]) -> Optional[str]:
+        # Shape only. Where the directory may live (realpath + commonpath against
+        # $HOME, $CWD and $TMPDIR) is checked at launch by utils/l2l_spill.py, which
+        # also needs the filesystem.
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("training.l2l_spill_dir must be a non-empty path")
+        if "\x00" in value:
+            raise ValueError("training.l2l_spill_dir must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("training.l2l_spill_dir must be <= 4096 chars")
+        return value
 
     @model_validator(mode="after")
     def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
@@ -8008,6 +8190,9 @@ class SoupConfig(BaseModel):
                     ("stream_vram_probe", bool(tcfg.stream_vram_probe)),
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
+                    ("stream_resident_layers", tcfg.stream_resident_layers != 0),
+                    ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                    ("stream_partial_ram", tcfg.stream_partial_ram is not None),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
@@ -8062,6 +8247,47 @@ class SoupConfig(BaseModel):
                 "belongs to the NVMe disk tier, and 'ram' never falls back to "
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
+            )
+        if tcfg.stream_partial_ram is not None:
+            if (
+                tcfg.stream_source != "disk"
+                or self.task != "sft"
+                or self.backend != "transformers"
+                or tcfg.quantization != "none"
+            ):
+                raise ValueError(
+                    "training.stream_partial_ram requires unquantized transformers SFT, "
+                    "stream_layers=true and stream_source='disk'; other modes are not "
+                    "supported yet"
+                )
+            for other, is_set in (
+                ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                ("stream_resident_layers", tcfg.stream_resident_layers != 0),
+            ):
+                if is_set:
+                    raise ValueError(
+                        f"training.stream_partial_ram cannot be combined with "
+                        f"training.{other}: each decides which layers sit in host RAM "
+                        f"or VRAM and their combined budget is not measured. Set one "
+                        f"of them."
+                    )
+            if tcfg.l2l:
+                if type(tcfg.batch_size) is not int:
+                    raise ValueError(
+                        "training.stream_partial_ram with training.l2l requires a fixed "
+                        "positive integer training.batch_size"
+                    )
+                if tcfg.l2l_spill_dir is not None:
+                    raise ValueError(
+                        "training.l2l_spill_dir cannot be set with training.stream_partial_ram: "
+                        "the shared budget uses RAM-only activations"
+                    )
+        if tcfg.stream_source == "ram" and tcfg.stream_ram_cache_mb != 0:
+            raise ValueError(
+                f"training.stream_ram_cache_mb={tcfg.stream_ram_cache_mb} has no effect "
+                "with training.stream_source='ram': the RAM tier already holds the "
+                "complete store. Set stream_source='auto' or 'disk', or drop "
+                "stream_ram_cache_mb."
             )
         # DPO/IPO use a frozen reference adapter on the streamed base.
         # KTO/BCO use the same base with adapters disabled for the reference pass.
@@ -8134,6 +8360,36 @@ class SoupConfig(BaseModel):
                 f"backward is not supported yet. Remove training.stream_recompute "
                 f"or set it to 'on'."
             )
+        if tcfg.stream_resident_layers != 0:
+            if stream_task != "sft":
+                raise ValueError(
+                    f"training.stream_resident_layers supports task='sft' only; got "
+                    f"task={stream_task!r}. The layers it keeps are chosen from a "
+                    f"measured causal-LM step, which is the SFT step; a preference "
+                    f"loss runs a different computation. Remove "
+                    f"training.stream_resident_layers."
+                )
+            if tcfg.activation_offloading is not None:
+                raise ValueError(
+                    f"training.stream_resident_layers cannot be combined with "
+                    f"training.activation_offloading={tcfg.activation_offloading!r}: "
+                    f"both claim the spare VRAM. Unset one of them."
+                )
+            if tcfg.stream_recompute != "on":
+                raise ValueError(
+                    f"training.stream_resident_layers cannot be combined with "
+                    f"training.stream_recompute={tcfg.stream_recompute!r}: both "
+                    f"decide what stays in spare VRAM and their combined budget is "
+                    f"not measured. Set stream_recompute to 'on' or remove "
+                    f"training.stream_resident_layers."
+                )
+            if tcfg.optimizer not in _STREAM_RESIDENCY_OPTIMIZERS:
+                raise ValueError(
+                    f"training.stream_resident_layers requires an AdamW optimizer "
+                    f"({', '.join(sorted(_STREAM_RESIDENCY_OPTIMIZERS))}) whose future "
+                    f"moment allocation can be budgeted; got optimizer="
+                    f"{tcfg.optimizer!r}."
+                )
         if tcfg.stream_recompute != "on" and tcfg.activation_offloading is not None:
             # A retained layer saves its activations through its own
             # saved_tensors_hooks, the innermost ones, so the offloading hooks
@@ -8328,6 +8584,62 @@ class SoupConfig(BaseModel):
                     f"{'it' if len(dropped) == 1 else 'them'}."
                 )
             raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_l2l_compat(self) -> "SoupConfig":
+        """``training.l2l`` and its options: each refusal names the field and the gate.
+
+        ``l2l`` reuses the streamed layer loads, so it needs ``stream_layers`` and a task
+        whose L2L window loss ships. The options only change how L2L runs, so each is
+        refused while ``l2l`` is off. The codec gate itself (``fp8_e4m3``) is closed at
+        launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
+        """
+        tcfg = self.training
+        options = {
+            "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
+            "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
+            "l2l_auto_k": tcfg.l2l_auto_k,
+        }
+        if not tcfg.l2l:
+            for name, is_set in options.items():
+                if is_set:
+                    raise ValueError(
+                        f"training.{name} is set but training.l2l is false: it changes how "
+                        f"L2L runs and nothing else reads it. Set l2l=true or drop {name}."
+                    )
+            return self
+        if not tcfg.stream_layers:
+            raise ValueError(
+                "training.l2l requires training.stream_layers=true: L2L reuses the "
+                "streamed layer loads, and a resident model has none to reuse."
+            )
+        if self.task not in L2L_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
+                f"got task={self.task!r}."
+            )
+        if self.backend != "transformers" or self.modality != "text":
+            raise ValueError(
+                "training.l2l requires backend='transformers' and modality='text'; "
+                f"got backend={self.backend!r}, modality={self.modality!r}."
+            )
+        own_trainer = [
+            name
+            for name, is_set in (
+                ("data.format='raft'", self.data.format == "raft"),
+                ("training.prefix_tree", bool(tcfg.prefix_tree)),
+                ("training.stream_loss_chunk", tcfg.stream_loss_chunk is not None),
+            )
+            if is_set
+        ]
+        if own_trainer:
+            raise ValueError(
+                f"training.l2l cannot be combined with {' / '.join(own_trainer)}: each "
+                "builds its own trainer or replaces how the loss is computed (the L2L loss "
+                "bypasses the chunked-loss hook), so L2L would skip it. "
+                "Remove one of the two."
+            )
         return self
 
     @model_validator(mode="after")

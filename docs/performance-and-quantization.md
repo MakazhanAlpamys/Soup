@@ -469,7 +469,9 @@ training:
   stream_source: auto          # 'auto' (same-host RAM), 'ram', 'disk' (v0.72.3)
   stream_ngram_source: auto    # Qwen4 PLE only: 'auto', 'ram', or read-only 'disk'
   stream_buffers: 2            # Double-buffering; range [2, 8]
+  # stream_resident_layers: auto  # Keep measured decoder layers in spare VRAM (CUDA SFT, RAM or async SSD source); see below
   stream_read_ahead: 2         # Disk tier only; range [1, 8]. N stages N-1 layers ahead, and each level costs one layer of pinned host RAM
+  # stream_ram_cache_mb: 14336 # Optional SSD-tier RAM hotset allocation ceiling in MiB; 0 disables it
   # stream_pin: false          # Force the pinned RAM store off (escape hatch) or on; unset = automatic. See below
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
@@ -499,6 +501,119 @@ A Kimi K2 base is read the same way, through a guarded rewrite of its `config.js
 (see "Kimi K2" below).
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
+
+**Persistent decoder weights (opt-in).** `training.stream_resident_layers: auto`
+measures a forward/backward at the configured batch size and maximum context, then keeps a
+centred block of frozen decoder weights in private GPU slots. They are copied once during
+setup and reused across training steps; the other layers use the existing rotating buffers.
+An integer selects that many centred layers; `0` (the default) leaves ordinary streaming.
+The complete host store is retained. Precision does not change and base weights are not updated.
+
+The scope is dense text SFT on CUDA with the RAM tier or the async SSD source, and an AdamW
+optimizer. NF4 slots keep the packed weights and quantization sidecars; dense slots keep the
+stream dtype. On the SSD tier a resident layer is never read from disk again and is excluded
+from the `stream_ram_cache_mb` hotset. `auto` reports a fallback to ordinary streaming on
+CPU/MPS or a source that cannot coordinate; an explicit positive count refuses an unsupported
+or over-budget request. The config refuses it beside
+`activation_offloading` and a non-default `stream_recompute`, because those also spend the spare
+VRAM and their combined budget is not measured.
+
+The measured candidate must fit the smallest of 85% of physical VRAM, currently free plus
+reserved memory, and `stream_vram_override`, after a 64 MiB setup reserve and an estimated
+12 bytes per trainable parameter for future AdamW state. The setup probe runs forward and
+backward but no optimizer step; it preserves Torch RNG, adapter values and module training
+flags and requires pristine gradients. An automatic OOM or failed capacity check keeps the
+ordinary pool; a non-OOM execution error refuses the run. The ready message reports the
+persistent memory separately from the rotating buffers. Setup time is additional to training.
+
+This is a conservative capacity policy, not a speed selector: occupying more VRAM is not a
+promise of a faster step. Check speed and peak memory for the actual model and configuration.
+
+**Partial RAM cache for the SSD tier (opt-in).** If the full base does not fit in
+RAM, `training.stream_ram_cache_mb` can keep a fixed, centred hotset of frozen layers
+in host memory. The remaining layers continue through the existing async NVMe reader.
+Cached layers are read once at setup and skipped by subsequent speculative disk reads;
+they still use the ordinary GPU buffers and host-to-device copies. This is separate
+from `stream_resident_layers`, which keeps weights on the GPU; when both are set, the
+GPU-resident layers are chosen first and excluded from the hotset.
+
+The integer is an **allocation ceiling in MiB**, including power-of-two pinned arenas
+or pageable alignment slack. The layer count fits that ceiling and a conservative
+current-RAM allowance: 70% of available memory minus a 512 MiB future-runtime reserve.
+On Linux, visible cgroup hard limits, `memory.high`, and finite positive v1 soft-limit
+hints also constrain the allowance. Clean file-cache pages may be reclaimed; dirty,
+writeback, shared and unevictable pages and swap capacity are excluded. Limits and
+system settings are never changed. Singleton groups already held by ordinary staging
+are not duplicated. No fitting layer means ordinary disk streaming with a notice.
+
+`0` is the default and does not probe or allocate the hotset. Explicit `stream_source:
+ram` rejects a nonzero cache budget; `auto` uses the complete RAM store when it fits and
+reports that the partial cache is unnecessary. A cache allocation failure refuses with
+advice to lower the budget or disable pinning; SSD read and identity failures are
+propagated. Cached buffers stay alive until their outstanding copy events finish at
+teardown.
+
+The cache preserves original tensor bytes, including packed NF4 weights and sidecars;
+it adds no quantization, arithmetic kernel, activation retention or compilation.
+Setup preload consumes time and additional RAM. A speed benefit requires exposed SSD
+waiting and enough repeated reads to repay the preload; filling memory alone is not a
+speed guarantee.
+
+### Experimental partial RAM residency
+
+`training.stream_partial_ram` keeps a fixed subset of decoder layers in CPU RAM
+and sends only the remaining layers to the existing asynchronous disk reader.
+It is off by default. The supported path is **dense Llama, unquantized
+Transformers SFT, explicit disk tier**. CPU correctness tests pass; CUDA correctness,
+pinned-transfer lifetime and throughput still need hardware validation. It is refused
+beside `stream_ram_cache_mb` and `stream_resident_layers`: each decides which layers sit
+in host RAM or VRAM, and their combined budget is not measured.
+
+```yaml
+training:
+  stream_layers: true
+  stream_source: disk
+  quantization: none
+  batch_size: 1
+  stream_partial_ram:
+    limit_bytes: 8589934592     # example 8 GiB host allocation envelope
+    reserved_bytes: 4294967296  # example 4 GiB for other host users/safety
+    cache_bytes: 2147483648     # at most 2 GiB of resident allocations
+```
+
+These values illustrate the configuration, not a measured safe recipe. Choose
+reservations for the actual workload. The trainer also charges resident extras
+and RAM-backed auxiliary weights. It caps the envelope using free and physical
+RAM headroom, including visible Linux cgroup limits. Setup refuses the envelope
+when it cannot determine available memory. The source checks the envelope **before buffer
+allocation**: caller/trainer reservations + resident allocations + disk staging
+allocations + the largest selected shard's loading map must fit. Pinned arena
+rounding and staging alignment overhead count against the envelope. Pinned
+staging reserves padding in each arena to align its actual address.
+An oversized plan is refused; it does not silently reduce reservations, change
+pinning or restart with another plan.
+
+With `training.l2l: true`, use a fixed integer `training.batch_size`. Before caching
+weights, Soup reserves the maximum activation window inside `limit_bytes`. It uses
+`data.max_length` rounded up to 64 tokens, the batch size, the accumulation count,
+the model dimensions, the activation dtype and pinned allocation rounding on CUDA.
+Keep this automatic charge out of `reserved_bytes`, which covers other host users
+and safety headroom. The shared-budget path keeps uncompressed activations in RAM.
+
+Selection is stable first-fit in decoder order, retaining complete layers only.
+Embedding/head shards remain on the existing path. Cached layers are removed
+from the disk reader's path list, including speculative lookahead; get/release
+indices are remapped together. Cache loading reads each selected shard once.
+The cache is immutable throughout training and is released on runtime close;
+outstanding recorded transfer events are synchronized before cached storage is
+released. Constructor failures close any already-started disk reader.
+
+The envelope bounds accounted allocations, **not process RSS**. Python overhead,
+allocator retention, the OS page cache and unrelated processes are not controlled.
+There is no dynamic pressure-driven eviction. `resident_tensor_bytes_served` counts
+logical tensor requests served from RAM; it is neither physical SSD bytes saved nor a
+measured speedup. Runtime statistics distinguish resident tensor bytes, staging bytes,
+owned host allocations and the reserved peak including the loading transient.
 
 For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
 bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
@@ -1100,7 +1215,7 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_resident_layers` / `stream_ram_cache_mb` / `stream_partial_ram` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
 - a pre-quantised bitsandbytes NF4 base (`unsloth/*-bnb-4bit`: `quant_method: bitsandbytes`, `load_in_4bit`, `bnb_4bit_quant_type: nf4`, `bnb_4bit_use_double_quant: true`, `bnb_4bit_compute_dtype: bfloat16`, `uint8` storage) is the one quantised source that streams, and only under `training.quantization: 4bit` on a dense decoder architecture (not `deepseek_v3` or `qwen4_exp`): it is imported into the layer cache byte for byte, with no dequantisation and no requantisation, and the cache is the same on every run device. The run needs a bfloat16 card (a float16 GPU and the CPU are refused), double quantisation left on and an unstriped cache, each refused by name before the weights are resolved. An import killed half way leaves a `.soup-nf4-import.<pid>.*` staging folder in the cache folder; the next run removes it before the disk pre-flight (a folder whose process is still running, another run of the same base, is left alone). The same base under `quantization: none`, and bitsandbytes 8-bit, FP4 or a base that is not double-quantised, stay refused like the other quantised sources
@@ -1197,6 +1312,37 @@ output: ./output
 - **The prediction is not equally trustworthy at every sequence length.** Measured on a 4 GB RTX 3050 with SmolLM2-135M streamed in bf16 at batch 1, the formula over-predicts by 8% at seq 4352 (safe) and then **under-predicts — 0.934x the real peak at seq 5120 and 0.787x at 6144**. The grid it was fitted on only ever varied batch size, at seq 256 and 512, so long-context streaming is exactly where it has the least evidence behind it. If you are streaming at multi-thousand-token sequences, turn on `stream_vram_probe`. Record: [`benchmarks/gate-v0.73.1-measured-vram-fit.md`](../benchmarks/gate-v0.73.1-measured-vram-fit.md).
 - **The pre-flight reports the whole card on a capped or shared GPU** — `torch.cuda.mem_get_info()` is a device-level driver query and cannot see `set_per_process_memory_fraction`, a MIG slice, or another process on the same card. Set `training.stream_vram_override` to what your process may actually use; the check then refuses configurations that would exceed *that*, which is also how you rehearse a 4 GB card on a 16 GB one.
 - **Slower than you expected** — layer streaming trades time for memory. If the model already fits resident on your card, do not enable it.
+
+### Layer-to-layer execution (`training.l2l`, BETA)
+
+A streamed run with `gradient_accumulation_steps: k` reads every layer once per micro-batch, so k times per optimizer step. `training.l2l: true` runs the step layer-major instead: each streamed layer is loaded once and runs all k micro-batches, the micro-batch activations wait in host memory between layers, and the backward walks the layers in reverse. The loss, the gradients and the random stream are those of gradient accumulation; only the number of weight reads changes. `l2l: false` (the default) leaves a `stream_layers` run exactly as it was.
+
+```yaml
+training:
+  stream_layers: true
+  l2l: true
+  batch_size: 1
+  gradient_accumulation_steps: 8      # k micro-batches per layer load
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
+| `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
+| `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
+| `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
+
+- **Scope.** Llama and Mistral models on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model is refused with `L2L on a MoE model needs per-expert streaming parity (not yet in this version)`. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
+- **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
+- **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
+- **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
+- **Recipe and resume.** The run writes `l2l_recipe.json` (requested and effective k, codec) to its output directory. A resume whose k or codec differs from the checkpoint's is refused, because a different k moves the optimizer-step boundaries.
+- **k = 1** behaves like plain streaming.
+- **Shared host budget.** Dense, unquantized Llama SFT on the disk tier can use
+  [experimental partial RAM residency](#experimental-partial-ram-residency) with L2L.
+  A window that exceeds the activation reservation fails before replacing the
+  current store. Leave `training.l2l_spill_dir` unset for this RAM-only mode.
+  Shutdown drains activations before releasing the streamed weights.
 
 ### Preference losses over streaming (v0.72.4)
 
