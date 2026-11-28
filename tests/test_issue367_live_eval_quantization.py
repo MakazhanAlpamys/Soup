@@ -537,7 +537,7 @@ class TestShipDerivesQuantizationFromConfig:
 
         captured = {}
 
-        def _fake_resolve(base, tuned, adapter, device, quantization=None):
+        def _fake_resolve(base, tuned, adapter, device, quantization=None, **kwargs):
             captured["quantization"] = quantization
             return (lambda p: "hi", lambda p: "hi")
 

@@ -232,7 +232,7 @@ def test_verdict_dict_and_rubric_carry_the_number():
 def _run(monkeypatch, changed, *, base="base", config=None, extra=()):
     loads = []
 
-    def _fake_resolve(base, tuned, adapter, device, quantization=None):
+    def _fake_resolve(base, tuned, adapter, device, quantization=None, **kwargs):
         loads.append(adapter)
         return (lambda p: "hi", lambda p: "hi")
 

@@ -45,6 +45,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Dict,
     List,
@@ -789,6 +790,81 @@ def _expected_numerics_family(soup_config: "SoupConfig") -> str:
     return quant if quant is not None else NUMERICS_FAMILY_FULL
 
 
+@dataclass(frozen=True)
+class _ShipLoad:
+    device: str
+    quantization: Optional[str]
+    numerics: str
+    quantization_config: object = None
+
+    @property
+    def dtype(self) -> Optional[str]:
+        return None if self.quantization else self.numerics
+
+
+def _resolve_ship_load(quantization: Optional[str], device: Optional[str]) -> _ShipLoad:
+    from soup_cli.utils import live_eval
+
+    resolved = live_eval.resolve_device(device)
+    return _ShipLoad(resolved, quantization, _live_eval_numerics(quantization, resolved))
+
+
+def _validate_external_load(
+    load: _ShipLoad, base: str, tuned: Optional[str], adapter: Optional[str],
+) -> _ShipLoad:
+    """Reject unsupported external evaluation before either engine loads a model."""
+    from importlib.metadata import version
+
+    from packaging.version import Version
+
+    _reject_lm_eval_injection(base, "--base")
+    _reject_lm_eval_injection(
+        adapter if adapter else str(tuned), "--adapter" if adapter else "--tuned",
+    )
+    try:
+        if Version(version("lm-eval")) < Version("0.4.1"):
+            raise ValueError("external ship benchmarks need lm-eval>=0.4.1; upgrade soup-cli[eval]")
+        from lm_eval.models.huggingface import HFLM  # noqa: F401
+
+        from soup_cli.utils.run_provenance import recorded_adapter_base
+
+        if adapter or recorded_adapter_base(base) or (tuned and recorded_adapter_base(tuned)):
+            from peft import PeftModel  # noqa: F401
+    except ImportError as exc:
+        raise ValueError(
+            "external ship dependencies unavailable; install soup-cli[train,eval] (lm-eval/PEFT)"
+        ) from exc
+    import torch
+
+    selected = torch.device(load.device)
+    if selected.type not in {"cpu", "cuda", "mps"}:
+        raise ValueError("external ship --device must select cpu, cuda or mps")
+    if selected.type == "cuda" and (
+        not torch.cuda.is_available()
+        or (selected.index is not None and selected.index >= torch.cuda.device_count())
+    ):
+        raise ValueError("external ship --device selects an unavailable CUDA device")
+    if selected.type == "mps":
+        if not torch.backends.mps.is_available() or selected.index not in (None, 0):
+            raise ValueError("external ship --device selects unavailable MPS")
+        if load.quantization:
+            raise ValueError("external ship quantization on MPS is unsupported; use cpu or cuda")
+    quantization_config = None
+    if load.quantization:
+        try:
+            import bitsandbytes  # noqa: F401
+        except (ImportError, OSError) as exc:
+            raise ValueError(
+                "external ship quantization needs bitsandbytes; install soup-cli[train]"
+            ) from exc
+        from soup_cli.utils import live_eval
+
+        quantization_config = live_eval._build_quantization_config(
+            load.quantization, device=load.device,
+        )
+    return replace(load, quantization_config=quantization_config)
+
+
 def _check_evidence_numerics(payload: dict, expected_family: str) -> None:
     """Refuse evidence whose numerics *family* does not match ``--config``.
 
@@ -826,6 +902,8 @@ def _resolve_generators(
     quantization: Optional[str] = None,
     chat_template_kwargs: Optional[dict] = None,
     base_adapter: Optional[str] = None,
+    *,
+    load: Optional[_ShipLoad] = None,
 ) -> Tuple[Callable[[str], str], Callable[[str], str]]:
     """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode).
 
@@ -843,7 +921,8 @@ def _resolve_generators(
     from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
     from soup_cli.utils import live_eval
 
-    numerics = _live_eval_numerics(quantization, device)
+    load = load or _resolve_ship_load(quantization, device)
+    device, quantization, numerics = load.device, load.quantization, load.numerics
     if quantization:
         console.print(
             f"[dim]Live eval: loading base/tuned at {numerics} "
@@ -864,6 +943,10 @@ def _resolve_generators(
     # Passed only when set, so a run without --base-adapter builds the base side
     # exactly as before (no ``adapter`` keyword at all).
     base_adapter_options = {"adapter": base_adapter} if base_adapter is not None else {}
+    quantization_options: Dict[str, Any] = (
+        {"quantization_config": load.quantization_config}
+        if load.quantization_config is not None else {}
+    )
     if base_adapter is not None:
         console.print(
             f"[dim]Live eval: base side = base + --base-adapter "
@@ -875,6 +958,7 @@ def _resolve_generators(
             dtype=dtype, quantization=quantization,
             **base_adapter_options,
             **template_options,
+            **quantization_options,
         )
     if adapter:
         with group("load", side="tuned"):
@@ -883,6 +967,7 @@ def _resolve_generators(
                 max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
                 dtype=dtype, quantization=quantization,
                 **template_options,
+                **quantization_options,
             )
     elif tuned:
         with group("load", side="tuned"):
@@ -890,6 +975,7 @@ def _resolve_generators(
                 tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
                 dtype=dtype, quantization=quantization,
                 **template_options,
+                **quantization_options,
             )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
@@ -1652,11 +1738,14 @@ def _lm_eval_leg2(
     adapter: Optional[str],
     baseline_scores: Mapping[str, float],
     device: Optional[str],
+    *,
+    load: Optional[_ShipLoad] = None,
 ) -> Tuple[Dict[str, object], Dict[str, object]]:
     """Score non-mini benchmarks via the existing lm-eval harness runner."""
     from soup_cli.commands import eval as eval_cmd
+    from soup_cli.utils import live_eval
 
-    dev = device or "cpu"
+    load = load or _resolve_ship_load(None, device)
     _reject_lm_eval_injection(base_id, "--base")
     base_arg = f"pretrained={base_id}"
     if adapter:
@@ -1670,9 +1759,15 @@ def _lm_eval_leg2(
     tuned_map: Dict[str, object] = {}
 
     with group("suite_eval", side="tuned", suite=",".join(names)):
-        tuned_results = eval_cmd._run_lm_eval(
-            tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev
+        tuned_loaded = live_eval.load_model_and_tokenizer(
+            base_id if adapter else str(tuned_id), adapter=adapter, device=load.device,
+            dtype=load.dtype, quantization=load.quantization,
+            quantization_config=load.quantization_config,
         )
+        tuned_results = eval_cmd._run_lm_eval(
+            tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, load.device, loaded=tuned_loaded,
+        )
+        del tuned_loaded
     tuned_blocks = tuned_results.get("results", {})
     for name in names:
         score = _extract_lm_score(tuned_blocks.get(name, {}))
@@ -1687,9 +1782,14 @@ def _lm_eval_leg2(
             base_to_run.append(name)
     if base_to_run:
         with group("suite_eval", side="base", suite=",".join(base_to_run)):
-            base_results = eval_cmd._run_lm_eval(
-                base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev
+            base_loaded = live_eval.load_model_and_tokenizer(
+                base_id, device=load.device, dtype=load.dtype, quantization=load.quantization,
+                quantization_config=load.quantization_config,
             )
+            base_results = eval_cmd._run_lm_eval(
+                base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, load.device, loaded=base_loaded,
+            )
+            del base_loaded
         base_blocks = base_results.get("results", {})
         for name in base_to_run:
             score = _extract_lm_score(base_blocks.get(name, {}))
@@ -1709,6 +1809,7 @@ def _leg2_scores(
     adapter: Optional[str],
     baseline_scores: Mapping[str, float],
     device: Optional[str],
+    load: Optional[_ShipLoad] = None,
 ) -> Tuple[Dict[str, object], Dict[str, object]]:
     """Compute leg-2 ``(base_scores, tuned_scores)`` maps over the general suite.
 
@@ -1740,7 +1841,7 @@ def _leg2_scores(
 
     if other_names:
         lm_base, lm_tuned = _lm_eval_leg2(
-            other_names, base_id, tuned_id, adapter, baseline_scores, device
+            other_names, base_id, tuned_id, adapter, baseline_scores, device, load=load,
         )
         base_map.update(lm_base)
         tuned_map.update(lm_tuned)
@@ -2246,6 +2347,15 @@ def _verdict_live(
             loop_gate=unmeasured_loop_gate(gate_inputs) if gate_inputs is not None else None,
         )
 
+    try:
+        load = _resolve_ship_load(quantization, device)
+        from soup_cli.eval.gate_suites import is_bundled_suite
+
+        if any(not is_bundled_suite(name) for name in suite_names):
+            load = _validate_external_load(load, base, tuned, adapter)
+    except (ValueError, RuntimeError, ImportError, OSError) as exc:
+        _fail(f"live ship load settings: {exc}", _EXIT_USAGE)
+
     if before_models is not None:
         before_models()
     # the file is run HERE: after the run is known to evaluate, before any model loads
@@ -2254,13 +2364,9 @@ def _verdict_live(
     # Passed on only when set: the helpers' call shape is unchanged without it.
     reference_option = {"judge_reference": True} if judge_reference else {}
     try:
-        template_options = (
-            {"chat_template_kwargs": chat_template_kwargs}
-            if chat_template_kwargs is not None else {}
-        )
         base_gen, tuned_gen = _resolve_generators(
-            base, tuned, adapter, device, quantization, **template_options,
-            **({"base_adapter": base_adapter} if base_adapter is not None else {}),
+            base, tuned, adapter, device, quantization, load=load,
+            chat_template_kwargs=chat_template_kwargs, base_adapter=base_adapter,
         )
 
         measured_floor: Optional[NoiseFloor] = None
@@ -2300,6 +2406,7 @@ def _verdict_live(
             adapter=adapter,
             baseline_scores=baseline_scores,
             device=device,
+            load=load,
         )
         deltas = compute_benchmark_deltas(
             base_scores,
@@ -2330,7 +2437,7 @@ def _verdict_live(
             )
         return replace(
             verdict,
-            numerics=_live_eval_numerics(quantization, device),
+            numerics=load.numerics,
             adapter_change=adapter_change,
             judged=judged,
             base_adapter=base_adapter,

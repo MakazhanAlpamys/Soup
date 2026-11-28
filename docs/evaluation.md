@@ -628,6 +628,27 @@ soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
 soup ship --evidence evidence.json --output verdict.json
 ```
 
+### External benchmark load settings
+
+External names in `--general-suite` use the same resolved device and precision as
+the task and bundled suites. Full-precision loads use the device-selected dtype;
+`--config` reuses `training.quantization: 4bit` or `8bit`, including NF4 compute
+precision and double quantization. Soup loads the models and adapters through its
+shared loader, then passes them to lm-eval for task-specific scoring. The existing
+`numerics` stamp records that shared precision.
+
+This path requires lm-eval 0.4.1 or newer and the model-loading dependencies
+(`pip install "soup-cli[train,eval]"`). Version 0.4.0 cannot accept the loaded model;
+upgrade before retrying. This is an API minimum; older evaluator releases can still
+require incompatible Transformers/datasets versions, so upgrade if their imports fail.
+Missing dependencies, invalid/unavailable CPU/CUDA/MPS
+devices and quantized MPS are refused before model loading (exit `3`). For MPS,
+use `training.quantization: none` or select a supported CPU/CUDA environment.
+Model-loading or benchmark execution failures remain runtime errors (exit `1`).
+The harness keeps its own task prompts; `--chat-template-kwargs` remains live-only.
+The evidence schema and legacy replay rules are unchanged: older external scores
+cannot be verified from their combined numerics stamp and should be remeasured.
+
 ### Reference-guided judging
 
 By default the judge sees only the prompt and the response(s), so it rewards the
