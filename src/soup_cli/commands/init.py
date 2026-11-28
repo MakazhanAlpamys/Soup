@@ -167,12 +167,23 @@ def init(
 
     _write_config(output, config_text)
 
-    if template == "chat" and not Path("./data/train.jsonl").exists():
+    train_path = None
+    if template == "chat":
+        import yaml
+
+        try:
+            parsed = yaml.safe_load(config_text)
+            if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
+                train_path = parsed["data"].get("train")
+        except Exception:
+            pass
+
+    if train_path and not Path(train_path).exists():
         receipt_text = Text.assemble(
             ("Config saved to ", "bold green"),
             terminal_text(output_path, style="bold green"),
             "\n\nNext step:\nProvide training data at ",
-            ("./data/train.jsonl", "bold"),
+            (str(train_path), "bold"),
             " (or edit data.train in the config) before running:\n",
             ("soup train --config ", "bold"),
             terminal_text(output_path, style="bold"),
