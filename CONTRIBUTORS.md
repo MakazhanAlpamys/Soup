@@ -1761,6 +1761,9 @@ Listed by first contribution. PR numbers link the work.
 - **D Zayed Aman** ([@Zayed024](https://github.com/Zayed024))
   - Reused the shared NaN validator for data filter thresholds and TUI refresh, enforced the documented coherence range, and covered the refusals in the CLI. ([#3007](https://github.com/MakazhanAlpamys/Soup/pull/3007))
 
+- **Aibar** ([@loadcosmos](https://github.com/loadcosmos))
+  - Preserved evaluation baseline coverage when a task could not be scored and added a regression through the training gate. ([#3093](https://github.com/MakazhanAlpamys/Soup/pull/3093))
+
 ---
 
 Want to join this list? See [CONTRIBUTING.md](CONTRIBUTING.md) — good first issues are
