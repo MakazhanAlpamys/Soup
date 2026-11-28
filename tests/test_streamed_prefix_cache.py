@@ -272,13 +272,13 @@ def test_l2l_reuses_an_older_cutoff_after_progressive_freeze(tmp_path, monkeypat
         rows = _micro_batches(2)
         step = L2LStep(model, runtime, capture_layer_call(model, rows[0], draws=False))
         with closing(StreamedPrefixCache(model, 1, 1 << 20).install()) as cache:
-            with closing(_store(2)) as store:
+            with closing(_store(2, n_layers=len(step.layers))) as store:
                 plain = step.run(rows, store)
             model.zero_grad(set_to_none=True)
             _freeze(model, 2)
             cache.raise_cutoff(2)
             loads = _record_loads(runtime, monkeypatch)
-            with closing(_store(2)) as store:
+            with closing(_store(2, n_layers=len(step.layers))) as store:
                 promoted = step.run(rows, store)
             assert loads and min(loads) >= 1
             assert all(torch.equal(a, b) for a, b in zip(plain, promoted, strict=True))
