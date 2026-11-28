@@ -2473,7 +2473,7 @@ def from_traces_cmd(
         trace_iter = parse_soup_serve(str(logs_path))
     else:
         if logs_path.is_file():
-            with logs_path.open("r", encoding="utf-8") as fh:
+            with logs_path.open("r", encoding="utf-8-sig") as fh:
                 for line_no, line in enumerate(fh, start=1):
                     if line_no > max_trace_lines:
                         console.print(
