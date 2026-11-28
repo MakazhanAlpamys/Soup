@@ -990,7 +990,14 @@ The file is
 and is consumed later by `soup ship --baseline baseline.json` or
 `soup eval gate --baseline baseline.json`. Shared helpers
 `stamp_baseline_scores` / `write_baseline_file` are the only writers;
-`write_baseline_file` refuses an empty score map. Baseline scores must be finite
+`write_baseline_file` refuses an empty score map. A refresh is also refused when
+it could not score a task the suite still runs and that task is already covered
+by the `--baseline` map the run compared against or by the file being replaced
+(#2951): the missing task names are printed and the previous file is kept
+byte-for-byte, because the next run would otherwise have no reference for that
+task and a regression there would pass. An unreadable existing file is replaced,
+because it covers nothing. A fresh output path with no reference still records
+the measured subset. Baseline scores must be finite
 numbers — non-finite values (`NaN`, `+inf`, `-inf`) are refused at read
 (`resolve_baseline`), write (`stamp_baseline_scores`, `write_baseline_file`),
 and gate (`run_gate`) boundaries (#1773). `resolve_baseline`
