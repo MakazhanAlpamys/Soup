@@ -175,13 +175,18 @@ python benchmarks/harness/nf4_stream_bench.py --fused --json fused.json
 python benchmarks/harness/nf4_stream_bench.py --aliasing --alias-width 9000 --alias-absent --json alias9000.json
 ```
 
-| N x K | M | native forward dispatch | A fused (ms) | B dequant+linear (ms) | B relative to A | max abs A vs native fwd / bwd |
-|---|---:|---|---:|---:|---|---|
-| 4096 x 4096 | 3 | fused `gemm_4bit` | 7.205 | 4.250 | **1.40x faster (B)** | 0.001953125 / 0.0000305176 |
-| 4096 x 4096 | 8 | fused `gemm_4bit` | 7.255 | 4.332 | **1.40x faster (B)** | 0.001953125 / 0.0000305176 |
+| N x K | M | native forward dispatch | A fused (ms) | B dequant+linear (ms) | B time reduction vs A | A/B speed ratio | max abs A vs native fwd / bwd |
+|---|---:|---|---:|---:|---|---:|---|
+| 4096 x 4096 | 3 | fused `gemm_4bit` | 7.205 | 4.250 | **40.2%** (`B/A = 0.590`) | 1.695x | 0.001953125 / 0.0000305176 |
+| 4096 x 4096 | 8 | fused `gemm_4bit` | 7.255 | 4.332 | **40.3%** (`B/A = 0.597`) | 1.675x | 0.001953125 / 0.0000305176 |
 
-Three processes per cell, all valid, `small_share: false`; medians of the
-per-process reductions 0.402622 and 0.402549. The forward difference of
+**Statistic reported:** the harness's `cell_verdict` compares the paired **time
+reduction** `1 - B/A` against the spread within an arm; the medians of the
+per-process reductions are 0.402622 and 0.402549. Stated as a speed ratio the
+same pairs give `A/B ≈ 1.7x`, i.e. explicit dequantise + linear (B) ran at about
+1.7x the throughput of the fused candidate (A) on this card. The two figures
+are the same measurement in reciprocal forms, not two different results. Three
+processes per cell, all valid, `small_share: false`. The forward difference of
 0.001953125 is **the same** as explicit dequantise + linear against the native
 fused kernel at these rows; the kernel is not bit-exact against bitsandbytes'
 dispatch, so it is published as measured and not adopted. No timing advantage
