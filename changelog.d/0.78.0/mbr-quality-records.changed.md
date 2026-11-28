@@ -1,0 +1,1 @@
+- Publish the DeepSeek FP8 pilot gate, Moonlight FP8 activation study, route-preserving MBR group-size sweep and CLI quality screen, MBR phase profile and batch-invariance studies, segmented GEMM CUDA graph trace, and exact MBR speed and training records. (#PENDING by @Artix6034, @Batyrkhantzy111, @M1kado0)
