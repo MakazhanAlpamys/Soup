@@ -8,6 +8,7 @@ trusted-org allowlist that suppresses noise on first-party models.
 from __future__ import annotations
 
 import re
+import sys
 from io import StringIO
 
 import pytest
@@ -207,6 +208,36 @@ class TestRequiresProbe:
         )
         assert model_requires_trust_remote_code(str(tmp_path)) is True
 
+    def test_shared_probe_requires_opt_in_for_builtin_model_with_auto_map(self, tmp_path):
+        pytest.importorskip("transformers")
+        from soup_cli.utils.trust_remote import model_requires_trust_remote_code
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type": "deepseek_v3", "auto_map": {"AutoConfig": "config.Custom"}}',
+            encoding="utf-8",
+        )
+        assert model_requires_trust_remote_code(str(tmp_path)) is True
+
+    def test_builtin_model_type_with_auto_map_returns_false_for_export(self, tmp_path):
+        pytest.importorskip("transformers")
+        from soup_cli.utils.trust_remote import model_requires_trust_remote_code
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type": "deepseek_v3", "auto_map": {"AutoConfig": "config.Custom"}}',
+            encoding="utf-8",
+        )
+        assert model_requires_trust_remote_code(str(tmp_path), allow_builtin_config=True) is False
+
+    def test_builtin_lookup_failure_keeps_requiring_opt_in(self, tmp_path, monkeypatch):
+        from soup_cli.utils.trust_remote import model_requires_trust_remote_code
+
+        monkeypatch.setitem(sys.modules, "transformers.models.auto.configuration_auto", None)
+        (tmp_path / "config.json").write_text(
+            '{"model_type": "llama", "auto_map": {"AutoConfig": "config.Custom"}}',
+            encoding="utf-8",
+        )
+        assert model_requires_trust_remote_code(str(tmp_path), allow_builtin_config=True) is True
+
     def test_missing_config_returns_none(self, tmp_path):
         """Missing config.json → None (unknown — caller decides)."""
         from soup_cli.utils.trust_remote import model_requires_trust_remote_code
@@ -231,12 +262,43 @@ class TestRequiresProbe:
         out = model_requires_trust_remote_code(str(tmp_path))
         assert out is None
 
+    def test_invalid_utf8_returns_none(self, tmp_path):
+        from soup_cli.utils.trust_remote import model_requires_trust_remote_code
+
+        (tmp_path / "config.json").write_bytes(b"\xff")
+        assert model_requires_trust_remote_code(str(tmp_path)) is None
+
     def test_non_directory_path_returns_none(self):
         """Bare HF repo id (not a local dir) → None (unknown)."""
         from soup_cli.utils.trust_remote import model_requires_trust_remote_code
 
         out = model_requires_trust_remote_code("meta-llama/Llama-3.2-1B")
         assert out is None
+
+
+class TestTokenizerProbe:
+    @pytest.mark.parametrize(
+        "auto_map",
+        ['{"AutoTokenizer": ["tokenizer.Custom", null]}', '["tokenizer.Custom", null]'],
+    )
+    def test_tokenizer_auto_map_requires_opt_in(self, tmp_path, auto_map):
+        from soup_cli.utils.trust_remote import tokenizer_requires_trust_remote_code
+
+        (tmp_path / "tokenizer_config.json").write_text(
+            f'{{"auto_map": {auto_map}}}', encoding="utf-8"
+        )
+        assert tokenizer_requires_trust_remote_code(str(tmp_path)) is True
+
+    @pytest.mark.parametrize(
+        "body",
+        [None, b"{}", b"{bad JSON", b"[1]", b"\xff", b'{"auto_map": {"AutoConfig": "c.C"}}'],
+    )
+    def test_no_tokenizer_mapping_has_no_positive_signal(self, tmp_path, body):
+        from soup_cli.utils.trust_remote import tokenizer_requires_trust_remote_code
+
+        if body is not None:
+            (tmp_path / "tokenizer_config.json").write_bytes(body)
+        assert tokenizer_requires_trust_remote_code(str(tmp_path)) is False
 
 
 # ---------------------------------------------------------------------------
