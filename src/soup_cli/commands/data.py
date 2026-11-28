@@ -2991,9 +2991,8 @@ def _publish_preprocess_cache(
     import shutil
     import tempfile
 
-    from datasets import load_from_disk
-
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.preprocess_arrow import validate_staged_arrow
 
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".tmp_" + target.name + ".", dir=target.parent))
@@ -3005,11 +3004,7 @@ def _publish_preprocess_cache(
         with open(metadata_path, encoding="utf-8") as handle:
             if json.load(handle) != metadata:
                 raise ValueError("preprocess staged metadata does not match")
-        # No validation mmap may outlive this check: Windows must be able to move the shards.
-        validated = load_from_disk(str(staging), keep_in_memory=True)
-        if len(validated) != metadata["row_count"] or validated.features != dataset.features:
-            raise ValueError("preprocess staged Arrow does not match")
-        del validated
+        validate_staged_arrow(staging, metadata["row_count"], dataset.features)
 
         with _preprocess_publish_lock(target):
             enforce_under_cwd_and_no_symlink(str(target), "preprocess target")
@@ -3054,125 +3049,10 @@ def _publish_preprocess_cache(
         shutil.rmtree(staging, ignore_errors=True)
 
 
-@app.command(name="preprocess")
-def preprocess_dataset(
-    config_path: str = typer.Argument(
-        ..., help="Path to soup.yaml — uses data.train + tokenizer + max_length"
-    ),
-    output_dir: str = typer.Option(
-        "./.soup-tokenized", "--output", "-o",
-        help="Cache directory under cwd",
-    ),
-    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
-) -> None:
-    """AOT-tokenize a dataset and cache to disk for reuse across runs.
+_MAX_PREPROCESS_ROWS = 10_000_000
 
-    v0.53.7 #86: live tokenize loop. Lazy-imports ``transformers``/``datasets``,
-    iterates ``data.train``, renders each row through chat template (or raw
-    text for pretrain), tokenizes with ``max_length=data.max_length`` +
-    ``truncation=True``, writes Arrow shards under
-    ``<output>/<cache_key>/`` via ``Dataset.save_to_disk``. Writes
-    ``metadata.json`` with cache_key + row_count + tokenizer_name + max_length.
 
-    Rows capped at 10M to defend against pathological dataset sizes.
-    """
-    from soup_cli.config.loader import load_config
-    from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.data_pipeline import (
-        make_preprocess_cache_key,
-        preprocess_mask_mode,
-    )
-    from soup_cli.utils.paths import is_under_cwd
-
-    cfg_real = os.path.realpath(config_path)
-    if not is_under_cwd(cfg_real):
-        console.print(
-            f"[red]--config must stay under cwd[/] (got {for_terminal(repr(config_path))})"
-        )
-        raise typer.Exit(1)
-    if not Path(cfg_real).is_file():
-        console.print(f"[red]Config not found:[/] {for_terminal(config_path)}")
-        raise typer.Exit(1)
-
-    cfg = load_config(cfg_real)
-    out_real = os.path.realpath(output_dir)
-    if not is_under_cwd(out_real):
-        console.print(
-            f"[red]--output must stay under cwd[/] (got {for_terminal(repr(output_dir))})"
-        )
-        raise typer.Exit(1)
-
-    dataset_path = _cache_key_dataset_path(cfg)
-    # #1067: render with data.chat_template, as the live path does, and key on it.
-    try:
-        chat_template = resolve_chat_template(cfg.data.chat_template)
-    except KeyError as exc:
-        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
-        raise typer.Exit(1) from exc
-    train_display = (
-        ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
-    )
-    mask_mode = preprocess_mask_mode(cfg.data, getattr(cfg, "training", None))
-    cache_key = make_preprocess_cache_key(
-        dataset_path=dataset_path,
-        tokenizer_name=cfg.base,
-        max_length=cfg.data.max_length,
-        format_name=cfg.data.format,
-        chat_template=chat_template,
-        mask_mode=mask_mode,
-        task=cfg.task,
-    )
-    target = Path(out_real) / cache_key
-    console.print(f"[cyan]Dataset:[/] {for_terminal(train_display)}")
-    console.print(f"[cyan]Tokenizer:[/] {for_terminal(cfg.base)}")
-    console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
-    console.print(f"[cyan]Loss mask:[/] {mask_mode}")
-    console.print(f"[cyan]Cache key:[/] {cache_key}")
-    console.print(f"[cyan]Target:[/] {for_terminal(target)}")
-
-    if target.exists() and not yes:
-        console.print(
-            f"[yellow]Target already exists:[/] {for_terminal(target)}\n"
-            "[dim]Re-run with --yes to overwrite.[/]"
-        )
-        raise typer.Exit(0)
-
-    # Lazy imports — defer heavy deps until the actual tokenize loop runs.
-    try:
-        from transformers import AutoTokenizer
-    except ImportError:
-        console.print(
-            "[red]transformers not installed.[/] Run: pip install transformers"
-        )
-        raise typer.Exit(1) from None
-    try:
-        from datasets import Dataset
-    except ImportError:
-        console.print(
-            "[red]datasets not installed.[/] Run: pip install datasets"
-        )
-        raise typer.Exit(1) from None
-    from soup_cli.data.loader import load_dataset
-
-    # DoS cap (10M rows).
-    max_preprocess_rows = 10_000_000
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        cfg.base, trust_remote_code=False
-    )
-    if chat_template is not None:
-        tokenizer.chat_template = chat_template
-
-    try:
-        dataset = load_dataset(cfg.data)
-    except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]Failed to load dataset:[/] {for_terminal(exc)}")
-        raise typer.Exit(1) from exc
-
-    raw_rows = dataset.get("train", []) if isinstance(dataset, dict) else []
-    max_length = int(cfg.data.max_length)
-    is_pretrain = cfg.task == "pretrain"
-
+def _tokenize_cache_rows(raw_rows, tokenizer, mask_mode, max_length, is_pretrain, tokenizer_name):
     # #876: measured once, not per row -- how many leading BOS the tokenizer's
     # post-processor prepends, so the chat path can keep only the template's own.
     bos_added_by_post_processor = None
@@ -3185,17 +3065,16 @@ def preprocess_dataset(
         # #1180 review: a whole-dataset problem, reported once rather than blamed
         # on the first row -- removing a row cannot fix it.
         console.print(
-            f"[red]The tokenizer for {for_terminal(cfg.base)} has no chat_template,[/] "
+            f"[red]The tokenizer for {for_terminal(tokenizer_name)} has no chat_template,[/] "
             "so no chat row can be rendered. Set data.chat_template, or use a base "
             "whose tokenizer ships one. Nothing was written."
         )
         raise typer.Exit(1)
 
-    rendered_rows: list[dict] = []
     for idx, row in enumerate(raw_rows):
-        if idx >= max_preprocess_rows:
+        if idx >= _MAX_PREPROCESS_ROWS:
             console.print(
-                f"[yellow]Reached row cap {max_preprocess_rows}, truncating.[/]"
+                f"[yellow]Reached row cap {_MAX_PREPROCESS_ROWS}, truncating.[/]"
             )
             break
         if is_pretrain:
@@ -3300,45 +3179,163 @@ def preprocess_dataset(
         else:
             # Pretrain trains on every token by design — no masking.
             labels = list(input_ids)
-        rendered_rows.append(
-            {
-                "input_ids": input_ids,
-                "labels": labels,
-                "attention_mask": attention_mask,
-            }
-        )
+        yield {
+            "input_ids": input_ids,
+            "labels": labels,
+            "attention_mask": attention_mask,
+        }
 
-    if not rendered_rows:
+
+
+@app.command(name="preprocess")
+def preprocess_dataset(
+    config_path: str = typer.Argument(
+        ..., help="Path to soup.yaml — uses data.train + tokenizer + max_length"
+    ),
+    output_dir: str = typer.Option(
+        "./.soup-tokenized", "--output", "-o",
+        help="Cache directory under cwd",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+) -> None:
+    """AOT-tokenize a dataset and cache to disk for reuse across runs.
+
+    v0.53.7 #86: live tokenize loop. Lazy-imports ``transformers``/``datasets``,
+    iterates ``data.train``, renders each row through chat template (or raw
+    text for pretrain), tokenizes with ``max_length=data.max_length`` +
+    ``truncation=True``, writes Arrow shards under
+    ``<output>/<cache_key>/`` in the existing saved-dataset format. Writes
+    ``metadata.json`` with cache_key + row_count + tokenizer_name + max_length.
+
+    Rows capped at 10M to defend against pathological dataset sizes.
+    """
+    from soup_cli.config.loader import load_config
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.data_pipeline import (
+        make_preprocess_cache_key,
+        preprocess_mask_mode,
+    )
+    from soup_cli.utils.paths import is_under_cwd
+
+    cfg_real = os.path.realpath(config_path)
+    if not is_under_cwd(cfg_real):
         console.print(
-            "[red]No rows tokenized.[/] Check data.format and tokenizer "
-            "chat_template."
+            f"[red]--config must stay under cwd[/] (got {for_terminal(repr(config_path))})"
+        )
+        raise typer.Exit(1)
+    if not Path(cfg_real).is_file():
+        console.print(f"[red]Config not found:[/] {for_terminal(config_path)}")
+        raise typer.Exit(1)
+
+    cfg = load_config(cfg_real)
+    out_real = os.path.realpath(output_dir)
+    if not is_under_cwd(out_real):
+        console.print(
+            f"[red]--output must stay under cwd[/] (got {for_terminal(repr(output_dir))})"
         )
         raise typer.Exit(1)
 
-    ds = Dataset.from_list(rendered_rows)
-    from soup_cli import __version__ as _soup_version
-    from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
+    dataset_path = _cache_key_dataset_path(cfg)
+    # #1067: render with data.chat_template, as the live path does, and key on it.
+    try:
+        chat_template = resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
+    train_display = (
+        ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
+    )
+    mask_mode = preprocess_mask_mode(cfg.data, getattr(cfg, "training", None))
+    cache_key = make_preprocess_cache_key(
+        dataset_path=dataset_path,
+        tokenizer_name=cfg.base,
+        max_length=cfg.data.max_length,
+        format_name=cfg.data.format,
+        chat_template=chat_template,
+        mask_mode=mask_mode,
+        task=cfg.task,
+    )
+    target = Path(out_real) / cache_key
+    console.print(f"[cyan]Dataset:[/] {for_terminal(train_display)}")
+    console.print(f"[cyan]Tokenizer:[/] {for_terminal(cfg.base)}")
+    console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
+    console.print(f"[cyan]Loss mask:[/] {mask_mode}")
+    console.print(f"[cyan]Cache key:[/] {cache_key}")
+    console.print(f"[cyan]Target:[/] {for_terminal(target)}")
 
-    metadata = {
-        "cache_key": cache_key,
-        "row_count": len(rendered_rows),
-        "tokenizer_name": cfg.base,
-        "max_length": max_length,
-        "format": cfg.data.format,
-        "chat_template": cfg.data.chat_template,
-        "mask_mode": mask_mode,
-        "task": cfg.task,
-        # #1272: what the gate needs to say why a cache is refused -- the key
-        # generation, and the row-set inputs so it can name the fields that differ.
-        "key_schema": _PREPROCESS_TOKENIZE_SCHEMA,
-        "dataset_key": json.loads(dataset_path),
-        "soup_version": _soup_version,
-    }
-    if not _publish_preprocess_cache(ds, target, metadata, overwrite=yes):
+    if target.exists() and not yes:
+        console.print(
+            f"[yellow]Target already exists:[/] {for_terminal(target)}\n"
+            "[dim]Re-run with --yes to overwrite.[/]"
+        )
         raise typer.Exit(0)
 
+    # Lazy imports — defer heavy deps until the actual tokenize loop runs.
+    try:
+        from transformers import AutoTokenizer
+    except ImportError:
+        console.print(
+            "[red]transformers not installed.[/] Run: pip install transformers"
+        )
+        raise typer.Exit(1) from None
+    try:
+        import datasets  # noqa: F401 -- actionable dependency error before preprocessing
+    except ImportError:
+        console.print(
+            "[red]datasets not installed.[/] Run: pip install datasets"
+        )
+        raise typer.Exit(1) from None
+    from contextlib import ExitStack
+    from tempfile import TemporaryDirectory
+
+    from soup_cli.data.preprocess import preprocessing_rows
+    from soup_cli.utils.preprocess_arrow import PreparedDataset
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.base, trust_remote_code=False
+    )
+    if chat_template is not None:
+        tokenizer.chat_template = chat_template
+
+    with TemporaryDirectory(prefix="soup-preprocess-arrow-") as folder, ExitStack() as stack:
+        try:
+            raw_rows = stack.enter_context(preprocessing_rows(cfg.data, cfg.task))
+        except (TypeError, ValueError, FileNotFoundError) as exc:
+            console.print(f"[red]Failed to load dataset:[/] {for_terminal(exc)}")
+            raise typer.Exit(1) from exc
+        max_length = int(cfg.data.max_length)
+        ds = PreparedDataset(_tokenize_cache_rows(
+            raw_rows, tokenizer, mask_mode, max_length, cfg.task == "pretrain", cfg.base,
+        ), Path(folder))
+        row_count = ds.num_rows
+        if not row_count:
+            console.print(
+                "[red]No rows tokenized.[/] Check data.format and tokenizer chat_template."
+            )
+            raise typer.Exit(1)
+        from soup_cli import __version__ as _soup_version
+        from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
+
+        metadata = {
+            "cache_key": cache_key,
+            "row_count": row_count,
+            "tokenizer_name": cfg.base,
+            "max_length": max_length,
+            "format": cfg.data.format,
+            "chat_template": cfg.data.chat_template,
+            "mask_mode": mask_mode,
+            "task": cfg.task,
+            # #1272: what the gate needs to say why a cache is refused -- the key
+            # generation, and the row-set inputs so it can name the fields that differ.
+            "key_schema": _PREPROCESS_TOKENIZE_SCHEMA,
+            "dataset_key": json.loads(dataset_path),
+            "soup_version": _soup_version,
+        }
+        if not _publish_preprocess_cache(ds, target, metadata, overwrite=yes):
+            raise typer.Exit(0)
+
     console.print(
-        f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {for_terminal(target)}"
+        f"[green]Wrote {row_count} tokenized rows to[/] {for_terminal(target)}"
     )
     console.print(
         f"[dim]Set data.tokenized_path={for_terminal(target)} + data.format=pre_tokenized "

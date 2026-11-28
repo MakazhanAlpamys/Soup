@@ -54,14 +54,14 @@ def publication_case(tmp_path, monkeypatch):
 def test_publication_failure_preserves_prior_cache(
     tmp_path, monkeypatch, publication_case, existing, step,
 ):
-    import datasets
+    from soup_cli.utils import preprocess_arrow
 
     cache, previous = publication_case
     if not existing:
         shutil.rmtree(cache)
     real_mkdtemp = tempfile.mkdtemp
-    real_save = datasets.Dataset.save_to_disk
-    real_load = datasets.load_from_disk
+    real_save = preprocess_arrow.PreparedDataset.save_to_disk
+    real_validate = preprocess_arrow.validate_staged_arrow
     real_open = open
     real_dump = json.dump
     real_replace = os.replace
@@ -89,7 +89,7 @@ def test_publication_failure_preserves_prior_cache(
     def load(path, *args, **kwargs):
         if Path(path).name.startswith(".tmp_"):
             raise OSError("injected validation failure")
-        return real_load(path, *args, **kwargs)
+        return real_validate(path, *args, **kwargs)
 
     def replace(source, destination):
         if Path(source).name.startswith(".tmp_") and Path(destination) == cache:
@@ -98,10 +98,10 @@ def test_publication_failure_preserves_prior_cache(
 
     hooks = {
         "staging": (tempfile, "mkdtemp", create),
-        "arrow": (datasets.Dataset, "save_to_disk", save),
+        "arrow": (preprocess_arrow.PreparedDataset, "save_to_disk", save),
         "metadata_open": (__import__("builtins"), "open", open_metadata),
         "metadata_write": (json, "dump", dump),
-        "validation": (datasets, "load_from_disk", load),
+        "validation": (preprocess_arrow, "validate_staged_arrow", load),
         "install": (os, "replace", replace),
     }
     with monkeypatch.context() as fault:
@@ -205,29 +205,33 @@ def test_staged_validation_refuses_corruption(
 ):
     import datasets
 
+    from soup_cli.utils import preprocess_arrow
+
     cache, previous = publication_case
-    real_dump, real_load = json.dump, datasets.load_from_disk
+    real_dump = json.dump
+    real_validate = preprocess_arrow.validate_staged_arrow
 
     def dump(value, handle, *args, **kwargs):
         if Path(handle.name).name == "metadata.json":
             value = {**value, "cache_key": "wrong-key"}
         return real_dump(value, handle, *args, **kwargs)
 
-    def load(path, *args, **kwargs):
-        loaded = real_load(path, *args, **kwargs)
-        if Path(path).name.startswith(".tmp_"):
-            assert kwargs.get("keep_in_memory") is True
-            if corruption == "rows":
-                loaded = loaded.select([0])
-            else:
-                loaded = loaded.remove_columns("labels")
-        return loaded
+    def validate(path, row_count, features):
+        # Rewrite real IPC data and close the temporary dataset before validation.
+        loaded = datasets.load_from_disk(str(path), keep_in_memory=True)
+        changed = loaded.select([0]) if corruption == "rows" else loaded.remove_columns("labels")
+        with tempfile.TemporaryDirectory() as folder:
+            changed.save_to_disk(folder)
+            del changed, loaded
+            shutil.rmtree(path)
+            shutil.copytree(folder, path)
+        return real_validate(path, row_count, features)
 
     with monkeypatch.context() as fault:
         if corruption == "metadata":
             fault.setattr(json, "dump", dump)
         else:
-            fault.setattr(datasets, "load_from_disk", load)
+            fault.setattr(preprocess_arrow, "validate_staged_arrow", validate)
         result = _invoke()
     assert result.exit_code == 1
     assert "preprocess staged" in str(result.exception)
@@ -285,7 +289,7 @@ def test_failed_backup_cleanup_keeps_new_cache_and_reports_backup(
 
 
 def test_cleanup_does_not_touch_other_runs(tmp_path, monkeypatch, publication_case):
-    import datasets
+    from soup_cli.utils import preprocess_arrow
 
     cache, previous = publication_case
     stale = [cache.parent / (prefix + cache.name) for prefix in (".tmp_", ".backup_")]
@@ -293,7 +297,8 @@ def test_cleanup_does_not_touch_other_runs(tmp_path, monkeypatch, publication_ca
         path.mkdir()
         (path / "keep").write_text("other run")
     with monkeypatch.context() as fault:
-        fault.setattr(datasets.Dataset, "save_to_disk", MagicMock(side_effect=OSError("save")))
+        fault.setattr(preprocess_arrow.PreparedDataset, "save_to_disk",
+                      MagicMock(side_effect=OSError("save")))
         result = _invoke()
     assert result.exit_code == 1
     assert _gate(tmp_path, "data.jsonl", cache)[0].to_list() == previous[0]
