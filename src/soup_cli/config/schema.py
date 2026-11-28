@@ -4074,13 +4074,19 @@ class TrainingConfig(BaseModel):
     frozen_prefix_cache: bool = Field(
         default=False,
         description=(
-            "Cache the output of the frozen bottom layers on disk and reuse it in "
-            "later epochs instead of running those layers again. Needs "
-            "training.freeze_layers or training.freeze_ratio with LoRA on the layers "
-            "above them, and task sft + backend transformers on a resident text "
-            "model (no layer streaming); Mistral and OLMoE decoders only. The "
-            "entries are written under the output directory and take disk space "
-            "in proportion to the training set."
+            "Reuse the output of frozen bottom layers during Transformers text SFT. "
+            "Resident Mistral and OLMoE use disk and need freeze_layers or freeze_ratio. "
+            "Layer streaming and L2L use host RAM and need training.lora_layers with a "
+            "fixed or progressively growing frozen prefix and no LoRA dropout."
+        ),
+    )
+    frozen_prefix_cache_gib: Optional[float] = Field(
+        default=None,
+        gt=0,
+        le=4096,
+        description=(
+            "Host RAM ceiling in GiB for the streamed frozen-prefix cache. "
+            "Defaults to 8 GiB and is also capped at one quarter of available RAM."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -10686,11 +10692,17 @@ class SoupConfig(BaseModel):
         The cache holds the output of the bottom layers, so it needs a freeze
         plan to say where they end, a LoRA adapter (not full fine-tuning) to keep
         them frozen, and a forward pass that nothing else rewrites. The backend,
-        modality and layer-streaming gates are not repeated here:
-        :meth:`_validate_freeze_is_applied` refuses a freeze plan on those paths
-        first, and that refusal is the one a user sees.
+        modality and layer-streaming gates for the resident freeze fields run
+        first in :meth:`_validate_freeze_is_applied`.
         """
         tcfg = self.training
+        if tcfg.frozen_prefix_cache_gib is not None and not (
+            tcfg.frozen_prefix_cache and tcfg.stream_layers
+        ):
+            raise ValueError(
+                "training.frozen_prefix_cache_gib requires training.frozen_prefix_cache=true "
+                "and training.stream_layers=true."
+            )
         if not tcfg.frozen_prefix_cache:
             return self
         if self.task != "sft":
@@ -10698,7 +10710,28 @@ class SoupConfig(BaseModel):
                 "training.frozen_prefix_cache requires task='sft'; "
                 f"got task={self.task!r}."
             )
-        if tcfg.freeze_layers is None and tcfg.freeze_ratio is None:
+        if tcfg.stream_layers:
+            if tcfg.lora_layers is None:
+                raise ValueError(
+                    "training.frozen_prefix_cache with training.stream_layers requires "
+                    "training.lora_layers."
+                )
+            if tcfg.lora_layers.method == "lisa":
+                raise ValueError(
+                    "training.frozen_prefix_cache does not support "
+                    "training.lora_layers.method='lisa': the trainable layers change."
+                )
+            if tcfg.lora.dropout:
+                raise ValueError(
+                    "training.frozen_prefix_cache with training.stream_layers requires "
+                    "training.lora.dropout=0."
+                )
+            if tcfg.prefix_tree:
+                raise ValueError(
+                    "training.frozen_prefix_cache with training.stream_layers does not "
+                    "support training.prefix_tree."
+                )
+        elif tcfg.freeze_layers is None and tcfg.freeze_ratio is None:
             raise ValueError(
                 "training.frozen_prefix_cache requires training.freeze_layers or "
                 "training.freeze_ratio: the cache holds the output of the frozen "
@@ -10715,7 +10748,7 @@ class SoupConfig(BaseModel):
                 "training.frozen_prefix_cache does not support training.packing or "
                 "training.multipack: a packed batch differs every epoch."
             )
-        if tcfg.gradient_checkpointing is not False:
+        if not tcfg.stream_layers and tcfg.gradient_checkpointing is not False:
             raise ValueError(
                 "training.frozen_prefix_cache requires training.gradient_checkpointing=false."
             )
@@ -10726,7 +10759,7 @@ class SoupConfig(BaseModel):
                 "on every step, so the cache would keep the first epoch's noise for "
                 "all later epochs. Remove one of them."
             )
-        if tcfg.batch_size != 1 and not (
+        if not tcfg.stream_layers and tcfg.batch_size != 1 and not (
             tcfg.curriculum and tcfg.curriculum_metric == "length"
         ):
             raise ValueError(

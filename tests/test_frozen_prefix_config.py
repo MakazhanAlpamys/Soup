@@ -5,6 +5,20 @@ import pytest
 from soup_cli.config.schema import SoupConfig
 
 
+def streamed_config(**overrides):
+    raw = make_config()
+    raw["training"].update(
+        freeze_layers=None,
+        stream_layers=True,
+        quantization="none",
+        gradient_accumulation_steps=2,
+        lora_layers={"method": "progressive", "freeze_step": 1, "freeze_below": 1},
+        lora={"r": 8, "dropout": 0},
+    )
+    raw["training"].update(overrides)
+    return raw
+
+
 def make_config(**training_overrides):
     training = {
         "frozen_prefix_cache": True,
@@ -177,3 +191,74 @@ def test_unsupported_paths_are_refused_by_the_freeze_check_first(top, training, 
 def test_unknown_key_still_refuses_the_load():
     with pytest.raises(ValueError, match="frozen_prefix_cash"):
         SoupConfig.model_validate(make_config(frozen_prefix_cash=True))
+
+
+@pytest.mark.parametrize("l2l", [False, True])
+def test_the_same_switch_enables_streamed_and_l2l_prefix_caching(l2l):
+    config = SoupConfig.model_validate(
+        streamed_config(l2l=l2l, frozen_prefix_cache_gib=0.125)
+    )
+    assert config.training.frozen_prefix_cache
+    assert config.training.frozen_prefix_cache_gib == 0.125
+
+
+def test_row_cache_allows_shuffled_batches():
+    config = SoupConfig.model_validate(streamed_config(batch_size=2))
+    assert config.training.batch_size == 2
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        (
+            {"lora_layers": None},
+            "training.frozen_prefix_cache with training.stream_layers requires "
+            "training.lora_layers",
+        ),
+        (
+            {"lora_layers": {"method": "lisa", "k": 1}},
+            "training.frozen_prefix_cache does not support "
+            "training.lora_layers.method='lisa': the trainable layers change.",
+        ),
+        (
+            {"lora": {"r": 8, "dropout": 0.05}},
+            "training.frozen_prefix_cache with training.stream_layers requires "
+            "training.lora.dropout=0.",
+        ),
+        (
+            {"packing": True},
+            "training.stream_layers is mutually exclusive with packing: streaming owns the "
+            "model-construction path (meta skeleton + per-layer weight substitution) and "
+            "cannot share it with a feature that rewrites or re-freezes the same layers.",
+        ),
+        (
+            {"multipack": True},
+            "training.stream_layers is mutually exclusive with multipack: streaming owns the "
+            "model-construction path (meta skeleton + per-layer weight substitution) and "
+            "cannot share it with a feature that rewrites or re-freezes the same layers.",
+        ),
+        (
+            {"prefix_tree": True},
+            "training.frozen_prefix_cache with training.stream_layers does not "
+            "support training.prefix_tree.",
+        ),
+        (
+            {"frozen_prefix_cache": False, "frozen_prefix_cache_gib": 1},
+            "training.frozen_prefix_cache_gib requires training.frozen_prefix_cache=true "
+            "and training.stream_layers=true.",
+        ),
+    ],
+)
+def test_streamed_cache_guards(overrides, message):
+    with pytest.raises(ValueError) as caught:
+        SoupConfig.model_validate(streamed_config(**overrides))
+    assert message in str(caught.value)
+
+
+def test_resident_cache_refuses_the_host_ram_tunable():
+    with pytest.raises(ValueError) as caught:
+        SoupConfig.model_validate(make_config(frozen_prefix_cache_gib=1))
+    assert (
+        "training.frozen_prefix_cache_gib requires training.frozen_prefix_cache=true "
+        "and training.stream_layers=true."
+    ) in str(caught.value)

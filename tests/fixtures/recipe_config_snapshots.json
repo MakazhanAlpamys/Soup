@@ -117,6 +117,7 @@
     "training.freeze_ratio": null,
     "training.freeze_trainable_layers": null,
     "training.frozen_prefix_cache": false,
+    "training.frozen_prefix_cache_gib": null,
     "training.galore_rank": 128,
     "training.galore_scale": 0.25,
     "training.galore_update_proj_gap": 200,

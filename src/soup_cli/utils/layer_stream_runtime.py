@@ -1470,6 +1470,7 @@ class StreamPrefetcher:
         self.stream = stream
         self.prev: Optional[int] = None
         self.direction = 1
+        self.prime_start = 0
         self.backward_floor = 0
         self.primes = 0
         self.tail_prefetch = tail_prefetch
@@ -1512,15 +1513,16 @@ class StreamPrefetcher:
             )
         self._head_prefetch_layer = value
 
-    def prime(self) -> None:
-        """Start of a forward pass: layer 0, walking upward."""
+    def prime(self, start: Optional[int] = None) -> None:
+        """Start a forward walk at the first layer whose input must be computed."""
         self.prev = None
         self.direction = 1
         self.primes += 1
         self.backward_tail_prefetched = False
         self.tail_prefetched = False
-        if self.pool.owner[self.pool.slot_for(0)] != 0:
-            self.pool.load_async(0, self.source, self.stream)
+        start = self.prime_start if start is None else start
+        if self.pool.owner[self.pool.slot_for(start)] != start:
+            self.pool.load_async(start, self.source, self.stream)
 
     def advance(self, idx: int) -> None:
         # Direction is explicit state, not re-derived per call. It only ever
@@ -1541,7 +1543,7 @@ class StreamPrefetcher:
             head_layer = self.n_layers - 1
         if (
             self.direction == 1
-            and idx == head_layer
+            and idx >= head_layer
             and not self.tail_prefetched
             and self.tail_prefetch is not None
         ):

@@ -865,7 +865,7 @@ activation writes and reverse reads below the cutoff.
 
 ### Frozen-prefix activation cache
 
-With `freeze_layers` / `freeze_ratio` and LoRA, the embeddings and the frozen bottom layers give the
+On a resident model with `freeze_layers` / `freeze_ratio` and LoRA, the frozen bottom layers give the
 same output for the same batch in every epoch. `training.frozen_prefix_cache: true` stores that
 output on disk during the first epoch and reads it back in later ones, so the frozen layers run
 once per distinct batch instead of once per epoch. Off by default.
@@ -906,14 +906,32 @@ space on that volume. Writing stops, with one notice, when a write would leave l
 the larger of 2 GiB and 5 % of the volume, and when a write fails (for example the disk is full):
 entries already stored are still read, new batches are computed as usual, and the run carries on.
 
-Config loading refuses it outside `task: sft` and without a freeze plan, and where a freeze plan is not applied (`backend` other than
-`transformers`, a non-text model, `stream_layers`), with `training.lora.r: 0` (full fine-tuning),
+The resident cache requires Transformers text SFT with a resident freeze plan. It refuses
+`training.lora.r: 0` (full fine-tuning),
 `packing`, `multipack`, `gradient_checkpointing`, `training.neftune_alpha` (it adds new noise to the
 embeddings on every step), `training.lora.use_vera` or `training.lora.target_parameters`. It
 supports Mistral and OLMoE decoders on a single device; any other decoder, a run on more than one
 visible GPU through `torch.nn.DataParallel`, `output_router_logits` and `output_attentions` refuse
 when training starts. For an OLMoE model set `training.moe_aux_loss_coeff: 0`, because the cached
 prefix has no router logits.
+
+#### Layer streaming and L2L
+
+With `training.stream_layers: true`, set `training.frozen_prefix_cache: true` and choose layers
+with `training.lora_layers`. A progressive policy starts caching when it freezes a decoder prefix.
+When the cutoff rises, a row can resume at its earlier cutoff and run the newly frozen layers.
+The streamed cache supports Llama, Mistral, Qwen2, Qwen3 and Qwen3.5. L2L uses its existing
+architecture and SFT input limits.
+
+The streamed cache keeps rows in host RAM for one run. `training.frozen_prefix_cache_gib`
+sets its ceiling, 8 GiB by default, further capped at one quarter of the available host RAM when
+measurable. At the limit, new rows are computed as usual. Evaluation runs the full decoder.
+Ordinary streaming resumes a batch when its rows share a cached cutoff. L2L can resume each
+micro-batch separately. The training summary and `lora_layers.json` record cache activity.
+
+Use frozen input embeddings, zero LoRA and attention dropout, and a fixed or progressively
+growing frozen prefix. Packing, multipack, prefix trees, LISA resampling and L2L reference passes
+are incompatible with the streamed cache.
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 

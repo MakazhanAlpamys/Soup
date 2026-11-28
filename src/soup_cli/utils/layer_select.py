@@ -204,6 +204,7 @@ class Selection:
     backward_cut: str = ""
     norms: list[tuple[int, dict[int, float]]] = field(default_factory=list)
     skipped_windows: list[int] = field(default_factory=list)
+    cache: dict[str, int] | None = None
 
     def to_json(self) -> dict[str, Any]:
         record = {
@@ -219,6 +220,8 @@ class Selection:
                 for step, window in self.norms
             ]
             record["skipped_windows"] = self.skipped_windows
+        if self.cache is not None:
+            record["cache"] = self.cache
         return record
 
 
@@ -304,6 +307,7 @@ class _LayerSelectCallback:
         output_dir: str,
         console: Any = None,
         autocast: Any = nullcontext,
+        prefix_cache_bytes: int | None = None,
     ) -> None:
         self.policy = policy
         self.dataset = dataset
@@ -319,6 +323,9 @@ class _LayerSelectCallback:
         self._window: dict[int, Any] = {}
         self._window_skipped = False
         self._ema: dict[int, float] = {}
+        self._prefix_cache_bytes = prefix_cache_bytes
+        self._prefix_cache: Any = None
+        self._cache_model: Any = None
 
     def _policy_record(self) -> dict[str, Any]:
         policy = self.policy
@@ -335,6 +342,8 @@ class _LayerSelectCallback:
         }
 
     def _write_record(self, directory: str | Path, step: int, *, checkpoint: bool = False) -> None:
+        if self._prefix_cache is not None:
+            self.selection.cache = asdict(self._prefix_cache.stats)
         path = Path(directory) / RECORD_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {**self.selection.to_json(), "policy": self._policy_record(), "step": step}
@@ -370,6 +379,12 @@ class _LayerSelectCallback:
     def on_train_begin(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
         model = kwargs["model"]
         step = state.global_step
+        self.close_prefix_cache()
+        if self._prefix_cache_bytes is not None:
+            from soup_cli.utils.streamed_prefix_cache import streamed_cache_decoder
+
+            streamed_cache_decoder(model)
+            self._cache_model = model
         # A repeated train() may reuse the model. Keep the original parameter set for
         # scoring and resampling, including adapters that the last mask froze.
         if not self.by_layer:
@@ -401,6 +416,7 @@ class _LayerSelectCallback:
         trainable = apply_layer_mask(self.by_layer, selection.layers)
         selection.backward_cut = cut_input_grads(model)
         self.selection = selection
+        self._update_prefix_cache()
         self._write_record(self.output_dir, step)
         if self.console is not None:
             self.console.print(
@@ -434,7 +450,34 @@ class _LayerSelectCallback:
                     optimizer_state.pop(param, None)
         self.selection.layers = active
         self.selection.history.append((step, active))
+        self._update_prefix_cache()
         self._write_record(self.output_dir, step)
+
+    def _update_prefix_cache(self) -> None:
+        if self._cache_model is None:
+            return
+        cutoff = min(self.selection.layers)
+        if cutoff == 0:
+            return
+        if self._prefix_cache is None:
+            from soup_cli.utils.streamed_prefix_cache import StreamedPrefixCache
+
+            self._prefix_cache = StreamedPrefixCache(
+                self._cache_model, cutoff, self._prefix_cache_bytes,
+            ).install()
+            if self.console is not None:
+                self.console.print(
+                    f"[green]Frozen-prefix cache enabled:[/] {cutoff} frozen layers "
+                    f"(host limit {self._prefix_cache_bytes / (1 << 30):.2f} GiB)"
+                )
+        elif cutoff > self._prefix_cache.cutoff:
+            self._prefix_cache.raise_cutoff(cutoff)
+
+    def close_prefix_cache(self) -> None:
+        if self._prefix_cache is not None:
+            self._prefix_cache.close()
+            self._prefix_cache = None
+        self._cache_model = None
 
     def on_pre_optimizer_step(
         self, args: Any, state: Any, control: Any = None, **kwargs: Any
@@ -560,8 +603,22 @@ class _LayerSelectCallback:
             )
 
     def on_train_end(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
-        if self.policy.method == "progressive" and self.selection is not None:
+        if self.selection is not None and (
+            self.policy.method == "progressive" or self._prefix_cache is not None
+        ):
             self._write_record(self.output_dir, state.global_step)
+        if self._cache_model is not None and self.console is not None:
+            if self._prefix_cache is None:
+                self.console.print("[green]Frozen-prefix cache:[/] no frozen decoder prefix")
+            else:
+                stats = self._prefix_cache.stats
+                self.console.print(
+                    f"[green]Frozen-prefix cache:[/] hits={stats.hits + stats.l2l_hits}, "
+                    f"misses={stats.misses + stats.l2l_misses}, "
+                    f"partial={stats.partial + stats.l2l_partial}, "
+                    f"host_bytes={stats.bytes_stored:,}"
+                )
+        self.close_prefix_cache()
         return control
 
     def on_save(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
@@ -592,6 +649,11 @@ def attach_layer_select_callback(
 
     from soup_cli.utils.layer_select import LayerSelectCallback
 
+    prefix_cache_bytes = None
+    if getattr(tcfg, "frozen_prefix_cache", False) and tcfg.stream_layers:
+        from soup_cli.utils.streamed_prefix_cache import resolve_cache_bytes
+
+        prefix_cache_bytes = resolve_cache_bytes(tcfg.frozen_prefix_cache_gib)
     defaults = LayerSelectPolicy(cfg.method, k=cfg.k, layers=tuple(cfg.layers or ()))
     callback = LayerSelectCallback(
         LayerSelectPolicy(
@@ -615,6 +677,7 @@ def attach_layer_select_callback(
         output_dir=output_dir,
         console=console,
         autocast=getattr(getattr(trainer, "accelerator", None), "autocast", nullcontext),
+        prefix_cache_bytes=prefix_cache_bytes,
     )
     trainer.add_callback(callback)
     return callback

@@ -1198,6 +1198,18 @@ class L2LStep:
             or any(type(value) is not int or value < 0 for value in routing_budget)
         ):
             raise ValueError("routing budget needs nonnegative record and comparison bytes")
+        from soup_cli.utils.streamed_prefix_cache import OWNER_ATTR
+
+        cache = getattr(self.owner, OWNER_ATTR, None)
+        if cache is not None:
+            if as_passes(reference):
+                raise ValueError(
+                    "training.frozen_prefix_cache cannot be combined with an L2L reference pass."
+                )
+            if route_preserving_mbr:
+                raise ValueError(
+                    "training.frozen_prefix_cache cannot be combined with route-preserving MBR."
+                )
         if route_preserving_mbr:
             _validate_route_preserving_mbr(self.layers, self.causal)
             if mbr_group_size is not None and (
@@ -1258,6 +1270,7 @@ class L2LStep:
                             reference,
                             backward_floor=floor,
                             collect_phase_stats=collect_phase_stats,
+                            prefix_cache=cache if cache is not None and cache.enabled else None,
                         )
         finally:
             prefetcher.backward_floor = previous_floor
@@ -1284,6 +1297,7 @@ class L2LStep:
         routing_budget: Optional[Tuple[int, int]] = None,
         mbr_split_backward: bool = False,
         mbr_ordered_backward: bool = False,
+        prefix_cache: Any = None,
     ) -> List[Any]:
         import torch
 
@@ -1323,6 +1337,15 @@ class L2LStep:
             )
         pass_ids = [_pass_micro_batches(spec, micro_batches, k) for spec in passes]
         pass_calls = [_pass_calls(spec, calls, k) for spec in passes]
+        cached = None
+        if prefix_cache is not None:
+            if any(l2l_rng.has_draws(call.draws[:prefix_cache.cutoff]) for call in calls):
+                raise ValueError(
+                    "training.frozen_prefix_cache requires zero dropout in the L2L prefix."
+                )
+            cached = prefix_cache.l2l_lookup(micro_batches, calls)
+        keys, starts, hidden = cached if cached is not None else (None, [0] * k, [None] * k)
+        start = min(starts)
         replayed = None
         plan = (*self.call.draws, self.call.head_draws)
         if l2l_rng.has_draws(plan):
@@ -1354,18 +1377,24 @@ class L2LStep:
         if route_preserving_mbr:
             self.route_preserving_mbr_stats = phase_stats
 
-        self._prime(self.owner, ())
+        if start:
+            # Every row has its embedding output already. Only prime the decoder slots.
+            self.runtime.prefetcher.prime(start=start)
+        else:
+            self._prime(self.owner, ())
         pass_hidden: List[List[Any]] = []
         with torch.no_grad():
-            hidden = []
-            for ids in micro_batches:
+            for mb, ids in enumerate(micro_batches):
+                if starts[mb]:
+                    continue
                 if train_embedding:
                     embedding_states.append(l2l_rng.snapshot())
-                hidden.append(self.owner.embed_tokens(ids))
+                hidden[mb] = self.owner.embed_tokens(ids)
             for spec, ids in zip(passes, pass_ids):
                 with self._pass_adapters(spec):
                     pass_hidden.append([self.owner.embed_tokens(x) for x in ids])
-            for idx, layer in enumerate(self.layers):
+            for idx in range(start, len(self.layers)):
+                layer = self.layers[idx]
                 if idx >= backward_floor:
                     for mb in range(k):
                         store.put(idx, mb, hidden[mb])
@@ -1424,6 +1453,8 @@ class L2LStep:
                 else:
                     before = self._expert_read_snapshot() if phase_stats is not None else None
                     for mb in range(k):
+                        if idx < starts[mb]:
+                            continue
                         pair = contexts.get((idx, mb))
                         route_context = (
                             guard.record(idx, mb)
@@ -1452,6 +1483,8 @@ class L2LStep:
                     with self._pass_adapters(spec):
                         for mb in range(k):
                             current[mb] = self._layer(layer, current[mb], None, spec_calls[mb])
+                if keys is not None and idx == prefix_cache.cutoff - 1:
+                    prefix_cache.l2l_store(keys, micro_batches, hidden)
             for spec, current in zip(passes, pass_hidden):
                 spec.outputs.clear()
                 with self._pass_adapters(spec):
