@@ -126,7 +126,11 @@ def test_bf16_mbr_replay_preserves_losses_and_lora_gradients(window, count, mode
     assert grads.keys() == expected_grads.keys()
     for name, want in expected_grads.items():
         assert torch.equal(grads[name], want), name
-    for layer in stepper.route_preserving_mbr_stats["layers"].values():
+    layers = stepper.route_preserving_mbr_stats["layers"]
+    route_slots = sum(batch.numel() for batch in batches[:count]) * model.config.num_experts_per_tok
+    for idx in (1, 2):
+        layer = layers[idx]
+        assert layer["route_id_slots"] == route_slots
         assert layer["route_id_mismatch_slots"] == 0
         assert layer["gate_weight_max_abs"] == 0.0
 
