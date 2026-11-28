@@ -327,6 +327,62 @@ _LANG_STOPWORDS: Mapping[str, frozenset] = MappingProxyType(
     }
 )
 
+# #2785 — a Cyrillic answer is checked against the text's letters before it is
+# returned, on both paths. Neither detector knows Kazakh, so Kazakh rows came back
+# ``ru`` (the stopword heuristic, on one shared word) or ``ru`` / ``uk``
+# (langdetect, which has no Kazakh profile). Each Cyrillic label either detector
+# can return (langdetect's bg, mk, ru, uk) lists the letters outside the Russian
+# alphabet that its own alphabet has; when other extra letters are in at least
+# 15 % of the row's Cyrillic words, the row is ``unknown`` instead. That covers
+# Kazakh ә ғ қ ң ө ұ ү һ and the Kyrgyz, Tatar, Bashkir, Mongolian, Uzbek, Tajik,
+# Belarusian and Serbian letters alike, and Ukrainian і ї є ґ under ``ru`` or
+# ``bg``. The share keeps one Kazakh place name in a Russian sentence ``ru``.
+_RUSSIAN_LETTERS = frozenset("абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
+# Share of a row's Cyrillic words (words with at least one Cyrillic letter) that
+# must carry a letter outside the Russian alphabet before those letters can rule
+# out a Cyrillic label. Measured on the #2785 cases: the five Kazakh rows 46-85 %,
+# the Ukrainian sentence 20 %, a Russian sentence with one Kazakh place name 9 %.
+_EXTRA_LETTER_MIN_WORD_SHARE = 0.15
+_CYRILLIC_ALLOWED_EXTRA: Mapping[str, frozenset] = MappingProxyType(
+    {
+        "ru": frozenset(),
+        "bg": frozenset(),
+        "uk": frozenset("іїєґ"),
+        "mk": frozenset("ѓѕјљњќџ"),
+    }
+)
+_CYRILLIC_RANGES = ((0x0400, 0x052F), (0x1C80, 0x1C8F), (0xA640, 0xA69F))
+
+
+def _is_cyrillic(ch: str) -> bool:
+    code = ord(ch)
+    return any(low <= code <= high for low, high in _CYRILLIC_RANGES)
+
+
+def _extra_cyrillic_letters(tokens: Sequence[str]) -> Tuple[frozenset, float]:
+    """Non-Russian Cyrillic letters in ``tokens`` (lower-cased) and the share
+    of Cyrillic words that carry at least one of them."""
+    extra: Set[str] = set()
+    cyrillic_words = 0
+    marked_words = 0
+    for token in tokens:
+        word_extra = {
+            ch for ch in token
+            if ch not in _RUSSIAN_LETTERS and ch.isalpha() and _is_cyrillic(ch)
+        }
+        if word_extra or any(ch in _RUSSIAN_LETTERS for ch in token):
+            cyrillic_words += 1
+        if word_extra:
+            marked_words += 1
+            extra |= word_extra
+    share = marked_words / cyrillic_words if cyrillic_words else 0.0
+    return frozenset(extra), share
+
+
+def _ruled_out_by_letters(code: str, extra: frozenset) -> bool:
+    allowed = _CYRILLIC_ALLOWED_EXTRA.get(code)
+    return allowed is not None and not extra <= allowed
+
 
 def _langdetect_fast(text: str) -> str | None:
     """Probabilistic detection via ``langdetect`` (v0.53.10 #113 / ``[data-pro]``).
@@ -365,16 +421,22 @@ def detect_language(text: Any) -> str:
     via the ``[data-pro]`` extras, routes through its probabilistic
     detector for broader language coverage; otherwise falls back to the
     pure-Python stopword heuristic (covers en/es/fr/de/pt/ru).
+
+    #2785 — on both paths, a Cyrillic answer that the text's letters rule out
+    (``ru`` for Kazakh text, say) becomes ``unknown``. The text is the whole
+    row as the callers pass it, user and assistant turns together.
     """
     s = _require_str(text, name="text")
     tokens = _tokenise(s)
     if len(tokens) < 4:
         return "unknown"
+    extra, share = _extra_cyrillic_letters(tokens)
+    evidence = extra if share >= _EXTRA_LETTER_MIN_WORD_SHARE else frozenset()
     # Try langdetect first; falls through silently when the package is
     # missing or raises (e.g. too-short input).
     fast = _langdetect_fast(s)
     if fast is not None:
-        return fast
+        return "unknown" if _ruled_out_by_letters(fast, evidence) else fast
     token_set = set(tokens)
     best_lang = "unknown"
     best_hits = 0
@@ -383,7 +445,7 @@ def detect_language(text: Any) -> str:
         if hits > best_hits:
             best_hits = hits
             best_lang = lang
-    if best_hits < 1:
+    if best_hits < 1 or _ruled_out_by_letters(best_lang, evidence):
         return "unknown"
     return best_lang
 
