@@ -285,6 +285,7 @@
     "training.skip_zero_advantage": false,
     "training.stream_buffers": 2,
     "training.stream_disk_kind": null,
+    "training.stream_expert_gemm": "native",
     "training.stream_expert_layout": "fused",
     "training.stream_layers": false,
     "training.stream_loss_chunk": null,
