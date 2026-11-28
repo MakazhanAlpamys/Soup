@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Written for Soup (new kernel for #842), not ported from the Kernel Challenge.
+# Modified for Soup: none of the challenge's code is used here; the NF4 decode
+# follows the block layout documented in this package's nf4.py.
 # ruff: noqa: N803  (Triton constexpr arguments are upper case by convention)
 """Fused NF4 dequantise-and-multiply Triton kernel for #842.
 
