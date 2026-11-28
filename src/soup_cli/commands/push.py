@@ -286,11 +286,15 @@ def push(
         # Create repo if it doesn't exist
         api.create_repo(repo_id=repo, private=private, exist_ok=True)
 
-        # Upload the entire directory
+        # Upload the entire directory, except the frozen-prefix activation cache
+        # a training run may have left in it: scratch data, large, not the model.
+        from soup_cli.utils.frozen_prefix_cache import UPLOAD_IGNORE_PATTERNS
+
         api.upload_folder(
             folder_path=str(model_path),
             repo_id=repo,
             commit_message=commit_message,
+            ignore_patterns=UPLOAD_IGNORE_PATTERNS,
         )
 
         # Model card: --card <ref> overrides with a registry-driven card;

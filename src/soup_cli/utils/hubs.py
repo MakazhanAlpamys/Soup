@@ -633,6 +633,8 @@ def upload_repo(
             "repo_type must be one of 'model' / 'dataset' / 'space'"
         )
 
+    from soup_cli.utils.frozen_prefix_cache import CACHE_DIRNAME, UPLOAD_IGNORE_PATTERNS
+
     if canonical == "hf":
         try:
             from huggingface_hub import HfApi
@@ -644,8 +646,18 @@ def upload_repo(
             folder_path=folder_path,
             repo_type=repo_type,
             commit_message=commit_message,
+            ignore_patterns=UPLOAD_IGNORE_PATTERNS,
         )
         return
+
+    # The other SDKs take no ignore list, so the activation cache a training run
+    # leaves in its output folder would be uploaded with the model.
+    if os.path.lexists(os.path.join(folder_path, CACHE_DIRNAME)):
+        raise ValueError(
+            f"{folder_path!r} holds the frozen-prefix activation cache "
+            f"({CACHE_DIRNAME!r}); it is scratch data, not part of the model. "
+            "Delete that folder before uploading to this hub."
+        )
 
     if canonical == "modelscope":
         try:

@@ -19,6 +19,7 @@ from typing import (
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationInfo,
     field_validator,
@@ -105,6 +106,10 @@ _MAX_LORA_PATTERN_KEY_LEN = 512
 # How much of an over-long key the refusal quotes back: enough to recognise
 # which key it was, not enough to paste kilobytes into a terminal or a log.
 _MAX_LORA_PATTERN_KEY_SHOWN = 80
+
+# Tasks that training.l2l accepts. A task joins the tuple when its L2L window loss
+# (trainer/l2l_trainer.py WindowLoss) ships; the refusal below reads the tuple.
+L2L_SUPPORTED_TASKS = ("sft",)
 
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
@@ -1345,6 +1350,124 @@ class EvalGateConfig(BaseModel):
         return self
 
 
+class LoraLayersConfig(BaseModel):
+    """Choose which LoRA adapters inside numbered decoder layers can train."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["fixed", "random", "grad", "angular", "lisa", "progressive"]
+    layers: Optional[List[int]] = None
+    k: Optional[int] = Field(default=None, ge=1)
+    probe_rows: Optional[int] = Field(default=None, ge=1)
+    interval_steps: Optional[int] = Field(default=None, ge=1)
+    seed: Optional[int] = Field(default=None, ge=0)
+    freeze_step: Optional[int] = Field(
+        default=None, ge=1, description="Scheduled optimizer step after which the bottom freezes."
+    )
+    freeze_below: Optional[int] = Field(
+        default=None, ge=1, le=1024, description="Freeze adapted layer indices below this cutoff."
+    )
+    freeze_threshold: Optional[float] = Field(
+        default=None, gt=0.0, lt=1.0, description="Relative norm change allowed by the rule (0.10)."
+    )
+    max_freeze_below: Optional[int] = Field(
+        default=None, ge=1, le=1024, description="Exclusive layer cutoff cap for the rule."
+    )
+    freeze_deadline: Optional[int] = Field(
+        default=None, ge=1, description="Optimizer step by which the minimum cutoff takes effect."
+    )
+    min_freeze_below: Optional[int] = Field(
+        default=None, ge=1, le=1024, description="Minimum cutoff enforced at freeze_deadline."
+    )
+    freeze_smoothing: Optional[float] = Field(
+        default=None, ge=0.0, lt=1.0, description="EMA decay for the rule (0 disables smoothing)."
+    )
+
+    @field_validator(
+        "k",
+        "probe_rows",
+        "interval_steps",
+        "seed",
+        "freeze_step",
+        "freeze_below",
+        "freeze_threshold",
+        "max_freeze_below",
+        "freeze_deadline",
+        "min_freeze_below",
+        "freeze_smoothing",
+        mode="before",
+    )
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: ValidationInfo) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
+    @field_validator("layers", mode="before")
+    @classmethod
+    def _reject_boolean_layer_indices(cls, value: Any) -> Any:
+        if isinstance(value, (list, tuple)) and any(isinstance(i, bool) for i in value):
+            raise ValueError("layers entries must be ints, not bools")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_method_fields(self) -> "LoraLayersConfig":
+        rule_fields = (
+            "freeze_threshold",
+            "max_freeze_below",
+            "freeze_deadline",
+            "min_freeze_below",
+            "freeze_smoothing",
+        )
+        for name in ("freeze_step", "freeze_below", *rule_fields):
+            if getattr(self, name) is not None and self.method != "progressive":
+                raise ValueError(
+                    f"training.lora_layers: {name} only applies to method 'progressive'"
+                )
+        if self.method == "progressive":
+            if self.k is not None or self.layers is not None:
+                raise ValueError(
+                    "training.lora_layers: method='progressive' takes neither k nor layers"
+                )
+            if (self.freeze_step is None) != (self.freeze_below is None):
+                raise ValueError("training.lora_layers: freeze_step and freeze_below go together")
+            if (self.freeze_deadline is None) != (self.min_freeze_below is None):
+                raise ValueError(
+                    "training.lora_layers: freeze_deadline and min_freeze_below go together"
+                )
+            if self.freeze_step is not None:
+                for name in rule_fields:
+                    if getattr(self, name) is not None:
+                        raise ValueError(
+                            f"training.lora_layers: {name} only applies to the progressive rule"
+                        )
+            if (
+                self.min_freeze_below is not None
+                and self.max_freeze_below is not None
+                and self.min_freeze_below > self.max_freeze_below
+            ):
+                raise ValueError(
+                    "training.lora_layers: min_freeze_below must be at most max_freeze_below"
+                )
+        elif self.method == "fixed":
+            if self.k is not None:
+                raise ValueError("training.lora_layers.k only applies to sampled or scored methods")
+            if not self.layers or any(index < 0 for index in self.layers):
+                raise ValueError("training.lora_layers.method='fixed' requires nonnegative layers")
+        else:
+            if self.layers is not None:
+                raise ValueError("training.lora_layers.layers only applies to fixed")
+            if self.k is None:
+                raise ValueError(f"training.lora_layers.method={self.method!r} requires k")
+        if self.probe_rows is not None and self.method not in ("grad", "angular"):
+            raise ValueError("training.lora_layers.probe_rows only applies to grad and angular")
+        if self.interval_steps is not None and self.method not in ("lisa", "progressive"):
+            raise ValueError(
+                "training.lora_layers.interval_steps only applies to lisa or progressive"
+            )
+        if self.seed is not None and self.method not in ("random", "lisa"):
+            raise ValueError("training.lora_layers.seed only applies to random and lisa")
+        return self
+
+
 class TrainingConfig(BaseModel):
     @field_validator("*", mode="before")
     @classmethod
@@ -1461,6 +1584,10 @@ class TrainingConfig(BaseModel):
     lora: LoraConfig = Field(
         default_factory=LoraConfig,
         description="LoRA (Low-Rank Adaptation) adapter architecture and target modules.",
+    )
+    lora_layers: Optional[LoraLayersConfig] = Field(
+        default=None,
+        description="Select trainable decoder LoRA adapters in Transformers text SFT.",
     )
     quantization: Literal[
         "4bit",
@@ -3220,6 +3347,16 @@ class TrainingConfig(BaseModel):
             )
         return v
 
+    @field_validator("frozen_prefix_cache", mode="before")
+    @classmethod
+    def _validate_frozen_prefix_cache_is_bool(cls, v):
+        """A boolean switch: an int or a string is a typo, not a setting."""
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"training.frozen_prefix_cache must be bool, got {type(v).__name__}"
+            )
+        return v
+
     @field_validator("distill_checkpoint", mode="before")
     @classmethod
     def _validate_distill_checkpoint(cls, v):
@@ -3934,6 +4071,24 @@ class TrainingConfig(BaseModel):
             "transformers and no layer streaming, or native MLX text SFT with lora.r=0."
         ),
     )
+    frozen_prefix_cache: bool = Field(
+        default=False,
+        description=(
+            "Reuse the output of frozen bottom layers during Transformers text SFT. "
+            "Resident Mistral and OLMoE use disk and need freeze_layers or freeze_ratio. "
+            "Layer streaming and L2L use host RAM and need training.lora_layers with a "
+            "fixed or progressively growing frozen prefix and no LoRA dropout."
+        ),
+    )
+    frozen_prefix_cache_gib: Optional[float] = Field(
+        default=None,
+        gt=0,
+        le=4096,
+        description=(
+            "Host RAM ceiling in GiB for the streamed frozen-prefix cache. "
+            "Defaults to 8 GiB and is also capped at one quarter of available RAM."
+        ),
+    )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
     unfrozen_parameters: Optional[List[str]] = Field(
         default=None,
@@ -4061,6 +4216,49 @@ class TrainingConfig(BaseModel):
             "preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + "
             "text + quantization='none' or '4bit', LoRA and a concrete batch_size. "
             "Weighted preference_loss_weights do not stream yet."
+        ),
+    )
+    l2l: bool = Field(
+        default=False,
+        description=(
+            "BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each "
+            "streamed decoder layer is loaded once per optimizer step and runs all "
+            "k micro-batches, then the optimizer takes one step on the adapters. k is "
+            "gradient_accumulation_steps. Needs stream_layers=true and a Llama or "
+            "Mistral model on a single GPU; MoE models are refused. k=1 behaves like "
+            "plain streaming. A bool only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_spill_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "BETA — where training.l2l spills activations that do not fit the host-RAM "
+            "budget. Default: a '_l2l_spill' folder in the run's output directory. It "
+            "must resolve under $HOME, the working directory or the temp directory "
+            "(realpath, so symlinks and Windows short names cannot step outside), and "
+            "is refused at launch on RAM-backed, overlay and network filesystems and on "
+            "a drive without room. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
+        default="none",
+        description=(
+            "BETA — how training.l2l stores the activations between layers. 'none' keeps "
+            "them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the "
+            "launch refuses it until it is shown to be safe for training: it is lossy "
+            "and its gradients are not yet checked against the accumulation baseline. "
+            "The value is recorded in the run's l2l_recipe.json, and a resume with "
+            "another codec is refused. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_auto_k: bool = Field(
+        default=False,
+        description=(
+            "BETA — let the memory planner pick the largest k that fits host RAM, up to "
+            "gradient_accumulation_steps. Plans the window of a MoE model, which L2L "
+            "does not run yet, so the launch refuses it for now. Off: k = "
+            "gradient_accumulation_steps. Only valid with training.l2l=true. A bool "
+            "only: 1 or 'yes' is refused."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -4647,6 +4845,35 @@ class TrainingConfig(BaseModel):
             f"training.{info.field_name} must be true or false, got "
             f"{type(v).__name__} {v!r}"
         )
+
+    @field_validator("l2l", "l2l_auto_k", mode="before")
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_l2l_switch_is_bool(cls, v, info: ValidationInfo):
+        """``l2l: 1`` or ``yes`` is refused instead of being coerced to ``true``: the
+        switch replaces the training step, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
+
+    @field_validator("l2l_spill_dir")
+    @classmethod
+    def _validate_l2l_spill_dir(cls, value: Optional[str]) -> Optional[str]:
+        # Shape only. Where the directory may live (realpath + commonpath against
+        # $HOME, $CWD and $TMPDIR) is checked at launch by utils/l2l_spill.py, which
+        # also needs the filesystem.
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("training.l2l_spill_dir must be a non-empty path")
+        if "\x00" in value:
+            raise ValueError("training.l2l_spill_dir must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("training.l2l_spill_dir must be <= 4096 chars")
+        return value
 
     @model_validator(mode="after")
     def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
@@ -6215,6 +6442,45 @@ class SoupConfig(BaseModel):
             f"quantization={tcfg.quantization!r} would record a quantised run that "
             "never happens. Remove it or set quantization: none."
         )
+
+    @model_validator(mode="after")
+    def _validate_lora_layers_scope(self) -> "SoupConfig":
+        tcfg = self.training
+        if tcfg.lora_layers is None:
+            return self
+        if (self.task, self.backend, self.modality) != ("sft", "transformers", "text"):
+            raise ValueError(
+                "training.lora_layers requires task='sft', backend='transformers' "
+                f"and modality='text'; got {self.task=}, {self.backend=}, {self.modality=}."
+            )
+        if tcfg.lora.r == 0:
+            raise ValueError("training.lora_layers requires training.lora.r > 0")
+        lisa_tuned = any(
+            getattr(tcfg, name) != TrainingConfig.model_fields[name].default
+            for name in (
+                "lisa_num_layers", "lisa_interval_steps", "lisa_reset_optimizer",
+                "lisa_train_embeddings",
+            )
+        )
+        conflicts = [
+            f"training.{name}"
+            for name, enabled in (
+                ("freeze_layers", tcfg.freeze_layers is not None),
+                ("freeze_ratio", tcfg.freeze_ratio is not None),
+                ("unfrozen_parameters", bool(tcfg.unfrozen_parameters)),
+                ("lisa_enabled", tcfg.lisa_enabled),
+                ("lisa_*", lisa_tuned and not tcfg.lisa_enabled),
+                ("lora.use_vera", tcfg.lora.use_vera),
+                ("use_lorafa", tcfg.use_lorafa),
+                ("relora_steps", tcfg.relora_steps is not None),
+            )
+            if enabled
+        ]
+        if conflicts:
+            raise ValueError(
+                "training.lora_layers is mutually exclusive with " + ", ".join(conflicts)
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_expand_layers_scope(self) -> "SoupConfig":
@@ -8331,6 +8597,62 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_l2l_compat(self) -> "SoupConfig":
+        """``training.l2l`` and its options: each refusal names the field and the gate.
+
+        ``l2l`` reuses the streamed layer loads, so it needs ``stream_layers`` and a task
+        whose L2L window loss ships. The options only change how L2L runs, so each is
+        refused while ``l2l`` is off. The codec gate itself (``fp8_e4m3``) is closed at
+        launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
+        """
+        tcfg = self.training
+        options = {
+            "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
+            "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
+            "l2l_auto_k": tcfg.l2l_auto_k,
+        }
+        if not tcfg.l2l:
+            for name, is_set in options.items():
+                if is_set:
+                    raise ValueError(
+                        f"training.{name} is set but training.l2l is false: it changes how "
+                        f"L2L runs and nothing else reads it. Set l2l=true or drop {name}."
+                    )
+            return self
+        if not tcfg.stream_layers:
+            raise ValueError(
+                "training.l2l requires training.stream_layers=true: L2L reuses the "
+                "streamed layer loads, and a resident model has none to reuse."
+            )
+        if self.task not in L2L_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
+                f"got task={self.task!r}."
+            )
+        if self.backend != "transformers" or self.modality != "text":
+            raise ValueError(
+                "training.l2l requires backend='transformers' and modality='text'; "
+                f"got backend={self.backend!r}, modality={self.modality!r}."
+            )
+        own_trainer = [
+            name
+            for name, is_set in (
+                ("data.format='raft'", self.data.format == "raft"),
+                ("training.prefix_tree", bool(tcfg.prefix_tree)),
+                ("training.stream_loss_chunk", tcfg.stream_loss_chunk is not None),
+            )
+            if is_set
+        ]
+        if own_trainer:
+            raise ValueError(
+                f"training.l2l cannot be combined with {' / '.join(own_trainer)}: each "
+                "builds its own trainer or replaces how the loss is computed (the L2L loss "
+                "bypasses the chunked-loss hook), so L2L would skip it. "
+                "Remove one of the two."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_rollout_backend(self) -> "SoupConfig":
         """v0.50.0 Part C — ``rollout_backend`` requires task='grpo' and a
         non-mlx backend. Live launcher wired in v0.71.21 (#125):
@@ -10360,6 +10682,102 @@ class SoupConfig(BaseModel):
                 "the vision and audio setup paths load through transformers and "
                 f"do not use Unsloth; got modality={self.modality!r}. "
                 "Use backend: transformers for multimodal SFT."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_frozen_prefix_cache(self) -> "SoupConfig":
+        """``training.frozen_prefix_cache`` runs only where its frozen prefix is real.
+
+        The cache holds the output of the bottom layers, so it needs a freeze
+        plan to say where they end, a LoRA adapter (not full fine-tuning) to keep
+        them frozen, and a forward pass that nothing else rewrites. The backend,
+        modality and layer-streaming gates for the resident freeze fields run
+        first in :meth:`_validate_freeze_is_applied`.
+        """
+        tcfg = self.training
+        if tcfg.frozen_prefix_cache_gib is not None and not (
+            tcfg.frozen_prefix_cache and tcfg.stream_layers
+        ):
+            raise ValueError(
+                "training.frozen_prefix_cache_gib requires training.frozen_prefix_cache=true "
+                "and training.stream_layers=true."
+            )
+        if not tcfg.frozen_prefix_cache:
+            return self
+        if self.task != "sft":
+            raise ValueError(
+                "training.frozen_prefix_cache requires task='sft'; "
+                f"got task={self.task!r}."
+            )
+        if tcfg.stream_layers:
+            if tcfg.lora_layers is None:
+                raise ValueError(
+                    "training.frozen_prefix_cache with training.stream_layers requires "
+                    "training.lora_layers."
+                )
+            if tcfg.lora_layers.method == "lisa":
+                raise ValueError(
+                    "training.frozen_prefix_cache does not support "
+                    "training.lora_layers.method='lisa': the trainable layers change."
+                )
+            if tcfg.lora.dropout:
+                raise ValueError(
+                    "training.frozen_prefix_cache with training.stream_layers requires "
+                    "training.lora.dropout=0."
+                )
+            if tcfg.prefix_tree:
+                raise ValueError(
+                    "training.frozen_prefix_cache with training.stream_layers does not "
+                    "support training.prefix_tree."
+                )
+        elif tcfg.freeze_layers is None and tcfg.freeze_ratio is None:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.freeze_layers or "
+                "training.freeze_ratio: the cache holds the output of the frozen "
+                "bottom layers, so it needs to know where they end."
+            )
+        if tcfg.lora.r < 1:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.lora.r >= 1: full "
+                "fine-tuning (r=0) trains the embeddings and every layer, so no "
+                "prefix stays frozen."
+            )
+        if tcfg.packing or tcfg.multipack:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.packing or "
+                "training.multipack: a packed batch differs every epoch."
+            )
+        if not tcfg.stream_layers and tcfg.gradient_checkpointing is not False:
+            raise ValueError(
+                "training.frozen_prefix_cache requires training.gradient_checkpointing=false."
+            )
+        if tcfg.neftune_alpha is not None:
+            raise ValueError(
+                "training.frozen_prefix_cache cannot be combined with "
+                "training.neftune_alpha: NEFTune adds fresh noise to the embeddings "
+                "on every step, so the cache would keep the first epoch's noise for "
+                "all later epochs. Remove one of them."
+            )
+        if not tcfg.stream_layers and tcfg.batch_size != 1 and not (
+            tcfg.curriculum and tcfg.curriculum_metric == "length"
+        ):
+            raise ValueError(
+                "training.frozen_prefix_cache with training.batch_size above 1 (or "
+                "'auto') needs a fixed data order: the cache is keyed per batch, and "
+                "a shuffled order makes every batch new, so it would only write. Set "
+                "training.batch_size: 1, or turn on training.curriculum with "
+                "training.curriculum_metric: length, which reads the rows in a fixed "
+                "order."
+            )
+        if tcfg.lora.use_vera:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support training.lora.use_vera."
+            )
+        if tcfg.lora.target_parameters is not None:
+            raise ValueError(
+                "training.frozen_prefix_cache does not support "
+                "training.lora.target_parameters."
             )
         return self
 

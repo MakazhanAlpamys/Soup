@@ -1470,6 +1470,8 @@ class StreamPrefetcher:
         self.stream = stream
         self.prev: Optional[int] = None
         self.direction = 1
+        self.prime_start = 0
+        self.backward_floor = 0
         self.primes = 0
         self.tail_prefetch = tail_prefetch
         self.tail_prefetched = False
@@ -1511,15 +1513,16 @@ class StreamPrefetcher:
             )
         self._head_prefetch_layer = value
 
-    def prime(self) -> None:
-        """Start of a forward pass: layer 0, walking upward."""
+    def prime(self, start: Optional[int] = None) -> None:
+        """Start a forward walk at the first layer whose input must be computed."""
         self.prev = None
         self.direction = 1
         self.primes += 1
         self.backward_tail_prefetched = False
         self.tail_prefetched = False
-        if self.pool.owner[self.pool.slot_for(0)] != 0:
-            self.pool.load_async(0, self.source, self.stream)
+        start = self.prime_start if start is None else start
+        if self.pool.owner[self.pool.slot_for(start)] != start:
+            self.pool.load_async(start, self.source, self.stream)
 
     def advance(self, idx: int) -> None:
         # Direction is explicit state, not re-derived per call. It only ever
@@ -1532,14 +1535,15 @@ class StreamPrefetcher:
             self.direction = -1
         self.prev = idx
         nxt = idx + self.direction
-        if 0 <= nxt < self.n_layers and self.pool.owner[self.pool.slot_for(nxt)] != nxt:
+        floor = self.backward_floor if self.direction == -1 else 0
+        if floor <= nxt < self.n_layers and self.pool.owner[self.pool.slot_for(nxt)] != nxt:
             self.pool.load_async(nxt, self.source, self.stream)
         head_layer = self.head_prefetch_layer
         if head_layer is None:
             head_layer = self.n_layers - 1
         if (
             self.direction == 1
-            and idx == head_layer
+            and idx >= head_layer
             and not self.tail_prefetched
             and self.tail_prefetch is not None
         ):
@@ -1550,8 +1554,8 @@ class StreamPrefetcher:
             self.tail_prefetch()
             self.tail_prefetched = True
         # #975 — layer 0 reached going backward is the last decoder recompute
-        # of this step's backward pass, so this refills the shared slot with
-        # the embedding while the backward is still running. Two separate
+        # of the full backward pass. L2L can stop higher. At the last recompute, refill
+        # the shared slot with the embedding while the backward is still running. Two separate
         # things make that safe, and only the second protects the GPU:
         #
         # * CPU side: `lm_head`'s backward Node sits between the loss and every
@@ -1573,7 +1577,7 @@ class StreamPrefetcher:
         # hot path, by getting there first with time to overlap.
         if (
             self.direction == -1
-            and idx == 0
+            and idx == self.backward_floor
             and not self.backward_tail_prefetched
             and self.backward_tail_prefetch is not None
         ):
@@ -3633,16 +3637,19 @@ def assert_streamed_adapter_saved(model: Any, output_dir: str) -> None:
     after each save, by reading back the file's header (keys only, no tensor
     data).
 
-    The reference is the model's own trainable ``lora_*`` parameters, one saved
+    The reference is the model's own trainable and selection-frozen ``lora_*`` parameters, one saved
     key each, not a bare ``> 0``. There is no legitimately empty streamed save:
     streaming always trains a LoRA adapter, and its trainable tensors exist from
     construction, so a save before the first optimizer step still writes all of
     them. Non-``lora_`` keys (``modules_to_save``) are not counted on either
     side.
     """
+    from soup_cli.utils.layer_select import FROZEN_BY_SELECTION
+
     path = os.path.join(output_dir, _ADAPTER_WEIGHTS_FILE)
     expected = sum(
-        1 for name, param in model.named_parameters() if param.requires_grad and "lora_" in name
+        1 for name, param in model.named_parameters()
+        if "lora_" in name and (param.requires_grad or getattr(param, FROZEN_BY_SELECTION, False))
     )
     if not os.path.isfile(path):
         raise RuntimeError(

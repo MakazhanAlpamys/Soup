@@ -2412,7 +2412,7 @@ Usage: `soup export [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model directory (full model or LoRA adapter) |
 | `--format`, `-f` | text | `gguf` |  | Export format: gguf, onnx, tensorrt, bitnet, tq1_0, torchao, gguf-ud (torchao needs --quant-config) |
 | `--quant`, `-q` | text | `q4_k_m` |  | Quantization type: q4_0, q4_k_m, q5_k_m, q8_0, f16, f32 |
-| `--output`, `-o` | text |  |  | Output file path. Default: &lt;model-name>.&lt;quant>.gguf |
+| `--output`, `-o` | text |  |  | Output path: a file or a directory, depending on --format. GGUF writes a file (default: &lt;model-name>.&lt;quant>.gguf). ONNX and TensorRT write a directory (default: &lt;model-name>\_onnx or &lt;model-name>\_trt, next to the model). |
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
 | `--llama-cpp` | text |  |  | Path to llama.cpp directory. Auto-detected or cloned to \~/.soup/llama.cpp |
 | `--onnx-task` | text | `text-generation` |  | ONNX export task: text-generation (causal LM) or feature-extraction (embedding) |
@@ -2817,7 +2817,7 @@ Usage: `soup loop prune [OPTIONS]`
 |---|---|---|---|---|
 | `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
 | `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
-| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); `versions.jsonl` always retains at least 20 rollback transitions. |
 
 ### `soup loop replay`
 
@@ -3365,7 +3365,7 @@ Usage: `soup registry list [OPTIONS]`
 | `--tag`, `-t` | text |  |  | Filter by tag. |
 | `--base`, `-b` | text |  |  | Filter by base model. |
 | `--task` | text |  |  | Filter by training task. |
-| `--limit`, `-l` | integer | `100` |  | Maximum number of entries to show. |
+| `--limit`, `-l` | integer | `100` |  | Maximum number of entries to show (1-1000; out-of-range values are clamped). |
 
 ### `soup registry promote`
 
@@ -3402,7 +3402,7 @@ Usage: `soup registry search [OPTIONS] QUERY`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `QUERY` | text |  | yes | Keyword to search for |
-| `--limit`, `-l` | integer | `50` |  | Maximum number of matching entries to show. |
+| `--limit`, `-l` | integer | `50` |  | Maximum number of matching entries to show (1-500; out-of-range values are clamped). |
 
 ### `soup registry show`
 
