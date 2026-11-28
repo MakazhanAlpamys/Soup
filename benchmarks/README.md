@@ -1,12 +1,8 @@
 # Measurement records
 
-Raw gate records for Soup's layer-streaming feature and its release gate,
-published as written.
-
-These are not a report assembled after the fact. They are the working records
-kept while each item was built and verified, so they contain the failures, the
-assumptions that turned out wrong, and the numbers that were measured and then
-discarded — in the order those things happened.
+Working gate records and study summaries for Soup's layer-streaming feature.
+They preserve the measured results, failures, and superseded runs. Study
+summaries link to their archived evidence.
 
 They are the evidence behind the preprint:
 
@@ -16,6 +12,14 @@ They are the evidence behind the preprint:
 
 | File | What it gates | Headline |
 |---|---|---|
+| [L2L step reproduction](l2l-step-reproduction-rtx3070-2026-10-19.md) | Layer-major micro-batching correctness, scaling and ordinary-batch bound | All four gates passed. The longer control bounded the ordinary batch at 4 and established a VRAM advantage for L2L. |
+| [L2L activation-store spill](l2l-activation-store-spill-rtx3090-2026-10-26.md) | Store-level equality, RAM accounting, cleanup and drive placement | RAM-tier checks passed. Weight reads on the shared disk fell to 0.830x their no-spill rate. |
+| [L2L SFT padding](l2l-sft-padding-rtx3070-2026-10-26.md) | Dense SFT loss and gradient sensitivity to padding | Padded BF16 windows exceeded tolerance on the RTX 3070. Equal-length controls matched bit for bit. |
+| [L2L trainer spill](l2l-trainer-spill-rtx4090-2026-10-28.md) | Automatic spill under a trainer cgroup cap and recovery after interruption | The final spill gate passed, with +2.39% step overhead and a 95% interval of [-1.80%, +6.57%]. The separate GA tolerance failed. |
+| [L2L synthetic capacity](l2l-synthetic-capacity-rtx3090-2026-10-28.md) | Disk-streamed SFT on randomly initialized dense 70B-shaped weights | The RTX 3090 campaign recorded 3.33 GiB allocated VRAM. Unknown foreign reads limit its timing evidence. |
+| [L2L SFT readiness](l2l-sft-readiness-rtx5070ti-2026-10-29.md) | Streamed Mistral SFT loss, mixed lengths and allocated VRAM | Readiness passed with limits. The RTX 5070 Ti speed interval included zero. |
+| [L2L DPO precision](l2l-dpo-precision-rtx3060-2026-11-04.md) | FP32 and BF16 controls for the DPO discrepancy | FP32 matched with pinned and default SDPA. BF16 exceeded the noise-floor tolerance after step zero. |
+| [L2L preference readiness](l2l-preference-readiness-rtx3060-2026-11-04.md) | DPO, ORPO, SimPO and KTO qualification | DPO passed the follow-up gate. ORPO, SimPO and KTO each failed at least one cell. |
 | [`quant-check-performance-smoke-2026-11-10.md`](quant-check-performance-smoke-2026-11-10.md) | Functional validation of opt-in combined quality/performance reporting ([#2677](https://github.com/MakazhanAlpamys/Soup/issues/2677)) | Real Qwen FP16/NF4 on H200 and identical tiny CPU checkpoints; four CLI reports, null CPU VRAM, quality exit-code regression and full CPU suite. Not a speedup or model-quality claim |
 | [`flash-liger-h200-2026-11-10.md`](flash-liger-h200-2026-11-10.md) | Sequence/checkpointing sweep for #378; measurement, no default change | 120 timings and 32 probes on a shared H200: Liger 1.197-1.229x SDPA with 21.6-54.7% less allocated peak at feasible points; separate FA2 0.929-0.989x. Eight long-sequence checkpoint-off probe OOMs and all 40 unrun timing slots retained. |
 | [`protocol-378-h200.md`](protocol-378-h200.md) | Frozen protocol for the H200 sequence/checkpointing sweep of [#378](https://github.com/MakazhanAlpamys/Soup/issues/378), written before the timed matrix; the results are in [`flash-liger-h200-2026-11-10.md`](flash-liger-h200-2026-11-10.md) | Llama-3.1-8B, resident BF16 base with LoRA r=16 on all seven projections, batch 4, sequence 1024/2048/4096/8192 with checkpointing off and on, four arms (default SDPA, FA2, Liger, FA2+Liger), five interleaved repetitions per feasible cell, 5 warm-up and 80 measured updates. Activation probes run before timing, and a failed probe is retained rather than turned into a ratio. A second Hopper measurement, not a reproduction of the older H100 values. |

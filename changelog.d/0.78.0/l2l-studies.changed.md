@@ -1,0 +1,1 @@
+- Add measurement records for L2L step reproduction, activation-store spill, trainer spill, SFT padding, synthetic 70B capacity, SFT readiness, DPO precision, and preference readiness. (#PENDING by @Artix6034, @Batyrkhantzy111, @M1kado0)
