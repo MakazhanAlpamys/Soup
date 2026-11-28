@@ -1,0 +1,91 @@
+{
+  "n_layers": 2,
+  "layer_keys": [
+    "mlp.gate.e_score_correction_bias",
+    "mlp.shared_experts.down_proj.weight",
+    "self_attn.q_proj.weight",
+    "self_attn.q_proj.weight::absmax",
+    "self_attn.q_proj.weight::nested_absmax",
+    "self_attn.q_proj.weight::nested_offset"
+  ],
+  "extra_keys": [
+    "__nf4_code",
+    "__nf4_nested_code",
+    "model.norm.weight"
+  ],
+  "dtype": "float32",
+  "total_params": 1422,
+  "arch": "deepseek_v3",
+  "soup_version": "0.78.0",
+  "large_keys": [],
+  "format_version": 5,
+  "source_fingerprint": "25599a35714e4b8638a0d11872e09b70c7e12ce69a0b2e7a493b6f1e1dbcc4a6",
+  "source_files": [
+    [
+      "model.safetensors",
+      8272,
+      1795701947150142600
+    ]
+  ],
+  "quant": "nf4",
+  "double_quant": true,
+  "quant_device": "cpu",
+  "quant_specs": {
+    "self_attn.q_proj.weight": {
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "blocksize": 64,
+      "quant_type": "nf4",
+      "nested": true,
+      "nested_blocksize": 256
+    }
+  },
+  "external_tensors": {},
+  "external_mode": "",
+  "stripe_roots": [],
+  "layer_roots": [],
+  "expert_layout": "per_expert",
+  "expert_layers": [
+    0,
+    1
+  ],
+  "expert_count": 3,
+  "expert_shapes": {
+    "gate_up": [
+      16,
+      8
+    ],
+    "down": [
+      8,
+      8
+    ]
+  },
+  "expert_quant_specs": {
+    "gate_up": {
+      "shape": [
+        16,
+        8
+      ],
+      "dtype": "float32",
+      "blocksize": 64,
+      "quant_type": "nf4",
+      "nested": true,
+      "nested_blocksize": 256
+    },
+    "down": {
+      "shape": [
+        8,
+        8
+      ],
+      "dtype": "float32",
+      "blocksize": 64,
+      "quant_type": "nf4",
+      "nested": true,
+      "nested_blocksize": 256
+    }
+  },
+  "fp32_router_weights": false
+}

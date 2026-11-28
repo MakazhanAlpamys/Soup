@@ -636,6 +636,19 @@ including gradient accumulation, two forwards before one backward, `retain_graph
 no-grad forward and an exception mid-step. Hardware measurements are not part of this
 change and are discussed with its design (#2170).
 
+**Optional native expert reader.** Soup ships the C++ reader and CUDA NF4 decoder
+sources for explicit builds. With PyTorch, setuptools and a C++17 compiler installed,
+run the build command below and add `/tmp/soup-native` to `PYTHONPATH`.
+
+```bash
+python -m soup_cli.utils.native_expert_reader.build_ext build_ext \
+    --build-lib /tmp/soup-native --build-temp /tmp/soup-native/obj
+```
+
+Add `--with-cuda-nf4` on Linux to build the decoder with a matching CUDA toolkit
+and `nvcc`. The compiled module is available for direct use. The trainer uses
+the Python expert pool.
+
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,
 forward and recompute alike: two small kernels and a temporary per projection.
