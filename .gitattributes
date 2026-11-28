@@ -1,3 +1,9 @@
 tests/fixtures/recipe_config_snapshots.json text eol=lf
 benchmarks/evidence/flash-liger-378-h200/*.json text eol=lf
 benchmarks/evidence/flash-liger-378-preflight/*.json text eol=lf
+
+# Source snapshots are verified byte-for-byte against their published SHA-256.
+benchmarks/evidence/adapter-double-quant-a100-2026-10-25/** -text
+benchmarks/evidence/grouped-expert-compute-rtx3070-2026-11-07/** -text
+benchmarks/evidence/moe-serving-adapter-cpu-2026-10-08/** -text
+benchmarks/evidence/quant-streaming-and-expert-cache-2026-10-19/** -text

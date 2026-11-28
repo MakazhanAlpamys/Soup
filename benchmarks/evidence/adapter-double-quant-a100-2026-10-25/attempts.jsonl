@@ -1,0 +1,28 @@
+{"attempt_id": "9dd52ddad4c44a08a80de5cdff30f8e1", "event": "start", "kind": "F", "meta": {}, "pid": 5609, "run_id": "F_A_off", "ts": "2026-10-25T22:41:01Z", "unix_s": 1792968061.2831671}
+{"attempt_id": "9dd52ddad4c44a08a80de5cdff30f8e1", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-25T22:47:11Z"}
+{"attempt_id": "29298431f09d46d7acb1edf08a680856", "event": "start", "kind": "F", "meta": {}, "pid": 5854, "run_id": "F_A_on", "ts": "2026-10-25T22:47:18Z", "unix_s": 1792968438.788883}
+{"attempt_id": "29298431f09d46d7acb1edf08a680856", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-25T22:53:26Z"}
+{"attempt_id": "e851718a706840dbab9a18f0241b55dc", "event": "start", "kind": "F", "meta": {}, "pid": 6099, "run_id": "F_A_bf16", "ts": "2026-10-25T22:53:34Z", "unix_s": 1792968814.172187}
+{"attempt_id": "e851718a706840dbab9a18f0241b55dc", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-25T22:59:43Z"}
+{"attempt_id": "11b589e99ea64050abb22129f0b07807", "event": "start", "kind": "T", "meta": {}, "pid": 6600, "run_id": "T", "ts": "2026-10-25T23:29:04Z", "unix_s": 1792970944.6389358}
+{"attempt_id": "11b589e99ea64050abb22129f0b07807", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-25T23:32:11Z"}
+{"attempt_id": "fc0f5e1b820744e187f1bb78c1a8eb86", "event": "start", "kind": "T", "meta": {}, "pid": 6922, "run_id": "T_fallback_gateup", "ts": "2026-10-25T23:32:19Z", "unix_s": 1792971139.203138}
+{"attempt_id": "fc0f5e1b820744e187f1bb78c1a8eb86", "event": "end", "meta": {}, "outcome": "void", "reasons": ["crash: CalibrationStopped: fallback targets: cannot reach M=384 from 286 distinct SMOKE rows; no row is repeated, so the target is not calibrated"], "ts": "2026-10-25T23:34:53Z"}
+{"attempt_id": "ab89cece9d6549c1b8803bfa50f7e6bc", "event": "start", "kind": "W", "meta": {}, "pid": 7265, "run_id": "W", "ts": "2026-10-25T23:35:42Z", "unix_s": 1792971342.7677934}
+{"attempt_id": "ab89cece9d6549c1b8803bfa50f7e6bc", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-25T23:53:02Z"}
+{"attempt_id": "191ccd18ead846ee81eca7f77c9e5a97", "event": "start", "kind": "N", "meta": {}, "pid": 7606, "run_id": "N_1", "ts": "2026-10-25T23:53:10Z", "unix_s": 1792972390.050367}
+{"attempt_id": "191ccd18ead846ee81eca7f77c9e5a97", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-26T00:07:22Z"}
+{"attempt_id": "06e62d91980a4459853a1d956ead146a", "event": "start", "kind": "N", "meta": {}, "pid": 7891, "run_id": "N_2", "ts": "2026-10-26T00:07:30Z", "unix_s": 1792973250.2195017}
+{"attempt_id": "06e62d91980a4459853a1d956ead146a", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-26T00:21:45Z"}
+{"attempt_id": "9bc9a0bc6eb54c14ade4b26e073e2e13", "event": "start", "kind": "N", "meta": {}, "pid": 8224, "run_id": "N_3", "ts": "2026-10-26T00:21:53Z", "unix_s": 1792974113.1167743}
+{"attempt_id": "9bc9a0bc6eb54c14ade4b26e073e2e13", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-26T00:36:10Z"}
+{"attempt_id": "3cdfb794552a469a8577db1e46521086", "event": "start", "kind": "N", "meta": {}, "pid": 8584, "run_id": "N_4", "ts": "2026-10-26T00:36:18Z", "unix_s": 1792974978.182783}
+{"attempt_id": "3cdfb794552a469a8577db1e46521086", "event": "end", "meta": {}, "outcome": "void", "reasons": ["crash: KeyboardInterrupt: "], "ts": "2026-10-26T00:43:29Z"}
+{"attempt_id": "ca44d213dffb4da3a05b8d1b9e6717bc", "event": "start", "kind": "T", "meta": {}, "pid": 9074, "run_id": "T_fallback_gateup", "ts": "2026-10-26T00:43:54Z", "unix_s": 1792975434.5488665}
+{"attempt_id": "636ae958ac9d4c829d6df1d79a3a1deb", "event": "start", "kind": "N", "meta": {}, "pid": 9334, "run_id": "N_4", "ts": "2026-10-26T00:46:31Z", "unix_s": 1792975591.2250252}
+{"attempt_id": "636ae958ac9d4c829d6df1d79a3a1deb", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-26T01:00:50Z"}
+{"attempt_id": "da855292070c4517b4e6f4b78df79491", "event": "start", "kind": "N", "meta": {}, "pid": 9702, "run_id": "N_5", "ts": "2026-10-26T01:00:58Z", "unix_s": 1792976458.6363814}
+{"attempt_id": "da855292070c4517b4e6f4b78df79491", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-26T01:15:14Z"}
+{"attempt_id": "f61e737a816342bcb1886ce1be2612b9", "event": "start", "kind": "P", "meta": {}, "pid": 9987, "run_id": "P", "ts": "2026-10-26T01:15:23Z", "unix_s": 1792977323.4148693}
+{"attempt_id": "f61e737a816342bcb1886ce1be2612b9", "event": "end", "meta": {}, "outcome": "ok", "reasons": [], "ts": "2026-10-26T01:21:38Z"}
+{"attempt_id": "ca44d213dffb4da3a05b8d1b9e6717bc", "event": "end", "meta": {}, "outcome": "void", "reasons": ["interrupted: attempt has a start and no end (closed by the journal)"], "ts": "2026-10-26T01:21:46Z"}

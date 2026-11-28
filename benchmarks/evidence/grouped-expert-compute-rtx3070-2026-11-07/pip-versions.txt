@@ -1,0 +1,7 @@
+nvidia-cublas             13.1.0.3
+nvidia-cublas-cu12        12.6.4.1
+psutil                    7.0.0
+safetensors               0.8.0
+torch                     2.11.0
+torchelastic              0.2.2
+transformers              5.20.2

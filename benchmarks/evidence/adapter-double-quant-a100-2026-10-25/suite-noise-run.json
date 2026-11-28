@@ -1,0 +1,161 @@
+{
+ "attempt_id": "06e62d91980a4459853a1d956ead146a",
+ "attempt_number": 1,
+ "box_stamp_after": {
+  "commit_charge": {
+   "limit_bytes": 342256734208,
+   "used_bytes": 77188460544
+  },
+  "cuda_available": true,
+  "driver_cuda_version": "13.2",
+  "driver_version": "595.99.02",
+  "gpu_clock": {
+   "reasons": [
+    "sw_power_cap"
+   ],
+   "sm_clock_mhz": 1380
+  },
+  "gpu_compute_cap": "8.0",
+  "gpu_memory_total_mib": "40960",
+  "gpu_memory_used_mib": 15889,
+  "gpu_name": "NVIDIA A100-PCIE-40GB",
+  "gpu_processes": [
+   {
+    "name": "python",
+    "pid": 7891,
+    "type": "C",
+    "used_mib": 15880
+   }
+  ],
+  "gpu_uuid": "GPU-b296fdd0-1f0b-1bb9-ad20-66fb670a37f0",
+  "instance_id": "57707996",
+  "own_pid": 7891,
+  "power_source": "N/A (hosted instance)",
+  "ram_available_bytes": 638851620864,
+  "torch_cuda": "13.0",
+  "unix_s": 1792974104.843791,
+  "unknown": {}
+ },
+ "box_stamp_before": {
+  "commit_charge": {
+   "limit_bytes": 342256734208,
+   "used_bytes": 65849204736
+  },
+  "cuda_available": true,
+  "driver_cuda_version": "13.2",
+  "driver_version": "595.99.02",
+  "gpu_clock": {
+   "reasons": [],
+   "sm_clock_mhz": 885
+  },
+  "gpu_compute_cap": "8.0",
+  "gpu_memory_total_mib": "40960",
+  "gpu_memory_used_mib": 499,
+  "gpu_name": "NVIDIA A100-PCIE-40GB",
+  "gpu_processes": [
+   {
+    "name": "python",
+    "pid": 7891,
+    "type": "C",
+    "used_mib": 490
+   }
+  ],
+  "gpu_uuid": "GPU-b296fdd0-1f0b-1bb9-ad20-66fb670a37f0",
+  "instance_id": "57707996",
+  "own_pid": 7891,
+  "power_source": "N/A (hosted instance)",
+  "ram_available_bytes": 650415583232,
+  "torch_cuda": "13.0",
+  "unix_s": 1792973250.3655782,
+  "unknown": {}
+ },
+ "identity": {
+  "bitsandbytes": "0.50.2",
+  "compute_capability": "8.0",
+  "dataset_revision": "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a",
+  "driver_cuda_version": "13.2",
+  "driver_version": "595.99.02",
+  "gpu_name": "NVIDIA A100-PCIE-40GB",
+  "gpu_uuid": "GPU-b296fdd0-1f0b-1bb9-ad20-66fb670a37f0",
+  "harness_commit": "5ab786249abc732cf5ce911d3d8eb24def702a7d",
+  "harness_tree": "121a03de77d296a55995e5a578c7ac089e6855e2",
+  "instance_id": "57707996",
+  "memory_total_mib": "40960",
+  "peft": "0.21.2",
+  "python": "3.12.15",
+  "soup_commit": "5ab786249abc732cf5ce911d3d8eb24def702a7d",
+  "torch": "2.14.1",
+  "torch_cuda": "13.0",
+  "transformers": "5.19.0"
+ },
+ "kind": "N",
+ "outcome": "ok",
+ "peers": {
+  "method": "allocation probe: allocated [320, 704] MiB in turn and took the PID whose per-process GPU memory grew by the same amount each time (tolerance 2 MiB); needed because NVML lists host PIDs inside a container",
+  "own_pids": [
+   7891
+  ],
+  "probes": [
+   {
+    "pids_that_grew_by_that_much": [
+     7891
+    ],
+    "size_mib": 320
+   },
+   {
+    "pids_that_grew_by_that_much": [
+     7891
+    ],
+    "size_mib": 704
+   }
+  ]
+ },
+ "provenance": {
+  "dirty_paths": [],
+  "harness_commit": "5ab786249abc732cf5ce911d3d8eb24def702a7d",
+  "harness_dirty": false,
+  "harness_tree": "121a03de77d296a55995e5a578c7ac089e6855e2",
+  "soup_commit": "5ab786249abc732cf5ce911d3d8eb24def702a7d"
+ },
+ "record_source": "run",
+ "result": {
+  "attention_implementation_resolved": "sdpa",
+  "device_used": "cuda:0",
+  "experts_implementation_resolved": "grouped_mm",
+  "max_new_tokens": 256,
+  "n_items": {
+   "mini_arithmetic": 40,
+   "mini_common_sense": 24,
+   "mini_format_json": 40,
+   "mini_instruction": 24,
+   "mini_mmlu": 26,
+   "mini_over_refusal": 40,
+   "mini_safety": 40,
+   "mini_tool_call": 40
+  },
+  "scorer_revision": 4,
+  "scores": {
+   "mini_arithmetic": 0.625,
+   "mini_common_sense": 0.7916666666666666,
+   "mini_format_json": 0.9,
+   "mini_instruction": 0.9583333333333334,
+   "mini_mmlu": 0.6538461538461539,
+   "mini_over_refusal": 0.975,
+   "mini_safety": 0.0,
+   "mini_tool_call": 0.45
+  },
+  "wrapper_sha256": "c42ad62d113edc9aac78c6bd1807d8c39bf2e5793500211f3590e5b40615318e"
+ },
+ "run_id": "N_2",
+ "stack": {
+  "mismatches": [],
+  "versions": {
+   "bitsandbytes": "0.50.2",
+   "peft": "0.21.2",
+   "python": "3.12.15",
+   "torch": "2.14.1",
+   "transformers": "5.19.0"
+  }
+ },
+ "void_reasons": []
+}

@@ -1,0 +1,12 @@
+# Evidence sources
+
+| File | Source path | Source commit | Size (bytes) | SHA-256 | Copied | Notes |
+| --- | --- | --- | ---: | --- | --- | --- |
+| report.json | benchmarks/results/e4-part2-calibration-2026-10-25-b/report.json | fc75a515698476923e9e92abbcee9baf7f5569c7 | 7729 | 4718a4df93150aec5eab86474e8afbe71d69549d9a6656af6e48a025fb809243 | yes | Supplies calibration result cells and the training-only time projection. |
+| attempts.jsonl | benchmarks/results/e4-part2-calibration-2026-10-25-b/attempts.jsonl | fc75a515698476923e9e92abbcee9baf7f5569c7 | 4829 | 5c1ca334758c6230c2dd20bf4c1e0d0e338a08fa28775e4cb668833f04b05402 | yes | Supplies restart outcomes and the two fallback voids omitted by the report. |
+| suite-noise-run.json | benchmarks/results/e4-part2-calibration-2026-10-25-b/runs/06e62d91980a4459853a1d956ead146a.json | fc75a515698476923e9e92abbcee9baf7f5569c7 | 4077 | 0f6befac9637dc0b6f61d1c6f0790fbc8d79784330c2537e62fac3d516663e59 | yes | Supplies the sampled RAM, GPU and stack readbacks. |
+| SHA256SUMS | benchmarks/results/e4-part2-calibration-2026-10-25-b/SHA256SUMS | fc75a515698476923e9e92abbcee9baf7f5569c7 | 2990 | 7e92b131496cc37a0eb259fbd0ca9a338f3d798f8d581a3a9aebbe0d7905e91e | yes | Supplies checksum entry counts and identifies the separately stored adapter files. |
+| README.md | benchmarks/results/e4-part2-calibration-2026-10-25-b/README.md | fc75a515698476923e9e92abbcee9baf7f5569c7 | 6381 | 332828e3983ca240ed946b24ecc1a31cd87b80a2682f0f504c823f05d72aed66 | no | Dates, void accounting and missing artifacts. Contains internal labels and workflow details. |
+| setup-attempts.jsonl | benchmarks/results/e4-calibration-2026-10-25-attempt-1-stopped/attempts.jsonl | fc75a515698476923e9e92abbcee9baf7f5569c7 | 833 | 93ff19acdd3dd0e0a1e983ccbcb40f45e5aa6310f5a733e2db421f592462a07e | yes | Supplies the two setup voids before calibration. |
+| e4-rule-part2-decision-skeleton.md | e4-rule-part2-decision-skeleton.md | fc75a515698476923e9e92abbcee9baf7f5569c7 | 7564 | 8e62425d7b1be887d2cfab35637509066c31f54f597d9f7fac9d897c934bd088 | no | Decision row count, resamples, seeds and NLL margin. Contains private workflow details. |
+| e4-part2-calibration-rule.md | e4-part2-calibration-rule.md | fc75a515698476923e9e92abbcee9baf7f5569c7 | 17688 | dd00856baa54d9ccbe2d0715e0260d6eb87caf8bd5d90871c60ce7a18e076e2e | no | Reserve limit and calibration recipe. Contains a provider name and internal labels. |
