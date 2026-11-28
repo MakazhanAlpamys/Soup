@@ -1365,7 +1365,11 @@ class StreamPartialRamConfig(BaseModel):
     )
     reserved_bytes: int = Field(
         ge=0, strict=True,
-        description="Host bytes kept for activations and every other consumer; never measured",
+        description=(
+            "Reserve host bytes for other consumers and safety headroom. "
+            "With training.l2l enabled, Soup reserves the RAM activation window separately. "
+            "Otherwise, include activation memory in reserved_bytes."
+        ),
     )
     cache_bytes: int = Field(
         ge=0, strict=True,

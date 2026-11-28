@@ -1,5 +1,6 @@
 """Admission, allocation and shutdown for the public shared host envelope."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -90,6 +91,32 @@ def test_schema_names_options_that_cannot_use_the_shared_budget(options, message
     with pytest.raises(ValidationError) as excinfo:
         SoupConfig.model_validate(_partial_payload(l2l=True, **options))
     assert [str(error["ctx"]["error"]) for error in excinfo.value.errors()] == [message]
+
+
+@pytest.mark.parametrize(
+    "key,guidance",
+    [
+        (
+            "training.stream_partial_ram",
+            "With training.l2l, Soup reserves the maximum RAM activation window in addition "
+            "to reserved_bytes for other host consumers. Otherwise reserved_bytes also "
+            "covers activations.",
+        ),
+        (
+            "training.stream_partial_ram.reserved_bytes",
+            "With training.l2l enabled, Soup reserves the RAM activation window separately. "
+            "Otherwise, include activation memory in reserved_bytes.",
+        ),
+    ],
+)
+def test_config_reference_explains_activation_reservations(key: str, guidance: str) -> None:
+    from scripts import gen_reference_docs as gen
+
+    reference = Path(__file__).resolve().parents[1] / gen.CONFIG_PAGE
+    prefix = f"| `{key}` |"
+    for page in (gen.render_config_reference(), reference.read_text(encoding="utf-8")):
+        row = next(line for line in page.splitlines() if line.startswith(prefix))
+        assert guidance in row, row
 
 
 def test_store_growth_releases_old_lease_and_oversize_retains_current_lease(monkeypatch):
