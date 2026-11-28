@@ -279,6 +279,46 @@ def test_performance_renderers_include_units_and_noise_information(monkeypatch):
     assert "Quality alone" in render_table(result).caption
 
 
+@pytest.mark.parametrize(("before_count", "after_count", "zero_sides"), [
+    (0, 2, "before"),
+    (2, 0, "after"),
+    (0, 0, "before, after"),
+    (2, 2, None),
+])
+def test_performance_reports_which_side_generated_no_tokens(
+    monkeypatch, before_count, after_count, zero_sides,
+):
+    from rich.console import Console
+
+    from soup_cli.eval.quant_check import render_markdown, render_table, run_performance_quant_check
+
+    make_before, make_after, _ = _fake_factories(monkeypatch)
+
+    def generator_with_count(factory, count):
+        generator = factory()
+        generator.last_generated_tokens = count
+        return generator
+
+    result = run_performance_quant_check(
+        before_factory=lambda: generator_with_count(make_before, before_count),
+        after_factory=lambda: generator_with_count(make_after, after_count),
+        tasks=_tasks(1), device="cpu", warmup=0, repeats=1,
+    )
+    assert result.rows[0].verdict == "OK"
+    data = json.loads(result.to_json())["performance"]
+    assert data["before"]["generated_tokens"] == before_count
+    assert data["after"]["generated_tokens"] == after_count
+    table_output = StringIO()
+    Console(file=table_output, force_terminal=True, width=110).print(render_table(result))
+    for rendered in (table_output.getvalue(), render_markdown(result)):
+        normalized = " ".join(strip_ansi(rendered).split())
+        if zero_sides is None:
+            assert "No tokens generated" not in normalized
+        else:
+            sentence = f"No tokens generated ({zero_sides})."
+            assert normalized.count(sentence) == 1
+
+
 def test_overlapping_repeat_ranges_are_not_presented_as_a_clear_speed_change(monkeypatch):
     from soup_cli.eval.quant_check import run_performance_quant_check
 

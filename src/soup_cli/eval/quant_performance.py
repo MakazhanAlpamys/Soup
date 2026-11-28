@@ -218,13 +218,16 @@ def performance_note(performance: PerformanceComparison) -> str:
         noise = "observed repeat latency ranges overlap; speed difference may be noise"
     else:
         noise = "observed repeat latency ranges do not overlap (not a significance test)"
+    sides = (("before", a), ("after", b))
     ranges = "; ".join(
         f"{name} {min(side.repeat_latency_ms):.3f}..{max(side.repeat_latency_ms):.3f} ms"
-        for name, side in (("before", a), ("after", b))
+        for name, side in sides
     )
+    empty_sides = ", ".join(name for name, side in sides if side.generated_tokens == 0)
+    token_note = f"No tokens generated ({empty_sides}). " if empty_sides else ""
     return (
         f"Informational performance; {a.device}/{a.dtype} -> {b.device}/{b.dtype}; "
         f"warmup={performance.warmup}, repeats={performance.repeats}, "
         f"max_new_tokens={performance.max_new_tokens}; {ranges}; {noise}. "
-        "Quality alone determines the exit code."
+        f"{token_note}Quality alone determines the exit code."
     )
