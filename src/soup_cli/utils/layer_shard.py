@@ -48,6 +48,7 @@ from typing import (
 
 from soup_cli import __version__
 from soup_cli.utils.deepseek_v3 import ROUTER_WEIGHT_KEY, router_weight_uses_fp32
+from soup_cli.utils.expert_shard import EXPERT_LAYOUT_VERSION
 from soup_cli.utils.expert_stream import (
     EXPERT_LAYOUT_PER_EXPERT,
     expert_shard_name,
@@ -603,6 +604,9 @@ def large_shard_path(out_dir: str, key: str) -> str:
 STRIPE_MARKER_NAME = "stripe.json"
 #: A marker Soup writes is ~250 bytes; anything past this is not one, and is not parsed.
 _MAX_STRIPE_MARKER_BYTES = 4096
+#: A shard index lists every layer key and quant spec; a 1T-class store stays well
+#: under a few MB, so this bounds a hostile file without limiting a real one.
+_MAX_INDEX_BYTES = 64 * 2**20
 
 
 def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
@@ -618,14 +622,54 @@ def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
     return [shard_dir] + [os.path.join(root, name) for root in stripe_roots]
 
 
+# A bare shard file name: no separator, drive colon, control character, leading dot or space.
+_BARE_SHARD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+
+
+def contained_leaf(root: str, name: str) -> str:
+    """``root``/``name``, refused unless the file itself resolves inside ``root``.
+
+    ``name`` must be a bare file name. The check is on the RESOLVED leaf (``realpath`` of the
+    file, then ``commonpath`` against the resolved root), not on its directory, so a shard
+    that is a symlink to a file outside the store is refused too.
+    """
+    if (
+        not isinstance(name, str)
+        or _BARE_SHARD_NAME.fullmatch(name) is None
+        or name.split(".")[0].upper() in _WINDOWS_DEVICE_NAMES
+    ):
+        raise ValueError(f"shard file name {name!r} is not a bare file name")
+    path = os.path.join(root, name)
+    real_root = os.path.realpath(root)
+    real_leaf = os.path.realpath(path)
+    try:
+        inside = os.path.commonpath([real_root, real_leaf]) == real_root
+    except ValueError:  # different drives on Windows
+        inside = False
+    if not inside or real_leaf == real_root:
+        raise ValueError(f"shard file {name!r} resolves outside the store root {root!r}")
+    return path
+
+
 def layer_paths(shard_dir: str, index: "ShardIndex") -> List[str]:
     """Where each decoder layer's file lives. Every caller that used to build a layer path
     from ``shard_dir`` alone goes through this, so a striped cache is never half-understood."""
     placement = tuple(getattr(index, "layer_roots", ()) or ())
     if not placement:
-        return [layer_shard_path(shard_dir, idx) for idx in range(index.n_layers)]
+        return [
+            contained_leaf(shard_dir, os.path.basename(layer_shard_path(shard_dir, idx)))
+            for idx in range(index.n_layers)
+        ]
     dirs = stripe_dirs(shard_dir, tuple(index.stripe_roots))
-    return [layer_shard_path(dirs[root], idx) for idx, root in enumerate(placement)]
+    return [
+        contained_leaf(dirs[root], os.path.basename(layer_shard_path(dirs[root], idx)))
+        for idx, root in enumerate(placement)
+    ]
 
 
 def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
@@ -634,7 +678,7 @@ def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
         return {}
     paths = layer_paths(shard_dir, index)
     return {
-        layer: os.path.join(os.path.dirname(paths[layer]), expert_shard_name(layer))
+        layer: contained_leaf(os.path.dirname(paths[layer]), expert_shard_name(layer))
         for layer in index.expert_layers
     }
 
@@ -712,9 +756,26 @@ def _stripe_marker_problem(
 
 def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardIndex:
     """Read a shard index. Raises on a missing or malformed index."""
+    from soup_cli.utils.safetensors_reader import reject_duplicate_keys
+
     path = os.path.join(out_dir, index_name)
-    with open(path, encoding="utf-8") as handle:
-        payload = json.load(handle)
+    with open(path, "rb") as handle:
+        raw = handle.read(_MAX_INDEX_BYTES + 1)
+    if len(raw) > _MAX_INDEX_BYTES:
+        raise ValueError(
+            f"shard index {path} is larger than {_MAX_INDEX_BYTES} bytes; "
+            f"refusing to parse it"
+        )
+    try:
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"shard index {path} is not valid UTF-8 ({exc})") from exc
+    except ValueError as exc:
+        if isinstance(exc, json.JSONDecodeError):
+            raise ValueError(f"shard index {path} is not valid JSON ({exc})") from exc
+        raise ValueError(f"shard index {path} is not valid ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"shard index {path} is not a JSON object")
     # `quant` defaults to "none" so a v0.72.0/.1 bf16 cache stays valid for a
     # bf16 request rather than forcing every existing user to re-shard.
     specs = payload.get("quant_specs") or {}
@@ -733,6 +794,12 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
     expert_layout = str(payload.get("expert_layout", ""))
     if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
         raise ValueError(f"unknown expert_layout {expert_layout!r}")
+    # An index written by the other expert runtime stamps ``expert_layout_version``
+    # (and ``fp32_keys`` / ``stacked_experts``, which this reader does not need).
+    # This writer never emits it, so absence is the version this reader knows.
+    layout_version = payload.get("expert_layout_version", EXPERT_LAYOUT_VERSION)
+    if type(layout_version) is not int or layout_version != EXPERT_LAYOUT_VERSION:
+        raise ValueError(f"unsupported expert layout version {layout_version!r}")
     expert_layers = tuple(int(layer) for layer in (payload.get("expert_layers") or ()))
     if list(expert_layers) != sorted(set(expert_layers)) or any(
         not 0 <= layer < n_layers for layer in expert_layers

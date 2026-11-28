@@ -102,6 +102,7 @@ def test_probe_would_catch_a_regression():
         "soup_cli.eval.gate_suites",
         "soup_cli.recipes.catalog",
         "soup_cli.utils.cuda_graphs",
+        "soup_cli.utils.routing_oracle",
     ],
 )
 def test_documented_light_module_stays_light(module: str):
@@ -454,4 +455,3 @@ def test_check_steps_warmup_logic():
         "--steps 2 leaves nothing after --warmup 2: raise --steps or lower --warmup."
     )
     assert check_steps_warmup(3, 2) is None
-
