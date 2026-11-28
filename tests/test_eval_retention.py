@@ -1490,11 +1490,13 @@ class TestControlFileIntegrity:
         )
         assert "control task 'alpha' cannot be loaded" in output
         assert "Expected .jsonl" in output
+        assert "Control task alpha: added." not in output
 
     def test_a_control_file_with_a_bad_row_is_refused(self, fake_model):
         Path("alpha.jsonl").write_text('{"expected": "y"}\n', encoding="utf-8")
         output = _check(_run(fake_model, {}, "v1", "--add-task", "alpha=alpha.jsonl"), 3)
         assert "missing required field 'prompt'" in output
+        assert "Control task alpha: added." not in output
 
     def test_an_empty_control_file_is_refused(self, fake_model):
         Path("alpha.jsonl").write_text("", encoding="utf-8")
