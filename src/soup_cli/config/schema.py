@@ -193,6 +193,12 @@ def _reject_boolean_numeric_field(
     return value
 
 
+# Optimizers whose moment allocation ``stream_resident_layers`` can budget up
+# front (two fp32 moments per trainable parameter).
+_STREAM_RESIDENCY_OPTIMIZERS = frozenset(
+    {"adamw_torch", "adamw_torch_fused", "adamw_8bit", "paged_adamw_8bit"}
+)
+
 _TRAINING_NUMERIC_BOOL_VALIDATOR_EXEMPTIONS = frozenset({
     "seed",
     "data_seed",
@@ -1342,6 +1348,36 @@ class EvalGateConfig(BaseModel):
             raise ValueError(
                 "eval_gate.suite is required when eval_gate.enabled=true"
             )
+        return self
+
+
+class StreamPartialRamConfig(BaseModel):
+    """Experimental host envelope for ``training.stream_partial_ram``: explicit bytes only."""
+
+    model_config = {"extra": "forbid"}
+    limit_bytes: int = Field(
+        gt=0, strict=True,
+        description="Total host bytes the weights, staging and reservations may account for",
+    )
+    reserved_bytes: int = Field(
+        ge=0, strict=True,
+        description="Host bytes kept for activations and every other consumer; never measured",
+    )
+    cache_bytes: int = Field(
+        ge=0, strict=True,
+        description="Allocation cap, in bytes, for the decoder layers kept in RAM",
+    )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: Any) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
+    @model_validator(mode="after")
+    def _check_budget(self) -> "StreamPartialRamConfig":
+        from soup_cli.utils.partial_ram_source import PartialRamBudget
+
+        PartialRamBudget(self.limit_bytes, self.reserved_bytes, self.cache_bytes)
         return self
 
 
@@ -4271,6 +4307,71 @@ class TrainingConfig(BaseModel):
                 f"got {type(v).__name__} {v!r}"
             )
         return v
+
+    stream_resident_layers: Union[int, Literal["auto"]] = Field(
+        default=0,
+        description=(
+            "Opt-in persistent decoder weights for streamed text SFT. 0 (the "
+            "default) keeps ordinary streaming; a positive integer keeps a centred "
+            "block of that many decoder layers resident on the GPU, so they are "
+            "never re-read; 'auto' measures the configured forward+backward peak "
+            "and selects the layers that fit a conservative VRAM budget (the "
+            "smaller of 85% of the card and free + reserved VRAM, or "
+            "stream_vram_override, minus the measured peak, a setup reserve and an "
+            "estimated optimizer state). CUDA with the RAM tier or the async SSD "
+            "source, dense decoders only. A GPU-resident layer skips its SSD reads "
+            "and is excluded from the stream_ram_cache_mb hotset. 'auto' falls back "
+            "to ordinary streaming where it cannot measure, a positive count refuses "
+            "instead. The RAM-tier host store is retained. Setup probes preserve RNG "
+            "and do not update adapters. No speed guarantee. task='sft' with an AdamW "
+            "optimizer only, and refused beside activation_offloading and a "
+            "non-default stream_recompute."
+        ),
+    )
+
+    @field_validator("stream_resident_layers", mode="before")
+    @classmethod
+    def _validate_stream_resident_layers(cls, v: Any) -> Any:
+        """A count is an int, never a bool (``True`` would read as one layer)."""
+        v = _reject_boolean_numeric_field(cls, "stream_resident_layers", v)
+        if v == "auto" and isinstance(v, str):
+            return v
+        if type(v) is not int or v < 0:
+            raise ValueError(
+                "training.stream_resident_layers must be 0, a positive int or 'auto'; "
+                f"got {type(v).__name__} {v!r}"
+            )
+        return v
+
+    stream_partial_ram: Optional[StreamPartialRamConfig] = Field(
+        default=None,
+        description=(
+            "Experimental: keep a bounded prefix of the decoder layers in host RAM beside "
+            "the async SSD reader, under an explicit host envelope. limit_bytes is the "
+            "total the weights may take, reserved_bytes covers activations and every other "
+            "host consumer (it is never measured for you) and cache_bytes caps the "
+            "allocation for the cached layers. Dense Llama, unquantized, task='sft', "
+            "stream_source='disk' only; an allocation envelope, not a process-RSS limit. "
+            "Refused beside stream_ram_cache_mb and stream_resident_layers."
+        ),
+    )
+
+    stream_ram_cache_mb: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Optional allocation ceiling in MiB for a persistent RAM hotset on the "
+            "SSD streaming tier: the layers most re-read are loaded once and served "
+            "from host RAM instead of the disk. 0 (the default) disables it. The "
+            "layer count is selected automatically from the real allocation "
+            "(arena rounding included), the current cgroup limits, 30% available-RAM "
+            "slack and a 512 MiB runtime reserve, never above this ceiling. Does not "
+            "change weights or GPU buffers. Refused with stream_source='ram', which "
+            "already holds the complete store; on the 'auto' tier it applies only "
+            "when the store spills to the disk tier."
+        ),
+    )
 
     stream_expert_layout: Literal["fused", "per_expert"] = Field(
         default="fused",
@@ -8008,6 +8109,9 @@ class SoupConfig(BaseModel):
                     ("stream_vram_probe", bool(tcfg.stream_vram_probe)),
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
+                    ("stream_resident_layers", tcfg.stream_resident_layers != 0),
+                    ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                    ("stream_partial_ram", tcfg.stream_partial_ram is not None),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
@@ -8062,6 +8166,36 @@ class SoupConfig(BaseModel):
                 "belongs to the NVMe disk tier, and 'ram' never falls back to "
                 "it. Set stream_source='auto' or 'disk', or drop "
                 "stream_read_ahead."
+            )
+        if tcfg.stream_partial_ram is not None:
+            if (
+                tcfg.stream_source != "disk"
+                or self.task != "sft"
+                or self.backend != "transformers"
+                or tcfg.quantization != "none"
+            ):
+                raise ValueError(
+                    "training.stream_partial_ram requires unquantized transformers SFT, "
+                    "stream_layers=true and stream_source='disk'; other modes are not "
+                    "supported yet"
+                )
+            for other, is_set in (
+                ("stream_ram_cache_mb", tcfg.stream_ram_cache_mb != 0),
+                ("stream_resident_layers", tcfg.stream_resident_layers != 0),
+            ):
+                if is_set:
+                    raise ValueError(
+                        f"training.stream_partial_ram cannot be combined with "
+                        f"training.{other}: each decides which layers sit in host RAM "
+                        f"or VRAM and their combined budget is not measured. Set one "
+                        f"of them."
+                    )
+        if tcfg.stream_source == "ram" and tcfg.stream_ram_cache_mb != 0:
+            raise ValueError(
+                f"training.stream_ram_cache_mb={tcfg.stream_ram_cache_mb} has no effect "
+                "with training.stream_source='ram': the RAM tier already holds the "
+                "complete store. Set stream_source='auto' or 'disk', or drop "
+                "stream_ram_cache_mb."
             )
         # DPO/IPO use a frozen reference adapter on the streamed base.
         # KTO/BCO use the same base with adapters disabled for the reference pass.
@@ -8134,6 +8268,36 @@ class SoupConfig(BaseModel):
                 f"backward is not supported yet. Remove training.stream_recompute "
                 f"or set it to 'on'."
             )
+        if tcfg.stream_resident_layers != 0:
+            if stream_task != "sft":
+                raise ValueError(
+                    f"training.stream_resident_layers supports task='sft' only; got "
+                    f"task={stream_task!r}. The layers it keeps are chosen from a "
+                    f"measured causal-LM step, which is the SFT step; a preference "
+                    f"loss runs a different computation. Remove "
+                    f"training.stream_resident_layers."
+                )
+            if tcfg.activation_offloading is not None:
+                raise ValueError(
+                    f"training.stream_resident_layers cannot be combined with "
+                    f"training.activation_offloading={tcfg.activation_offloading!r}: "
+                    f"both claim the spare VRAM. Unset one of them."
+                )
+            if tcfg.stream_recompute != "on":
+                raise ValueError(
+                    f"training.stream_resident_layers cannot be combined with "
+                    f"training.stream_recompute={tcfg.stream_recompute!r}: both "
+                    f"decide what stays in spare VRAM and their combined budget is "
+                    f"not measured. Set stream_recompute to 'on' or remove "
+                    f"training.stream_resident_layers."
+                )
+            if tcfg.optimizer not in _STREAM_RESIDENCY_OPTIMIZERS:
+                raise ValueError(
+                    f"training.stream_resident_layers requires an AdamW optimizer "
+                    f"({', '.join(sorted(_STREAM_RESIDENCY_OPTIMIZERS))}) whose future "
+                    f"moment allocation can be budgeted; got optimizer="
+                    f"{tcfg.optimizer!r}."
+                )
         if tcfg.stream_recompute != "on" and tcfg.activation_offloading is not None:
             # A retained layer saves its activations through its own
             # saved_tensors_hooks, the innermost ones, so the offloading hooks

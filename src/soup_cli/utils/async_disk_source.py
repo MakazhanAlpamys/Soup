@@ -367,6 +367,11 @@ class AsyncDiskSource:
     neither would ever be served. The shipped consumer is ``StreamPrefetcher``
     on the compute thread, which is single-threaded by construction; nothing
     here enforces it, so a second caller is a caller bug.
+
+    ``ram_cache_bytes`` optionally admits a fixed hotset in additional host RAM.
+    Its allocation is capped by the requested bytes and current memory headroom.
+    Cached views are not recycled, but release events still protect their lifetime
+    at close. Ordinary staging retains its existing get/release ownership rules.
     """
 
     def __init__(
@@ -383,9 +388,23 @@ class AsyncDiskSource:
         pin: bool = True,
         read_ranges: int = DEFAULT_STREAM_READ_RANGES,
         layer_roots: Optional[Sequence[int]] = None,
+        ram_cache_bytes: int = 0,
+        max_host_bytes: Optional[int] = None,
     ):
         from soup_cli.utils.layer_stream_runtime import RamSource
 
+        if type(ram_cache_bytes) is not int or ram_cache_bytes < 0:
+            raise ValueError("ram_cache_bytes must be a non-negative integer byte ceiling")
+        self._cache = {}
+        self._cache_arenas = []
+        self._cache_borrowed = set()
+        self._cache_events = {}
+        self._resident = frozenset()
+        self._cache_config_lock = threading.Lock()
+        self._cache_stats = {
+            "requested_bytes": ram_cache_bytes, "indices": [], "allocated_bytes": 0,
+            "payload_bytes": 0, "preload_seconds": 0.0, "tensor_hits": 0,
+        }
         if isinstance(read_ahead, bool):
             raise ValueError("training.stream_read_ahead must be an int, not bool")
         read_ahead = int(read_ahead)
@@ -567,7 +586,21 @@ class AsyncDiskSource:
                 region_sizes.append(span)
                 first_member.append(members_of_group[0])
             self._group_slots.append(flat)
+        # Refuse before any tensor allocation or reader thread is started: a caller
+        # that shares one host budget names the bytes this staging may take.
+        if max_host_bytes is not None:
+            if type(max_host_bytes) is not int or max_host_bytes < 0:
+                raise ValueError("host RAM budget must be non-negative integer bytes")
+            needed = self._staging_allocation_bytes(region_sizes)
+            if needed > max_host_bytes:
+                raise ValueError(
+                    f"disk staging needs {needed} bytes, "
+                    f"exceeding remaining host RAM budget {max_host_bytes}"
+                )
         self._arenas, self._regions = self._allocate_staging(region_sizes)
+        self.host_allocated_bytes = sum(
+            arena.numel() * arena.element_size() for arena in self._arenas
+        )
         self._slots: List[Dict[str, Any]] = [
             self._views(self._plans[first_member[slot]], self._regions[slot])
             for slot in range(len(region_sizes))
@@ -677,6 +710,134 @@ class AsyncDiskSource:
         self._reader_entered = threading.Event()
         self._reader_starts = 0
         self._start_reader()
+        if ram_cache_bytes:
+            try:
+                self._initialize_ram_cache(ram_cache_bytes)
+            except BaseException:
+                self.close()
+                raise
+
+    def _initialize_ram_cache(self, requested: int) -> None:
+        from soup_cli.utils.stream_ram_cache import available_memory, cache_budget, plan_hotset
+
+        started = time.monotonic()
+        memory = available_memory()
+        budget = cache_budget(requested, memory["available_bytes"])
+        plan = plan_hotset([item.span for item in self._plans], self._group_of,
+                           self.read_ahead, budget, pinned=self.pinned, excluded=self._resident)
+        self._cache_stats.update(memory_admission=memory, budget_bytes=budget)
+        indices = plan["indices"]
+        if not indices:
+            self._cache_stats["reason"] = "no repeated layer fits the safe allocation budget"
+            return
+        staging_pinned_bytes = self.pinned_bytes
+        try:
+            arenas, regions = self._allocate_staging([self._plans[idx].span for idx in indices])
+        except (RuntimeError, MemoryError) as error:
+            raise MemoryError(
+                "Cannot allocate the SSD RAM cache; lower training.stream_ram_cache_mb "
+                "or set training.stream_pin=false if page-locking is unavailable"
+            ) from error
+        finally:
+            self.pinned_bytes = staging_pinned_bytes
+        self._cache_arenas = arenas
+        allocated = sum(arena.numel() * arena.element_size() for arena in arenas)
+        if allocated > budget:
+            # The plan charges the worst case of the allocator's alignment shift, so
+            # the real allocation can only be at or under it.
+            raise RuntimeError("RAM cache allocation exceeds its admitted arena plan")
+        cached = {}
+        for idx, region in zip(indices, regions):
+            # The original range reader validates each opened shard's identity.
+            # Ordinary staging and its initial background read remain independent.
+            pool = self._pools[self._root_of[idx]]
+            jobs = pool.submit(self._range_works(idx, region))
+            deadline = time.monotonic() + _MAX_READ_SECONDS
+            while not all(job.done.is_set() for job in jobs):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"RAM cache preload for layer {idx} exceeded read deadline")
+                for job in jobs:
+                    job.done.wait(timeout=_LIVENESS_POLL_SECONDS)
+                pool._check_workers()
+            pool.wait(jobs)
+            cached[idx] = self._views(self._plans[idx], region)
+        payload = sum(tensor.numel() * tensor.element_size()
+                      for values in cached.values() for tensor in values.values())
+        with self._ready:
+            if self._error is not None:
+                raise self._error
+            self._cache = cached
+            self._queue = [idx for idx in self._queue if idx not in cached]
+            self._cache_stats.update(
+                indices=indices, allocated_bytes=allocated, payload_bytes=payload,
+                preload_seconds=time.monotonic() - started,
+            )
+            if self.pinned:
+                self.pinned_bytes += allocated
+            self._ready.notify_all()
+
+    def ram_cache_stats(self) -> dict:
+        """Allocation includes arena rounding; historical selection survives close()."""
+        return {**self._cache_stats, "indices": list(self._cache_stats["indices"]),
+                "resident_indices": sorted(self._resident),
+                "live_allocated_bytes": 0 if self._closed else self._cache_stats["allocated_bytes"]}
+
+    def set_resident_layers(self, indices: Sequence[int]) -> None:
+        """Exclude already preloaded GPU layers, between completed training graphs.
+
+        A RAM hotset is rebuilt without those layers. Old host storage is drained
+        and freed before allocating its replacement; two full hotsets never coexist.
+        An already in-flight cold read may finish once during this setup transition.
+        """
+        chosen = tuple(indices)
+        if (
+            any(type(idx) is not int or not 0 <= idx < self.n_layers for idx in chosen)
+            or tuple(sorted(set(chosen))) != chosen
+        ):
+            raise ValueError("resident indices must be unique, sorted and inside the source")
+        with self._cache_config_lock:
+            if frozenset(chosen) != self._resident:
+                self._replace_ram_cache(self._cache_stats["requested_bytes"], frozenset(chosen))
+
+    def configure_ram_cache(self, requested_bytes: int) -> None:
+        """Allocate the host hotset after GPU residency has been selected at setup."""
+        if type(requested_bytes) is not int or requested_bytes < 0:
+            raise ValueError("RAM cache byte ceiling must be a non-negative integer")
+        with self._cache_config_lock:
+            self._replace_ram_cache(requested_bytes, self._resident)
+
+    def _replace_ram_cache(self, requested: int, resident: frozenset) -> None:
+        with self._ready:
+            if self._closed:
+                raise RuntimeError("layer-stream disk source is closed")
+            if self._error is not None:
+                raise self._error
+            if self._cache_borrowed or any(self._live):
+                raise RuntimeError("cannot reconfigure a source while host buffers are on loan")
+            events = list(self._cache_events.values())
+        for event in {id(value): value for value in events if value is not None}.values():
+            event.synchronize()
+        # No consumer may be active during setup reconfiguration. The ordinary
+        # reader may finish its independent pending reads under the original lock.
+        with self._ready:
+            if self.pinned:
+                self.pinned_bytes -= self._cache_stats["allocated_bytes"]
+            self._cache = {}
+            self._cache_arenas = []
+            self._cache_events = {}
+            self._resident = resident
+            self._cache_stats = {
+                "requested_bytes": requested, "indices": [], "allocated_bytes": 0,
+                "payload_bytes": 0, "preload_seconds": 0.0, "tensor_hits": 0,
+            }
+            self._queue = [idx for idx in self._queue if idx not in resident]
+            self._ready.notify_all()
+        if requested:
+            try:
+                self._initialize_ram_cache(requested)
+            except BaseException:
+                self.close()
+                raise
 
     @staticmethod
     def _normalize_layer_roots(layer_roots: Optional[Sequence[int]], n_layers: int) -> List[int]:
@@ -706,6 +867,16 @@ class AsyncDiskSource:
         self._run()
 
     # -- staging ---------------------------------------------------------
+    def _staging_allocation_bytes(self, region_sizes: Sequence[int]) -> int:
+        """Host bytes ``_allocate_staging`` can take for these regions, worst case."""
+        if not self.pinned:
+            return sum(size + SECTOR_BYTES for size in region_sizes)
+        from soup_cli.utils.layer_stream_runtime import plan_pinned_arenas
+        from soup_cli.utils.stream_ram_cache import pinned_allocation_bytes
+
+        plan = plan_pinned_arenas(region_sizes, align=SECTOR_BYTES)
+        return pinned_allocation_bytes(plan, region_sizes, SECTOR_BYTES)
+
     def _allocate_staging(self, region_sizes: Sequence[int]) -> Tuple[List[Any], List[Any]]:
         """Regions on sector boundaries; pinned ones as views of power-of-two arenas."""
         import torch
@@ -838,11 +1009,21 @@ class AsyncDiskSource:
         the layer the consumer is standing on is the one thing that must not be
         evicted, and is also the one thing there is no point fetching.
         """
+        if layer in self._resident:
+            return False
         group = self._group_of[layer]
         anchor = self._last_get.get(group)
         if anchor is None:
             return False
         step = (layer - anchor) * self._direction.get(group, 1)
+        if (self._cache or self._resident) and step >= 0:
+            low, high = sorted((anchor, layer))
+            distance = sum(
+                idx != anchor and idx not in self._cache and idx not in self._resident
+                and self._group_of[idx] == group
+                for idx in range(low, high + 1)
+            )
+            return distance < self._window_span(group) + (anchor in self._cache)
         return 0 <= step < self._window_span(group)
 
     def _claim_slot(self, idx: int, exclude: frozenset = frozenset()) -> Optional[int]:
@@ -900,7 +1081,7 @@ class AsyncDiskSource:
             del self._slot_of[layer]
         return chosen
 
-    def _hold(self, idx: int) -> None:
+    def _hold(self, idx: int, *, staging: bool = True) -> None:
         """Mark ``idx``'s slot as in use and release the rest. Lock held.
 
         What "release the rest" may mean depends on how the staging was
@@ -923,7 +1104,11 @@ class AsyncDiskSource:
           layer's weights. A loud stop is the only honest answer, because the
           alternative is a wrong gradient with no error anywhere.
         """
-        keep = self._slot_of.get(idx)
+        # A setup probe can leave an idle staging mapping for a layer later
+        # promoted into the immutable RAM hotset. A cache hit must check cold
+        # loans without borrowing that obsolete slot; release() tracks the
+        # cached arena's DMA event separately.
+        keep = self._slot_of.get(idx) if staging else None
         borrowed = [
             slot
             for slot in range(len(self._slots))
@@ -978,13 +1163,16 @@ class AsyncDiskSource:
         are not re-queued.
         """
         budget = [self._window_span(group) for group in range(len(self._group_slots))]
-        budget[self._group_of[idx]] -= 1
+        budget[self._group_of[idx]] -= idx not in self._cache
         plan: List[int] = []
         direction = self._direction.get(self._group_of[idx], 1)
         nxt = idx + direction
-        for _ in range(self.read_ahead):
+        for _ in range(self.n_layers if self._cache or self._resident else self.read_ahead):
             if not 0 <= nxt < self.n_layers:
                 break
+            if nxt in self._cache or nxt in self._resident:
+                nxt += direction
+                continue
             group = self._group_of[nxt]
             if budget[group] <= 0:
                 break
@@ -1019,7 +1207,8 @@ class AsyncDiskSource:
         position = 0
         while position < len(self._queue):
             idx = self._queue[position]
-            if idx in self._slot_of or idx in self._in_flight_batch:
+            if (idx in self._cache or idx in self._resident or idx in self._slot_of
+                    or idx in self._in_flight_batch):
                 self._queue.pop(position)
                 continue
             root = self._root_of[idx]
@@ -1199,6 +1388,24 @@ class AsyncDiskSource:
                     raise self._error
                 if self._closed:
                     raise RuntimeError("layer-stream disk source is closed")
+                if idx in self._resident:
+                    raise RuntimeError(
+                        "GPU-resident layer must be served by its private device slot"
+                    )
+                if idx in self._cache:
+                    tensor = self._cache[idx][name]
+                    self._check_the_reader_is_making_progress(idx)
+                    self._hold(idx, staging=False)
+                    if idx not in self._cache_borrowed:
+                        with self._open_buffered(self._paths[idx]) as handle:
+                            if identity_of(handle) != self._identities[idx]:
+                                raise RuntimeError(f"layer {idx}'s cached shard changed on disk")
+                        self._cache_borrowed.add(idx)
+                        self._note_direction(idx)
+                        self._queue = self._plan_queue(idx)
+                        self._ready.notify_all()
+                    self._cache_stats["tensor_hits"] += 1
+                    return tensor
                 slot_index = self._slot_of.get(idx)
                 if slot_index is not None:
                     tensor = self._slots[slot_index][name]
@@ -1336,6 +1543,15 @@ class AsyncDiskSource:
         have been evicted, which requires having been released already.
         """
         with self._ready:
+            if idx in self._cache:
+                previous = self._cache_events.get(idx)
+                if previous is not None and previous is not event and not previous.query():
+                    # Bound event ownership per cached layer, including callers
+                    # using different CUDA streams. Cached bytes are never refilled.
+                    previous.synchronize()
+                self._cache_events[idx] = event
+                self._cache_borrowed.discard(idx)
+                return
             slot_index = self._slot_of.get(idx)
             if slot_index is None:
                 return
@@ -1363,7 +1579,21 @@ class AsyncDiskSource:
             self._ready.notify_all()
         if self._thread.is_alive():
             self._thread.join(timeout=10.0)
+        # Cache views can outlive a get/release call while a DMA is pending.
+        # Wait only at teardown; there is no global CUDA barrier in the step path.
+        for event in {id(value): value for value in self._cache_events.values()
+                      if value is not None}.values():
+            event.synchronize()
+        if self.pinned and self._cache_borrowed:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
         with self._ready:
+            self._cache = {}
+            self._cache_arenas = []
+            self._cache_events = {}
+            self._cache_borrowed = set()
             self._slots = []
             self._regions = []
             self._arenas = []
