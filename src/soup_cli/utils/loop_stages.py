@@ -26,12 +26,14 @@ and offline smokes inject behaviour without a GPU or a network:
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import json
 import logging
 import os
 import re
 import sqlite3
+import stat
 import time
 import uuid
 from datetime import datetime, timezone
@@ -84,6 +86,100 @@ _LOG = logging.getLogger(__name__)
 
 _PAIRS_DIR = ".soup-loops/pairs"
 _ADAPTERS_DIR = ".soup-loops/adapters"
+
+
+def ensure_adapters_dir() -> Optional[str]:
+    """Create the ``.soup-loops/adapters`` directory owner-only (#3034).
+
+    The loop deploys through ``soup serve --adapter-dir .soup-loops/adapters``,
+    and serve refuses a missing directory, so ``soup loop init`` creates it up
+    front, and the train stage creates it through this same helper instead of
+    plain ``mkdir`` (which made it group-writable under umask 002). Only the
+    adapters directory itself is owner-only: the parent is an ordinary loop
+    directory other commands already create with plain ``mkdir`` (and may
+    already exist group-writable from an earlier run), so it is made with
+    ``makedirs``.
+
+    Returns a one-line note when a folder this account owns was kept and
+    tightened to owner-only, and ``None`` when nothing changed. Raises
+    :class:`OwnerOnlyError` when the directory cannot be created or made
+    owner-only; a link, a file, or another owner's folder at the path is
+    refused with the fix named, and the caller refuses the run.
+    """
+    from soup_cli.utils.owner_only_dir import OwnerOnlyError, ensure_owner_only_dir
+    from soup_cli.utils.paths import refuse_linked_dirs
+
+    parent = os.path.dirname(_ADAPTERS_DIR)
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError as exc:
+        raise OwnerOnlyError(f"could not create {parent} ({exc})") from exc
+    try:
+        # Only the adapters component itself is inspected (stop_at is its parent):
+        # a link there must not be followed, on Windows as on POSIX.
+        refuse_linked_dirs(_ADAPTERS_DIR, stop_at=parent)
+    except OSError as exc:
+        if exc.errno != errno.ELOOP:
+            raise
+        raise OwnerOnlyError(
+            f"{_ADAPTERS_DIR} is a link; remove the link and re-run init "
+            "so the loop owns its adapter directory"
+        ) from exc
+    if os.path.lexists(_ADAPTERS_DIR) and not os.path.isdir(_ADAPTERS_DIR):
+        raise OwnerOnlyError(
+            f"{_ADAPTERS_DIR} is a file, not a directory; remove it and re-run init"
+        )
+    if os.path.isdir(_ADAPTERS_DIR) and os.name != "nt":
+        return _tighten_adapters_dir()
+    try:
+        ensure_owner_only_dir(_ADAPTERS_DIR)
+    except OwnerOnlyError as exc:
+        if os.name == "nt":
+            raise OwnerOnlyError(
+                f"{exc}; remove {_ADAPTERS_DIR} or change its owner, then re-run init"
+            ) from exc
+        raise
+    return None
+
+
+def _tighten_adapters_dir() -> Optional[str]:
+    """Tighten an existing ``.soup-loops/adapters`` to owner-only (POSIX).
+
+    The train stage used to create this folder with plain ``mkdir``, so a loop
+    that already trained has a group-writable one. It belongs to this account,
+    so it is kept and restricted instead of refused. Returns a one-line note
+    saying what changed and why when the mode moved, and ``None`` when it was
+    already owner-only. Raises :class:`OwnerOnlyError` for a folder another
+    account owns (with the fix named) or one that cannot be opened as a real
+    folder.
+    """
+    from soup_cli.utils.owner_only_dir import OwnerOnlyError
+    from soup_cli.utils.paths import open_no_follow
+
+    try:
+        fd = open_no_follow(_ADAPTERS_DIR, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError as exc:
+        raise OwnerOnlyError(f"{_ADAPTERS_DIR} cannot be opened as a real folder ({exc})") from exc
+    try:
+        info = os.fstat(fd)
+        uid = os.geteuid()
+        if info.st_uid != uid:
+            raise OwnerOnlyError(
+                f"{_ADAPTERS_DIR} belongs to another user (uid {info.st_uid}, not {uid}); "
+                "remove it or change its owner, then re-run init"
+            )
+        mode = stat.S_IMODE(info.st_mode)
+        if mode == 0o700:
+            return None
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+    return (
+        f"tightened {_ADAPTERS_DIR} to owner-only (was mode {mode:o}); "
+        "only the loop owner may write the adapters it serves"
+    )
+
+
 #: The trace directory read when neither SOUP_LOOP_TRACE_DIR nor trace_dir is set.
 DEFAULT_TRACE_DIR = ".soup-loops/traces"
 #: The feedback log read when neither SOUP_LOOP_FEEDBACK_LOG nor feedback_log is set.
@@ -953,7 +1049,9 @@ def train_dpo_from_pairs(
     if quantization:
         decided["quantization_note"] = quantization[0]
     yaml_dir = Path(_ADAPTERS_DIR)
-    yaml_dir.mkdir(parents=True, exist_ok=True)
+    tightened = ensure_adapters_dir()
+    if tightened is not None:
+        _LOG.info(tightened)
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
     atomic_write_text(rendered, yaml_path, field="train yaml")
 
