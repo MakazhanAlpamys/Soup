@@ -218,9 +218,9 @@ class TestTheControlsStillLoad:
 
     def test_streaming_keeps_the_1692_message_for_the_kernel_flags(self):
         with pytest.raises(ValueError) as info:
-            load_config_from_string(_yaml(stream_layers=True, batch_size=1, use_liger=True))
+            load_config_from_string(_yaml(stream_layers=True, batch_size=1, use_flash_attn=True))
 
-        assert "mutually exclusive with use_liger" in str(info.value)
+        assert "mutually exclusive with use_flash_attn" in str(info.value)
 
     def test_streaming_leaves_the_kernel_flags_to_1692(self):
         """#1692's validator raises first on a load, so call this one directly."""
