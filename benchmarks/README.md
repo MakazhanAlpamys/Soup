@@ -1,12 +1,10 @@
 # Measurement records
 
-Raw gate records for Soup's layer-streaming feature and its release gate,
-published as written.
+Gate records for Soup's layer-streaming feature and its release gate, including
+summaries with commit-pinned measurement evidence.
 
-These are not a report assembled after the fact. They are the working records
-kept while each item was built and verified, so they contain the failures, the
-assumptions that turned out wrong, and the numbers that were measured and then
-discarded — in the order those things happened.
+The working records document failed attempts, revised assumptions and superseded
+measurements as they happened. Summaries identify which runs support each result.
 
 They are the evidence behind the preprint:
 
@@ -16,6 +14,9 @@ They are the evidence behind the preprint:
 
 | File | What it gates | Headline |
 |---|---|---|
+| [`giant-moe-acceptance-quadro-p4000-2026-10-29.md`](giant-moe-acceptance-quadro-p4000-2026-10-29.md) | Real DeepSeek-V3 671B attention-LoRA under a 32 GiB RAM cap | Two updates, eight paired WikiText-2 fragments and bitwise-equal reload logits on one Quadro P4000. The earlier RTX 5060 pilot used a larger host. |
+| [`moe-adapter-and-ram-tier-rtx3070-2026-11-09.md`](moe-adapter-and-ram-tier-rtx3070-2026-11-09.md) | Moonlight disk-streaming adapter gate and Qwen RAM-tier planning | Four Moonlight updates and matching reload digest on one RTX 3070. The Qwen header-only calculation selects disk at 32 GiB with NVMe available. |
+| [`synthetic-giant-moe-cold-warm-rtx3060-ti-2026-11-09.md`](synthetic-giant-moe-cold-warm-rtx3060-ti-2026-11-09.md) | Cold and warm execution on a synthetic 671B-parameter store | One RTX 3060 Ti, three updates per run and matching adapter reload digests. The cause of the slower cold first step remains unknown. |
 | [`quant-check-performance-smoke-2026-11-10.md`](quant-check-performance-smoke-2026-11-10.md) | Functional validation of opt-in combined quality/performance reporting ([#2677](https://github.com/MakazhanAlpamys/Soup/issues/2677)) | Real Qwen FP16/NF4 on H200 and identical tiny CPU checkpoints; four CLI reports, null CPU VRAM, quality exit-code regression and full CPU suite. Not a speedup or model-quality claim |
 | [`flash-liger-h200-2026-11-10.md`](flash-liger-h200-2026-11-10.md) | Sequence/checkpointing sweep for #378; measurement, no default change | 120 timings and 32 probes on a shared H200: Liger 1.197-1.229x SDPA with 21.6-54.7% less allocated peak at feasible points; separate FA2 0.929-0.989x. Eight long-sequence checkpoint-off probe OOMs and all 40 unrun timing slots retained. |
 | [`protocol-378-h200.md`](protocol-378-h200.md) | Frozen protocol for the H200 sequence/checkpointing sweep of [#378](https://github.com/MakazhanAlpamys/Soup/issues/378), written before the timed matrix; the results are in [`flash-liger-h200-2026-11-10.md`](flash-liger-h200-2026-11-10.md) | Llama-3.1-8B, resident BF16 base with LoRA r=16 on all seven projections, batch 4, sequence 1024/2048/4096/8192 with checkpointing off and on, four arms (default SDPA, FA2, Liger, FA2+Liger), five interleaved repetitions per feasible cell, 5 warm-up and 80 measured updates. Activation probes run before timing, and a failed probe is retained rather than turned into a ratio. A second Hopper measurement, not a reproduction of the older H100 values. |
