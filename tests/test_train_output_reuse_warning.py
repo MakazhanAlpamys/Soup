@@ -9,6 +9,7 @@ silent.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -188,6 +189,85 @@ def test_helper_warns_on_the_fresh_path(tmp_path: Path, capsys: pytest.CaptureFi
     _warn_existing_output_files(_silent_cfg(tmp_path), resume=None, hf_resume=False)
     captured = capsys.readouterr()
     assert "already has adapter_model.safetensors" in captured.out + captured.err
+
+
+def test_only_chief_worker_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    # In a multi-worker launch every worker reaches the warning, so only the
+    # chief prints: across a RANK=0 and a RANK=1 call there is one notice.
+    # A plain single-node launch without RANK still warns (LOCAL_RANK == 0),
+    # while a non-chief LOCAL_RANK stays silent.
+    _seed_adapter_files(tmp_path / "out" / "exp1")
+    cfg = _silent_cfg(tmp_path)
+    for rank_env in (
+        {"RANK": "0", "WORLD_SIZE": "2"},
+        {"RANK": "1", "WORLD_SIZE": "2"},
+        {"LOCAL_RANK": "1"},
+        {},
+    ):
+        for key in ("RANK", "WORLD_SIZE", "LOCAL_RANK"):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in rank_env.items():
+            monkeypatch.setenv(key, value)
+        _warn_existing_output_files(cfg, resume=None, hf_resume=False)
+    captured = capsys.readouterr()
+    assert (captured.out + captured.err).count("already has") == 2
+
+
+def test_fresh_run_warns_once_on_chief_rank(run, monkeypatch: pytest.MonkeyPatch) -> None:
+    config, dest, calls = run
+    dest.mkdir(parents=True)
+    for name in _ADAPTER_FILES:
+        (dest / name).write_text("x", encoding="utf-8")
+    monkeypatch.setenv("RANK", "0")
+
+    result = make_cli_runner().invoke(app, ["train", "--config", str(config), "--yes"])
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert calls == ["setup", "train"]
+    squashed = _squash(_output(result))
+    notice = (
+        f"Warning: {dest} already has adapter_model.safetensors, "
+        "adapter_config.json and tokenizer_config.json. This run may replace them."
+    )
+    assert squashed.count(_squash(notice)) == 1
+    assert squashed.index(_squash(notice)) < squashed.index("stubtrainerstarting")
+
+
+def test_fresh_run_stays_silent_on_non_chief_rank(run, monkeypatch: pytest.MonkeyPatch) -> None:
+    config, dest, calls = run
+    dest.mkdir(parents=True)
+    for name in _ADAPTER_FILES:
+        (dest / name).write_text("x", encoding="utf-8")
+    monkeypatch.setenv("RANK", "1")
+
+    result = make_cli_runner().invoke(app, ["train", "--config", str(config), "--yes"])
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert calls == ["setup", "train"]
+    assert "already has" not in _output(result)
+    assert "This run may replace them" not in _output(result)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="':' is not a valid Windows filename character"
+)
+def test_helper_prints_emoji_alias_path_as_supplied(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # A POSIX destination containing a Rich emoji alias must appear exactly
+    # as supplied: without literal rendering, ":smile:" is expanded to the
+    # emoji and the rendered path differs from the directory the save uses.
+    dest = tmp_path / "out:smile:" / "exp1"
+    _seed_adapter_files(dest)
+    _warn_existing_output_files(
+        _silent_cfg(tmp_path, output=str(tmp_path / "out:smile:")),
+        resume=None, hf_resume=False,
+    )
+    captured = capsys.readouterr()
+    assert str(dest) in _squash(strip_ansi(captured.out + captured.err))
+    assert "😄" not in captured.out + captured.err
 
 
 def test_helper_prints_bracketed_path_as_supplied(

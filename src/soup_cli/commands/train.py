@@ -187,12 +187,20 @@ def _warn_existing_output_files(
     Only the fresh path warns: a resumed run is expected to pick up where the
     previous run left off. The destination is resolved exactly as the SFT
     setup resolves it, so the notice names the directory the save will use.
+    In a multi-worker launch every worker reaches this point, so only the
+    chief worker prints — one notice per run, before setup. The destination
+    is rendered as literal terminal text, so a path containing Rich markup
+    or an emoji alias appears exactly as supplied.
     """
     if cfg.task != "sft" or cfg.backend != "transformers":
         return
     if resume is not None or hf_resume:
         return
-    from soup_cli.utils.terminal import for_terminal
+    if not _is_chief_worker():
+        return
+    from rich.text import Text
+
+    from soup_cli.utils.terminal import terminal_text
     from soup_cli.utils.training_output import training_output_dir
 
     destination = training_output_dir(cfg.output, cfg.experiment_name)
@@ -206,8 +214,11 @@ def _warn_existing_output_files(
     else:
         names = ", ".join(existing[:-1]) + f" and {existing[-1]}"
     console.print(
-        f"[yellow]Warning:[/] {for_terminal(destination)} already has {names}. "
-        "This run may replace them."
+        Text.assemble(
+            ("Warning: ", "yellow"),
+            terminal_text(destination),
+            f" already has {names}. This run may replace them.",
+        )
     )
 
 
@@ -3566,12 +3577,12 @@ def _write_energy_json(path: str, measurement: "EnergyMeasurement") -> None:
     atomic_write_text(payload, path, field="--energy-out")
 
 
-def _should_run_diagnose_gate_on_rank() -> bool:
+def _is_chief_worker() -> bool:
     """Return True only for the single chief worker in a distributed launch.
 
-    The diagnose gate (and the --annex-xi / --repro-receipt / capture hooks)
-    write one report and, on a shared filesystem, read one shared output dir
-    -- so they should fire exactly once per *cluster*, not once per node.
+    Work that must fire exactly once per *cluster*, not once per worker --
+    the diagnose gate and its report hooks, and the output-reuse warning,
+    which every worker reaches on a shared filesystem -- gates on this.
 
     Resolution (v0.71.15 #170 — fixes the v0.56.0 limitation where a shared-FS
     multi-node run fired the gate once per node):
@@ -3594,6 +3605,17 @@ def _should_run_diagnose_gate_on_rank() -> bool:
         return int(os.environ.get("LOCAL_RANK", "0")) == 0
     except ValueError:
         return True
+
+
+def _should_run_diagnose_gate_on_rank() -> bool:
+    """Return True only for the single chief worker in a distributed launch.
+
+    The diagnose gate (and the --annex-xi / --repro-receipt / capture hooks)
+    write one report and, on a shared filesystem, read one shared output dir
+    -- so they should fire exactly once per *cluster*, not once per node.
+    See :func:`_is_chief_worker` for how the chief is resolved.
+    """
+    return _is_chief_worker()
 
 
 def _run_diagnose_gate(
