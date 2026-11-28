@@ -477,8 +477,6 @@ def test_compiled_reader_feeds_the_existing_cuda_nf4_restore(reader_factory, mon
     )
     from tests.test_native_expert_reader_port import extension_or_skip
 
-    if not torch.cuda.is_available():
-        pytest.skip("requires CUDA")
     pytest.importorskip("bitsandbytes")
     extension_or_skip()
     reader, _, codes = reader_factory(nf4=True, nested=nested)
