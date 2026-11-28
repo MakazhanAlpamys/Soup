@@ -738,15 +738,42 @@ def filter_data(
         console.print("[red]Dataset is empty.[/]")
         raise typer.Exit(1)
 
+    if field and not any(field in row for row in data):
+        console.print(
+            f"--field {field!r} is absent from every row; "
+            "choose a field present in the dataset.",
+            markup=False, highlight=False, emoji=False,
+        )
+        raise typer.Exit(1)
+
     console.print(f"[dim]Scoring {len(data)} rows...[/]")
 
-    # Extract texts for scoring
+    # A row without --field (or with a null there) is not scored on its
+    # other fields: it is left out, counted, and named in a warning (#3437).
+    scored_idx = [
+        idx for idx, row in enumerate(data)
+        if not field or row.get(field) is not None
+    ]
+    missing = len(data) - len(scored_idx)
     texts = []
-    for row in data:
-        if field and field in row:
+    for idx in scored_idx:
+        row = data[idx]
+        if field:
             texts.append(str(row[field]))
         else:
             texts.append(" ".join(str(v) for v in row.values() if v))
+    if missing:
+        fate = "their scores are null" if score_only else "they are not in the output"
+        console.print(
+            f"{missing} of {len(data)} rows have no {field!r} and were not scored; {fate}.",
+            style="yellow", markup=False, highlight=False, emoji=False,
+        )
+
+    def _by_row(scores: list[float]) -> list[Optional[float]]:
+        out: list[Optional[float]] = [None] * len(data)
+        for idx, score in zip(scored_idx, scores):
+            out[idx] = score
+        return out
 
     # Compute coherence scores (lightweight, always computed)
     from soup_cli.utils.quality import compute_coherence_score
@@ -770,14 +797,18 @@ def filter_data(
             )
             raise typer.Exit(1) from None
 
+    coherence_by_row = _by_row(coherence_scores)
+    perplexity_by_row = None if perplexity_scores is None else _by_row(perplexity_scores)
+
     if score_only:
         # Add scores to each row and write output
         scored_data = []
         for idx, row in enumerate(data):
             scored_row = dict(row)
-            scored_row["_coherence_score"] = coherence_scores[idx]
-            if perplexity_scores is not None:
-                scored_row["_perplexity_score"] = round(perplexity_scores[idx], 2)
+            scored_row["_coherence_score"] = coherence_by_row[idx]
+            if perplexity_by_row is not None:
+                ppl = perplexity_by_row[idx]
+                scored_row["_perplexity_score"] = None if ppl is None else round(ppl, 2)
             scored_data.append(scored_row)
 
         if output is None:
@@ -799,11 +830,13 @@ def filter_data(
     kept = []
     removed = []
     for idx, row in enumerate(data):
-        remove = False
-        if perplexity is not None and perplexity_scores is not None:
-            if perplexity_scores[idx] > perplexity:
+        remove = coherence_by_row[idx] is None  # not scored: no --field value
+        if perplexity is not None and perplexity_by_row is not None:
+            ppl = perplexity_by_row[idx]
+            if ppl is not None and ppl > perplexity:
                 remove = True
-        if coherence is not None and coherence_scores[idx] < coherence:
+        coh = coherence_by_row[idx]
+        if coherence is not None and coh is not None and coh < coherence:
             remove = True
 
         if remove:
@@ -821,15 +854,20 @@ def filter_data(
         raise typer.Exit(1)
     _write_jsonl(out_path, kept)
 
+    unscored = ""
+    if missing:
+        verb = "has" if missing == 1 else "have"
+        unscored = f"; {missing} {verb} no {for_terminal(repr(field))}"
     console.print(
         f"[green]Filter complete:[/] {len(data)} -> {len(kept)} rows "
-        f"([red]-{len(removed)}[/] removed)\n"
+        f"([red]-{len(removed)}[/] removed{unscored})\n"
         f"Output: [bold]{for_terminal(out_path)}[/]"
     )
-    if perplexity is not None and perplexity_scores is not None:
+    # Averages are over the scored rows only.
+    if perplexity is not None and perplexity_scores:
         avg_ppl = sum(perplexity_scores) / len(perplexity_scores)
         console.print(f"Avg perplexity: [bold]{avg_ppl:.1f}[/] (threshold: {perplexity})")
-    if coherence is not None:
+    if coherence is not None and coherence_scores:
         avg_coh = sum(coherence_scores) / len(coherence_scores)
         console.print(f"Avg coherence:  [bold]{avg_coh:.3f}[/] (threshold: {coherence})")
 
