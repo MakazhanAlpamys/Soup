@@ -179,4 +179,4 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 
 Measured by @Batyrkhantzy111
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/40b0e5748859220b53d1e856e93f11af8a06eff5/benchmarks
+Evidence: benchmarks/evidence/moe-adapter-placement-a6000-pro6000-2026-10-14/ (source commit 40b0e5748859)

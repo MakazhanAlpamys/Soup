@@ -1,0 +1,88 @@
+{
+  "schema": "e2-hybrid-analysis-v1",
+  "protocol": "benchmarks/e2/hybrid/PROTOCOL.txt",
+  "scorer_revision": 5,
+  "arms": {
+    "H16": {
+      "arm": "H16",
+      "problems": [],
+      "ce": 0.8738048076629639,
+      "scores": {
+        "mini_mmlu": 0.9230769230769231,
+        "mini_common_sense": 0.9583333333333334,
+        "mini_instruction": 1.0,
+        "mini_arithmetic": 0.625,
+        "mini_tool_call": 0.7,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.025,
+        "mini_over_refusal": 0.975
+      }
+    },
+    "H24": {
+      "arm": "H24",
+      "problems": [],
+      "ce": 0.8739433884620667,
+      "scores": {
+        "mini_mmlu": 0.9615384615384616,
+        "mini_common_sense": 0.9583333333333334,
+        "mini_instruction": 1.0,
+        "mini_arithmetic": 0.625,
+        "mini_tool_call": 0.7,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.0,
+        "mini_over_refusal": 0.975
+      }
+    },
+    "W32": {
+      "arm": "W32",
+      "problems": [],
+      "ce": 0.8757693767547607,
+      "scores": {
+        "mini_mmlu": 1.0,
+        "mini_common_sense": 0.9583333333333334,
+        "mini_instruction": 1.0,
+        "mini_arithmetic": 0.625,
+        "mini_tool_call": 0.7,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.0,
+        "mini_over_refusal": 0.975
+      }
+    }
+  },
+  "not_claimed": [
+    "speed",
+    "cache parity across the freeze",
+    "other seeds or recipes"
+  ],
+  "anchor_relative_difference": 0.00116538857769409,
+  "H24": {
+    "ce_gap_percent": -0.20850104390044438,
+    "suite_deltas": {
+      "mini_mmlu": -0.038461538461538436,
+      "mini_common_sense": 0.0,
+      "mini_instruction": 0.0,
+      "mini_arithmetic": 0.0,
+      "mini_tool_call": 0.0,
+      "mini_format_json": 0.0,
+      "mini_safety": 0.0
+    },
+    "over_refusal_top": 0.975,
+    "label": "WITHIN_MARGIN",
+    "top_k_gap_reference": 1.5449222934611186
+  },
+  "H16": {
+    "ce_gap_percent": -0.22432493575840204,
+    "suite_deltas": {
+      "mini_mmlu": -0.07692307692307687,
+      "mini_common_sense": 0.0,
+      "mini_instruction": 0.0,
+      "mini_arithmetic": 0.0,
+      "mini_tool_call": 0.0,
+      "mini_format_json": 0.0,
+      "mini_safety": 0.025
+    },
+    "over_refusal_top": 0.975,
+    "label": "FAILS"
+  },
+  "label": "WITHIN_MARGIN"
+}

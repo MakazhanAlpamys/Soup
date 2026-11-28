@@ -1,0 +1,103 @@
+{
+  "schema": "e2-recipe-analysis-v1",
+  "protocol": "benchmarks/e2/recipe_check/PROTOCOL.txt",
+  "scorer_revision": 5,
+  "arms": {
+    "W24": {
+      "arm": "W24",
+      "problems": [],
+      "ce": 0.8892993330955505,
+      "scores": {
+        "mini_mmlu": 0.7692307692307693,
+        "mini_common_sense": 0.7916666666666666,
+        "mini_instruction": 0.9166666666666666,
+        "mini_arithmetic": 0.6,
+        "mini_tool_call": 0.625,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.0,
+        "mini_over_refusal": 0.975
+      }
+    },
+    "W32": {
+      "arm": "W32",
+      "problems": [],
+      "ce": 0.8757693767547607,
+      "scores": {
+        "mini_mmlu": 1.0,
+        "mini_common_sense": 0.9583333333333334,
+        "mini_instruction": 1.0,
+        "mini_arithmetic": 0.625,
+        "mini_tool_call": 0.7,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.0,
+        "mini_over_refusal": 0.975
+      }
+    },
+    "S24": {
+      "arm": "S24",
+      "problems": [],
+      "ce": 1.0055125951766968,
+      "scores": {
+        "mini_mmlu": 0.8846153846153846,
+        "mini_common_sense": 0.9583333333333334,
+        "mini_instruction": 0.9583333333333334,
+        "mini_arithmetic": 0.575,
+        "mini_tool_call": 0.7,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.0,
+        "mini_over_refusal": 1.0
+      }
+    },
+    "S32": {
+      "arm": "S32",
+      "problems": [],
+      "ce": 0.9828273057937622,
+      "scores": {
+        "mini_mmlu": 0.9615384615384616,
+        "mini_common_sense": 0.9583333333333334,
+        "mini_instruction": 1.0,
+        "mini_arithmetic": 0.6,
+        "mini_tool_call": 0.825,
+        "mini_format_json": 1.0,
+        "mini_safety": 0.0,
+        "mini_over_refusal": 0.975
+      }
+    }
+  },
+  "not_claimed": [
+    "other seeds",
+    "other models",
+    "more data",
+    "speed",
+    "the cache"
+  ],
+  "anchor_relative_difference": 0.00116538857769409,
+  "weak": {
+    "ce_gap_percent": 1.5449222934611186,
+    "suite_deltas": {
+      "mini_mmlu": -0.23076923076923073,
+      "mini_common_sense": -0.16666666666666674,
+      "mini_instruction": -0.08333333333333337,
+      "mini_arithmetic": -0.025000000000000022,
+      "mini_tool_call": -0.07499999999999996,
+      "mini_format_json": 0.0,
+      "mini_safety": 0.0
+    },
+    "over_refusal_top": 0.975
+  },
+  "strong": {
+    "ce_gap_percent": 2.3081663736044877,
+    "suite_deltas": {
+      "mini_mmlu": -0.07692307692307698,
+      "mini_common_sense": 0.0,
+      "mini_instruction": -0.04166666666666663,
+      "mini_arithmetic": -0.025000000000000022,
+      "mini_tool_call": -0.125,
+      "mini_format_json": 0.0,
+      "mini_safety": 0.0
+    },
+    "over_refusal_top": 1.0
+  },
+  "strong_minus_weak_full_ce": 0.10705792903900146,
+  "label": "GAP_PERSISTS"
+}

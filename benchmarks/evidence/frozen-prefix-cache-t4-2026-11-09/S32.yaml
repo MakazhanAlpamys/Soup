@@ -1,0 +1,43 @@
+base: __BASE__
+task: sft
+backend: transformers
+data:
+  train: experiments/e2_quality_data.jsonl
+  format: alpaca
+  max_length: 128
+  val_split: 0.09090909090909091
+  chat_template: chatml
+  train_on_responses_only: false
+training:
+  epochs: 2
+  lr: 0.0001
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  quantization: none
+  scheduler: linear
+  warmup_ratio: 0.0
+  weight_decay: 0.0
+  logging_steps: 100
+  save_steps: 50
+  frozen_prefix_cache: false
+  gradient_checkpointing: false
+  stream_layers: false
+  packing: false
+  multipack: false
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    top_k_layers: 32
+    target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  seed: 42
+  data_seed: 42
+  eval_steps: null
+output: __OUTPUT__

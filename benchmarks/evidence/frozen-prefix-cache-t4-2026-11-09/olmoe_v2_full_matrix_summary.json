@@ -1,0 +1,59 @@
+{
+  "kind": "olmoe_full_quality_matrix_v2",
+  "status": "EXPLORATORY",
+  "research_acceptance": "NO VERDICT",
+  "runner_sha256": "e65c47b690031125863a63165bef4ab837a6732c2d8c35a817b39af68f33ccf9",
+  "protocol_signature": {
+    "train_sha256": "535f364382cca5a5fe82b8c0b6788182db89b7c55439061dab0d47cbaff319a1",
+    "validation_sha256": "39c8736ea6b123e01f7d0c56eced3d579e486155fb5773e666375557e42edf55",
+    "tokenized_train_sha256": "65c77a029c373cf3158bfd47462d39d5a84e4b230157317c1f177a7a3762a93f",
+    "tokenized_validation_sha256": "5680b97a26291d34c783daa7f872f7e9c0a2069811a42e3ec7e14209833796d6",
+    "chatml_template_sha256": "9fe579a2c222698c7ba22d46e26466362fbe951569a89096c366267f9b82ab92",
+    "epoch_training_orders_sha256": "2a461c58bfb9f670cecdd449a8e5f032cc202405fe486d9cd46ba9ccf081f1ab"
+  },
+  "results": [
+    {
+      "k": 4,
+      "frozen_layers": 12,
+      "validation_task_loss": 1.1888684494256974,
+      "validation_total_loss": 1.2707379895448685,
+      "steps": 4000,
+      "cache_parity": "EXACT",
+      "relative_loss_increase_pct": 17.4518390612308
+    },
+    {
+      "k": 8,
+      "frozen_layers": 8,
+      "validation_task_loss": 1.0687360456705093,
+      "validation_total_loss": 1.1507306128740311,
+      "steps": 4000,
+      "cache_parity": "EXACT",
+      "relative_loss_increase_pct": 5.5836027069822824
+    },
+    {
+      "k": 12,
+      "frozen_layers": 4,
+      "validation_task_loss": 1.0242358920812606,
+      "validation_total_loss": 1.106187384724617,
+      "steps": 4000,
+      "cache_parity": "EXACT",
+      "relative_loss_increase_pct": 1.1873005929096125
+    },
+    {
+      "k": 16,
+      "frozen_layers": 0,
+      "validation_task_loss": 1.012217823857069,
+      "validation_total_loss": 1.0939262609183789,
+      "steps": 4000,
+      "cache_parity": "NO_CACHE_REFERENCE",
+      "relative_loss_increase_pct": 0.0
+    }
+  ],
+  "limitations": [
+    "Quality/safety acceptance thresholds not approved",
+    "Exact HF Trainer sampler equivalence not established",
+    "Not a final performance ABBA benchmark"
+  ],
+  "published_runner_sha256": "c18edc34f7eb22395a676268bbda16fcc79d7291536a8a4ee99a6ab2340e75dc",
+  "publication_note": "Original runner_sha256 identifies the executed GPU runner. Published source differs only by trailing whitespace removal."
+}

@@ -198,4 +198,4 @@ The measured timing ratios apply to this Mistral setup.
 
 Measured by @nurseit14
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/ee4f4bed3d29ab9515007405f1cfebec2bc71cad/benchmarks/e2
+Evidence: benchmarks/evidence/frozen-prefix-cache-t4-2026-11-09/ (source commit ee4f4bed3d29)

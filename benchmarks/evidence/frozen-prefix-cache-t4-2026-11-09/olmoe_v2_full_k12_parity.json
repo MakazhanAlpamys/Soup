@@ -1,0 +1,19 @@
+{
+  "kind": "olmoe_soup_preprocessed_linear_same_k_comparison_v2",
+  "k": 12,
+  "max_train_loss_abs_diff": 0.0,
+  "max_validation_loss_abs_diff": 0.0,
+  "initial_adapter_exact": true,
+  "final_adapter_exact": true,
+  "adapter_file_exact": true,
+  "cache": {
+    "enabled": true,
+    "hits": 2000,
+    "misses": 2000,
+    "skipped_frozen_layer_calls": 8000,
+    "full_sha256_recomputes": 1
+  },
+  "verdict": "TECHNICAL_SMOKE_PARITY_PASS_ONLY",
+  "research_acceptance": "NO VERDICT",
+  "warning": "Soup preprocessing + linear LR, but independent HF Trainer sampler equivalence and acceptance not established"
+}
