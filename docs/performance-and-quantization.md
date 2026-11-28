@@ -1214,7 +1214,7 @@ training:
 |-----|---------|---------|
 | `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
 | `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
-| `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
+| `l2l_activation_codec` | `none` | Boundary activation storage. The CLI launch requires `none`. |
 | `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
 | `l2l_two_read_experts` | `false` | Experimental. Replay routing during recompute. |
 | `l2l_grouped_expert_routes` | `false` | Experimental. Gather expert routes in one `nonzero`. |
@@ -1222,7 +1222,7 @@ training:
 | `l2l_mbr_group_size` | `null` | Micro-batches per expert group. `null` uses the full accumulation window. An explicit size must be between 1 and `gradient_accumulation_steps`. |
 | `l2l_mbr_split_backward` | `false` | Backpropagate through the grouped experts, then through each micro-batch's attention, router and shared experts in L2L order. Refuses deferred decoder forward hooks. |
 | `l2l_mbr_ordered_backward` | `false` | Recompute in reverse micro-batch order so one backward per MoE layer accumulates adapter gradients in L2L order. Excludes split backward. |
-| `l2l_routing_oracle` | `false` | Replay the forward's expert IDs and scores during MBR backward. Requires a frozen native DeepSeek-V3 router and `l2l_activation_codec: none`. |
+| `l2l_routing_oracle` | `false` | Replay the forward's expert IDs and scores during MBR backward. Requires a frozen native DeepSeek-V3 router. |
 
 Both settings require `stream_expert_layout: per_expert` with L2L. Routing replay reads a routed
 expert in the forward pass and again in its backward pass. Grouped routing gathers the hit
@@ -1259,7 +1259,13 @@ records the setting and refuses resume when it changes.
 - **Scope.** Llama and Mistral models, and DeepSeek-V3-family MoE models streamed with `stream_expert_layout: per_expert`, on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model with the fused expert layout is refused at launch, before any weight is sharded, naming `stream_expert_layout`. On a MoE model every routed expert is read through one bounded buffer pool (the pre-flight charges its arena in place of the single in-flight expert), the backward leases each hit expert again, and a routing guard stops a step whose recompute routed tokens differently from its forward. Only the stateless SiLU activation can be recomputed. `l2l_auto_k` stays refused on a MoE model: its host-RAM window planner is not wired into the launch. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
-- **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
+- **Experimental FP8 boundary storage.** The Python L2L API can select
+  `fp8_e4m3_block64` with routing replay in regular or decoupled MBR. It stores one
+  float32 scale per 64 hidden channels and pads a partial block with zeros. Forward
+  uses the original activations, while backward recomputes from the lossy FP8 copy.
+  The store requires eager PyTorch float8 casts on CPU or CUDA and resident host
+  memory. The CLI launch requires `l2l_activation_codec: none` while FP8 gradient
+  quality on this training stack is evaluated.
 - **Recipe and resume.** SFT writes `l2l_recipe.json` (requested and effective k, activation
   codec, expert and MBR settings) to the run directory and each L2L checkpoint. Ordinary checkpoints
   saved in a run directory with L2L history record their training mode too. Resume checks the

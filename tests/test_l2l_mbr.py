@@ -116,6 +116,29 @@ def test_routing_oracle_requires_uncompressed_activations() -> None:
     )
 
 
+def test_block64_codec_requires_routing_oracle_and_is_recognized_with_it() -> None:
+    options = {**PREREQUISITES, MBR: True, "l2l_activation_codec": "fp8_e4m3_block64"}
+    _assert_config_error(
+        "training.l2l_activation_codec='fp8_e4m3_block64' requires "
+        "training.l2l_routing_oracle=true",
+        **options,
+    )
+    training = _load(**{**options, ORACLE: True})
+    assert training.l2l_activation_codec == "fp8_e4m3_block64"
+
+
+@pytest.mark.parametrize("mode", [SPLIT, ORDERED])
+def test_block64_config_refuses_unvalidated_backward_modes(mode: str) -> None:
+    _assert_config_error(
+        "training.l2l_activation_codec='fp8_e4m3_block64' does not support "
+        f"training.{mode}=true",
+        **{
+            **PREREQUISITES, MBR: True, ORACLE: True, mode: True,
+            "l2l_activation_codec": "fp8_e4m3_block64",
+        },
+    )
+
+
 def test_mbr_group_size_cannot_exceed_accumulation_window() -> None:
     _assert_config_error(
         f"training.{SIZE} cannot exceed training.gradient_accumulation_steps",

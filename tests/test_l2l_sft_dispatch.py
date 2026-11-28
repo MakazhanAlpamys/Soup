@@ -78,6 +78,20 @@ def test_fp8_is_refused_before_the_model_load_with_the_exact_message(monkeypatch
     )
 
 
+def test_block64_is_refused_before_the_model_load_even_with_routing_replay(monkeypatch):
+    wrapper = _wrapper(
+        monkeypatch, l2l=True, l2l_activation_codec="fp8_e4m3_block64",
+        stream_expert_layout="per_expert", l2l_two_read_experts=True,
+        l2l_grouped_expert_routes=True, l2l_route_preserving_mbr=True, l2l_routing_oracle=True,
+    )
+    with pytest.raises(ValueError) as caught:
+        wrapper.setup({})
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' is not available yet: the launch "
+        "supports 'none'. Set it to 'none'."
+    )
+
+
 def test_auto_k_is_refused_before_the_model_load(monkeypatch):
     wrapper = _wrapper(monkeypatch, l2l=True, l2l_auto_k=True)
     with pytest.raises(ValueError, match="l2l_auto_k is not available yet for this model"):

@@ -1,7 +1,7 @@
 """Budgeted, resident FP8 storage for L2L boundary activations.
 
-One FP8 payload slot per layer and micro-batch holds logical hidden vectors.
-One ragged float32 slab holds their per-token absmax scales. No compressed spill
+One FP8 payload slot per layer and micro-batch holds the encoded hidden vectors.
+One ragged float32 slab holds their per-row or per-block absmax scales. No compressed spill
 is supported. The numerical codec is the one in ``activation_codec``.
 
 The host reservation includes requested storage, pinned allocator rounding, and
@@ -53,10 +53,10 @@ class FP8ActivationAllocation:
     ``host_transient_bytes``, so it is exactly the store's lease amount.
 
     A codec operation handles at most 256 rows. The scratch bound allows eight
-    float32 tile matrices and eight float32 row vectors, plus one full decoded
+    float32 tile matrices and eight float32 scale tiles, plus one full decoded
     result and one scalar flag. This covers input staging, the unchanged shared
     expressions, payload/scale transfers, and finite-check masks conservatively.
-    CUDA reserves only a row-sized host finite mask plus its scalar reduction;
+    CUDA reserves a scale-tile-sized host finite mask plus its scalar reduction;
     all codec matrices and the decoded result belong to device scratch instead.
 
     The caller's source activation, caller-retained decoded results, Python/CUDA
@@ -82,6 +82,7 @@ def fp8_activation_allocation(
     pin: bool,
     compute_dtype: str = "bfloat16",
     device_type: str = "cuda",
+    codec: str = activation_codec.FP8,
 ) -> FP8ActivationAllocation:
     """Pure allocation contract used unchanged by the planner and the store."""
     from soup_cli.utils.layer_stream_runtime import _next_power_of_two
@@ -92,23 +93,27 @@ def fp8_activation_allocation(
         raise ValueError("pin must be a boolean")
     if compute_dtype not in _COMPUTE_BYTES:
         raise ValueError("FP8 compute dtype must be bfloat16, float16, or float32")
-    if device_type not in ("cpu", "cuda"):
-        raise ValueError("FP8 activation storage supports cpu or cuda devices")
+    if codec not in activation_codec.FP8_CODECS:
+        raise ValueError(f"unsupported FP8 activation codec {codec!r}")
+    activation_codec.validate_fp8_device(device_type, codec)
     shapes = _shapes(mb_shapes)
-    payload_requests = [math.prod(shape) for shape in shapes]
+    hidden = shapes[0][-1]
+    padded, blocks = activation_codec.codec_of(codec).block_layout(hidden)
     rows = [activation_codec.rows_of(shape) for shape in shapes]
+    payload_requests = [count * padded for count in rows]
     payload_bytes = n_layers * sum(payload_requests)
-    scale_bytes = n_layers * sum(rows) * activation_codec.SCALE_BYTES
+    scale_bytes = n_layers * sum(rows) * blocks * activation_codec.SCALE_BYTES
     allocated = payload_bytes + scale_bytes
     if pin:
         allocated = n_layers * sum(_next_power_of_two(size) for size in payload_requests)
         allocated += _next_power_of_two(scale_bytes)
     pinned_overhead = allocated - payload_bytes - scale_bytes
     tile_rows = min(max(rows), _CODEC_TILE_ROWS)
-    tile_elements = tile_rows * shapes[0][-1]
-    output_bytes = max(payload_requests) * _COMPUTE_BYTES[compute_dtype]
-    codec_scratch = 8 * 4 * tile_elements + 8 * 4 * tile_rows + output_bytes + 1
-    host_scratch = codec_scratch if device_type == "cpu" else tile_rows + 1
+    tile_elements = tile_rows * padded
+    tile_scales = tile_rows * blocks
+    output_bytes = max(rows) * hidden * _COMPUTE_BYTES[compute_dtype]
+    codec_scratch = 8 * 4 * (tile_elements + tile_scales) + output_bytes + 1
+    host_scratch = codec_scratch if device_type == "cpu" else tile_scales + 1
     return FP8ActivationAllocation(
         host_bytes=allocated + host_scratch,
         payload_bytes=payload_bytes,
@@ -146,6 +151,7 @@ class FP8ActivationStore:
         mb_shapes: Sequence[tuple[int, ...]] | None = None,
         spill_layers: int = 0,
         ring: int = 1,
+        codec: str = activation_codec.FP8,
     ) -> None:
         import torch
 
@@ -171,22 +177,31 @@ class FP8ActivationStore:
         if dtype not in dtype_names:
             raise ValueError("FP8 compute dtype must be bfloat16, float16, or float32")
         self.dtype = dtype
-        self.device = torch.device(device)
+        try:
+            self.device = torch.device(device)
+        except (RuntimeError, TypeError) as error:
+            if codec == activation_codec.FP8_BLOCK64:
+                raise ValueError(
+                    f"{activation_codec.FP8_BLOCK64_FIELD} has an invalid device {device!r}"
+                ) from error
+            raise
         self.is_cuda = self.device.type == "cuda"
         self.allocation = fp8_activation_allocation(
             n_layers=n_layers, mb_shapes=shapes, pin=pin,
-            compute_dtype=dtype_names[dtype], device_type=self.device.type,
+            compute_dtype=dtype_names[dtype], device_type=self.device.type, codec=codec,
         )
+        self.codec = codec
         self.n_layers = n_layers
         self.k = k
         self.shape = shape
         self.mb_shapes = shapes
         self.hidden = shape[-1]
+        self.padded_hidden, blocks = activation_codec.codec_of(codec).block_layout(self.hidden)
         self.capacity = math.prod(shape)
         self.spill_layers = 0
         self.spill_path = None
-        self.payload_chunk_bytes = self.capacity
-        self.scale_chunk_bytes = activation_codec.rows_of(shape) * activation_codec.SCALE_BYTES
+        self.payload_chunk_bytes = activation_codec.payload_chunk_bytes(shape, codec)
+        self.scale_chunk_bytes = activation_codec.scale_chunk_bytes(shape, codec)
         self.chunk_bytes = self.payload_chunk_bytes + self.scale_chunk_bytes
         self._pin = pin
         self._closed = False
@@ -211,14 +226,30 @@ class FP8ActivationStore:
         # No tensor allocation, including scalar dtype probes, precedes this lease.
         self._lease = host_budget.reserve("fp8.activations", self.allocation.host_bytes)
         try:
+            if codec == activation_codec.FP8_BLOCK64:
+                fp8_dtype = activation_codec.block64_fp8_dtype(self.device)
+                try:
+                    torch.zeros(1, dtype=torch.float32, device=self.device).to(fp8_dtype).float()
+                except torch.OutOfMemoryError:
+                    raise
+                except (NotImplementedError, RuntimeError, AssertionError) as error:
+                    raise ValueError(
+                        f"{activation_codec.FP8_BLOCK64_FIELD} requires eager float8_e4m3fn "
+                        f"support on {self.device}"
+                    ) from error
+            else:
+                fp8_dtype = torch.float8_e4m3fn
             for layer in range(n_layers):
-                for mb, capacity_shape in enumerate(shapes):
+                for mb, rows in enumerate(self._row_capacities):
                     self._payload[(layer, mb)] = torch.empty(
-                        math.prod(capacity_shape), dtype=torch.float8_e4m3fn,
+                        rows * self.padded_hidden, dtype=fp8_dtype,
                         device="cpu", pin_memory=pin,
                     )
+            scale_shape = (n_layers * self._rows_per_layer,)
+            if codec == activation_codec.FP8_BLOCK64:
+                scale_shape = (*scale_shape, blocks)
             self._scales = torch.empty(
-                n_layers * self._rows_per_layer, dtype=torch.float32,
+                scale_shape, dtype=torch.float32,
                 device="cpu", pin_memory=pin,
             )
         except BaseException as error:
@@ -352,12 +383,12 @@ class FP8ActivationStore:
         tiles = None
         try:
             with torch.no_grad():
-                host_payload = self._payload[key].view(-1, self.hidden)
+                host_payload = self._payload[key].view(-1, self.padded_hidden)
                 host_scale = self._scale_view(key, rows)
                 tiles = self._row_tiles(tensor, rows)
                 for start, values in tiles:
                     payload, scale = activation_codec.encode(
-                        values, activation_codec.FP8, check_finite=False,
+                        values, self.codec, check_finite=False,
                     )
                     count = values.shape[0]
                     host_payload[start : start + count].copy_(
@@ -397,7 +428,7 @@ class FP8ActivationStore:
             with torch.no_grad():
                 out = torch.empty(shape, dtype=self.dtype, device=self.device)
                 flat_out = out.view(rows, self.hidden)
-                host_payload = self._payload[key].view(-1, self.hidden)
+                host_payload = self._payload[key].view(-1, self.padded_hidden)
                 host_scale = self._scale_view(key, rows)
                 for start in range(0, rows, _CODEC_TILE_ROWS):
                     stop = min(rows, start + _CODEC_TILE_ROWS)
@@ -408,7 +439,8 @@ class FP8ActivationStore:
                         self.device, non_blocking=self.is_cuda and self._pin, copy=True,
                     )
                     restored = activation_codec.decode(
-                        payload, scale, activation_codec.FP8, self.dtype, self.hidden,
+                        payload, scale, self.codec, self.dtype, self.hidden,
+                        validate_values=False,
                     )
                     flat_out[start:stop].copy_(restored)
                     payload = scale = restored = None
@@ -422,51 +454,67 @@ class FP8ActivationStore:
         return out
 
     def begin_backward(self) -> None:
+        """Validate block64 scales before recompute, retaining the valid slots."""
         self._raise_if_closed()
+        if self.codec == activation_codec.FP8_BLOCK64:
+            self._drain_copies()
+            self._check_finite_boundaries()
 
     def _finite_scales(self, key: tuple[int, int], shape: tuple[int, ...]) -> bool:
         rows = activation_codec.rows_of(shape)
         scales = self._scale_view(key, rows)
         try:
             for start in range(0, rows, _CODEC_TILE_ROWS):
-                # absmax is non-negative. This uses one CPU row mask and scalar.
+                # absmax is non-negative. This uses one CPU scale mask and scalar.
                 if not bool((scales[start : start + _CODEC_TILE_ROWS] < math.inf).all()):
                     return False
             return True
         finally:
             scales = None
 
-    def end_step(self) -> None:
-        """Drain copies, refuse non-finite boundaries, and discard this step's shapes."""
-        self._raise_if_closed()
+    def _drain_copies(self) -> None:
         if self.is_cuda and self._cuda_used:
             import torch
 
             torch.cuda.synchronize(self.device)
             self._cuda_used = False
+
+    def _check_finite_boundaries(self) -> None:
         bad_count = 0
         first_bad = []
         bad_keys = self._nonfinite_keys
-        try:
-            for key, shape in self._shapes.items():
-                if key in bad_keys or not self._finite_scales(key, shape):
-                    bad_count += 1
-                    if len(first_bad) < 4:
-                        first_bad.append(key)
-            for key in bad_keys:
-                if key in self._shapes:
-                    continue
+        for key, shape in self._shapes.items():
+            if key not in bad_keys and self._finite_scales(key, shape):
+                continue
+            bad_count += 1
+            if len(first_bad) < 4:
+                first_bad.append(key)
+        for key in bad_keys:
+            if key not in self._shapes:
                 bad_count += 1
                 if len(first_bad) < 4:
                     first_bad.append(key)
+        if bad_count:
+            self._shapes.clear()
+            self._nonfinite_keys.clear()
+            field = (
+                activation_codec.FP8_BLOCK64_FIELD
+                if self.codec == activation_codec.FP8_BLOCK64 else self.codec
+            )
+            raise activation_codec.NonFiniteActivationError(
+                f"{field}: {bad_count} boundary chunk(s) held a NaN or an Inf, "
+                f"first (layer, micro-batch) {first_bad}; the lossy step is refused"
+            )
+
+    def end_step(self) -> None:
+        """Drain copies, refuse non-finite boundaries, and discard this step's shapes."""
+        self._raise_if_closed()
+        self._drain_copies()
+        try:
+            self._check_finite_boundaries()
         finally:
             self._shapes.clear()
             self._nonfinite_keys.clear()
-        if bad_count:
-            raise activation_codec.NonFiniteActivationError(
-                f"{activation_codec.FP8}: {bad_count} boundary chunk(s) held a NaN or an Inf, "
-                f"first (layer, micro-batch) {first_bad}; the lossy step is refused"
-            )
 
     def host_bytes(self) -> dict[str, int]:
         """Live storage measurements and the exact shared reservation breakdown.
@@ -493,17 +541,13 @@ class FP8ActivationStore:
         """Drain before dropping storage and releasing its lease, idempotently.
 
         A failed drain leaves storage and its reservation intact, rejects new
-        work, and permits a later close retry. Constructor failures need no CUDA
-        drain because construction only allocates host storage.
+        work, and permits a later close retry. Construction queues no transfers
+        to or from the rented host slots.
         """
         if self._closed:
             return
         self._closing = True
-        if self.is_cuda and self._cuda_used:
-            import torch
-
-            torch.cuda.synchronize(self.device)
-            self._cuda_used = False
+        self._drain_copies()
         self._payload.clear()
         self._scales = None
         self._shapes.clear()

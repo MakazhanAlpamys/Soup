@@ -56,6 +56,18 @@ def test_resolving_a_recipe_refuses_fp8_too():
         resolve_l2l_recipe(_tcfg(l2l_activation_codec="fp8_e4m3"))
 
 
+def test_block64_launch_gate_refuses_routing_replay_too():
+    with pytest.raises(ValueError) as caught:
+        resolve_l2l_recipe(_tcfg(
+            l2l_activation_codec="fp8_e4m3_block64", l2l_route_preserving_mbr=True,
+            l2l_routing_oracle=True,
+        ))
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' is not available yet: the launch "
+        "supports 'none'. Set it to 'none'."
+    )
+
+
 def test_the_gate_opens_only_through_available_codecs(monkeypatch):
     monkeypatch.setattr(l2l_recipe, "AVAILABLE_CODECS", ("none", "fp8_e4m3"))
     validate_l2l_options(_tcfg(l2l_activation_codec="fp8_e4m3"))

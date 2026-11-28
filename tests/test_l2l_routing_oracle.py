@@ -1,5 +1,6 @@
 """Native DeepSeek-V3 routing replay on CPU."""
 
+import math
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -7,9 +8,12 @@ import pytest
 
 from soup_cli.utils.host_memory_budget import HostMemoryBudget
 from soup_cli.utils.routing_oracle import DeepseekRoutingOracle
+from tests.test_fp8_activations import cpu_float8 as _cpu_float8
 from tests.test_l2l_mbr import _run
 from tests.test_l2l_mbr import window as _mbr_window
+from tests.test_l2l_moe import _grads
 
+cpu_float8 = _cpu_float8
 window = _mbr_window  # the shared streamed-window fixture, re-exported under its own name
 
 
@@ -215,6 +219,7 @@ def test_oracle_step_refuses_fp8_before_activations(window):
 
     model, stepper, batches, calls = window
     store = FP8ActivationStore.__new__(FP8ActivationStore)
+    store.codec = "fp8_e4m3"
     with DeepseekRoutingOracle(model, pin=False) as oracle:
         with pytest.raises(ValueError) as caught:
             stepper.run(
@@ -222,6 +227,182 @@ def test_oracle_step_refuses_fp8_before_activations(window):
             )
         assert str(caught.value) == "routing_oracle requires uncompressed L2L activations"
         assert oracle.host_bytes()["owned_host_storage_bytes"] == 0
+
+
+@pytest.mark.parametrize("decoupled", [False, True])
+@pytest.mark.parametrize("window", [{"dtype": "bfloat16"}], indirect=True)
+def test_block64_oracle_preserves_forward_and_bounds_tiny_gradient_error(
+    cpu_float8, window, decoupled,
+):
+    from soup_cli.utils.fp8_activations import FP8ActivationStore
+
+    torch = cpu_float8
+    model, stepper, batches, calls = window
+    batches, calls = batches[:2], calls[:2]
+    shapes = [(*ids.shape, model.config.hidden_size) for ids in batches]
+    options = {
+        "route_preserving_mbr": True, "mbr_group_size": 2, "collect_phase_stats": True,
+        "mbr_decoupled_subwindow": decoupled,
+    }
+    expected_losses, expected_grads = _run((model, stepper, batches, calls), **options)
+    model.zero_grad(set_to_none=True)
+    budget = HostMemoryBudget(1 << 20)
+    with DeepseekRoutingOracle(model, host_budget=budget, pin=False) as oracle:
+        store = FP8ActivationStore(
+            host_budget=budget, n_layers=len(stepper.layers), k=2, chunk_shape=max(shapes),
+            mb_shapes=shapes, dtype=torch.bfloat16, device="cpu", pin=False,
+            codec="fp8_e4m3_block64",
+        )
+        try:
+            losses = stepper.run(batches, store, calls=calls, routing_oracle=oracle, **options)
+            assert oracle.report()["complete"]
+            assert oracle.report()["step_counts"] == {
+                "native_forward": 4, "oracle_peek": 4 if decoupled else 0,
+                "oracle_recompute": 4, "oracle_vjp": 4,
+            }
+            for idx in (1, 2):
+                stats = stepper.route_preserving_mbr_stats["layers"][idx]
+                assert stats["route_id_mismatch_slots"] == 0
+                assert stats["gate_weight_max_abs"] == 0.0
+        finally:
+            store.close()
+    assert budget.used_bytes == 0
+    assert all(torch.equal(a, b) for a, b in zip(losses, expected_losses, strict=True))
+    grads = _grads(model)
+    assert grads.keys() == expected_grads.keys()
+    errors, baseline = 0.0, 0.0
+    for name, want in expected_grads.items():
+        want, got = want.double().flatten(), grads[name].double().flatten()
+        assert got.isfinite().all(), name
+        errors += float((got - want).square().sum())
+        baseline += float(want.square().sum())
+        if torch.count_nonzero(want):
+            assert torch.count_nonzero(got), name
+            assert got.dot(want) / (got.norm() * want.norm()) >= 0.98, name
+        else:
+            assert torch.count_nonzero(got) == 0, name
+    assert baseline > 0
+    assert math.sqrt(errors / baseline) <= 0.08
+
+
+def test_block64_step_refuses_missing_oracle_before_activations(window):
+    from soup_cli.utils.fp8_activations import FP8ActivationStore
+
+    _model, stepper, batches, calls = window
+    store = FP8ActivationStore.__new__(FP8ActivationStore)
+    store.codec = "fp8_e4m3_block64"
+    with pytest.raises(ValueError) as caught:
+        stepper.run(batches, store, calls=calls, route_preserving_mbr=True)
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' requires routing_oracle"
+    )
+
+
+def test_block64_step_refuses_nonfinite_storage_before_head_backward(cpu_float8, window):
+    from soup_cli.utils.activation_codec import NonFiniteActivationError
+    from soup_cli.utils.fp8_activations import FP8ActivationStore
+
+    torch = cpu_float8
+    model, stepper, batches, calls = window
+    budget = HostMemoryBudget(1 << 20)
+    shape = (*batches[0].shape, model.config.hidden_size)
+
+    class NonFiniteStore(FP8ActivationStore):
+        def put(self, layer, mb, tensor):
+            if layer == 0:
+                tensor = tensor.clone()
+                tensor[..., 0] = float("nan")
+            super().put(layer, mb, tensor)
+
+    def head(*args):
+        pytest.fail("the head ran with a non-finite stored boundary")
+
+    store = NonFiniteStore(
+        host_budget=budget, n_layers=len(stepper.layers), k=1, chunk_shape=shape,
+        dtype=torch.float32, device="cpu", pin=False, codec="fp8_e4m3_block64",
+    )
+    try:
+        with DeepseekRoutingOracle(model, host_budget=budget, pin=False) as oracle:
+            with pytest.raises(NonFiniteActivationError) as caught:
+                stepper.run(
+                    batches[:1], store, calls=calls[:1], head=head,
+                    routing_oracle=oracle, route_preserving_mbr=True,
+                )
+            assert str(caught.value) == (
+                "training.l2l_activation_codec='fp8_e4m3_block64': 1 boundary chunk(s) held a NaN "
+                "or an Inf, first (layer, micro-batch) [(0, 0)]; the lossy step is refused"
+            )
+            assert not oracle.report()["complete"]
+    finally:
+        store.close()
+    assert budget.used_bytes == 0
+
+
+@pytest.mark.parametrize("mode", ["mbr_split_backward", "mbr_ordered_backward"])
+def test_block64_step_refuses_unvalidated_backward_modes(window, mode):
+    from soup_cli.utils.fp8_activations import FP8ActivationStore
+
+    model, stepper, batches, calls = window
+    store = FP8ActivationStore.__new__(FP8ActivationStore)
+    store.codec = "fp8_e4m3_block64"
+    with DeepseekRoutingOracle(model, pin=False) as oracle:
+        with pytest.raises(ValueError) as caught:
+            stepper.run(
+                batches, store, calls=calls, routing_oracle=oracle, route_preserving_mbr=True,
+                **{mode: True},
+            )
+        assert str(caught.value) == (
+            f"training.l2l_activation_codec='fp8_e4m3_block64' does not support {mode}=True"
+        )
+        assert oracle.host_bytes()["owned_host_storage_bytes"] == 0
+
+
+def test_block64_trainer_reuses_budgeted_store_across_optimizer_steps(cpu_float8, window):
+    from soup_cli.trainer.l2l_trainer import L2LState, run_window
+    from soup_cli.utils.moe_l2l_budget import plan_moe_l2l
+
+    torch = cpu_float8
+    model, stepper, batches, _calls = window
+    codec = "fp8_e4m3_block64"
+    budget = HostMemoryBudget(1 << 20)
+    plan = plan_moe_l2l(
+        budget, n_layers=3, n_moe_layers=2, max_shape=(1, 6, model.config.hidden_size),
+        experts_per_token=model.config.num_experts_per_tok,
+        num_experts=model.config.n_routed_experts,
+        requested_k=2, dtype="float32", pin=False, codec=codec, device_type="cpu",
+        routing_oracle=True,
+    )
+    state = L2LState(
+        stepper.runtime, torch.float32, route_preserving_mbr=True, routing_oracle=True,
+        activation_codec=codec, host_budget=budget, memory_plan=plan,
+    )
+    adapters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    optimizer = torch.optim.AdamW(adapters, lr=1e-3)
+    try:
+        batches = batches[:2]
+        initial = [parameter.detach().clone() for parameter in adapters]
+        original_store = None
+        for count in (1, 2):
+            optimizer.zero_grad(set_to_none=True)
+            n_items = sum(ids.numel() - 1 for ids in batches)
+            losses, _counters = run_window(state, model, batches, batches, n_items, "cpu")
+            assert len(losses) == 2
+            assert all(loss.isfinite() for loss in losses)
+            assert all(p.grad is not None and p.grad.isfinite().all() for p in adapters)
+            optimizer.step()
+            assert all(p.isfinite().all() for p in adapters)
+            assert state.stepper.routing_oracle_stats["steps_completed"] == count
+            assert state.store.codec == codec
+            assert state.spill_plan["codec"] == codec
+            assert budget.used_bytes <= plan.host_bytes
+            if count == 1:
+                original_store = state.store
+            else:
+                assert state.store is original_store
+        assert any(not torch.equal(old, new) for old, new in zip(initial, adapters, strict=True))
+    finally:
+        state.close()
+    assert budget.used_bytes == 0
 
 
 def test_abort_clears_pending_replay_and_allows_a_new_window(router):

@@ -1,7 +1,7 @@
-"""Per-token activation codecs shared by the activation store and its benchmarks.
+"""Activation codecs shared by the activation store and its benchmarks.
 
 The numerical operations and their order are those of the original codec.
-The float32 scale is the row absmax, not an absmax/levels step. Dividing by absmax
+The float32 scale is the row or channel-block absmax. Dividing by absmax
 before multiplying by levels preserves finite bf16 extremes and denormals.
 Torch stays lazy so the byte arithmetic is usable by memory planners.
 """
@@ -15,6 +15,9 @@ from typing import Any, Dict, Optional, Tuple
 IDENTITY = "bf16"
 INT8 = "int8"
 FP8 = "fp8_e4m3"
+FP8_BLOCK64 = "fp8_e4m3_block64"
+FP8_CODECS = (FP8, FP8_BLOCK64)
+FP8_BLOCK64_FIELD = f"training.l2l_activation_codec={FP8_BLOCK64!r}"
 COARSE = "int4"
 CANDIDATES = (INT8, FP8)
 SCALE_BYTES = 4
@@ -30,22 +33,31 @@ class Codec:
     levels: int
     payload_dtype: Optional[str]
     packed: bool = False
+    block_size: Optional[int] = None
 
     @property
     def identity(self) -> bool:
         return self.levels == 0
+
+    def block_layout(self, hidden: int) -> Tuple[int, int]:
+        """Return the stored hidden width and scales per row for an FP8 layout."""
+        if self.block_size is None:
+            return hidden, 1
+        blocks = (hidden + self.block_size - 1) // self.block_size
+        return blocks * self.block_size, blocks
 
 
 CODECS: Dict[str, Codec] = {
     IDENTITY: Codec(IDENTITY, 0, None),
     INT8: Codec(INT8, 127, "int8"),
     FP8: Codec(FP8, 448, "float8_e4m3fn"),
+    FP8_BLOCK64: Codec(FP8_BLOCK64, 448, "float8_e4m3fn", block_size=64),
     COARSE: Codec(COARSE, 7, "uint8", packed=True),
 }
 
 
 class NonFiniteActivationError(ValueError):
-    """A NaN or Inf makes a per-row absmax scale non-finite."""
+    """A NaN or Inf makes an absmax scale non-finite."""
 
 
 def codec_of(name: str) -> Codec:
@@ -60,10 +72,29 @@ def rows_of(shape: Tuple[int, ...]) -> int:
     return math.prod(int(dim) for dim in shape[:-1])
 
 
+def validate_fp8_device(device_type: str, codec: str) -> None:
+    if device_type not in ("cpu", "cuda"):
+        if codec == FP8_BLOCK64:
+            raise ValueError(
+                f"{FP8_BLOCK64_FIELD} requires device_type='cpu' or 'cuda'; got {device_type!r}"
+            )
+        raise ValueError("FP8 activation storage supports cpu or cuda devices")
+
+
+def block64_fp8_dtype(device: Any) -> Any:
+    import torch
+
+    validate_fp8_device(device.type, FP8_BLOCK64)
+    dtype = getattr(torch, "float8_e4m3fn", None)
+    if dtype is None:
+        raise ValueError(f"{FP8_BLOCK64_FIELD} requires eager float8_e4m3fn support on {device}")
+    return dtype
+
+
 def payload_shape(shape: Tuple[int, ...], codec: str) -> Tuple[int, ...]:
     spec = codec_of(codec)
     hidden = int(shape[-1])
-    last = (hidden + 1) // 2 if spec.packed else hidden
+    last = (hidden + 1) // 2 if spec.packed else spec.block_layout(hidden)[0]
     return tuple(int(dim) for dim in shape[:-1]) + (last,)
 
 
@@ -77,8 +108,9 @@ def payload_chunk_bytes(
 
 
 def scale_chunk_bytes(shape: Tuple[int, ...], codec: str) -> int:
-    """One float32 per row, none for the identity."""
-    return 0 if codec_of(codec).identity else rows_of(shape) * SCALE_BYTES
+    """One float32 per row or block, none for the identity."""
+    spec = codec_of(codec)
+    return 0 if spec.identity else rows_of(shape) * spec.block_layout(shape[-1])[1] * SCALE_BYTES
 
 
 def compressed_chunk_bytes(
@@ -104,7 +136,7 @@ def tokens_at_budget(budget_bytes: int, *, n_layers: int, hidden: int, codec: st
 
 
 def encode(x: Any, codec: str, *, check_finite: bool = True) -> Tuple[Any, Optional[Any]]:
-    """Return device-local payload and float32 row absmax scales.
+    """Return device-local payload and float32 absmax scales.
 
     The identity returns ``x`` and None. A lossy codec rejects non-finite rows
     with a host synchronization unless its caller opts into a deferred check.
@@ -115,6 +147,27 @@ def encode(x: Any, codec: str, *, check_finite: bool = True) -> Tuple[Any, Optio
     if spec.identity:
         return x, None
     with torch.no_grad():
+        if spec.block_size is not None:
+            fp8_dtype = block64_fp8_dtype(x.device)
+            hidden = int(x.shape[-1]) if x.ndim else 0
+            if hidden < 1:
+                raise ValueError(f"{FP8_BLOCK64_FIELD} requires a positive hidden dimension")
+            padded, blocks = spec.block_layout(hidden)
+            if padded == hidden:
+                staged = x.to(dtype=torch.float32, copy=True, memory_format=torch.contiguous_format)
+            else:
+                staged = torch.zeros((*x.shape[:-1], padded), dtype=torch.float32, device=x.device)
+                staged[..., :hidden].copy_(x)
+            grouped = staged.unflatten(-1, (blocks, spec.block_size))
+            absmax = grouped.abs().amax(dim=-1)
+            if check_finite and not bool(torch.isfinite(absmax).all()):
+                bad = int((~torch.isfinite(absmax)).sum())
+                raise NonFiniteActivationError(
+                    f"{FP8_BLOCK64_FIELD}: {bad} of {absmax.numel()} blocks hold a NaN or an Inf"
+                )
+            safe = torch.where(absmax > 0, absmax, torch.ones_like(absmax))
+            grouped.div_(safe.unsqueeze(-1)).mul_(spec.levels).clamp_(-spec.levels, spec.levels)
+            return staged.to(fp8_dtype), absmax
         values = x.float()
         absmax = values.abs().amax(dim=-1, keepdim=True)
         if check_finite and not bool(torch.isfinite(absmax).all()):
@@ -137,11 +190,15 @@ def encode(x: Any, codec: str, *, check_finite: bool = True) -> Tuple[Any, Optio
         return payload, absmax.squeeze(-1)
 
 
-def decode(payload: Any, scale: Optional[Any], codec: str, dtype: Any, hidden: int) -> Any:
+def decode(
+    payload: Any, scale: Optional[Any], codec: str, dtype: Any, hidden: int,
+    *, validate_values: bool = True,
+) -> Any:
     """Restore in ``dtype`` on the payload device, in the order ``encode`` inverts.
 
     Raises ``ValueError`` naming the field when ``hidden``, ``scale`` or the payload shape do
-    not fit the codec, before anything is allocated.
+    not fit the codec, before anything is allocated. A store that produced the block64 payload
+    and checks its scales in bulk can skip the synchronous value checks.
     """
     import torch
 
@@ -153,13 +210,44 @@ def decode(payload: Any, scale: Optional[Any], codec: str, dtype: Any, hidden: i
     if scale is None:
         raise ValueError(f"scale is required to decode the lossy codec {codec}; got None")
     width = int(payload.shape[-1]) if len(payload.shape) else 0
-    expected = (hidden + 1) // 2 if spec.packed else hidden
+    padded, blocks = spec.block_layout(hidden)
+    expected = (hidden + 1) // 2 if spec.packed else padded
     if width != expected:
         raise ValueError(
             f"hidden={hidden} needs a payload width of {expected} for {codec}; "
             f"payload shape is {tuple(payload.shape)}"
         )
-    if tuple(scale.shape) != tuple(payload.shape[:-1]):
+    rows = tuple(payload.shape[:-1])
+    if spec.block_size is not None:
+        expected_scale = (*rows, blocks)
+        if tuple(scale.shape) != expected_scale:
+            raise ValueError(
+                f"scale shape {tuple(scale.shape)} does not match expected shape {expected_scale} "
+                f"for {codec}"
+            )
+        if payload.dtype != block64_fp8_dtype(payload.device):
+            raise ValueError(f"{FP8_BLOCK64_FIELD} requires payload.dtype=float8_e4m3fn")
+        if scale.dtype != torch.float32 or scale.device != payload.device:
+            raise ValueError(
+                f"{FP8_BLOCK64_FIELD} requires scale.dtype=float32 and scale.device=payload.device"
+            )
+        with torch.no_grad():
+            values = payload.float()
+            if validate_values:
+                for field, tensor in (("payload", values), ("scale", scale)):
+                    if not bool(torch.isfinite(tensor).all()):
+                        raise NonFiniteActivationError(
+                            f"{FP8_BLOCK64_FIELD}: {field} holds a NaN or an Inf"
+                        )
+                if hidden < padded and bool(values[..., hidden:].ne(0).any()):
+                    raise ValueError(
+                        f"{FP8_BLOCK64_FIELD} requires zero payload padding after hidden={hidden}"
+                    )
+            values.unflatten(-1, (blocks, spec.block_size)).div_(spec.levels).mul_(
+                scale.unsqueeze(-1)
+            )
+            return values[..., :hidden].to(dtype)
+    if tuple(scale.shape) != rows:
         raise ValueError(
             f"scale shape {tuple(scale.shape)} does not match the payload rows "
             f"{tuple(payload.shape[:-1])}"

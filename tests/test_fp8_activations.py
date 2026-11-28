@@ -102,6 +102,180 @@ def _reference_fp8(tensor):
     return (payload.float() / 448 * absmax).to(tensor.dtype)
 
 
+@pytest.fixture
+def cpu_float8():
+    torch = _torch()
+    dtype = getattr(torch, "float8_e4m3fn", None)
+    if dtype is None:
+        pytest.skip("torch has no float8_e4m3fn")
+    try:
+        torch.zeros(1).to(dtype).float()
+    except (NotImplementedError, RuntimeError):
+        pytest.skip("torch does not support eager float8 casts on CPU")
+    return torch
+
+
+@pytest.mark.parametrize("hidden", [128, 130])
+def test_block64_codec_matches_independent_blocks(cpu_float8, hidden):
+    from soup_cli.utils import activation_codec as codec
+
+    torch = cpu_float8
+    source = torch.randn((2, 3, hidden), generator=torch.Generator().manual_seed(123))
+    source[0, 0].zero_()
+    source[..., 64:128] *= 1000
+    original = source.clone()
+    payload, scales = codec.encode(source, codec.FP8_BLOCK64)
+    restored = codec.decode(payload, scales, codec.FP8_BLOCK64, source.dtype, hidden)
+    blocks = source.split(64, dim=-1)
+    assert torch.equal(restored, torch.cat([_reference_fp8(block) for block in blocks], dim=-1))
+    assert torch.equal(scales, torch.stack([block.abs().amax(dim=-1) for block in blocks], dim=-1))
+    assert torch.equal(source, original)
+    padded = 128 if hidden == 128 else 192
+    assert tuple(payload.shape) == (2, 3, padded)
+    assert torch.count_nonzero(payload.float()[..., hidden:]) == 0
+    assert codec.payload_chunk_bytes(source.shape, codec.FP8_BLOCK64) == 6 * padded
+    assert codec.scale_chunk_bytes(source.shape, codec.FP8_BLOCK64) == 24 * (padded // 64)
+
+
+@pytest.mark.parametrize(
+    ("width", "scale_shape", "message"),
+    [
+        (65, (2, 2), "hidden=65 needs a payload width of 128 for fp8_e4m3_block64; "
+         "payload shape is (2, 65)"),
+        (128, (2, 1), "scale shape (2, 1) does not match expected shape (2, 2) "
+         "for fp8_e4m3_block64"),
+    ],
+)
+def test_block64_decode_refuses_padding_mismatches(width, scale_shape, message):
+    torch = _torch()
+    from soup_cli.utils import activation_codec as codec
+
+    with pytest.raises(ValueError) as caught:
+        codec.decode(torch.empty(2, width), torch.empty(scale_shape), codec.FP8_BLOCK64,
+                     torch.float32, 65)
+    assert str(caught.value) == message
+
+
+def test_block64_decode_refuses_nonzero_tail_padding(cpu_float8):
+    from soup_cli.utils import activation_codec as codec
+
+    torch = cpu_float8
+    payload = torch.ones(2, 128).to(torch.float8_e4m3fn)
+    with pytest.raises(ValueError) as caught:
+        codec.decode(payload, torch.ones(2, 2), codec.FP8_BLOCK64, torch.float32, 65)
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' requires zero payload padding "
+        "after hidden=65"
+    )
+
+
+@pytest.mark.parametrize("field", ["payload", "scale"])
+def test_block64_decode_refuses_nonfinite_values(cpu_float8, field):
+    from soup_cli.utils import activation_codec as codec
+
+    torch = cpu_float8
+    values = {"payload": torch.zeros(2, 128), "scale": torch.ones(2, 2)}
+    values[field][0, 0] = float("nan")
+    payload = values["payload"].to(torch.float8_e4m3fn)
+    with pytest.raises(codec.NonFiniteActivationError) as caught:
+        codec.decode(payload, values["scale"], codec.FP8_BLOCK64, torch.float32, 65)
+    assert str(caught.value) == (
+        f"training.l2l_activation_codec='fp8_e4m3_block64': {field} holds a NaN or an Inf"
+    )
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+def test_block64_refuses_nonfinite_values_before_backward(cpu_float8, bad):
+    from soup_cli.utils import activation_codec as codec
+
+    torch = cpu_float8
+    source = torch.ones(1, 65)
+    source[..., 64] = bad
+    with pytest.raises(codec.NonFiniteActivationError) as caught:
+        codec.encode(source, codec.FP8_BLOCK64)
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64': 1 of 2 blocks hold a NaN or an Inf"
+    )
+    budget = HostMemoryBudget(1 << 20)
+    store = _store(budget, k=1, chunk_shape=(1, 65), mb_shapes=None, codec=codec.FP8_BLOCK64)
+    try:
+        store.put(0, 0, source)
+        with pytest.raises(codec.NonFiniteActivationError) as caught:
+            store.begin_backward()
+        assert str(caught.value) == (
+            "training.l2l_activation_codec='fp8_e4m3_block64': 1 boundary chunk(s) held a NaN "
+            "or an Inf, first (layer, micro-batch) [(0, 0)]; the lossy step is refused"
+        )
+        with pytest.raises(KeyError, match="this step"):
+            store.get(0, 0)
+        store.put(0, 0, torch.ones_like(source))
+        store.begin_backward()
+        assert torch.equal(store.get(0, 0), torch.ones_like(source))
+        store.end_step()
+    finally:
+        store.close()
+    assert budget.used_bytes == 0
+
+
+def test_block64_store_refuses_unsupported_device_before_reserving():
+    from soup_cli.utils.activation_codec import FP8_BLOCK64
+
+    budget = HostMemoryBudget(1 << 20)
+    with pytest.raises(ValueError) as caught:
+        _store(budget, device="meta", codec=FP8_BLOCK64)
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' requires device_type='cpu' or 'cuda'; "
+        "got 'meta'"
+    )
+    assert budget.used_bytes == 0
+
+
+def test_block64_store_refuses_missing_float8_and_releases_lease(monkeypatch):
+    from soup_cli.utils.activation_codec import FP8_BLOCK64
+
+    torch = _torch()
+    monkeypatch.setattr(torch, "float8_e4m3fn", None, raising=False)
+    budget = HostMemoryBudget(1 << 20)
+    with pytest.raises(ValueError) as caught:
+        _store(budget, codec=FP8_BLOCK64)
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' requires eager float8_e4m3fn "
+        "support on cpu"
+    )
+    assert budget.used_bytes == 0
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
+def test_block64_store_accounts_for_padding_and_restores_ragged_slots(device, request):
+    torch = request.getfixturevalue("cpu_float8") if device == "cpu" else _torch()
+    from soup_cli.utils.activation_codec import FP8_BLOCK64
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    budget = HostMemoryBudget(1 << 20)
+    store = _store(
+        budget, chunk_shape=(4, 65), mb_shapes=[(1, 3, 65), (2, 2, 65)],
+        device=device, pin=device == "cuda", codec=FP8_BLOCK64,
+    )
+    try:
+        measured = store.host_bytes()
+        assert measured["resident_payload_bytes"] == 1792
+        assert measured["scale_bytes"] == 112
+        assert measured["pinned_overhead_bytes"] == (272 if device == "cuda" else 0)
+        assert measured["host_bytes"] == budget.used_bytes
+        source = torch.arange(130, device=device, dtype=torch.float32).reshape(1, 2, 65)
+        source[..., 64] *= 1000
+        store.put(1, 0, source)
+        store.begin_backward()
+        expected = torch.cat([_reference_fp8(block) for block in source.split(64, dim=-1)], dim=-1)
+        assert torch.equal(store.get(1, 0), expected)
+        assert torch.equal(store.get(1, 0), expected)
+        store.end_step()
+    finally:
+        store.close()
+    assert budget.used_bytes == 0
+
+
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 def test_shared_fp8_matches_the_original_operation_order(dtype):
     torch = _torch()

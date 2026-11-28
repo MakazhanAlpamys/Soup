@@ -1,0 +1,1 @@
+- Add opt-in block64 FP8 activation storage for routing-replay MBR in the Python L2L API. (#PENDING by @kok-o)

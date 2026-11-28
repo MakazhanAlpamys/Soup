@@ -4091,13 +4091,13 @@ class TrainingConfig(BaseModel):
             "a drive without room. Only valid with training.l2l=true."
         ),
     )
-    l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
+    l2l_activation_codec: Literal["none", "fp8_e4m3", "fp8_e4m3_block64"] = Field(
         default="none",
         description=(
             "BETA — how training.l2l stores the activations between layers. 'none' keeps "
-            "them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the "
-            "launch refuses it until it is shown to be safe for training: it is lossy "
-            "and its gradients are not yet checked against the accumulation baseline. "
+            "them in the compute dtype. The CLI launch currently requires 'none'. "
+            "'fp8_e4m3' uses per-row scales. 'fp8_e4m3_block64' uses 64-channel blocks "
+            "and requires training.l2l_routing_oracle=true. Both FP8 codecs are lossy. "
             "The value is recorded in the run's l2l_recipe.json, and a resume with "
             "another codec is refused. Only valid with training.l2l=true."
         ),
@@ -4171,7 +4171,7 @@ class TrainingConfig(BaseModel):
         description=(
             "EXPERIMENTAL — replay the native DeepSeek-V3 router's forward routes and scores "
             "during MBR backward. Requires l2l_route_preserving_mbr=true, frozen routers "
-            "and uncompressed L2L activations."
+            "and l2l_activation_codec='none' at CLI launch."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -8557,10 +8557,22 @@ class SoupConfig(BaseModel):
                     raise ValueError(
                         f"training.{name} requires training.l2l_route_preserving_mbr=true"
                     )
-        if tcfg.l2l_routing_oracle and tcfg.l2l_activation_codec != "none":
+        if tcfg.l2l_routing_oracle and tcfg.l2l_activation_codec == "fp8_e4m3":
             raise ValueError(
                 "training.l2l_routing_oracle requires training.l2l_activation_codec='none'"
             )
+        if tcfg.l2l_activation_codec == "fp8_e4m3_block64":
+            if not tcfg.l2l_routing_oracle:
+                raise ValueError(
+                    "training.l2l_activation_codec='fp8_e4m3_block64' requires "
+                    "training.l2l_routing_oracle=true"
+                )
+            for option in ("l2l_mbr_split_backward", "l2l_mbr_ordered_backward"):
+                if getattr(tcfg, option):
+                    raise ValueError(
+                        "training.l2l_activation_codec='fp8_e4m3_block64' does not support "
+                        f"training.{option}=true"
+                    )
         if self.task not in L2L_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "

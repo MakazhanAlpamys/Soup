@@ -3,6 +3,13 @@
 from dataclasses import dataclass
 from typing import Sequence
 
+from soup_cli.utils.activation_codec import (
+    FP8,
+    FP8_BLOCK64,
+    FP8_BLOCK64_FIELD,
+    FP8_CODECS,
+    validate_fp8_device,
+)
 from soup_cli.utils.budgeted_activations import activation_allocation_bytes
 from soup_cli.utils.host_memory_budget import HostMemoryBudget
 from soup_cli.utils.layer_stream import SUPPORTED_STREAM_DTYPES, dtype_bytes
@@ -77,7 +84,7 @@ def plan_moe_l2l(
     """Select the largest RAM-fitting ``k`` for a fixed upper bound on micro-batch shape.
 
     ``max_shape`` is ``(batch, sequence, hidden)``. Charge every position at that
-    capacity using the store's allocation calculation. FP8 includes per-token scales,
+    capacity using the store's allocation calculation. FP8 includes scales, channel padding,
     pinned rounding and codec host scratch. Charge pageable int64 routing records for
     streamed MoE layers, plus one temporary record for the routing comparison of the recompute.
     An enabled routing oracle adds its own compact index, score and normalizer slabs.
@@ -102,16 +109,20 @@ def plan_moe_l2l(
         raise ValueError("MoE L2L host planning supports float32 or bfloat16 activations")
     if expert_input_dtype is not None and expert_input_dtype not in SUPPORTED_STREAM_DTYPES:
         raise ValueError(f"unsupported saved expert input dtype {expert_input_dtype!r}")
-    if codec not in ("none", "fp8_e4m3"):
-        raise ValueError("MoE L2L codec must be none or fp8_e4m3")
+    if codec not in ("none", *FP8_CODECS):
+        raise ValueError(f"MoE L2L codec must be none, {FP8} or {FP8_BLOCK64}")
+    if codec == FP8_BLOCK64:
+        validate_fp8_device(device_type, codec)
     if device_type not in ("cpu", "cuda") or type(pin) is not bool:
         raise ValueError("MoE L2L needs a cpu/cuda device type and boolean pin")
     if type(host_workspace_bytes_per_batch) is not int or host_workspace_bytes_per_batch < 0:
         raise ValueError("MoE L2L window workspace must be non-negative integer bytes")
     if type(routing_oracle) is not bool:
         raise ValueError("MoE L2L routing_oracle must be a bool")
-    if routing_oracle and codec != "none":
+    if routing_oracle and codec == FP8:
         raise ValueError("MoE L2L routing_oracle requires uncompressed L2L activations")
+    if codec == FP8_BLOCK64 and not routing_oracle:
+        raise ValueError(f"{FP8_BLOCK64_FIELD} requires routing_oracle")
     if routing_oracle and (type(num_experts) is not int or num_experts < experts_per_token):
         raise ValueError("MoE L2L routing_oracle requires num_experts >= experts_per_token")
 
@@ -137,7 +148,7 @@ def plan_moe_l2l(
         def activation(k: int) -> int:
             return fp8_activation_allocation(
                 n_layers=n_layers, mb_shapes=[max_shape] * k, pin=pin,
-                compute_dtype=dtype, device_type=device_type,
+                compute_dtype=dtype, device_type=device_type, codec=codec,
             ).host_bytes
 
     def oracle_bytes(k: int) -> int:

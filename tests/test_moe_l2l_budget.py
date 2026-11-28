@@ -65,6 +65,31 @@ def test_oracle_slabs_are_charged_in_addition_to_mbr_records(pin, oracle_bytes):
     assert short.effective_k == 3
 
 
+def test_block64_plan_charges_padding_and_oracle_at_exact_fit():
+    args = {
+        **PLAN_ARGS, "n_layers": 2, "n_moe_layers": 1, "max_shape": (1, 3, 65),
+        "experts_per_token": 2, "requested_k": 2, "codec": "fp8_e4m3_block64",
+        "device_type": "cpu", "routing_oracle": True, "num_experts": 8,
+    }
+    # 12 rows of 128 payload bytes and 2 float32 scales. Scratch is 12,871 bytes.
+    # The routing plan adds 144 bytes of route records/scratch and 96 oracle bytes.
+    limit = 14_743
+    plan = plan_moe_l2l(HostMemoryBudget(limit), **args)
+    assert plan.effective_k == 2
+    assert plan.activation_bytes == 14_503
+    assert plan.routing_oracle_bytes == 96
+    assert plan.host_bytes == limit
+    assert plan_moe_l2l(HostMemoryBudget(limit - 1), **args).effective_k == 1
+
+
+def test_block64_plan_requires_oracle():
+    with pytest.raises(ValueError) as caught:
+        plan_moe_l2l(HostMemoryBudget(100_000), **PLAN_ARGS, codec="fp8_e4m3_block64")
+    assert str(caught.value) == (
+        "training.l2l_activation_codec='fp8_e4m3_block64' requires routing_oracle"
+    )
+
+
 def test_selection_uses_remaining_budget_and_all_integer_window_sizes():
     budget = HostMemoryBudget(40_000, reserved_bytes=961)
     staging = budget.reserve("reader staging", 4600)

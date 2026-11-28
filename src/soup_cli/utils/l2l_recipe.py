@@ -16,9 +16,8 @@ from typing import Any, Optional
 
 RECIPE_NAME = "l2l_recipe.json"
 
-#: Codecs the launch accepts. ``fp8_e4m3`` stays closed until its gradients are checked
-#: against the accumulation baseline; the trainer and planner accept it through the API
-#: (``L2LState``), but a ``soup train`` config cannot reach it while it is absent here.
+#: Codecs the launch accepts. FP8 remains available through the Python trainer and planner
+#: while its accuracy against the accumulation baseline is evaluated on this training stack.
 AVAILABLE_CODECS = ("none",)
 
 

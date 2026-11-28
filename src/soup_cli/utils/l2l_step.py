@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from types import MethodType
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
+from soup_cli.utils.activation_codec import FP8_BLOCK64, FP8_BLOCK64_FIELD
+
 #: Architectures whose top-level forward this step re-implements. ``training.l2l`` admits them
 #: at launch under the rules in ``trainer.l2l_trainer.refuse_unsupported_l2l``.
 SUPPORTED_ARCHS = ("llama", "mistral", "deepseek_v3")
@@ -1381,7 +1383,8 @@ class L2LStep:
         ``mbr_recompute_subwindow`` micro-batches (default 1). It requires native pooled experts
         and excludes the split and ordered modes and deferred decoder forward hooks.
         ``routing_oracle`` replays the native forward's routes and scores in MBR recompute.
-        It requires uncompressed activations and native precision without autocast.
+        It requires native precision without autocast. Block64 FP8 storage requires
+        routing replay and supports regular or decoupled MBR backward.
         """
         self.routing_oracle_stats = None
         if type(route_preserving_mbr) is not bool:
@@ -1398,6 +1401,16 @@ class L2LStep:
             raise ValueError("mbr_ordered_backward is only valid with route_preserving_mbr=True")
         if mbr_ordered_backward and mbr_split_backward:
             raise ValueError("mbr_ordered_backward and mbr_split_backward exclude each other")
+        block64 = getattr(store, "codec", None) == FP8_BLOCK64
+        if block64:
+            if routing_oracle is None:
+                raise ValueError(f"{FP8_BLOCK64_FIELD} requires routing_oracle")
+            for option, enabled in (
+                ("mbr_split_backward", mbr_split_backward),
+                ("mbr_ordered_backward", mbr_ordered_backward),
+            ):
+                if enabled:
+                    raise ValueError(f"{FP8_BLOCK64_FIELD} does not support {option}=True")
         if routing_oracle is not None:
             import torch
 
@@ -1416,7 +1429,7 @@ class L2LStep:
                 raise ValueError(
                     "routing_oracle requires native router precision with autocast disabled"
                 )
-            if isinstance(store, FP8ActivationStore):
+            if isinstance(store, FP8ActivationStore) and not block64:
                 raise ValueError("routing_oracle requires uncompressed L2L activations")
         if type(mbr_decoupled_subwindow) is not bool:
             raise ValueError("mbr_decoupled_subwindow must be a bool")
@@ -1715,6 +1728,11 @@ class L2LStep:
                         spec.outputs[mb] = spec.head(self.causal, self.owner, current[mb], mb)
                         current[mb] = None
 
+        block64 = getattr(store, "codec", None) == FP8_BLOCK64
+        if block64:
+            # Refuse invalid stored boundaries before the head can write gradients.
+            store.begin_backward()
+
         losses: List[Any] = []
         grads: List[Any] = []
         for mb in range(k):
@@ -1731,7 +1749,8 @@ class L2LStep:
             losses.append(loss.detach())
             grads.append(last.grad)
 
-        store.begin_backward()
+        if not block64:
+            store.begin_backward()
         for idx in range(len(self.layers) - 1, -1, -1):
             layer = self.layers[idx]
             saved = layer.use_checkpoint

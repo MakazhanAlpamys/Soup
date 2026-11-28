@@ -16,10 +16,10 @@ The layer arguments (position ids, mask) are captured once per distinct shape an
 micro-batch gets the call of its shape. The activation store sizes every micro-batch's
 chunks to that micro-batch, so a short row does not pay for the longest row of its window.
 
-FP8 is an opt-in boundary codec: capacities retain the logical hidden width for
-per-token scales, and the host lease includes codec scratch, not device workspace.
-It is lossy and does not relax the routing guard. An already-resolved memory plan
-can bound each window; the trainer never selects k or changes HF's schedule.
+FP8 is an opt-in boundary codec. Capacities retain the logical hidden width for
+recompute, and the host lease includes the encoded layout and host codec scratch.
+Block64 uses native routing replay to keep the routes and scores of the original
+forward. The memory plan bounds each window without changing HF's schedule.
 
 Each micro-batch position keeps its largest capacity seen so far. A larger window grows
 the store after releasing its old allocations. When the store does not fit the host-RAM
@@ -50,6 +50,7 @@ from typing import (
     Union,
 )
 
+from soup_cli.utils.activation_codec import FP8, FP8_BLOCK64, FP8_BLOCK64_FIELD, FP8_CODECS
 from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
 from soup_cli.utils.host_memory_budget import HostMemoryBudget, MemoryLease
 from soup_cli.utils.l2l_step import (
@@ -188,7 +189,7 @@ class L2LState:
     stale_removed: List[str] = field(default_factory=list)
     c3_plan: Any = None
     #: Boundary storage only; compute and routing checks retain their existing behavior.
-    activation_codec: Literal["none", "fp8_e4m3"] = "none"
+    activation_codec: Literal["none", "fp8_e4m3", "fp8_e4m3_block64"] = "none"
     #: An already-resolved MoEL2LMemoryPlan. The trainer never selects accumulation k.
     memory_plan: Optional[MoEL2LMemoryPlan] = None
     host_budget: Optional[HostMemoryBudget] = None
@@ -209,11 +210,17 @@ class L2LState:
             self.loss = SFT_WINDOW_LOSS
         if self.routing_oracle and not self.route_preserving_mbr:
             raise ValueError("routing_oracle requires route_preserving_mbr=True")
-        if self.routing_oracle and self.activation_codec != "none":
+        if self.routing_oracle and self.activation_codec == FP8:
             raise ValueError("routing_oracle requires uncompressed L2L activations")
-        if self.activation_codec not in ("none", "fp8_e4m3"):
+        if self.activation_codec not in ("none", *FP8_CODECS):
             raise ValueError(f"unsupported L2L activation codec {self.activation_codec!r}")
-        if self.activation_codec == "fp8_e4m3":
+        if self.activation_codec == FP8_BLOCK64:
+            if not self.routing_oracle:
+                raise ValueError(f"{FP8_BLOCK64_FIELD} requires routing_oracle")
+            for option in ("mbr_split_backward", "mbr_ordered_backward"):
+                if getattr(self, option):
+                    raise ValueError(f"{FP8_BLOCK64_FIELD} does not support {option}=True")
+        if self.activation_codec in FP8_CODECS:
             if self.loss is not SFT_WINDOW_LOSS:
                 raise ValueError("FP8 activation storage supports the SFT window loss only")
             if str(self.dtype).removeprefix("torch.") not in ("float32", "bfloat16"):
@@ -585,14 +592,14 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
             or actual_device != expected_device
         ):
             raise ValueError("L2L activation store layers, dtype or device changed between windows")
-        if state.activation_codec == "fp8_e4m3" and any(
+        if state.activation_codec in FP8_CODECS and any(
             len(shape) < 2 or shape[-1] != hidden for shape in store.mb_shapes
         ):
             raise ValueError("FP8 activation store hidden width changed between windows")
     need = [math.prod(shape) for shape in shapes]
     have = [math.prod(shape) for shape in store.mb_shapes] if store is not None else []
     caps = [max(n, h) for n, h in zip(need, have)] + need[len(have):] + have[len(need):]
-    fp8 = state.activation_codec == "fp8_e4m3"
+    fp8 = state.activation_codec in FP8_CODECS
     mb_shapes = [(cap // hidden, hidden) for cap in caps] if fp8 else [(cap,) for cap in caps]
     if fp8:
         from soup_cli.utils.fp8_activations import fp8_activation_allocation
@@ -600,6 +607,7 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
         allocation = fp8_activation_allocation(
             n_layers=n_layers, mb_shapes=mb_shapes, pin=pin,
             compute_dtype=dtype, device_type=torch.device(device).type,
+            codec=state.activation_codec,
         ).host_bytes
     elif state.memory_plan is not None:
         from soup_cli.utils.budgeted_activations import activation_allocation_bytes
@@ -670,11 +678,13 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
 
             factory = BudgetedActivationStore
             chunk_shape = (max(caps),)
+        store_options = {"codec": state.activation_codec} if fp8 else {}
         try:
             state.store = factory(
                 host_budget=host_budget, n_layers=n_layers, k=len(caps),
                 chunk_shape=chunk_shape, mb_shapes=mb_shapes,
                 dtype=state.dtype, device=device, pin=pin,
+                **store_options,
             )
         except BaseException:
             # A failed store constructor owns its own cleanup; no routing guard ran yet.
@@ -913,7 +923,7 @@ def attach_l2l_state(
     dtype: Any,
     loss: Optional[WindowLoss] = None,
     c3_plan: Any = None,
-    activation_codec: Literal["none", "fp8_e4m3"] = "none",
+    activation_codec: Literal["none", "fp8_e4m3", "fp8_e4m3_block64"] = "none",
     memory_plan: Optional[MoEL2LMemoryPlan] = None,
     host_budget: Optional[HostMemoryBudget] = None,
     spill_dir: Optional[str] = None,
