@@ -1,0 +1,23 @@
+{
+  "fixture_version": 1,
+  "fixture_freeze_commit": "a5ab5484a85b98cc153c4e3a70b9c57b11fb60f4",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "public_declaration": {
+    "pr_url": "https://github.com/MakazhanAlpamys/Soup/pull/3242",
+    "updated_at": "2026-11-24T09:13:47Z",
+    "body_sha256": "53b288898448bd958ca917b38241315a40554d86ba261f04071cfa4f86868ad5",
+    "freeze_commit": "a5ab5484a85b98cc153c4e3a70b9c57b11fb60f4"
+  },
+  "started_at": "2026-11-24T09:14:26.347359+00:00",
+  "fixture_sha256": "ad73c7d7f794296b49ef7ba6d7b8914b2e9d474e27d735e3aed7bf5b0183d898",
+  "command": [
+    ".venv/bin/python",
+    "scripts/check_docs_search_ranking.py",
+    "tests/fixtures/docs_search/pinned_docs_v1.json",
+    "--output",
+    "benchmarks/docs-search-3192/pinned_docs_v1-results.json"
+  ],
+  "status": "first execution complete",
+  "returncode": 0,
+  "finished_at": "2026-11-24T09:14:26.751231+00:00"
+}

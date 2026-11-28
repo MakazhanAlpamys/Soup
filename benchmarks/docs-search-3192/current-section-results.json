@@ -1,0 +1,1069 @@
+{
+  "cohort": "original28-current-sections",
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee",
+  "query_count": 28,
+  "gate": "option B: aggregate preservation, all individual losses disclosed",
+  "passed": true,
+  "require_hit5_gain": false,
+  "metrics": {
+    "baseline": {
+      "hit1": 0.6071428571428571,
+      "hit5": 0.9642857142857143,
+      "mrr10": 0.7857142857142857,
+      "recall5": 0.9464285714285714
+    },
+    "candidate": {
+      "hit1": 0.6428571428571429,
+      "hit5": 0.9642857142857143,
+      "mrr10": 0.8075396825396826,
+      "recall5": 0.9464285714285714
+    }
+  },
+  "rank_losses": [],
+  "per_query": [
+    {
+      "id": "soup_v3_001",
+      "query": "how do i stop training when eval drops past baseline?",
+      "targets": [
+        "463"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "412",
+          "463",
+          "550",
+          "420",
+          "467",
+          "660",
+          "468",
+          "612",
+          "462",
+          "473"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "412",
+          "463",
+          "550",
+          "420",
+          "467",
+          "660",
+          "468",
+          "462",
+          "612",
+          "461"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_002",
+      "query": "train llama 8b on a 4gb card with layer streaming, what config keys",
+      "targets": [
+        "565"
+      ],
+      "baseline": {
+        "rank": 15,
+        "top10": [
+          "566",
+          "568",
+          "577",
+          "688",
+          "571",
+          "648",
+          "559",
+          "524",
+          "569",
+          "532"
+        ]
+      },
+      "candidate": {
+        "rank": 9,
+        "top10": [
+          "568",
+          "566",
+          "577",
+          "688",
+          "524",
+          "571",
+          "648",
+          "559",
+          "565",
+          "569"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_003",
+      "query": "does dpo streaming build a second reference model in vram?",
+      "targets": [
+        "570"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "571",
+          "570",
+          "564",
+          "559",
+          "569",
+          "565",
+          "643",
+          "568",
+          "116",
+          "610"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "571",
+          "570",
+          "564",
+          "565",
+          "568",
+          "559",
+          "569",
+          "643",
+          "116",
+          "610"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_004",
+      "query": "why does soup data lint flag length bias in my dpo pairs",
+      "targets": [
+        "455"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "455",
+          "212",
+          "459",
+          "618",
+          "490",
+          "674",
+          "55",
+          "288",
+          "665",
+          "57"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "455",
+          "212",
+          "459",
+          "618",
+          "490",
+          "55",
+          "674",
+          "288",
+          "665",
+          "301"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_005",
+      "query": "semantic dedup threshold 0.8 vs minhash, what should i use",
+      "targets": [
+        "417"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "197",
+          "417",
+          "418",
+          "207",
+          "225",
+          "432",
+          "455",
+          "416",
+          "196",
+          "227"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "197",
+          "417",
+          "418",
+          "207",
+          "225",
+          "432",
+          "455",
+          "416",
+          "196",
+          "227"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_006",
+      "query": "chat template doctor says eos missing in labels",
+      "targets": [
+        "454"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "454",
+          "452",
+          "199",
+          "56",
+          "70",
+          "480",
+          "609",
+          "58",
+          "55",
+          "615"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "454",
+          "199",
+          "452",
+          "56",
+          "70",
+          "480",
+          "575",
+          "609",
+          "58",
+          "55"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_007",
+      "query": "soup ship evidence json with config provenance, how does it replay",
+      "targets": [
+        "472"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "473",
+          "472",
+          "371",
+          "477",
+          "471",
+          "414",
+          "467",
+          "468",
+          "475",
+          "476"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "473",
+          "472",
+          "371",
+          "477",
+          "467",
+          "414",
+          "471",
+          "468",
+          "475",
+          "382"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_008",
+      "query": "what does noise floor do in soup ship on gpu",
+      "targets": [
+        "471"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "471",
+          "472",
+          "414",
+          "477",
+          "413",
+          "371",
+          "508",
+          "469",
+          "473",
+          "470"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "471",
+          "414",
+          "472",
+          "477",
+          "371",
+          "413",
+          "508",
+          "467",
+          "469",
+          "473"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_009",
+      "query": "hot swap lora adapter on running soup serve",
+      "targets": [
+        "620"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "620",
+          "621",
+          "389",
+          "623",
+          "316",
+          "616",
+          "614",
+          "3",
+          "698",
+          "628"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "620",
+          "621",
+          "623",
+          "389",
+          "316",
+          "3",
+          "616",
+          "614",
+          "698",
+          "458"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_010",
+      "query": "vllm install downgraded torch, how do i check env drift",
+      "targets": [
+        "117"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "117",
+          "615",
+          "253",
+          "252",
+          "397",
+          "254",
+          "2",
+          "508",
+          "517",
+          "0"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "117",
+          "615",
+          "253",
+          "252",
+          "397",
+          "254",
+          "2",
+          "508",
+          "465",
+          "517"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_011",
+      "query": "serve q8_0 kv cache needs hqq, what if missing",
+      "targets": [
+        "613"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "590",
+          "613",
+          "370",
+          "598",
+          "282",
+          "623",
+          "615",
+          "614",
+          "571",
+          "552"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "590",
+          "613",
+          "370",
+          "598",
+          "282",
+          "623",
+          "615",
+          "614",
+          "571",
+          "552"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_012",
+      "query": "build llama.cpp for quantized gguf export on windows",
+      "targets": [
+        "601"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "601",
+          "633",
+          "598",
+          "605",
+          "282",
+          "632",
+          "600",
+          "589",
+          "587",
+          "292"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "601",
+          "598",
+          "633",
+          "605",
+          "282",
+          "632",
+          "589",
+          "600",
+          "587",
+          "292"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_013",
+      "query": "merge adapters with cc-by-nc and apache, override reason gets logged?",
+      "targets": [
+        "24"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "24",
+          "142",
+          "11",
+          "9",
+          "22",
+          "596",
+          "2",
+          "474",
+          "630",
+          "620"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "24",
+          "142",
+          "11",
+          "9",
+          "22",
+          "596",
+          "2",
+          "474",
+          "630",
+          "620"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_014",
+      "query": "scan adapter for rank-1 backdoor before merge",
+      "targets": [
+        "19"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "19",
+          "129",
+          "142",
+          "9",
+          "1",
+          "24",
+          "144",
+          "5",
+          "403",
+          "596"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "19",
+          "142",
+          "129",
+          "9",
+          "1",
+          "24",
+          "144",
+          "403",
+          "5",
+          "596"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_015",
+      "query": "verify adapter signature against trusted public key",
+      "targets": [
+        "20",
+        "403"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "146",
+          "20",
+          "160",
+          "13",
+          "403",
+          "145",
+          "473",
+          "29",
+          "38",
+          "314"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "146",
+          "20",
+          "160",
+          "13",
+          "403",
+          "145",
+          "473",
+          "29",
+          "38",
+          "314"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_016",
+      "query": "show lineage dag for a registry model name",
+      "targets": [
+        "8"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "8",
+          "284",
+          "126",
+          "9",
+          "220",
+          "405",
+          "352",
+          "453",
+          "6",
+          "389"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "8",
+          "284",
+          "126",
+          "9",
+          "405",
+          "220",
+          "453",
+          "352",
+          "358",
+          "6"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_017",
+      "query": "pack soup can and embed in-toto attestation",
+      "targets": [
+        "10"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "174",
+          "10",
+          "160",
+          "159",
+          "402",
+          "158",
+          "13",
+          "172",
+          "126",
+          "171"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "174",
+          "10",
+          "160",
+          "402",
+          "159",
+          "158",
+          "13",
+          "172",
+          "171",
+          "126"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_018",
+      "query": "disable audit log for one soup command",
+      "targets": [
+        "16"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "125",
+          "16",
+          "401",
+          "161",
+          "1",
+          "163",
+          "162",
+          "398",
+          "18",
+          "126"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "125",
+          "16",
+          "161",
+          "401",
+          "163",
+          "162",
+          "1",
+          "18",
+          "398",
+          "130"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_019",
+      "query": "attach measured energy json to cyclonedx bom",
+      "targets": [
+        "11",
+        "12",
+        "402"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "12",
+          "169",
+          "402",
+          "15",
+          "11",
+          "168",
+          "14",
+          "382",
+          "268",
+          "280"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "12",
+          "169",
+          "402",
+          "15",
+          "11",
+          "168",
+          "14",
+          "382",
+          "401",
+          "268"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_020",
+      "query": "generate eu ai act annex xi from train with track-energy",
+      "targets": [
+        "14",
+        "401"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "401",
+          "14",
+          "15",
+          "399",
+          "1",
+          "382",
+          "65",
+          "287",
+          "12",
+          "0"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "401",
+          "14",
+          "15",
+          "399",
+          "1",
+          "382",
+          "65",
+          "287",
+          "12",
+          "0"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_021",
+      "query": "airgap bundle with repro receipt embedded",
+      "targets": [
+        "25"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "25",
+          "155",
+          "404",
+          "1",
+          "398",
+          "17",
+          "401",
+          "65",
+          "20",
+          "396"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "25",
+          "155",
+          "404",
+          "1",
+          "398",
+          "17",
+          "401",
+          "65",
+          "20",
+          "396"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_022",
+      "query": "autopilot dry run with 24gb gpu budget",
+      "targets": [
+        "52"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "52",
+          "164",
+          "594",
+          "635",
+          "235",
+          "580",
+          "392",
+          "459",
+          "51",
+          "65"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "52",
+          "164",
+          "594",
+          "635",
+          "235",
+          "392",
+          "580",
+          "65",
+          "459",
+          "51"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_023",
+      "query": "find mlx recipes for apple silicon",
+      "targets": [
+        "53"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "76",
+          "53",
+          "62",
+          "61",
+          "51",
+          "685",
+          "686",
+          "561",
+          "408",
+          "60"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "53",
+          "76",
+          "62",
+          "61",
+          "51",
+          "685",
+          "60",
+          "54",
+          "686",
+          "561"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_024",
+      "query": "pre-tokenize dataset and reuse tokenized cache",
+      "targets": [
+        "443",
+        "452"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "217",
+          "452",
+          "442",
+          "697",
+          "409",
+          "108",
+          "443",
+          "660",
+          "43",
+          "570"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "217",
+          "452",
+          "442",
+          "697",
+          "409",
+          "108",
+          "443",
+          "660",
+          "43",
+          "119"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_025",
+      "query": "train from s3 jsonl with streaming and shuffle buffer",
+      "targets": [
+        "449"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "449",
+          "409",
+          "443",
+          "689",
+          "452",
+          "416",
+          "571",
+          "444",
+          "671",
+          "565"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "449",
+          "409",
+          "443",
+          "452",
+          "689",
+          "416",
+          "571",
+          "565",
+          "444",
+          "671"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_026",
+      "query": "grpo reward hack mitigation kl_control, what settings",
+      "targets": [
+        "652",
+        "654"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "654",
+          "652",
+          "662",
+          "382",
+          "410",
+          "664",
+          "684",
+          "644",
+          "59",
+          "678"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "654",
+          "652",
+          "662",
+          "382",
+          "410",
+          "664",
+          "684",
+          "59",
+          "644",
+          "678"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_027",
+      "query": "unlearn npo without retain set, why warning",
+      "targets": [
+        "655"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "655",
+          "408",
+          "409",
+          "81",
+          "474",
+          "701",
+          "435",
+          "650",
+          "637",
+          "645"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "655",
+          "408",
+          "409",
+          "81",
+          "474",
+          "701",
+          "435",
+          "650",
+          "637",
+          "96"
+        ]
+      }
+    },
+    {
+      "id": "soup_v3_028",
+      "query": "online dpo with ollama judge, config example",
+      "targets": [
+        "665"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "665",
+          "435",
+          "453",
+          "679",
+          "446",
+          "423",
+          "205",
+          "275",
+          "204",
+          "220"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "665",
+          "435",
+          "679",
+          "453",
+          "446",
+          "275",
+          "423",
+          "205",
+          "204",
+          "220"
+        ]
+      }
+    }
+  ],
+  "fixture_sha256": "d4356d859e495d2faac0b1059db976826e19a9ecd4d635673e9fc6c91743a0c9",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a"
+}

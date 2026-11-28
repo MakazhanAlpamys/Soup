@@ -1,0 +1,266 @@
+{
+  "documents": {
+    "README.md": "7b4bee2682a1b873d2c3f7f4530d67cacca51fdd9139911385bffa1ddfc656c5",
+    "adapters-and-governance.md": "f2db40adaa6e3ef307e22cfd439b128ea5fd8470dadadd11442b878b5e75fb64",
+    "autodistill.md": "168415e9c3117c9d9e0f16f0b20c264e56fc3ec1d68fc5255b7c8d51d815f88b",
+    "backends-and-ops.md": "3e8553948085019257bcd16883eb7b6b9182a8f3a8e0f238ddbf8471edf0e75a",
+    "cli-reference.md": "39611b49064396f48d67bc1a59cb5a7b34d809ba280c2a8fea399714ec244dcd",
+    "commands.md": "03861e8f7d53a38ca7112eb34ee982a5b172d730b9db57b04901dfd43d9ef393",
+    "compliance.md": "96df2848b939a0e4c44e1053e9ea2390b47ae2782c42fdd41c41a95022ab74d2",
+    "config-reference.md": "df7c6d040c6f99b4ab47c81fa39d916a7983d43d38750bee18f7a97178b08243",
+    "data.md": "804ede1b804bdf9663441569da4f9751c3cd102c7d29abb0d62d0606f2235ebd",
+    "evaluation.md": "8e2e706ed56b484eeeaf681a65098f4e7b27f943650350b6537568b757fbad16",
+    "issue-difficulty.md": "e8388fc37f04c6fd7a47ba3bd5cac8528d7f242400311a9fcdc8590f37844b10",
+    "loop-formats.md": "ee9c46a9e5fbbf706921f8fa68d25a5487dafe4a826e0a919a41532c94dd76e5",
+    "models.md": "63ebf6143bd7ba6362761895aac89f78867515eacd4ddd251f1ce18b6d00b2d2",
+    "peft-and-efficiency.md": "7fc9c679593eef4df58d24de13cf1441b6df6d84f71a5c3c011f874464b7edbf",
+    "performance-and-quantization.md": "f08b6f09b63970f4e301e6ed8bf9546b43e5b6febd8f5fff997d7fab50793f7d",
+    "serving-and-export.md": "09ba86f2038d651b8f3b752adfb2fa0800866f0971233f19963ef9796701aab3",
+    "training.md": "a26bf6a3dbfdc9734a3ccf96448d39e7c1c7af742c7aa05f8691c1eee1c198d8"
+  },
+  "provenance": "AI-drafted, maintainer-reviewed ten; development evidence only. Original query wording and target sections preserved; two section titles mapped explicitly.",
+  "cohort": "maintainer10-development",
+  "queries": [
+    {
+      "id": "D01",
+      "query": "how do I stop training with ctrl+c without losing progress",
+      "original_target": {
+        "doc_name": "backends-and-ops",
+        "section": "Ctrl+C Graceful Save"
+      },
+      "resolved_section": "Ctrl+C Graceful Save",
+      "targets": [
+        "104"
+      ],
+      "baseline_top10": [
+        "104",
+        "437",
+        "508",
+        "612",
+        "470",
+        "468",
+        "490",
+        "225",
+        "648",
+        "614"
+      ]
+    },
+    {
+      "id": "D02",
+      "query": "continue training from a checkpoint after a crash",
+      "original_target": {
+        "doc_name": "backends-and-ops",
+        "section": "Resume Training"
+      },
+      "resolved_section": "Resume Training",
+      "targets": [
+        "71"
+      ],
+      "baseline_top10": [
+        "42",
+        "48",
+        "71",
+        "127",
+        "99",
+        "104",
+        "646",
+        "105",
+        "555",
+        "393"
+      ]
+    },
+    {
+      "id": "D03",
+      "query": "find the biggest batch size that fits my GPU",
+      "original_target": {
+        "doc_name": "performance-and-quantization",
+        "section": "Live CUDA Batch-Size Probe"
+      },
+      "resolved_section": "Live CUDA Batch-Size Probe",
+      "targets": [
+        "585"
+      ],
+      "baseline_top10": [
+        "119",
+        "576",
+        "585",
+        "544",
+        "382",
+        "549",
+        "655",
+        "552",
+        "644",
+        "674"
+      ]
+    },
+    {
+      "id": "D04",
+      "query": "preference training without a reference model",
+      "original_target": {
+        "doc_name": "training",
+        "section": "ORPO Training (No Reference Model)"
+      },
+      "resolved_section": "ORPO Training (No Reference Model)",
+      "targets": [
+        "686"
+      ],
+      "baseline_top10": [
+        "666",
+        "437",
+        "643",
+        "390",
+        "436",
+        "574",
+        "676",
+        "455",
+        "308",
+        "53"
+      ]
+    },
+    {
+      "id": "D05",
+      "query": "convert my model to GGUF for llama.cpp",
+      "original_target": {
+        "doc_name": "serving-and-export",
+        "section": "Export to GGUF"
+      },
+      "resolved_section": "Export to GGUF",
+      "targets": [
+        "598"
+      ],
+      "baseline_top10": [
+        "605",
+        "601",
+        "598",
+        "600",
+        "587",
+        "282",
+        "633",
+        "632",
+        "292",
+        "290"
+      ]
+    },
+    {
+      "id": "D06",
+      "query": "remove near duplicate rows using embeddings",
+      "original_target": {
+        "doc_name": "data",
+        "section": "Semantic dedup"
+      },
+      "resolved_section": "Semantic dedup (`soup data dedup --semantic`)",
+      "targets": [
+        "417"
+      ],
+      "baseline_top10": [
+        "197",
+        "417",
+        "429",
+        "696",
+        "541",
+        "32",
+        "483",
+        "464",
+        "44",
+        "418"
+      ]
+    },
+    {
+      "id": "D07",
+      "query": "fine-tune on a Mac without a GPU",
+      "original_target": {
+        "doc_name": "backends-and-ops",
+        "section": "Apple Silicon (MLX Backend)"
+      },
+      "resolved_section": "Apple Silicon (MLX Backend)",
+      "targets": [
+        "53"
+      ],
+      "baseline_top10": [
+        "390",
+        "670",
+        "650",
+        "529",
+        "394",
+        "648",
+        "459",
+        "668",
+        "517",
+        "382"
+      ]
+    },
+    {
+      "id": "D08",
+      "query": "train on a cloud GPU without my own server",
+      "original_target": {
+        "doc_name": "backends-and-ops",
+        "section": "Cloud GPU Training (Modal)"
+      },
+      "resolved_section": "Cloud GPU Training",
+      "targets": [
+        "65"
+      ],
+      "baseline_top10": [
+        "65",
+        "67",
+        "382",
+        "615",
+        "426",
+        "493",
+        "66",
+        "70",
+        "91",
+        "459"
+      ]
+    },
+    {
+      "id": "D09",
+      "query": "serve my model behind an OpenAI compatible API",
+      "original_target": {
+        "doc_name": "serving-and-export",
+        "section": "Inference Server"
+      },
+      "resolved_section": "Inference Server",
+      "targets": [
+        "612"
+      ],
+      "baseline_top10": [
+        "429",
+        "665",
+        "612",
+        "205",
+        "207",
+        "275",
+        "638",
+        "434",
+        "595",
+        "430"
+      ]
+    },
+    {
+      "id": "D10",
+      "query": "will this model fit in 24GB of VRAM",
+      "original_target": {
+        "doc_name": "backends-and-ops",
+        "section": "Hardware-Fit Calculator"
+      },
+      "resolved_section": "Hardware-Fit Calculator",
+      "targets": [
+        "118"
+      ],
+      "baseline_top10": [
+        "164",
+        "585",
+        "564",
+        "563",
+        "576",
+        "569",
+        "116",
+        "568",
+        "571",
+        "119"
+      ]
+    }
+  ],
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee"
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from importlib import resources
 from pathlib import Path
@@ -21,6 +22,68 @@ INDEX_CONFIG = {
     "eps": 0.25,
     "tokenizer": "domain_aware_v1",
 }
+
+_ALIASES = {
+    ("continue", "training"): "resume",
+    ("batch", "size"): "batch-size",
+}
+_REFERENCE_PHRASES = (
+    ("without", "a", "reference", "model"),
+    ("without", "reference", "model"),
+    ("no", "reference", "model"),
+    ("reference-free",),
+)
+_REFERENCE_HEADING = re.compile(
+    r"\b(?:no reference model|without (?:a )?reference model|reference[- ]free)\b"
+)
+
+
+def _query_expansions(query: str) -> tuple[dict[str, float], bool]:
+    """Infer terms from prose without treating flag/path components as prose."""
+    words = re.findall(r"[\w./:\\+-]+", query.casefold())
+    literal = set(tokenize(query))
+    inferred: dict[str, float] = {}
+    if {"mac", "macs"}.intersection(words):
+        inferred.update({term: 0.7 for term in {"mac", "macs"} - literal})
+        if {"train", "training", "fine-tune"}.intersection(words):
+            inferred["mlx"] = 0.65
+
+    def contains(phrase: tuple[str, ...]) -> bool:
+        return any(tuple(words[pos : pos + len(phrase)]) == phrase for pos in range(len(words)))
+
+    inferred.update({term: 0.65 for phrase, term in _ALIASES.items() if contains(phrase)})
+    return (
+        {term: weight for term, weight in inferred.items() if term not in literal},
+        any(contains(phrase) for phrase in _REFERENCE_PHRASES),
+    )
+
+
+def _rank_chunks(
+    query: str, index: PureBM25, chunks: Sequence[dict[str, Any]], top_k: int
+) -> list[tuple[int, float]]:
+    """Apply query-side lexical signals before the result cutoff."""
+    tokens = tokenize(query)
+    scores = index.score(tokens)
+    inferred, reference_free = _query_expansions(query)
+    for term, weight in sorted(inferred.items()):
+        for doc_id, score in enumerate(index.score([term])):
+            scores[doc_id] += weight * score
+
+    prose_terms = {term for term in re.findall(r"[\w./:\\+-]+", query.casefold()) if term.isalpha()}
+    literal_idf = {term: max(0.0, index.idf.get(term, 0.0)) for term in sorted(prose_terms)}
+    for doc_id, chunk in enumerate(chunks):
+        if scores[doc_id] <= 0:
+            continue
+        section = chunk["section"]
+        if reference_free and _REFERENCE_HEADING.search(section.casefold()):
+            scores[doc_id] += 8.0
+        if section != "Overview":
+            heading_tokens = set(tokenize(section))
+            heading_score = sum(idf for term, idf in literal_idf.items() if term in heading_tokens)
+            scores[doc_id] += min(0.25 * scores[doc_id], 0.3 * heading_score)
+
+    order = sorted(range(len(scores)), key=lambda doc_id: (-scores[doc_id], doc_id))
+    return [(doc_id, scores[doc_id]) for doc_id in order[:top_k]]
 
 
 def get_default_cache_dir() -> Path:
@@ -183,8 +246,7 @@ def search_docs(
         return []
 
     index, chunks = get_or_build_index(cache_dir=cache_dir)
-    query_tokens = tokenize(query)
-    ranked = index.rank(query_tokens, top_k=top_k)
+    ranked = _rank_chunks(query, index, chunks, top_k=top_k)
 
     results = []
     for idx, score in ranked:

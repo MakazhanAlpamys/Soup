@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import subprocess
@@ -15,6 +16,8 @@ from soup_cli.cli import app
 from soup_cli.docs.bm25 import PureBM25
 from soup_cli.docs.chunker import split_markdown_by_headings
 from soup_cli.docs.retriever import (
+    _query_expansions,
+    _rank_chunks,
     get_default_cache_dir,
     load_cache,
     load_docs,
@@ -26,6 +29,383 @@ from soup_cli.utils.terminal import for_terminal
 from tests.conftest import make_cli_runner, strip_ansi
 
 runner = make_cli_runner()
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("fine-tune on a Mac", {"macs": 0.7, "mlx": 0.65}),
+        ("train on Macs", {"mac": 0.7, "mlx": 0.65}),
+        ("continue training", {"resume": 0.65}),
+        ("continue training continue training", {"resume": 0.65}),
+        ("batch size", {"batch-size": 0.65}),
+        ("resume resume continue training", {}),
+        ("mlx fine-tune on a Mac", {"macs": 0.7}),
+        ("foo/mac --macs C:\\mac", {}),
+        ("--continue training --batch size", {}),
+        ("24GB v0.78.0 org/model learning_rate", {}),
+        ("preference DPO KTO ORPO", {}),
+    ],
+)
+def test_query_expansions_preserve_literal_and_technical_terms(query, expected):
+    assert _query_expansions(query)[0] == expected
+
+
+@pytest.mark.parametrize(
+    "query", ["--no reference model", "--without a reference model", "no/reference model"]
+)
+def test_reference_free_rule_requires_prose_boundaries(query):
+    assert not _query_expansions(query)[1]
+
+
+@pytest.mark.parametrize("query", ["foo/mac", "--macs", "24GB", "org/model", "v0.78.0"])
+def test_technical_only_queries_keep_original_ranking(query):
+    from soup_cli.docs.retriever import build_index
+
+    chunks = [
+        {"section": word, "heading_prefix": word, "text": f"{word} other"}
+        for word in ["Mac", "Macs", "24GB", "org/model", "v0.78.0", "alpha", "beta"]
+    ]
+    index = build_index(chunks)
+    assert _rank_chunks(query, index, chunks, len(chunks)) == index.rank(
+        tokenize(query), len(chunks)
+    )
+
+
+def test_generic_preference_keeps_methods_and_reference_free_is_not_orpo_only():
+    from soup_cli.docs.retriever import build_index
+
+    chunks = [
+        {"section": heading, "heading_prefix": heading, "text": body}
+        for heading, body in [
+            ("ORPO (No Reference Model)", "preference training alignment"),
+            ("SimPO (Reference-free)", "preference training alignment"),
+            ("DPO", "preference training reference model"),
+            ("KTO", "preference training examples"),
+            ("Formats", "alpha beta gamma delta epsilon zeta"),
+            ("Export", "eta theta iota kappa lambda mu"),
+            ("Serving", "nu xi omicron pi rho sigma"),
+            ("Hardware", "tau upsilon phi chi psi omega"),
+            ("Checkpoints", "save checkpoint restore"),
+        ]
+    ]
+    index = build_index(chunks)
+    generic = _rank_chunks("preference", index, chunks, len(chunks))
+    assert generic == index.rank(["preference"], len(chunks))
+    assert {doc_id for doc_id, score in generic if score > 0} == {0, 1, 2, 3}
+    reference_free = _rank_chunks("preference training without a reference model", index, chunks, 2)
+    assert {doc_id for doc_id, _ in reference_free} == {0, 1}
+
+
+@pytest.mark.parametrize(
+    ("query", "sections", "bodies", "expected"),
+    [
+        ("Mac", ["Target", "Decoy"], ["macs", "unrelated"], 0),
+        ("continue training", ["Target", "Decoy"], ["resume", "unrelated"], 0),
+        ("batch size", ["Target", "Decoy"], ["batch-size alpha", "batch size"], 0),
+        ("fine-tune on a Mac", ["Target", "Decoy"], ["mlx", "unrelated"], 0),
+        (
+            "preference training without a reference model",
+            ["No Reference Model", "Preference Training", "Reference-free training"],
+            ["alignment", "preference preference training", "alignment"],
+            0,
+        ),
+    ],
+)
+def test_each_query_rule_changes_retrieval(query, sections, bodies, expected):
+    chunks = [
+        {"doc_name": "guide", "section": title, "heading_prefix": title, "text": body}
+        for title, body in zip(sections, bodies)
+    ]
+    chunks.extend(
+        {"doc_name": "guide", "section": f"Other {number}", "heading_prefix": "Other", "text": word}
+        for number, word in enumerate(["alpha", "beta", "gamma", "delta"])
+    )
+    from soup_cli.docs.retriever import build_index
+
+    index = build_index(chunks)
+    baseline = index.rank(tokenize(query), top_k=1)
+    actual = _rank_chunks(query, index, chunks, top_k=1)
+    assert actual and actual[0][0] == expected and actual[0][1] > 0
+    assert baseline[0][0] != expected or baseline[0][1] <= 0
+
+
+def test_heading_boost_ranks_before_top_k_and_is_bounded():
+    chunks = [
+        {"section": "Other", "heading_prefix": "Guide > Other", "text": "vram"},
+        {"section": "VRAM", "heading_prefix": "Guide > VRAM", "text": "other"},
+        {"section": "Other", "heading_prefix": "Guide > Other", "text": "unrelated"},
+    ]
+    chunks.extend(
+        {"section": "Other", "heading_prefix": "Guide > Other", "text": word}
+        for word in ["alpha", "beta", "gamma", "delta"]
+    )
+    index = PureBM25([tokenize(c["heading_prefix"] + "\n\n" + c["text"]) for c in chunks])
+    before = index.score(["vram"])
+    assert index.rank(["vram"], 1)[0][0] == 0
+    after = _rank_chunks("vram", index, chunks, 3)
+    assert after[0][0] == 1
+    assert before[1] < after[0][1] <= 1.25 * before[1]
+    repeated_score = _rank_chunks("vram vram", index, chunks, 3)[0][1]
+    assert repeated_score - 2 * before[1] <= 0.3 * index.idf["vram"] + 1e-12
+
+
+def test_query_only_search_preserves_existing_cache(tmp_path, monkeypatch):
+    from soup_cli.docs import retriever
+
+    docs = {
+        "guide.md": (
+            "# Guide\n\n## Apple Silicon\n\nFine-tune with MLX on Macs.\n\n"
+            "## Other\n\nalpha beta gamma\n\n## Unrelated\n\ndelta epsilon zeta"
+        )
+    }
+    monkeypatch.setattr(retriever, "load_docs", lambda: docs)
+    first = search_docs("fine-tune on a Mac", cache_dir=tmp_path)
+    assert first
+    cache = tmp_path / "docs_index.json"
+    original = (cache.read_bytes(), cache.stat().st_mtime_ns)
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("query-only rules must reuse the existing cache")
+
+    monkeypatch.setattr(retriever, "save_cache", unexpected_write)
+    monkeypatch.setattr(retriever, "build_index", unexpected_write)
+    assert search_docs("fine-tune on a Mac", cache_dir=tmp_path) == first
+    assert (cache.read_bytes(), cache.stat().st_mtime_ns) == original
+
+
+def _comparison_fixture(monkeypatch, baseline, candidate, targets):
+    from types import SimpleNamespace
+
+    from scripts import check_docs_search_ranking as gate
+
+    fixture = {
+        "cohort": "gate contract test",
+        "chunks": [{"chunk_id": str(number)} for number in range(12)],
+        "queries": [
+            {"id": str(number), "query": f"query{number}", "targets": target}
+            for number, target in enumerate(targets)
+        ],
+    }
+
+    def ranked(query, runs):
+        return [(doc_id, 1.0) for doc_id in runs[int(query.removeprefix("query"))]]
+
+    monkeypatch.setattr(
+        gate,
+        "build_index",
+        lambda chunks: SimpleNamespace(rank=lambda tokens, limit: ranked(tokens[0], baseline)),
+    )
+    monkeypatch.setattr(gate, "_rank_chunks", lambda query, *args: ranked(query, candidate))
+    return gate, fixture
+
+
+def test_ranking_gate_accepts_aggregate_gains_and_discloses_individual_loss(monkeypatch):
+    gate, fixture = _comparison_fixture(
+        monkeypatch,
+        [[9, 0], [9, 1, 8, 7, 6, 2]],
+        [[9, 8, 0], [1, 9, 8, 2]],
+        [["0"], ["1", "2"]],
+    )
+    result = gate.compare(fixture)
+    assert result["passed"]
+    assert result["metrics"]["candidate"]["recall5"] == 1
+    assert result["metrics"]["baseline"]["recall5"] == 0.75
+    assert result["rank_losses"] == [{"id": "0", "query": "query0", "old_rank": 2, "new_rank": 3}]
+
+
+def test_ranking_gate_refuses_recall_loss_despite_first_rank_gain(monkeypatch):
+    gate, fixture = _comparison_fixture(
+        monkeypatch,
+        [[9, 0], [1, 9, 8, 2]],
+        [[0, 9], [1, 9, 8, 7, 6, 2]],
+        [["0"], ["1", "2"]],
+    )
+    result = gate.compare(fixture)
+    assert result["metrics"]["candidate"]["mrr10"] > result["metrics"]["baseline"]["mrr10"]
+    assert not result["passed"]
+
+
+def test_ranking_gate_scores_misses_as_zero_and_still_reports_full_rank_loss(monkeypatch):
+    gate, fixture = _comparison_fixture(
+        monkeypatch, [list(range(12))], [list(range(10)) + [11, 10]], [["10"]]
+    )
+    result = gate.compare(fixture)
+    assert result["passed"]
+    assert result["metrics"]["candidate"] == dict.fromkeys(["hit1", "hit5", "mrr10", "recall5"], 0)
+    assert result["rank_losses"][0]["old_rank"] == 11
+    assert result["rank_losses"][0]["new_rank"] == 12
+    assert not gate.compare(fixture, require_hit5_gain=True)["passed"]
+
+
+@pytest.mark.parametrize(
+    "invalid", ["missing_target", "duplicate_query", "duplicate_chunk", "empty"]
+)
+def test_ranking_gate_refuses_invalid_comparisons(monkeypatch, invalid):
+    gate, fixture = _comparison_fixture(monkeypatch, [[0]], [[0]], [["0"]])
+    if invalid == "missing_target":
+        fixture["queries"][0]["targets"] = ["unknown"]
+    elif invalid == "duplicate_query":
+        fixture["queries"].append(fixture["queries"][0])
+    elif invalid == "duplicate_chunk":
+        fixture["chunks"].append(fixture["chunks"][0])
+    else:
+        fixture["queries"] = []
+    with pytest.raises(ValueError):
+        gate.compare(fixture)
+
+
+def test_ranking_gate_refuses_changed_baseline(monkeypatch):
+    gate, fixture = _comparison_fixture(monkeypatch, [[0]], [[0]], [["0"]])
+    fixture["queries"][0]["baseline_top10"] = ["1"]
+    with pytest.raises(ValueError, match="baseline ranking changed"):
+        gate.compare(fixture)
+
+
+def test_ranking_gate_refuses_changed_document_or_chunk_snapshot(monkeypatch):
+    gate, fixture = _comparison_fixture(monkeypatch, [[0]], [[0]], [["0"]])
+    fixture["corpus_sha256"] = "incorrect"
+    with pytest.raises(ValueError, match="chunking differs"):
+        gate.compare(fixture)
+    fixture.pop("corpus_sha256")
+    fixture["documents"] = {"guide.md": "incorrect"}
+    monkeypatch.setattr(gate, "load_docs", lambda: {"guide.md": "# Guide"})
+    with pytest.raises(ValueError, match="documentation snapshot differs"):
+        gate.compare(fixture)
+
+
+def test_rebuilt_fixture_preserves_queries_and_maps_fenced_headings():
+    from scripts.rebuild_docs_search_fixture import build_fixture
+
+    text = "# Guide\nIntro\n## Training\n```sh\n# resume here\nsoup train\n```\n"
+    source = {
+        "docs_commit": "pinned",
+        "documents": {"guide.md": hashlib.sha256(text.encode()).hexdigest()},
+        "passages": [
+            {"chunk_id": "old-a", "doc_name": "guide", "heading": "Training", "section_index": 1},
+            {
+                "chunk_id": "old-b",
+                "doc_name": "guide",
+                "heading": "resume here",
+                "section_index": 2,
+            },
+        ],
+        "queries": [{"query_id": "q1", "query": "  continue training?  "}],
+        "annotations": [
+            {"query_id": "q1", "status": "resolved", "relevant_chunk_ids": ["old-a", "old-b"]}
+        ],
+        "disputed_passages": ["old-b"],
+    }
+    fixture, audit = build_fixture(source, {"guide.md": text})
+    assert fixture["queries"] == [
+        {"id": "q1", "query": "  continue training?  ", "targets": ["guide::section_001"]}
+    ]
+    assert "# resume here" in fixture["chunks"][1]["text"]
+    assert audit["query_labels"][0]["old_targets"] == ["old-a", "old-b"]
+    assert audit["query_labels"][0]["new_targets"] == ["guide::section_001"]
+    assert audit["disputed_passages"][0]["old_target_queries"] == ["q1"]
+    assert audit["disputed_passages"][0]["new_target_queries"] == ["q1"]
+    source["passages"][1]["heading"] = "different"
+    with pytest.raises(ValueError, match="historical heading differs"):
+        build_fixture(source, {"guide.md": text})
+    with pytest.raises(ValueError, match="pinned document hashes differ"):
+        build_fixture(source, {"guide.md": text + "changed"})
+
+
+def test_rebuilt_fixture_lock_and_complete_label_migration():
+    root = Path(__file__).parents[1]
+    fixtures = root / "tests" / "fixtures" / "docs_search"
+    source = json.loads((fixtures / "original28-source.json").read_bytes())
+    fixture = json.loads((fixtures / "pinned_docs_v1.json").read_bytes())
+    audit = json.loads((fixtures / "pinned_docs_v1-migration.json").read_bytes())
+    lock = json.loads((root / "benchmarks/docs-search-3192/pinned_docs_v1-lock.json").read_bytes())
+    for name, expected in lock["files"].items():
+        data = (root / name).read_bytes()
+        if name == "tests/fixtures/docs_search/original28-source.json":
+            frozen = json.loads(data)
+            frozen.pop("reproduction_terms", None)
+            data = (json.dumps(frozen, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        assert hashlib.sha256(data).hexdigest() == expected, name
+    assert [(q["id"], q["query"]) for q in fixture["queries"]] == [
+        (q["query_id"], q["query"]) for q in source["queries"]
+    ]
+    assert len(fixture["queries"]) == 28
+    assert set(audit["passage_mapping"]) == {p["chunk_id"] for p in source["passages"]}
+    assert len(audit["passage_mapping"]) == 1068
+    for old, migrated, new in zip(source["annotations"], audit["query_labels"], fixture["queries"]):
+        assert old["query_id"] == migrated["id"] == new["id"]
+        assert old["status"] == migrated["old_status"] == migrated["new_status"] == "resolved"
+        assert old["relevant_chunk_ids"] == migrated["old_targets"]
+        assert (
+            migrated["new_targets"]
+            == new["targets"]
+            == sorted({audit["passage_mapping"][target] for target in old["relevant_chunk_ids"]})
+        )
+    assert {p["old_chunk_id"] for p in audit["disputed_passages"]} == set(
+        source["disputed_passages"]
+    )
+    assert all(
+        not row["old_target_queries"] and not row["new_target_queries"]
+        for row in audit["disputed_passages"]
+    )
+
+
+@pytest.mark.parametrize("name", ["original28-source.json", "friend30.json"])
+def test_reproduction_permission_adds_only_terms_to_frozen_metadata(name):
+    root = Path(__file__).parents[1]
+    path = f"tests/fixtures/docs_search/{name}"
+    record = json.loads(
+        (root / "benchmarks/docs-search-3192/reproduction-permissions.json").read_bytes()
+    )["files"][path]
+    data = (root / path).read_bytes()
+    assert hashlib.sha256(data).hexdigest() == record["permission_metadata_sha256"]
+    metadata = json.loads(data)
+    assert record["only_added_field"] == "reproduction_terms"
+    terms = metadata.pop(record["only_added_field"])
+    assert terms["license"] == "Apache-2.0"
+    assert terms["permission_statement"] and terms["permission_evidence"]
+    frozen = (json.dumps(metadata, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    expected = json.loads((root / record["pre_scoring_lock"]).read_bytes())["files"][path]
+    assert hashlib.sha256(frozen).hexdigest() == record["pre_scoring_sha256"] == expected
+
+
+def test_ranking_gate_command_exit_codes_and_json(tmp_path):
+    fixture = {
+        "cohort": "command contract",
+        "chunks": [
+            {
+                "chunk_id": "0",
+                "doc_name": "guide",
+                "section": "Guide",
+                "heading_prefix": "Guide",
+                "text": "alpha beta",
+            }
+        ],
+        "queries": [{"id": "q1", "query": "unmatched", "targets": ["0"]}],
+    }
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    script = Path(__file__).parents[1] / "scripts" / "check_docs_search_ranking.py"
+    command = [sys.executable, str(script), str(fixture_path)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["passed"]
+    original = fixture_path.read_bytes()
+    result = subprocess.run(
+        command + ["--output", str(fixture_path)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 2
+    assert fixture_path.read_bytes() == original
+    result = subprocess.run(
+        command + ["--require-hit5-gain"], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 1
+    assert not json.loads(result.stdout)["passed"]
+    fixture["queries"][0]["targets"] = ["missing"]
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 2
+    assert "Invalid ranking comparison" in " ".join(strip_ansi(result.stdout).split())
 
 
 @pytest.mark.unit
@@ -437,7 +817,7 @@ def test_cli_docs_search_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     result = runner.invoke(app, ["docs", "search", "safetensors", "--top-k", "3"])
     assert result.exit_code == 0, result.output
-    text = strip_ansi(result.stdout)
+    text = " ".join(strip_ansi(result.stdout).split())
     assert "Documentation Search:" in text
     assert "safetensors" in text
     assert (
@@ -479,7 +859,7 @@ def test_cli_docs_search_no_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     result = runner.invoke(app, ["docs", "search", "nonexistentquerywordxyz12345"])
     assert result.exit_code == 0, result.output
-    text = strip_ansi(result.stdout)
+    text = " ".join(strip_ansi(result.stdout).split())
     assert "No matching documentation found" in text
 
 
@@ -546,8 +926,9 @@ def test_cli_docs_search_missing_docs_error(tmp_path: Path, monkeypatch: pytest.
 
     result = runner.invoke(app, ["docs", "search", "safetensors"])
     assert result.exit_code == 1
-    assert "Error:" in result.output
-    assert "No documentation files found" in result.output
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "Error:" in plain
+    assert "No documentation files found" in plain
 
 
 @pytest.mark.unit

@@ -1,0 +1,17 @@
+{
+  "cohort": "supplemental10",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a",
+  "comparison_tool_sha256": "0230eb498102f02c031acc5a3d3360420b446e9ff6acafef8f896ce28ac5cd4b",
+  "fixture_path": "tests/fixtures/docs_search/agent_draft_review.json",
+  "fixture_sha256": "4318f4eb6a1f36d62e766b7a45cb6643b63b00efe2ab24a8dfbb07789fc50aa4",
+  "question_and_target_records_sha256": "f4a52afd1d187ded2eabade0df05c87db5cd8e1518473d2a7f9c0030d309a217",
+  "question_records_unchanged_from_commit": "ebdedcd9d2abde91035f46cc3f36e0d01ed77958",
+  "approval": "User approved all ten questions in chat on 2026-11-23 before scoring.",
+  "frozen_at_utc": "2026-11-23T17:31:41.714315+00:00",
+  "authorship": "AI-drafted by the Codex implementation agent who developed and tuned this candidate.",
+  "outside_tuning_authorship": false,
+  "purpose": "Supplemental fixed-candidate check; not a substitute for the confirmed outside-tuning fresh-set condition.",
+  "numerical_checks": "Exact aggregate preservation and additional Hit@5 gain; full rank losses disclosed.",
+  "execution_state_at_freeze": "Not scored; no baseline or candidate rankings inspected for these questions."
+}

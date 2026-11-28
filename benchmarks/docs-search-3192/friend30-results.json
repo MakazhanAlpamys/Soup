@@ -1,0 +1,1145 @@
+{
+  "cohort": "friend30",
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee",
+  "query_count": 30,
+  "gate": "option B: aggregate preservation, all individual losses disclosed",
+  "passed": true,
+  "require_hit5_gain": true,
+  "metrics": {
+    "baseline": {
+      "hit1": 0.7666666666666667,
+      "hit5": 0.9666666666666667,
+      "mrr10": 0.8381481481481482,
+      "recall5": 0.95
+    },
+    "candidate": {
+      "hit1": 0.7666666666666667,
+      "hit5": 1.0,
+      "mrr10": 0.8666666666666667,
+      "recall5": 1.0
+    }
+  },
+  "rank_losses": [
+    {
+      "id": "FR11",
+      "query": "registry push idempotency key same key different config error",
+      "old_rank": 1,
+      "new_rank": 2
+    }
+  ],
+  "per_query": [
+    {
+      "id": "FR01",
+      "query": "soup loop canary stuck at UNKNOWN no ratings coming in",
+      "targets": [
+        "3"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "3",
+          "508",
+          "308",
+          "505",
+          "501",
+          "630",
+          "4",
+          "507",
+          "506",
+          "307"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "3",
+          "508",
+          "308",
+          "505",
+          "307",
+          "630",
+          "501",
+          "4",
+          "507",
+          "306"
+        ]
+      }
+    },
+    {
+      "id": "FR02",
+      "query": "how to get soup train to write energy json for the bom",
+      "targets": [
+        "12"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "12",
+          "15",
+          "402",
+          "169",
+          "382",
+          "65",
+          "504",
+          "362",
+          "436",
+          "401"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "12",
+          "15",
+          "402",
+          "169",
+          "382",
+          "65",
+          "504",
+          "401",
+          "362",
+          "436"
+        ]
+      }
+    },
+    {
+      "id": "FR03",
+      "query": "adapter merge refused because lora ranks differ on shared module",
+      "targets": [
+        "9"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "9",
+          "527",
+          "588",
+          "538",
+          "411",
+          "526",
+          "597",
+          "53",
+          "596",
+          "63"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "9",
+          "527",
+          "588",
+          "411",
+          "538",
+          "526",
+          "596",
+          "597",
+          "53",
+          "63"
+        ]
+      }
+    },
+    {
+      "id": "FR04",
+      "query": "my merged adapter is weaker than inputs did --weights apply wrong",
+      "targets": [
+        "9"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "9",
+          "142",
+          "602",
+          "116",
+          "586",
+          "458",
+          "467",
+          "596",
+          "18",
+          "332"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "9",
+          "142",
+          "602",
+          "116",
+          "586",
+          "596",
+          "458",
+          "467",
+          "18",
+          "332"
+        ]
+      }
+    },
+    {
+      "id": "FR05",
+      "query": "sign adapter with ed25519 and verify in ci pipeline",
+      "targets": [
+        "20"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "20",
+          "146",
+          "160",
+          "13",
+          "145",
+          "403",
+          "398",
+          "1",
+          "76",
+          "485"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "20",
+          "146",
+          "403",
+          "160",
+          "145",
+          "13",
+          "398",
+          "1",
+          "76",
+          "485"
+        ]
+      }
+    },
+    {
+      "id": "FR06",
+      "query": "soup adapters audit shows unknown for learning rate is that bad",
+      "targets": [
+        "18"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "18",
+          "84",
+          "77",
+          "16",
+          "3",
+          "681",
+          "1",
+          "61",
+          "90",
+          "398"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "18",
+          "84",
+          "16",
+          "77",
+          "130",
+          "681",
+          "3",
+          "22",
+          "1",
+          "61"
+        ]
+      }
+    },
+    {
+      "id": "FR07",
+      "query": "edit a fact into smollm with rome without full finetune",
+      "targets": [
+        "5"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "5",
+          "7",
+          "251",
+          "249",
+          "519",
+          "651",
+          "126",
+          "508",
+          "482",
+          "468"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "5",
+          "7",
+          "251",
+          "249",
+          "519",
+          "651",
+          "126",
+          "508",
+          "482",
+          "468"
+        ]
+      }
+    },
+    {
+      "id": "FR08",
+      "query": "grace codebook how many edits before norms blow up",
+      "targets": [
+        "7"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "7",
+          "251",
+          "1",
+          "5",
+          "501",
+          "508",
+          "308",
+          "434",
+          "446",
+          "468"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "7",
+          "251",
+          "1",
+          "5",
+          "501",
+          "508",
+          "308",
+          "434",
+          "446",
+          "468"
+        ]
+      }
+    },
+    {
+      "id": "FR09",
+      "query": "soup steer vector not doing anything at serve time",
+      "targets": [
+        "6"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "6",
+          "376",
+          "378",
+          "377",
+          "370",
+          "622",
+          "375",
+          "623",
+          "496",
+          "395"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "6",
+          "376",
+          "378",
+          "377",
+          "370",
+          "622",
+          "375",
+          "623",
+          "496",
+          "395"
+        ]
+      }
+    },
+    {
+      "id": "FR10",
+      "query": "soup can run refuses redacted value in config",
+      "targets": [
+        "10"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "10",
+          "124",
+          "578",
+          "116",
+          "99",
+          "407",
+          "655",
+          "18",
+          "629",
+          "628"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "10",
+          "124",
+          "116",
+          "578",
+          "99",
+          "407",
+          "655",
+          "18",
+          "462",
+          "490"
+        ]
+      }
+    },
+    {
+      "id": "FR11",
+      "query": "registry push idempotency key same key different config error",
+      "targets": [
+        "8"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "8",
+          "356",
+          "402",
+          "84",
+          "463",
+          "452",
+          "99",
+          "18",
+          "389",
+          "159"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "356",
+          "8",
+          "402",
+          "84",
+          "463",
+          "452",
+          "99",
+          "18",
+          "351",
+          "389"
+        ]
+      }
+    },
+    {
+      "id": "FR12",
+      "query": "bisect checkpoints to find which step broke my eval",
+      "targets": [
+        "2"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "2",
+          "131",
+          "574",
+          "405",
+          "544",
+          "87",
+          "402",
+          "605",
+          "382",
+          "72"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "2",
+          "131",
+          "574",
+          "405",
+          "544",
+          "87",
+          "402",
+          "605",
+          "382",
+          "72"
+        ]
+      }
+    },
+    {
+      "id": "FR13",
+      "query": "backdoor scan failed my adapter can i still merge it",
+      "targets": [
+        "19",
+        "24"
+      ],
+      "baseline": {
+        "rank": 5,
+        "top10": [
+          "142",
+          "1",
+          "144",
+          "129",
+          "24",
+          "19",
+          "403",
+          "9",
+          "22",
+          "597"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "19",
+          "142",
+          "144",
+          "24",
+          "1",
+          "129",
+          "403",
+          "9",
+          "22",
+          "597"
+        ]
+      }
+    },
+    {
+      "id": "FR14",
+      "query": "generate annex xi markdown from a training run",
+      "targets": [
+        "14"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "14",
+          "401",
+          "15",
+          "399",
+          "382",
+          "1",
+          "178",
+          "65",
+          "143",
+          "429"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "14",
+          "401",
+          "15",
+          "399",
+          "382",
+          "1",
+          "178",
+          "65",
+          "143",
+          "429"
+        ]
+      }
+    },
+    {
+      "id": "FR15",
+      "query": "where does soup audit log live and how do i turn it off",
+      "targets": [
+        "16"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "18",
+          "420",
+          "16",
+          "163",
+          "125",
+          "508",
+          "398",
+          "0",
+          "124",
+          "1"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "18",
+          "16",
+          "163",
+          "420",
+          "161",
+          "125",
+          "162",
+          "508",
+          "398",
+          "0"
+        ]
+      }
+    },
+    {
+      "id": "FR16",
+      "query": "soup airgap bundle for offline deployment machine",
+      "targets": [
+        "25"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "25",
+          "155",
+          "1",
+          "396",
+          "404",
+          "398",
+          "13",
+          "20",
+          "126",
+          "122"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "25",
+          "155",
+          "1",
+          "396",
+          "404",
+          "398",
+          "13",
+          "20",
+          "122",
+          "126"
+        ]
+      }
+    },
+    {
+      "id": "FR17",
+      "query": "soup loop watch not training says not_enough_new_data",
+      "targets": [
+        "3"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "3",
+          "505",
+          "504",
+          "316",
+          "630",
+          "306",
+          "312",
+          "309",
+          "506",
+          "508"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "3",
+          "505",
+          "316",
+          "504",
+          "306",
+          "630",
+          "312",
+          "309",
+          "308",
+          "508"
+        ]
+      }
+    },
+    {
+      "id": "FR18",
+      "query": "feedback log format for soup loop sft train method",
+      "targets": [
+        "3"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "308",
+          "3",
+          "505",
+          "495",
+          "629",
+          "628",
+          "4",
+          "507",
+          "389",
+          "370"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "308",
+          "3",
+          "505",
+          "495",
+          "629",
+          "628",
+          "4",
+          "507",
+          "389",
+          "370"
+        ]
+      }
+    },
+    {
+      "id": "FR19",
+      "query": "soup loop deploy keeps failing pending_deploy backoff",
+      "targets": [
+        "3"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "316",
+          "3",
+          "606",
+          "306",
+          "505",
+          "234",
+          "503",
+          "235",
+          "507",
+          "237"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "316",
+          "3",
+          "234",
+          "306",
+          "606",
+          "235",
+          "505",
+          "237",
+          "503",
+          "507"
+        ]
+      }
+    },
+    {
+      "id": "FR20",
+      "query": "autodistill shard manifest resume after crash",
+      "targets": [
+        "44"
+      ],
+      "baseline": {
+        "rank": 4,
+        "top10": [
+          "48",
+          "34",
+          "30",
+          "44",
+          "50",
+          "393",
+          "41",
+          "42",
+          "31",
+          "49"
+        ]
+      },
+      "candidate": {
+        "rank": 4,
+        "top10": [
+          "34",
+          "48",
+          "30",
+          "44",
+          "41",
+          "50",
+          "393",
+          "42",
+          "31",
+          "49"
+        ]
+      }
+    },
+    {
+      "id": "FR21",
+      "query": "autodistill top-k probabilities renormalized or not",
+      "targets": [
+        "36"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "36",
+          "33",
+          "50",
+          "45",
+          "28",
+          "335",
+          "27",
+          "699",
+          "30",
+          "37"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "36",
+          "33",
+          "50",
+          "45",
+          "28",
+          "335",
+          "27",
+          "699",
+          "30",
+          "37"
+        ]
+      }
+    },
+    {
+      "id": "FR22",
+      "query": "autodistill plan-only estimate bytes per token",
+      "targets": [
+        "45"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "45",
+          "31",
+          "30",
+          "50",
+          "44",
+          "43",
+          "48",
+          "118",
+          "320",
+          "49"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "45",
+          "31",
+          "30",
+          "50",
+          "44",
+          "43",
+          "48",
+          "118",
+          "320",
+          "49"
+        ]
+      }
+    },
+    {
+      "id": "FR23",
+      "query": "autodistill consumption event replay rules after commit",
+      "targets": [
+        "42"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "42",
+          "30",
+          "35",
+          "48",
+          "50",
+          "29",
+          "90",
+          "49",
+          "31",
+          "46"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "42",
+          "30",
+          "35",
+          "48",
+          "50",
+          "29",
+          "90",
+          "49",
+          "31",
+          "46"
+        ]
+      }
+    },
+    {
+      "id": "FR24",
+      "query": "mlx backend on mac training lora setup",
+      "targets": [
+        "53"
+      ],
+      "baseline": {
+        "rank": 9,
+        "top10": [
+          "63",
+          "561",
+          "699",
+          "390",
+          "51",
+          "554",
+          "55",
+          "532",
+          "53",
+          "528"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "390",
+          "53",
+          "63",
+          "561",
+          "699",
+          "55",
+          "532",
+          "51",
+          "554",
+          "528"
+        ]
+      }
+    },
+    {
+      "id": "FR25",
+      "query": "soup lock check exit code on env drift",
+      "targets": [
+        "2"
+      ],
+      "baseline": {
+        "rank": 4,
+        "top10": [
+          "117",
+          "397",
+          "253",
+          "2",
+          "252",
+          "303",
+          "396",
+          "305",
+          "255",
+          "256"
+        ]
+      },
+      "candidate": {
+        "rank": 4,
+        "top10": [
+          "117",
+          "397",
+          "253",
+          "2",
+          "252",
+          "303",
+          "396",
+          "255",
+          "305",
+          "256"
+        ]
+      }
+    },
+    {
+      "id": "FR26",
+      "query": "soup plan apply terraform style for training config",
+      "targets": [
+        "116"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "116",
+          "51",
+          "325",
+          "157",
+          "433",
+          "586",
+          "690",
+          "660",
+          "126",
+          "689"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "116",
+          "51",
+          "325",
+          "157",
+          "433",
+          "586",
+          "690",
+          "660",
+          "170",
+          "126"
+        ]
+      }
+    },
+    {
+      "id": "FR27",
+      "query": "namespace pinning blocking hf download author changed",
+      "targets": [
+        "23"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "23",
+          "335",
+          "1",
+          "200",
+          "283",
+          "172",
+          "108",
+          "174",
+          "567",
+          "10"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "23",
+          "335",
+          "200",
+          "1",
+          "283",
+          "172",
+          "108",
+          "174",
+          "567",
+          "10"
+        ]
+      }
+    },
+    {
+      "id": "FR28",
+      "query": "soup autopilot picked weird learning rate can i override",
+      "targets": [
+        "52"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "52",
+          "18",
+          "529",
+          "96",
+          "235",
+          "392",
+          "518",
+          "164",
+          "594",
+          "651"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "52",
+          "18",
+          "529",
+          "235",
+          "392",
+          "164",
+          "651",
+          "635",
+          "96",
+          "127"
+        ]
+      }
+    },
+    {
+      "id": "FR29",
+      "query": "soup adapters check says inactive all lora_B zero",
+      "targets": [
+        "22"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "22",
+          "467",
+          "9",
+          "135",
+          "474",
+          "131",
+          "18",
+          "128",
+          "389",
+          "620"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "22",
+          "467",
+          "135",
+          "9",
+          "474",
+          "131",
+          "18",
+          "128",
+          "2",
+          "389"
+        ]
+      }
+    },
+    {
+      "id": "FR30",
+      "query": "license conflict merging llama and gemma adapters",
+      "targets": [
+        "24"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "24",
+          "122",
+          "11",
+          "1",
+          "142",
+          "489",
+          "9",
+          "289",
+          "598",
+          "76"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "24",
+          "122",
+          "11",
+          "1",
+          "142",
+          "489",
+          "289",
+          "9",
+          "598",
+          "76"
+        ]
+      }
+    }
+  ],
+  "fixture_sha256": "c7720c6e08a4bb7ebefe58c04cbab6e57f1dbb1a2d0782245516234cdb22948b",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a"
+}

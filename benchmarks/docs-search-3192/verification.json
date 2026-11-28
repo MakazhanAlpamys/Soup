@@ -1,0 +1,24 @@
+{
+  "status": "CANDIDATE_ONLY_NOT_READY_FOR_DEFAULT_CHANGE",
+  "base": "bf62781f0dc8cb509e3dae16a3818f8dba28627c",
+  "checks": {
+    "baseline_docs_tests": "27 passed before source changes",
+    "latest_docs_tests_python312": "64 passed",
+    "affected_suite_python312": "364 passed, 3 skipped",
+    "docs_tests_python311": "64 passed",
+    "docs_tests_python313": "64 passed",
+    "mutations": "All six retained components caught by failing focused tests when removed",
+    "lint": "ruff check src/soup_cli/ scripts/ tests/ benchmarks/ passed",
+    "wheel": "Built; 17 guides exactly once; base-only offline search and five-field JSON verified",
+    "cache": "Existing bytes and mtime unchanged on cache hit; no build/write allowed by test",
+    "original28_numerical_gate": "PASS locally, all four metrics preserved or improved; one individual loss disclosed",
+    "current28_section_gate": "PASS; pinned docs/chunks/baseline/mappings; no individual loss",
+    "changelog": "Fragment renamed to changelog.d/0.78.0/3242.changed.md using the actual PR number.",
+    "supplemental10": "Completed once after approval and freeze. FAIL: Hit@5 7/10 to 7/10; MRR@10 0.4750 to 0.453333; all four first-rank losses disclosed."
+  },
+  "pending": {
+    "historical_fixture": "Two passages lack established Soup docs source; bodies not committed",
+    "fresh_set": "Supplemental10 approved and scored, but no Hit@5 gain and lower MRR@10. Outside-tuning independence was not established; the confirmed fresh-set requirement remains pending.",
+    "pull_request": "Draft #3242; promotion unsupported by supplemental results and still pending eligible fresh-set evidence and historical fixture provenance."
+  }
+}

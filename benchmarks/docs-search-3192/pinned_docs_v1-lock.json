@@ -1,0 +1,21 @@
+{
+  "fixture_version": 1,
+  "cohort": "original28-pinned-docs-v1",
+  "docs_commit": "8ab26641ed34e724018e696a93a06460f26c153e",
+  "candidate_commit": "f40be434fb6b4dbd1b1688cf12c633de5f1f6ef5",
+  "ruling": "https://github.com/MakazhanAlpamys/Soup/issues/3192#issuecomment-7126471247",
+  "declaration_status": "Frozen before first baseline or candidate scoring; declare in PR before executing the gate",
+  "gate": "option B: no decrease in Hit@1, Hit@5, MRR@10, Recall@5; disclose every first-relevant-rank loss",
+  "label_policy": "Original 28 unchanged; original positive labels mapped to owning sections and deduplicated; no result-based relabeling",
+  "files": {
+    "src/soup_cli/docs/retriever.py": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a",
+    "src/soup_cli/docs/tokenizer.py": "f5d929939cadbe7da5ec7cefd8f257945c9658aeb97adc661eb2ee106d9203a8",
+    "src/soup_cli/docs/bm25.py": "3dbfbc893babe41374a9d67c2428dde5470eab5915d8a800791362a228484289",
+    "src/soup_cli/docs/chunker.py": "5f3aada4a27491b8744c3c256794cc069e6f5b73d1351f169c2f11fe5edadc47",
+    "scripts/check_docs_search_ranking.py": "0230eb498102f02c031acc5a3d3360420b446e9ff6acafef8f896ce28ac5cd4b",
+    "scripts/rebuild_docs_search_fixture.py": "6e3942d11d89ec65654d7fa3cc03dc2d1aba1dc2343ae7ea970fbafa82ebf78c",
+    "tests/fixtures/docs_search/original28-source.json": "b485ae32a0142ec6958080d838302feb0c9563d2acf2c7cb18b56f41974193c4",
+    "tests/fixtures/docs_search/pinned_docs_v1.json": "ad73c7d7f794296b49ef7ba6d7b8914b2e9d474e27d735e3aed7bf5b0183d898",
+    "tests/fixtures/docs_search/pinned_docs_v1-migration.json": "e7eee25c3281e208bcc0c3291a6495b5a1899efdcab8cd8a5ba5d04710d0d705"
+  }
+}

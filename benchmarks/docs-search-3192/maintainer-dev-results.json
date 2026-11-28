@@ -1,0 +1,397 @@
+{
+  "cohort": "maintainer10-development",
+  "corpus_sha256": "4be524ccc697cb045c478ebd82fd68d2c6750939cb9837faa60ce351e4bca9ee",
+  "query_count": 10,
+  "gate": "option B: aggregate preservation, all individual losses disclosed",
+  "passed": true,
+  "require_hit5_gain": false,
+  "metrics": {
+    "baseline": {
+      "hit1": 0.2,
+      "hit5": 0.7,
+      "mrr10": 0.38333333333333336,
+      "recall5": 0.7
+    },
+    "candidate": {
+      "hit1": 0.5,
+      "hit5": 0.9,
+      "mrr10": 0.655952380952381,
+      "recall5": 0.9
+    }
+  },
+  "rank_losses": [],
+  "per_query": [
+    {
+      "id": "D01",
+      "query": "how do I stop training with ctrl+c without losing progress",
+      "targets": [
+        "104"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "104",
+          "437",
+          "508",
+          "612",
+          "470",
+          "468",
+          "490",
+          "225",
+          "648",
+          "614"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "104",
+          "437",
+          "508",
+          "470",
+          "612",
+          "468",
+          "507",
+          "490",
+          "225",
+          "648"
+        ]
+      }
+    },
+    {
+      "id": "D02",
+      "query": "continue training from a checkpoint after a crash",
+      "targets": [
+        "71"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "42",
+          "48",
+          "71",
+          "127",
+          "99",
+          "104",
+          "646",
+          "105",
+          "555",
+          "393"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "71",
+          "48",
+          "42",
+          "393",
+          "646",
+          "555",
+          "99",
+          "547",
+          "127",
+          "104"
+        ]
+      }
+    },
+    {
+      "id": "D03",
+      "query": "find the biggest batch size that fits my GPU",
+      "targets": [
+        "585"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "119",
+          "576",
+          "585",
+          "544",
+          "382",
+          "549",
+          "655",
+          "552",
+          "644",
+          "674"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "585",
+          "576",
+          "119",
+          "552",
+          "544",
+          "382",
+          "390",
+          "549",
+          "569",
+          "655"
+        ]
+      }
+    },
+    {
+      "id": "D04",
+      "query": "preference training without a reference model",
+      "targets": [
+        "686"
+      ],
+      "baseline": {
+        "rank": 399,
+        "top10": [
+          "666",
+          "437",
+          "643",
+          "390",
+          "436",
+          "574",
+          "676",
+          "455",
+          "308",
+          "53"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "686",
+          "666",
+          "437",
+          "643",
+          "390",
+          "455",
+          "436",
+          "574",
+          "673",
+          "676"
+        ]
+      }
+    },
+    {
+      "id": "D05",
+      "query": "convert my model to GGUF for llama.cpp",
+      "targets": [
+        "598"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "605",
+          "601",
+          "598",
+          "600",
+          "587",
+          "282",
+          "633",
+          "632",
+          "292",
+          "290"
+        ]
+      },
+      "candidate": {
+        "rank": 3,
+        "top10": [
+          "605",
+          "601",
+          "598",
+          "600",
+          "587",
+          "282",
+          "292",
+          "633",
+          "632",
+          "290"
+        ]
+      }
+    },
+    {
+      "id": "D06",
+      "query": "remove near duplicate rows using embeddings",
+      "targets": [
+        "417"
+      ],
+      "baseline": {
+        "rank": 2,
+        "top10": [
+          "197",
+          "417",
+          "429",
+          "696",
+          "541",
+          "32",
+          "483",
+          "464",
+          "44",
+          "418"
+        ]
+      },
+      "candidate": {
+        "rank": 2,
+        "top10": [
+          "197",
+          "417",
+          "429",
+          "541",
+          "696",
+          "535",
+          "32",
+          "483",
+          "464",
+          "44"
+        ]
+      }
+    },
+    {
+      "id": "D07",
+      "query": "fine-tune on a Mac without a GPU",
+      "targets": [
+        "53"
+      ],
+      "baseline": {
+        "rank": 21,
+        "top10": [
+          "390",
+          "670",
+          "650",
+          "529",
+          "394",
+          "648",
+          "459",
+          "668",
+          "517",
+          "382"
+        ]
+      },
+      "candidate": {
+        "rank": 7,
+        "top10": [
+          "390",
+          "670",
+          "650",
+          "529",
+          "394",
+          "648",
+          "53",
+          "382",
+          "459",
+          "517"
+        ]
+      }
+    },
+    {
+      "id": "D08",
+      "query": "train on a cloud GPU without my own server",
+      "targets": [
+        "65"
+      ],
+      "baseline": {
+        "rank": 1,
+        "top10": [
+          "65",
+          "67",
+          "382",
+          "615",
+          "426",
+          "493",
+          "66",
+          "70",
+          "91",
+          "459"
+        ]
+      },
+      "candidate": {
+        "rank": 1,
+        "top10": [
+          "65",
+          "67",
+          "382",
+          "615",
+          "426",
+          "493",
+          "66",
+          "70",
+          "91",
+          "618"
+        ]
+      }
+    },
+    {
+      "id": "D09",
+      "query": "serve my model behind an OpenAI compatible API",
+      "targets": [
+        "612"
+      ],
+      "baseline": {
+        "rank": 3,
+        "top10": [
+          "429",
+          "665",
+          "612",
+          "205",
+          "207",
+          "275",
+          "638",
+          "434",
+          "595",
+          "430"
+        ]
+      },
+      "candidate": {
+        "rank": 3,
+        "top10": [
+          "429",
+          "665",
+          "612",
+          "205",
+          "207",
+          "275",
+          "638",
+          "434",
+          "595",
+          "430"
+        ]
+      }
+    },
+    {
+      "id": "D10",
+      "query": "will this model fit in 24GB of VRAM",
+      "targets": [
+        "118"
+      ],
+      "baseline": {
+        "rank": 12,
+        "top10": [
+          "164",
+          "585",
+          "564",
+          "563",
+          "576",
+          "569",
+          "116",
+          "568",
+          "571",
+          "119"
+        ]
+      },
+      "candidate": {
+        "rank": 4,
+        "top10": [
+          "164",
+          "585",
+          "564",
+          "118",
+          "563",
+          "576",
+          "569",
+          "116",
+          "568",
+          "571"
+        ]
+      }
+    }
+  ],
+  "fixture_sha256": "c5a2b9cc994346f52b72a5ddf0f62a95ea7b909ef916d58300591bd32dbe033b",
+  "ranker_sha256": "8989fe5c07f76e6de3b0f23fe17f15e48282abc977064e2a6b7375bd337c8d9a"
+}

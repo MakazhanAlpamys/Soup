@@ -1,0 +1,21 @@
+{
+  "fixture_freeze_commit": "f1f507ad9d166eab0be34b9bda319d65b4034afb",
+  "fixture_sha256": "4318f4eb6a1f36d62e766b7a45cb6643b63b00efe2ab24a8dfbb07789fc50aa4",
+  "started_at_utc": "2026-11-23T17:32:08.505406+00:00",
+  "state": "completed",
+  "command": [
+    "python",
+    "scripts/check_docs_search_ranking.py",
+    "tests/fixtures/docs_search/agent_draft_review.json",
+    "--require-hit5-gain",
+    "--output",
+    "benchmarks/docs-search-3192/supplemental10-results.json"
+  ],
+  "exit_code": 1,
+  "completed_at_utc": "2026-11-23T17:32:08.903673+00:00",
+  "outcome": "FAIL: no Hit@5 gain and MRR@10 decreased.",
+  "authorship": "AI-drafted by the Codex implementation agent who developed and tuned this candidate.",
+  "outside_tuning_authorship": false,
+  "queries_or_targets_changed_after_scoring": false,
+  "ranker_changed_after_scoring": false
+}

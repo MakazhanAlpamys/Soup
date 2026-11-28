@@ -1,0 +1,43 @@
+{
+  "query": "will this model fit in 24GB of VRAM",
+  "method": "fresh Python process running the real Typer app; cache location redirected in wrapper; identical current docs for both arms",
+  "cli": {
+    "empty_index_cache": {
+      "baseline": {
+        "n": 20,
+        "median_ms": 630.7039795210585,
+        "p95_ms": 640.6597500899807
+      },
+      "candidate": {
+        "n": 20,
+        "median_ms": 636.318520992063,
+        "p95_ms": 649.7609580401331
+      }
+    },
+    "populated_index_cache": {
+      "baseline": {
+        "n": 20,
+        "median_ms": 317.34285404672846,
+        "p95_ms": 335.3235409595072
+      },
+      "candidate": {
+        "n": 20,
+        "median_ms": 322.93214596575126,
+        "p95_ms": 343.19225000217557
+      }
+    }
+  },
+  "warm_ranking": {
+    "baseline": {
+      "n": 500,
+      "median_ms": 0.22845802595838904,
+      "p95_ms": 0.24516705889254808
+    },
+    "candidate": {
+      "n": 500,
+      "median_ms": 2.512749982997775,
+      "p95_ms": 2.6485000271350145
+    }
+  },
+  "chunk_count": 702
+}
