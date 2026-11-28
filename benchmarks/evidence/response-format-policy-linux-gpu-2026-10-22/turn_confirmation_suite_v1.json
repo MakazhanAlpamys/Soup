@@ -1,0 +1,657 @@
+{
+  "version": "g6-turn-confirmation-v1",
+  "not_standard_benchmark": true,
+  "scope": "fresh authored confirmation tasks; no model outputs observed",
+  "cases": [
+    {
+      "id": "g6-turn-confirm-v1-add-01",
+      "kind": "task",
+      "family": "add",
+      "prompt": "Give the result of 188 plus 251. Output a single decimal integer, without explanation.",
+      "expected": "439",
+      "operands": [
+        188,
+        251
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-subtract-01",
+      "kind": "task",
+      "family": "subtract",
+      "prompt": "Find the difference 824 minus 686. Output a single decimal integer, without explanation.",
+      "expected": "138",
+      "operands": [
+        824,
+        686
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-multiply-01",
+      "kind": "task",
+      "family": "multiply",
+      "prompt": "What is the product of 32 and 22? Output a single decimal integer, without explanation.",
+      "expected": "704",
+      "operands": [
+        32,
+        22
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-sort-01",
+      "kind": "task",
+      "family": "sort",
+      "prompt": "Arrange these values from smallest to largest: 17, 68, 27, 69, 52. Your entire response must contain integers separated by commas, with no spaces.",
+      "expected": "17,27,52,68,69",
+      "operands": [
+        17,
+        68,
+        27,
+        69,
+        52
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-extract-01",
+      "kind": "task",
+      "family": "extract",
+      "prompt": "Read this entry: name=Lyra | code=D516 | count=74. Output the code value alone.",
+      "expected": "D516",
+      "operands": {
+        "name": "Lyra",
+        "code": "D516",
+        "count": 74
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-count-01",
+      "kind": "task",
+      "family": "count",
+      "prompt": "How many words equal fig in this list: fig date kiwi date fig? Output only the count as digits.",
+      "expected": "2",
+      "operands": {
+        "target": "fig",
+        "words": [
+          "fig",
+          "date",
+          "kiwi",
+          "date",
+          "fig"
+        ]
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-last-01",
+      "kind": "task",
+      "family": "last",
+      "prompt": "Copy the final item, preserving its lowercase spelling: copper | agate | spruce | willow. Output that item alone.",
+      "expected": "willow",
+      "operands": [
+        "copper",
+        "agate",
+        "spruce",
+        "willow"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-format-01",
+      "kind": "task",
+      "family": "format",
+      "prompt": "Write birch and silver in uppercase, in that order. Separate them with exactly one slash and nothing else.",
+      "expected": "BIRCH/SILVER",
+      "operands": [
+        "birch",
+        "silver"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-logic-01",
+      "kind": "task",
+      "family": "logic",
+      "prompt": "Premise: every vexil is green. Premise: Ivo is a vexil. Is Ivo green? Respond using exactly lowercase yes or no.",
+      "expected": "yes",
+      "operands": {
+        "all_members_have_property": true,
+        "group": "vexils",
+        "person": "Ivo",
+        "property": "green"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-context-01",
+      "kind": "task",
+      "family": "context",
+      "prompt": "Record: Davi checked in on Sunday; Bela checked in on Saturday. Give only the recorded weekday for Davi, preserving capitalization.",
+      "expected": "Sunday",
+      "operands": {
+        "days": {
+          "Davi": "Sunday",
+          "Bela": "Saturday"
+        },
+        "query": "Davi"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-reverse-01",
+      "kind": "task",
+      "family": "reverse",
+      "prompt": "Write the characters of 3FALW8 in reverse order. Preserve letter case; output the resulting six characters alone.",
+      "expected": "8WLAF3",
+      "operands": "3FALW8",
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-json-01",
+      "kind": "task",
+      "family": "json",
+      "prompt": "Produce only valid JSON with exactly the keys color and count. Set color to the string amber and count to the integer 7.",
+      "expected": "{\"color\":\"amber\",\"count\":7}",
+      "operands": {
+        "color": "amber",
+        "count": 7
+      },
+      "scorer": "json_object"
+    },
+    {
+      "id": "g6-turn-confirm-v1-add-02",
+      "kind": "task",
+      "family": "add",
+      "prompt": "Give the result of 373 plus 843. Output a single decimal integer, without explanation.",
+      "expected": "1216",
+      "operands": [
+        373,
+        843
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-subtract-02",
+      "kind": "task",
+      "family": "subtract",
+      "prompt": "Find the difference 856 minus 193. Output a single decimal integer, without explanation.",
+      "expected": "663",
+      "operands": [
+        856,
+        193
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-multiply-02",
+      "kind": "task",
+      "family": "multiply",
+      "prompt": "What is the product of 18 and 16? Output a single decimal integer, without explanation.",
+      "expected": "288",
+      "operands": [
+        18,
+        16
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-sort-02",
+      "kind": "task",
+      "family": "sort",
+      "prompt": "Arrange these values from smallest to largest: 55, 4, 94, 6, 25. Your entire response must contain integers separated by commas, with no spaces.",
+      "expected": "4,6,25,55,94",
+      "operands": [
+        55,
+        4,
+        94,
+        6,
+        25
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-extract-02",
+      "kind": "task",
+      "family": "extract",
+      "prompt": "Read this entry: name=Vega | code=B975 | count=23. Output the code value alone.",
+      "expected": "B975",
+      "operands": {
+        "name": "Vega",
+        "code": "B975",
+        "count": 23
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-count-02",
+      "kind": "task",
+      "family": "count",
+      "prompt": "How many words equal lime in this list: kiwi lime lime date date lime? Output only the count as digits.",
+      "expected": "3",
+      "operands": {
+        "target": "lime",
+        "words": [
+          "kiwi",
+          "lime",
+          "lime",
+          "date",
+          "date",
+          "lime"
+        ]
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-last-02",
+      "kind": "task",
+      "family": "last",
+      "prompt": "Copy the final item, preserving its lowercase spelling: spruce | willow | garnet | marble. Output that item alone.",
+      "expected": "marble",
+      "operands": [
+        "spruce",
+        "willow",
+        "garnet",
+        "marble"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-format-02",
+      "kind": "task",
+      "family": "format",
+      "prompt": "Write hazel and indigo in uppercase, in that order. Separate them with exactly one slash and nothing else.",
+      "expected": "HAZEL/INDIGO",
+      "operands": [
+        "hazel",
+        "indigo"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-logic-02",
+      "kind": "task",
+      "family": "logic",
+      "prompt": "Premise: every dorvet is not round. Premise: Mira is a dorvet. Is Mira round? Respond using exactly lowercase yes or no.",
+      "expected": "no",
+      "operands": {
+        "all_members_have_property": false,
+        "group": "dorvets",
+        "person": "Mira",
+        "property": "round"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-context-02",
+      "kind": "task",
+      "family": "context",
+      "prompt": "Record: Ciro checked in on Saturday; Elin checked in on Sunday. Give only the recorded weekday for Elin, preserving capitalization.",
+      "expected": "Sunday",
+      "operands": {
+        "days": {
+          "Ciro": "Saturday",
+          "Elin": "Sunday"
+        },
+        "query": "Elin"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-reverse-02",
+      "kind": "task",
+      "family": "reverse",
+      "prompt": "Write the characters of 2KF8LR in reverse order. Preserve letter case; output the resulting six characters alone.",
+      "expected": "RL8FK2",
+      "operands": "2KF8LR",
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-json-02",
+      "kind": "task",
+      "family": "json",
+      "prompt": "Produce only valid JSON with exactly the keys color and count. Set color to the string ivory and count to the integer 11.",
+      "expected": "{\"color\":\"ivory\",\"count\":11}",
+      "operands": {
+        "color": "ivory",
+        "count": 11
+      },
+      "scorer": "json_object"
+    },
+    {
+      "id": "g6-turn-confirm-v1-add-03",
+      "kind": "task",
+      "family": "add",
+      "prompt": "Give the result of 612 plus 620. Output a single decimal integer, without explanation.",
+      "expected": "1232",
+      "operands": [
+        612,
+        620
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-subtract-03",
+      "kind": "task",
+      "family": "subtract",
+      "prompt": "Find the difference 641 minus 308. Output a single decimal integer, without explanation.",
+      "expected": "333",
+      "operands": [
+        641,
+        308
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-multiply-03",
+      "kind": "task",
+      "family": "multiply",
+      "prompt": "What is the product of 30 and 34? Output a single decimal integer, without explanation.",
+      "expected": "1020",
+      "operands": [
+        30,
+        34
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-sort-03",
+      "kind": "task",
+      "family": "sort",
+      "prompt": "Arrange these values from smallest to largest: 61, 27, 31, 51, 94. Your entire response must contain integers separated by commas, with no spaces.",
+      "expected": "27,31,51,61,94",
+      "operands": [
+        61,
+        27,
+        31,
+        51,
+        94
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-extract-03",
+      "kind": "task",
+      "family": "extract",
+      "prompt": "Read this entry: name=Carina | code=B849 | count=41. Output the code value alone.",
+      "expected": "B849",
+      "operands": {
+        "name": "Carina",
+        "code": "B849",
+        "count": 41
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-count-03",
+      "kind": "task",
+      "family": "count",
+      "prompt": "How many words equal mango in this list: mango kiwi date date mango mango mango? Output only the count as digits.",
+      "expected": "4",
+      "operands": {
+        "target": "mango",
+        "words": [
+          "mango",
+          "kiwi",
+          "date",
+          "date",
+          "mango",
+          "mango",
+          "mango"
+        ]
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-last-03",
+      "kind": "task",
+      "family": "last",
+      "prompt": "Copy the final item, preserving its lowercase spelling: spruce | marble | bronze | willow. Output that item alone.",
+      "expected": "willow",
+      "operands": [
+        "spruce",
+        "marble",
+        "bronze",
+        "willow"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-format-03",
+      "kind": "task",
+      "family": "format",
+      "prompt": "Write silver and birch in uppercase, in that order. Separate them with exactly one slash and nothing else.",
+      "expected": "SILVER/BIRCH",
+      "operands": [
+        "silver",
+        "birch"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-logic-03",
+      "kind": "task",
+      "family": "logic",
+      "prompt": "Premise: every nalpin is quiet. Premise: Suri is a nalpin. Is Suri quiet? Respond using exactly lowercase yes or no.",
+      "expected": "yes",
+      "operands": {
+        "all_members_have_property": true,
+        "group": "nalpins",
+        "person": "Suri",
+        "property": "quiet"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-context-03",
+      "kind": "task",
+      "family": "context",
+      "prompt": "Record: Davi checked in on Sunday; Ciro checked in on Saturday. Give only the recorded weekday for Davi, preserving capitalization.",
+      "expected": "Sunday",
+      "operands": {
+        "days": {
+          "Davi": "Sunday",
+          "Ciro": "Saturday"
+        },
+        "query": "Davi"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-reverse-03",
+      "kind": "task",
+      "family": "reverse",
+      "prompt": "Write the characters of MLJCNH in reverse order. Preserve letter case; output the resulting six characters alone.",
+      "expected": "HNCJLM",
+      "operands": "MLJCNH",
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-json-03",
+      "kind": "task",
+      "family": "json",
+      "prompt": "Produce only valid JSON with exactly the keys color and count. Set color to the string magenta and count to the integer 4.",
+      "expected": "{\"color\":\"magenta\",\"count\":4}",
+      "operands": {
+        "color": "magenta",
+        "count": 4
+      },
+      "scorer": "json_object"
+    },
+    {
+      "id": "g6-turn-confirm-v1-add-04",
+      "kind": "task",
+      "family": "add",
+      "prompt": "Give the result of 394 plus 344. Output a single decimal integer, without explanation.",
+      "expected": "738",
+      "operands": [
+        394,
+        344
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-subtract-04",
+      "kind": "task",
+      "family": "subtract",
+      "prompt": "Find the difference 836 minus 470. Output a single decimal integer, without explanation.",
+      "expected": "366",
+      "operands": [
+        836,
+        470
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-multiply-04",
+      "kind": "task",
+      "family": "multiply",
+      "prompt": "What is the product of 35 and 29? Output a single decimal integer, without explanation.",
+      "expected": "1015",
+      "operands": [
+        35,
+        29
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-sort-04",
+      "kind": "task",
+      "family": "sort",
+      "prompt": "Arrange these values from smallest to largest: 78, 21, 41, 66, 17. Your entire response must contain integers separated by commas, with no spaces.",
+      "expected": "17,21,41,66,78",
+      "operands": [
+        78,
+        21,
+        41,
+        66,
+        17
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-extract-04",
+      "kind": "task",
+      "family": "extract",
+      "prompt": "Read this entry: name=Aquila | code=D360 | count=56. Output the code value alone.",
+      "expected": "D360",
+      "operands": {
+        "name": "Aquila",
+        "code": "D360",
+        "count": 56
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-count-04",
+      "kind": "task",
+      "family": "count",
+      "prompt": "How many words equal melon in this list: melon kiwi melon date date melon melon melon? Output only the count as digits.",
+      "expected": "5",
+      "operands": {
+        "target": "melon",
+        "words": [
+          "melon",
+          "kiwi",
+          "melon",
+          "date",
+          "date",
+          "melon",
+          "melon",
+          "melon"
+        ]
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-last-04",
+      "kind": "task",
+      "family": "last",
+      "prompt": "Copy the final item, preserving its lowercase spelling: agate | willow | spruce | marble. Output that item alone.",
+      "expected": "marble",
+      "operands": [
+        "agate",
+        "willow",
+        "spruce",
+        "marble"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-format-04",
+      "kind": "task",
+      "family": "format",
+      "prompt": "Write hazel and birch in uppercase, in that order. Separate them with exactly one slash and nothing else.",
+      "expected": "HAZEL/BIRCH",
+      "operands": [
+        "hazel",
+        "birch"
+      ],
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-logic-04",
+      "kind": "task",
+      "family": "logic",
+      "prompt": "Premise: every ferlan is not warm. Premise: Dena is a ferlan. Is Dena warm? Respond using exactly lowercase yes or no.",
+      "expected": "no",
+      "operands": {
+        "all_members_have_property": false,
+        "group": "ferlans",
+        "person": "Dena",
+        "property": "warm"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-context-04",
+      "kind": "task",
+      "family": "context",
+      "prompt": "Record: Elin checked in on Wednesday; Bela checked in on Thursday. Give only the recorded weekday for Bela, preserving capitalization.",
+      "expected": "Thursday",
+      "operands": {
+        "days": {
+          "Elin": "Wednesday",
+          "Bela": "Thursday"
+        },
+        "query": "Bela"
+      },
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-reverse-04",
+      "kind": "task",
+      "family": "reverse",
+      "prompt": "Write the characters of YCWL9H in reverse order. Preserve letter case; output the resulting six characters alone.",
+      "expected": "H9LWCY",
+      "operands": "YCWL9H",
+      "scorer": "strip_exact"
+    },
+    {
+      "id": "g6-turn-confirm-v1-json-04",
+      "kind": "task",
+      "family": "json",
+      "prompt": "Produce only valid JSON with exactly the keys color and count. Set color to the string olive and count to the integer 9.",
+      "expected": "{\"color\":\"olive\",\"count\":9}",
+      "operands": {
+        "color": "olive",
+        "count": 9
+      },
+      "scorer": "json_object"
+    }
+  ],
+  "generation": {
+    "render": "user: {prompt}\nassistant:",
+    "add_BOS": true,
+    "add_EOS_to_prompt": false,
+    "do_sample": false,
+    "num_beams": 1,
+    "max_new_tokens": 128,
+    "use_cache": true,
+    "stop": "EOS or max_new_tokens; no string stopping",
+    "decode": "skip_special_tokens=True; clean_up_tokenization_spaces=False"
+  },
+  "scoring": "unchanged frozen strict scorer; no formatting normalization"
+}

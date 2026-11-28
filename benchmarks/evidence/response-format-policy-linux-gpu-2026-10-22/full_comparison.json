@@ -1,0 +1,103 @@
+{
+  "mode": "full",
+  "contract_sha256": "1b80dd94d4b1358e9cb63f7a1e804a581436ff59d806fbfa5b733147f6f135d3",
+  "rows": {
+    "baseline": {
+      "final_ce": 0.9839257797862864,
+      "relative_ce_vs_baseline": 0.0,
+      "actual_train_s": 5609.586099249998,
+      "train_useful_tokens_s": 891.3313587732436,
+      "peak_allocated_bytes": 17582362624,
+      "peak_reserved_bytes": 19868418048,
+      "task": {
+        "task_passes": 0,
+        "task_total": 12,
+        "safety_status": "PENDING_BLIND_MANUAL_REVIEW",
+        "complete_quality_verdict": false
+      },
+      "F1_timing_accepted": true,
+      "checkpoint_reload_s": 893.6123472549989,
+      "tokens": {
+        "useful_loss_tokens": 5000000,
+        "processed_input_slots": 5473632,
+        "nonpadding_input_tokens": 5459986,
+        "padded_input_slots": 13646
+      }
+    },
+    "coherence_filter": {
+      "final_ce": 0.9841728593419583,
+      "relative_ce_vs_baseline": 0.00025111605036465257,
+      "actual_train_s": 5597.937483947004,
+      "train_useful_tokens_s": 893.18610905147,
+      "peak_allocated_bytes": 17582297088,
+      "peak_reserved_bytes": 20539506688,
+      "task": {
+        "task_passes": 0,
+        "task_total": 12,
+        "safety_status": "PENDING_BLIND_MANUAL_REVIEW",
+        "complete_quality_verdict": false
+      },
+      "F1_timing_accepted": true,
+      "checkpoint_reload_s": 886.4089159230061,
+      "tokens": {
+        "useful_loss_tokens": 5000000,
+        "processed_input_slots": 5470224,
+        "nonpadding_input_tokens": 5456023,
+        "padded_input_slots": 14201
+      }
+    },
+    "length_curriculum": {
+      "final_ce": 0.9929982158818574,
+      "relative_ce_vs_baseline": 0.00922065086813939,
+      "actual_train_s": 5597.310593071001,
+      "train_useful_tokens_s": 893.286144633385,
+      "peak_allocated_bytes": 17581314048,
+      "peak_reserved_bytes": 24792530944,
+      "task": {
+        "task_passes": 0,
+        "task_total": 12,
+        "safety_status": "PENDING_BLIND_MANUAL_REVIEW",
+        "complete_quality_verdict": false
+      },
+      "F1_timing_accepted": true,
+      "checkpoint_reload_s": 883.2918562560008,
+      "tokens": {
+        "useful_loss_tokens": 5000000,
+        "processed_input_slots": 5454152,
+        "nonpadding_input_tokens": 5440667,
+        "padded_input_slots": 13485
+      }
+    },
+    "reverse_length_curriculum": {
+      "final_ce": 0.9942416858139351,
+      "relative_ce_vs_baseline": 0.010484435147018356,
+      "actual_train_s": 5533.245572255,
+      "train_useful_tokens_s": 903.6287897777718,
+      "peak_allocated_bytes": 17580265472,
+      "peak_reserved_bytes": 18398314496,
+      "task": {
+        "task_passes": 0,
+        "task_total": 12,
+        "safety_status": "PENDING_BLIND_MANUAL_REVIEW",
+        "complete_quality_verdict": false
+      },
+      "F1_timing_accepted": true,
+      "checkpoint_reload_s": 888.6611753550023,
+      "tokens": {
+        "useful_loss_tokens": 5000000,
+        "processed_input_slots": 5354064,
+        "nonpadding_input_tokens": 5340190,
+        "padded_input_slots": 13874
+      }
+    }
+  },
+  "status": "MANUAL_REVIEW_PENDING",
+  "quality_verdict": "NO_VERDICT",
+  "single_seed_exploratory": true,
+  "initial_state_sha256": "afabcfa96bc9f495cb1f3a61686fbff09b1b31fc253e6f192c7a6fb8da9e22d2",
+  "F1_all_accepted": true,
+  "baseline_pilot_original_end_to_end_timing_validated": false,
+  "quality_ranking_is_single_seed_exploratory": true,
+  "independent_safety_review_pending": true,
+  "training_phase_time_excludes_preparation_eval_and_reload": true
+}

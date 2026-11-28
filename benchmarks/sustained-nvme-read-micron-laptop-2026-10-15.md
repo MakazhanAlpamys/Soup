@@ -81,4 +81,4 @@ a host-specific heuristic.
 
 Measured by @Artix6034
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/b3c86a29dbb7efe40d1646595961f250347ce683/benchmarks/results/c4-local
+Evidence: benchmarks/evidence/sustained-nvme-read-micron-laptop-2026-10-15/ (source commit b3c86a29dbb7)

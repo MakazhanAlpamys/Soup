@@ -1,0 +1,43 @@
+{
+  "schema": "g3-checklist-v1",
+  "task_status": "INCOMPLETE_ENVIRONMENT_BLOCKED",
+  "items": [
+    {
+      "requirement": "Controlled GDS support or explicit unsupported-on-tested-stack verdict",
+      "complete": false,
+      "evidence": "Initialization error 5001; missing configured driver is NO_VERDICT."
+    },
+    {
+      "requirement": "Native NVMe-to-VRAM transfer if supported",
+      "complete": false,
+      "evidence": "0 completed direct reads."
+    },
+    {
+      "requirement": "Comparison against unbuffered pinned staging (#974)",
+      "complete": false,
+      "evidence": "Two correctness controls passed; no comparative performance run."
+    },
+    {
+      "requirement": "Bandwidth, CPU and pinned RAM measurements",
+      "complete": false,
+      "evidence": "No accepted comparative study; internal total pinned RAM remains unknown."
+    },
+    {
+      "requirement": "Reproducible explicit unsupported result if direct path unavailable",
+      "complete": false,
+      "evidence": "Setup gaps cannot establish unsupported hardware."
+    }
+  ],
+  "supporting_work_complete": [
+    "Frozen primitive and controls",
+    "CUDA runtime UUID compile fix",
+    "CPU checks and actual SDK stats-off compile/link",
+    "Positive control byte oracle and independent F1 calibration on attempt3",
+    "Read-only selection gate",
+    "Local preservation and provider cleanup for all6leases"
+  ],
+  "additional_full_scope_open": [
+    "One-drive direct route and valid comparison",
+    "Two independent drives and concurrent comparison"
+  ]
+}

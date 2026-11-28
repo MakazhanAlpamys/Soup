@@ -80,4 +80,4 @@ record covers the Linux native path.
 
 Measured by @nurseit14
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/839ab24221103fa93eb9245a1f9891d7ee3edec3/benchmarks/g3/reports/20261023
+Evidence: benchmarks/evidence/direct-storage-read-rtx4090-2026-10-23/ (source commit 839ab2422110)

@@ -1,0 +1,65 @@
+{
+  "status": "LOCAL_SNAPSHOT_WEIGHT_HASHES_AND_STRUCTURE_VERIFIED",
+  "upstream": {
+    "repo": "meta-llama/Llama-3.1-8B",
+    "revision": "d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
+    "gated": "manual",
+    "anonymous_config_status": 401
+  },
+  "public_mirror": {
+    "repo": "unsloth/Meta-Llama-3.1-8B",
+    "revision": "e9a141a2091ea561b96483212645a2a05e6f99fc",
+    "gated": false,
+    "config_download_verified": true,
+    "license_identifier": "llama3.1",
+    "config_is_identical_to_upstream": false,
+    "missing_chat_template_requires_explicit_override": true,
+    "license_file_download_status": 404
+  },
+  "weights": [
+    {
+      "file": "model-00001-of-00004.safetensors",
+      "bytes": 4976698672,
+      "published_sha256": "f8b9704ab09cdeb097aa4a0a24bca96f906eec36bad63ab495bc21475058601b",
+      "mirror_published_sha256_matches": true,
+      "locally_verified": true
+    },
+    {
+      "file": "model-00002-of-00004.safetensors",
+      "bytes": 4999802720,
+      "published_sha256": "c28b25e7541751056ee126627e007f8d4288319733285e9f7b17b9ff6eb313f0",
+      "mirror_published_sha256_matches": true,
+      "locally_verified": true
+    },
+    {
+      "file": "model-00003-of-00004.safetensors",
+      "bytes": 4915916176,
+      "published_sha256": "d8e9504dd4e4a146d484c52a97584ec14dac92237c46b064934af67a85e7d383",
+      "mirror_published_sha256_matches": true,
+      "locally_verified": true
+    },
+    {
+      "file": "model-00004-of-00004.safetensors",
+      "bytes": 1168138808,
+      "published_sha256": "e4486f35c040f683f7d790354f66c169c109eb9fa0954a4a35d7c458a108405d",
+      "mirror_published_sha256_matches": true,
+      "locally_verified": true
+    }
+  ],
+  "weight_bytes_total": 16060556376,
+  "small_files_sha256": {
+    "tokenizer_config.json": "590b9837d3c2a8790e2aaf920f4c69f9181c3ca8fe52e6579ad3a3f654e59a9b",
+    "special_tokens_map.json": "32f404d626cf7b1b6eea36c241ae7cbd6ec29c777a8701ea48c0fe9ebb94c9b1",
+    "config.json": "0ea2186ccf686654fea498aae830b9de201334432b24b07f031d80b76dd928f0",
+    "tokenizer.json": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+    "generation_config.json": "46097458fa97e44251c131fb384df37a37ec0a9334d7a001100782fc9f1fc0bd",
+    "model.safetensors.index.json": "146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b"
+  },
+  "weights_downloaded": true,
+  "snapshot_complete": true,
+  "license_and_access_confirmed": false,
+  "usb_result": "Ollama GGUF variants found; not used as HF/NF4 reference snapshot",
+  "small_files_published_identity_verified": true,
+  "small_files_verification": "LFS SHA256 or exact Git blob SHA1 recomputed against immutable repository metadata",
+  "snapshot_receipt": "snapshot_preparation_result.json"
+}

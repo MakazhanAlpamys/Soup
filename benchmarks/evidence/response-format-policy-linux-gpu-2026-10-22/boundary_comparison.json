@@ -1,0 +1,658 @@
+{
+  "status": "FIVE_LABELS_LOCAL_AUDIT_COMPLETE",
+  "original_spec_sha256": "8f8c1607cb0302347b7bd8ff5f98ce693aa6d4975b7159a424af99d52ecb926c",
+  "recovery_sha256": "cc5f98016505852a2981a19fb5a669457d644a63ecbc96879b13f4a1fa009646",
+  "original_commit": "fee72251eb3a7b35f4b164e353bd23f896cc5fe1",
+  "recovery_commit": "6a9fda705ca00276ae2051d86cc116ec70746ac4",
+  "results": {
+    "initial": {
+      "paired": {
+        "diagnostic": {
+          "original_exact": 0,
+          "boundary_exact": 2,
+          "gains": 2,
+          "losses": 0,
+          "net_gain": 2
+        },
+        "confirmation": {
+          "original_exact": 0,
+          "boundary_exact": 7,
+          "gains": 7,
+          "losses": 0,
+          "net_gain": 7
+        }
+      },
+      "family": {
+        "add": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "subtract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "multiply": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "sort": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "extract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "count": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 2,
+          "gains": 2,
+          "losses": 0
+        },
+        "last": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "format": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "logic": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 1,
+          "gains": 1,
+          "losses": 0
+        },
+        "context": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "reverse": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "json": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        }
+      },
+      "completion_tokens": {
+        "original": {
+          "total": 6144,
+          "mean": 128.0,
+          "min": 128,
+          "max": 128
+        },
+        "boundary": {
+          "total": 679,
+          "mean": 14.145833333333334,
+          "min": 3,
+          "max": 35
+        }
+      },
+      "stop_reasons": {
+        "original": {
+          "max_new_tokens": 48
+        },
+        "boundary": {
+          "role_boundary": 48
+        }
+      }
+    },
+    "baseline": {
+      "paired": {
+        "diagnostic": {
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0,
+          "net_gain": 4
+        },
+        "confirmation": {
+          "original_exact": 0,
+          "boundary_exact": 14,
+          "gains": 14,
+          "losses": 0,
+          "net_gain": 14
+        }
+      },
+      "family": {
+        "add": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "subtract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 2,
+          "gains": 2,
+          "losses": 0
+        },
+        "multiply": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "sort": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "extract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "count": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "last": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "format": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "logic": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "context": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "reverse": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "json": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        }
+      },
+      "completion_tokens": {
+        "original": {
+          "total": 6105,
+          "mean": 127.1875,
+          "min": 89,
+          "max": 128
+        },
+        "boundary": {
+          "total": 657,
+          "mean": 13.6875,
+          "min": 4,
+          "max": 39
+        }
+      },
+      "stop_reasons": {
+        "original": {
+          "max_new_tokens": 47,
+          "eos": 1
+        },
+        "boundary": {
+          "role_boundary": 48
+        }
+      }
+    },
+    "coherence_filter": {
+      "paired": {
+        "diagnostic": {
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0,
+          "net_gain": 4
+        },
+        "confirmation": {
+          "original_exact": 0,
+          "boundary_exact": 15,
+          "gains": 15,
+          "losses": 0,
+          "net_gain": 15
+        }
+      },
+      "family": {
+        "add": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "subtract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 2,
+          "gains": 2,
+          "losses": 0
+        },
+        "multiply": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "sort": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "extract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "count": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "last": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 1,
+          "gains": 1,
+          "losses": 0
+        },
+        "format": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "logic": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "context": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "reverse": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "json": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        }
+      },
+      "completion_tokens": {
+        "original": {
+          "total": 5945,
+          "mean": 123.85416666666667,
+          "min": 74,
+          "max": 128
+        },
+        "boundary": {
+          "total": 621,
+          "mean": 12.9375,
+          "min": 4,
+          "max": 39
+        }
+      },
+      "stop_reasons": {
+        "original": {
+          "max_new_tokens": 44,
+          "eos": 4
+        },
+        "boundary": {
+          "role_boundary": 48
+        }
+      }
+    },
+    "length_curriculum": {
+      "paired": {
+        "diagnostic": {
+          "original_exact": 0,
+          "boundary_exact": 3,
+          "gains": 3,
+          "losses": 0,
+          "net_gain": 3
+        },
+        "confirmation": {
+          "original_exact": 0,
+          "boundary_exact": 15,
+          "gains": 15,
+          "losses": 0,
+          "net_gain": 15
+        }
+      },
+      "family": {
+        "add": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "subtract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "multiply": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "sort": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "extract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 1,
+          "gains": 1,
+          "losses": 0
+        },
+        "count": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "last": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 2,
+          "gains": 2,
+          "losses": 0
+        },
+        "format": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "logic": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "context": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "reverse": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "json": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        }
+      },
+      "completion_tokens": {
+        "original": {
+          "total": 6144,
+          "mean": 128.0,
+          "min": 128,
+          "max": 128
+        },
+        "boundary": {
+          "total": 758,
+          "mean": 15.791666666666666,
+          "min": 4,
+          "max": 63
+        }
+      },
+      "stop_reasons": {
+        "original": {
+          "max_new_tokens": 48
+        },
+        "boundary": {
+          "role_boundary": 48
+        }
+      }
+    },
+    "reverse_length_curriculum": {
+      "paired": {
+        "diagnostic": {
+          "original_exact": 0,
+          "boundary_exact": 3,
+          "gains": 3,
+          "losses": 0,
+          "net_gain": 3
+        },
+        "confirmation": {
+          "original_exact": 0,
+          "boundary_exact": 14,
+          "gains": 14,
+          "losses": 0,
+          "net_gain": 14
+        }
+      },
+      "family": {
+        "add": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "subtract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 2,
+          "gains": 2,
+          "losses": 0
+        },
+        "multiply": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "sort": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "extract": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "count": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "last": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "format": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        },
+        "logic": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "context": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "reverse": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 0,
+          "gains": 0,
+          "losses": 0
+        },
+        "json": {
+          "cases": 4,
+          "original_exact": 0,
+          "boundary_exact": 4,
+          "gains": 4,
+          "losses": 0
+        }
+      },
+      "completion_tokens": {
+        "original": {
+          "total": 5229,
+          "mean": 108.9375,
+          "min": 46,
+          "max": 128
+        },
+        "boundary": {
+          "total": 724,
+          "mean": 15.083333333333334,
+          "min": 4,
+          "max": 63
+        }
+      },
+      "stop_reasons": {
+        "original": {
+          "max_new_tokens": 25,
+          "eos": 23
+        },
+        "boundary": {
+          "role_boundary": 48
+        }
+      }
+    }
+  },
+  "descriptive_operational_gate": true,
+  "quality_verdict": "NO_VERDICT",
+  "independent_blinded_manual_safety": "PENDING",
+  "prior_attempt": {
+    "status": "PRESERVED_NVML_FAILURE_BEFORE_FIRST_RESPONSE",
+    "accepted_labels": 0,
+    "generated_responses": 0,
+    "archive_sha256": "3bbdec6bcad8a04f53a748581fbf629f28618ef670a49d7c4f6382ea735688cc"
+  },
+  "new_training": false,
+  "old_full_study_results_changed": false,
+  "data_policy_winner_claim": false,
+  "significance_claim": false,
+  "semantic_or_pretraining_contamination_ruled_out": false,
+  "guest_controls_certify_physical_host": false,
+  "single_seed_exploratory": true
+}

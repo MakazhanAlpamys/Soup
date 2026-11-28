@@ -111,4 +111,4 @@ has no verdict.
 
 Measured by @nurseit14
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/db0287a173ad8d8762b48679bf04b82460ff1f0a/benchmarks/g6
+Evidence: benchmarks/evidence/response-format-policy-linux-gpu-2026-10-22/ (source commit db0287a173ad)

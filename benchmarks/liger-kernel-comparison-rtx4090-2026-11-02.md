@@ -90,4 +90,4 @@ data. Model quality was outside the experiment.
 
 Measured by @nurseit14
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/5ff09d88a017b6d771928e7009ce4b961b124dc3/benchmarks/h2/reports/20261102_h2_close
+Evidence: benchmarks/evidence/liger-kernel-comparison-rtx4090-2026-11-02/ (source commit 5ff09d88a017)

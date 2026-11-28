@@ -1,0 +1,82 @@
+G6 prospective full four-policy study
+
+Purpose and frozen comparison
+Compare baseline, coherence_filter, length_curriculum and reverse_length_curriculum
+at exactly 5,000,000 shifted nonignored useful training targets each. Use one
+fixed Mistral-7B-v0.3 revision, tokenizer, LoRA recipe, runtime, seed901 and the
+same frozen held-out 256 examples / 322,332 evaluation targets. Each arm starts
+with the original model, fresh adapter and fresh optimizer. Exactly 611 optimizer
+updates: 610 of 8,192 targets and a last update of 2,880. The LR horizon stays 5M.
+These are the existing engine and prepared input plans, not a new data policy.
+
+Readiness evidence
+The original baseline pilot is USER_PAUSED_INCOMPLETE; its completed train/eval
+phases and separately verified exact 24-case reload evidence remain preserved.
+It has no accepted whole-run timing or reconstructed completion receipt.
+Coherence, fresh length curriculum and reverse curriculum pilots must each have
+all eight phases accepted, exact initialization,8updates/65,536targets, AMP,
+raw/PEFT reload agreement,24 exact reloaded answers and successful external exit.
+The JSON pins their complete retained evidence and distinct science contracts.
+The interrupted first length attempt stays incomplete; it is never substituted
+for the fresh completed attempt. Parent contracts and all old claims are intact.
+
+Full runs
+A new private runs directory and new science-keyed ledger contain four NEW full
+arms in the order above. Reuse run.execute_arm unchanged. Before each arm verify
+model bytes, exact runtime, same approved GPU, unchanged controls and deployed
+bytes from the user's pushed commit. Each subsequent arm requires the previous
+full arm's checksummed outputs, successful supervisor, identical initial state
+and private configuration,5M targets / 611 updates, finite AMP training, frozen base,
+exact raw and PEFT reloads, complete diagnostics and accepted F1/clocks.
+No pilot receipt may substitute for a full-arm receipt. Never delete claims,
+retry, auto-resume an optimizer, replace an interrupted receipt or change policy,
+eval, seed, scoring or stopping rules based on outcomes. Failure blocks progression.
+
+Operational limits and authority
+An arm has a hard 14,400-second supervisor limit plus 30 seconds before TERM and
+10 seconds before KILL; internal stage guards remain active. Four hours is an
+operational ceiling, not a guaranteed runtime prediction. Pilot linear token,
+processed-slot and squared-length extrapolations are only train-time heuristics;
+short ordered prefixes differ from the full length distribution. In particular,
+attention-proxy extrapolation for the short-first pilot is highly uncertain.
+The original model's longest prepared sequences must fit; a pilot does not prove
+that every full step will succeed. Preserve all failed/incomplete evidence.
+
+The user explicitly waived financial-reserve limits. This entry point requires
+that waiver in BOTH the private execution configuration and arm admission; it
+never defaults to a waiver. No balance floor or remaining-matrix reserve is
+invented. This does not waive model, data, identity, ownership, foreign-read,
+clock, storage, AMP, deadline or scientific audit checks. Account/instance/GPU,
+financial authority, Stop permission, SSH and provider receipts stay private.
+Provider credit exhaustion or external interruption can still terminate a run;
+this protocol does not guarantee funding or recovery. No optimizer state is saved.
+No automatic rental, Start, Stop, Reboot, deletion, top-up or provider control is
+implemented. Preserve outputs before any separately authorized provider Stop.
+
+Evaluation and deliverable
+Primary metric: token-weighted held-out mean CE, on identical target counts.
+Report CE versus baseline, useful/nonpadding/processed/padded token counts,
+training-phase seconds, useful-target throughput and peak allocated/reserved VRAM.
+The original frozen diagnostic suite is secondary; generation, scoring and
+128-token limit are unchanged. Export blinded forms with the unchanged summarize
+helper. Independent safety review remains pending; quality remains NO_VERDICT
+until reviewed. One seed supports exploratory comparisons, not a statistically
+established winner. Filtering effects concern that policy's full composition;
+never attribute a combined change to a single mechanism without an ablation.
+Training-phase timing excludes preparation, model setup, evaluation and reload.
+Do not label it complete end-to-end acceleration or include interrupted pilot
+whole-run timing. Preparation/filtering cost is not retrospectively measured.
+Guest controls do not certify unobservable physical-host isolation. No release
+speedup, safety acceptance or broader generalization claim follows automatically.
+
+Commands
+Modes: check (offline, no GPU), full (one new bounded arm), review (all four full
+roots plus blinded exports). Common options: --spec --spec-sha --reference
+--verification --series --pilots --artifact-root --data --cuda-gate --out.
+The first three evidence roots are original baseline, its separate reload check
+and original continuation series; --pilots is the pinned three completed pilots.
+Full also requires --arm --model-dir --launch-config --launch-config-sha
+--admission --protocol-commit. Review requires --runs ROOT1 ROOT2 ROOT3 ROOT4.
+Use the external supervisor, not its hidden worker; preserve and audit each arm
+before the next. A source commit string alone is not proof of pushed/deployed
+bytes; the operator verifies those independently before any paid full run.
