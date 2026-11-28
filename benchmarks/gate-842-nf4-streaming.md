@@ -149,3 +149,54 @@ parity stands for this configuration. Its two arms do not distinguish the repair
 Layer size alone did not make the historical failure appear here.
 [First pass](evidence/issue842/t4-model-first-pass.json) ·
 [Five repeats, per-parameter gradients and slot ownership](evidence/issue842/t4-model-repeated.json).
+
+## GTX 1650 (sm_75) — fused dequantise-and-multiply kernel, new baseline
+
+The fused Triton kernel (`src/soup_cli/kernels/packed_lora/triton/nf4_fused.py`) is a
+**candidate, not adopted**. It decodes NF4 inside the GEMM with no dense weight
+materialised; the reduction order is a sequential traversal of K in blocks of
+64 weights (one NF4 block per accumulation), an fp32 accumulator, and one round
+to fp16 at the end — no atomics and no split-K. The two arms in this row are the
+fused kernel (A) and explicit `dequantize_4bit` + `F.linear` (B); the native
+reference is `bnb.matmul_4bit` on the same packed weight and inputs. The
+harness's "faster"/"slower" verdict describes **B relative to A**.
+
+Card: NVIDIA GeForce GTX 1650 (TU117, sm_75, 4 GB), driver **580.178.04**, SM
+clock **1785 MHz** (12–13 in-window samples), torch **2.8.0+cu128**,
+bitsandbytes **0.50.2**, peft **0.21.2**, transformers **5.19.0**, Python 3.11.
+Protocol: seed 842, 20 warm-ups, 100 timed forward+backward iterations, 3
+processes per cell, ABBA arm order, non-reentrant checkpoint, BF16 compute
+dtype not available (native fp16). Same-session dense GEMM ceiling is measured
+separately by the harness. No end-to-end or full-model claim; this is a new
+baseline on this card and is not comparable with the T4 or 5070 rows above.
+
+```bash
+python benchmarks/harness/nf4_stream_bench.py --fused --json fused.json
+python benchmarks/harness/nf4_stream_bench.py --aliasing --alias-width 9000 --alias-absent --json alias9000.json
+```
+
+| N x K | M | native forward dispatch | A fused (ms) | B dequant+linear (ms) | B time reduction vs A | A/B speed ratio | max abs A vs native fwd / bwd |
+|---|---:|---|---:|---:|---|---:|---|
+| 4096 x 4096 | 3 | fused `gemm_4bit` | 7.205 | 4.250 | **40.2%** (`B/A = 0.590`) | 1.695x | 0.001953125 / 0.0000305176 |
+| 4096 x 4096 | 8 | fused `gemm_4bit` | 7.255 | 4.332 | **40.3%** (`B/A = 0.597`) | 1.675x | 0.001953125 / 0.0000305176 |
+
+**Statistic reported:** the harness's `cell_verdict` compares the paired **time
+reduction** `1 - B/A` against the spread within an arm; the medians of the
+per-process reductions are 0.402622 and 0.402549. Stated as a speed ratio the
+same pairs give `A/B ≈ 1.7x`, i.e. explicit dequantise + linear (B) ran at about
+1.7x the throughput of the fused candidate (A) on this card. The two figures
+are the same measurement in reciprocal forms, not two different results. Three
+processes per cell, all valid, `small_share: false`. The forward difference of
+0.001953125 is **the same** as explicit dequantise + linear against the native
+fused kernel at these rows; the kernel is not bit-exact against bitsandbytes'
+dispatch, so it is published as measured and not adopted. No timing advantage
+over the shipped arithmetic was found on this card.
+
+Aliasing control at width 9000: 40,500,000 packed bytes per layer (38.6 MiB)
+and 154.5 MiB dense, four layers, two slots, 8 tokens. The harness's
+above-threshold pass criterion does **not** apply at this size on sm_75: the
+resident arm took bnb's dense fallback (`fallback: 4`, no fused calls), so the
+recorded `pass` is false and the row is a control, not gate evidence. Raw arms:
+`unsafe` forward all exact, backward not exact (one layer's gradient differs);
+`bypass` forward and backward all exact; `repair` forward and backward all
+exact. This row does not replace the target-card aliasing gate.

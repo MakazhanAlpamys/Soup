@@ -128,6 +128,9 @@ def run_iterations(step, *, warmup: int, iterations: int) -> dict:
 
 
 def validate_paths(mode: str, arm: str, forward: dict, backward: dict) -> None:
+    if mode == "fused":
+        # The fused Triton kernel does not call bnb's counted hooks on either arm.
+        return
     kernel = forward.get("kernel", 0)
     fallback = forward.get("fallback", 0)
     dequant = forward.get("dequant", 0)
@@ -190,6 +193,10 @@ def measure(mode: str, n: int, k: int, m: int) -> dict:
                     return layer(x)
                 counts["cached_linear"] += 1
                 return functional.linear(x, cached)
+            if mode == "fused" and arm == "a":
+                from soup_cli.kernels.packed_lora.triton.nf4_fused import fused_nf4_apply
+
+                return fused_nf4_apply(x, packed, state)
             if arm == "a":
                 return checkpoint_visible_nf4_linear(x, packed, state)
             return functional.linear(x, bnb.functional.dequantize_4bit(packed, state))
@@ -238,7 +245,12 @@ def measure(mode: str, n: int, k: int, m: int) -> dict:
                 "backward": difference(actual[1], native[1]),
                 "paths": actual[2],
             }
-            if arm == "a" or mode == "ablation":
+            if mode == "fused":
+                # The fused kernel's arithmetic may differ from bnb's dispatch;
+                # publish it as measured rather than requiring exactness (#842).
+                if not all(checks[arm][part]["finite"] for part in ("forward", "backward")):
+                    raise ValueError(f"non-finite fused result: {checks}")
+            elif arm == "a" or mode == "ablation":
                 if not all(checks[arm][part]["exact"] for part in ("forward", "backward")):
                     raise ValueError(f"native reference mismatch: {checks}")
             elif not all(checks[arm][part]["finite"] for part in ("forward", "backward")):
@@ -297,7 +309,7 @@ def measure(mode: str, n: int, k: int, m: int) -> dict:
     return report
 
 
-def aliasing() -> dict:
+def aliasing(width: int = 18944, expect_defect: bool = True) -> dict:
     """Four synthetic layers, two packed slots, one backward through the full chain."""
     import copy
 
@@ -308,7 +320,7 @@ def aliasing() -> dict:
     from soup_cli.utils.layer_stream_runtime import install_dequant_forward
 
     torch.manual_seed(SEED)
-    width, tokens = 18944, 8
+    tokens = 8
     dtype = torch.float16
     sources = []
     for _ in range(4):
@@ -323,8 +335,10 @@ def aliasing() -> dict:
         )
         del weight
     packed_bytes = sources[0][0].nbytes
-    if packed_bytes <= 165 * 1024**2:
+    if width == 18944 and packed_bytes <= 165 * 1024**2:
         raise ValueError(f"fixture below gate: {packed_bytes} packed bytes")
+    # An explicit smaller width is a control row on the card that can fit it;
+    # it is not a replacement for the record's target-card aliasing gate.
     slots = [(p.clone(), copy.deepcopy(s)) for p, s in sources[:2]]
     initial = torch.randn(tokens, width, device="cuda", dtype=dtype)
     dy = torch.randn_like(initial) / math.sqrt(width)
@@ -403,20 +417,41 @@ def aliasing() -> dict:
             fwd = {i: difference(y[i], outputs[i]) for i in outputs}
             bwd = {i: difference(dx[i], grads[i]) for i in grads}
             # All arms must have exercised the fused kernel once per layer.
-            paths_ok = paths["forward"].get("kernel") == len(sources)
+            if expect_defect:
+                paths_ok = paths["forward"].get("kernel") == len(sources)
+            else:
+                # A smaller or misaligned shape is a negative control: bnb may
+                # take its dense fallback and no aliasing is expected.
+                paths_ok = (
+                    paths["forward"].get("kernel", 0)
+                    + paths["forward"].get("fallback", 0) == len(sources)
+                )
             if arm != "bypass":
                 paths_ok &= set(paths["slot_refills"]) == {0, 1}
             exact = all(v["exact"] for v in bwd.values())
-            passed = (
-                paths_ok
-                and all(v["exact"] for v in fwd.values())
-                and all(v["finite"] for v in bwd.values())
-                and exact == (arm != "unsafe")
-            )
+            if expect_defect:
+                passed = (
+                    paths_ok
+                    and all(v["exact"] for v in fwd.values())
+                    and all(v["finite"] for v in bwd.values())
+                    and exact == (arm != "unsafe")
+                )
+            else:
+                passed = (
+                    paths_ok
+                    and all(v["exact"] for v in fwd.values())
+                    and all(v["exact"] for v in bwd.values())
+                )
             report["arms"][arm] = {"forward": fwd, "backward": bwd, "paths": paths, "pass": passed}
-    report["pass"] = report["resident_paths"]["forward"].get("kernel") == len(sources) and all(
-        r["pass"] for r in report["arms"].values()
-    )
+    if expect_defect:
+        native_ok = report["resident_paths"]["forward"].get("kernel") == len(sources)
+    else:
+        native_ok = (
+            report["resident_paths"]["forward"].get("kernel", 0)
+            + report["resident_paths"]["forward"].get("fallback", 0) == len(sources)
+        )
+    report["expect_defect"] = expect_defect
+    report["pass"] = native_ok and all(r["pass"] for r in report["arms"].values())
     return report
 
 
@@ -465,6 +500,11 @@ def self_test() -> dict:
     ):
         validate_paths(mode, arm, forward, backward)
     rejected = 0
+    # The fused kernel does not go through bnb's counted hooks; its validation
+    # is deliberately a no-op, including when a path dict is mutated.
+    validate_paths("fused", "a", {}, {})
+    validate_paths("fused", "a", {"kernel": 1}, {"dequant": 2})
+
     for mode, arm, forward, backward in (
         ("ablation", "a", {}, {}),
         ("ablation", "a", {"kernel": 1}, {"dequant": 1}),
@@ -492,7 +532,13 @@ def main() -> int:
     modes.add_argument("--self-test", action="store_true")
     modes.add_argument("--ablation", action="store_true")
     modes.add_argument("--grid", action="store_true")
+    modes.add_argument("--fused", action="store_true")
     modes.add_argument("--aliasing", action="store_true")
+    parser.add_argument("--alias-width", type=int, default=18944)
+    parser.add_argument(
+        "--alias-absent", action="store_true",
+        help="expect no aliasing defect at this width (negative control)",
+    )
     modes.add_argument("--model", action="store_true")
     parser.add_argument("--json", type=pathlib.Path)
     parser.add_argument("--child", nargs=3, type=int, metavar=("N", "K", "M"))
@@ -504,15 +550,19 @@ def main() -> int:
 
         payload = model_check(count_paths, difference, hardware)
     elif args.aliasing:
-        payload = aliasing()
+        payload = aliasing(args.alias_width, expect_defect=not args.alias_absent)
     elif args.child:
         try:
-            payload = measure("ablation" if args.ablation else "grid", *args.child)
+            payload = measure(
+                "ablation" if args.ablation else "fused" if args.fused else "grid", *args.child
+            )
         except Exception as exc:
             payload = {"error": f"{type(exc).__name__}: {exc}"}
     else:
         cells = (
-            [(4096, 4096, 512)] if args.ablation else [(n, k, m) for n, k in SHAPES for m in TOKENS]
+            [(4096, 4096, 512)] if args.ablation
+            else ([(4096, 4096, m) for m in TOKENS[:2]] if args.fused
+                  else [(n, k, m) for n, k in SHAPES for m in TOKENS])
         )
         payload = {
             "protocol": {
@@ -536,7 +586,7 @@ def main() -> int:
                     command = [
                         sys.executable,
                         __file__,
-                        "--ablation" if args.ablation else "--grid",
+                        "--ablation" if args.ablation else "--fused" if args.fused else "--grid",
                         "--child",
                         *map(str, cell),
                         "--json",
