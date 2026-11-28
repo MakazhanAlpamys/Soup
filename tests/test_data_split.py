@@ -741,3 +741,102 @@ class TestDataSplitBoundsValidation:
         assert [r["text"] for r in train_rows] == expected_train
         assert [r["text"] for r in val_rows] == expected_val
 
+
+
+class TestDataSplitLeftoverFiles:
+    """#3362: a split file this run did not write is named, never deleted."""
+
+    @staticmethod
+    def _split(*args: str):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(app, ["data", "split", "data.jsonl", *args])
+        output = _plain(result.output)
+        assert result.exit_code == 0, output
+        return output
+
+    @staticmethod
+    def _warning(name: str) -> str:
+        return (
+            f"Warning: {name} is from an earlier run and was not updated by "
+            "this one; it may hold rows that are now in data_train.jsonl. "
+            "Move or delete it before using it as a held-out set."
+        )
+
+    def test_test_only_run_names_the_earlier_val_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _make_jsonl(tmp_path / "data.jsonl", 10)
+        self._split("--val", "20", "--seed", "1")
+        val_file = tmp_path / "data_val.jsonl"
+        earlier_val = val_file.read_bytes()
+
+        output = self._split("--test", "20", "--seed", "2")
+
+        assert self._warning("data_val.jsonl") in output
+        assert "data_test.jsonl is from an earlier run" not in output
+        assert val_file.read_bytes() == earlier_val
+        assert len(_read_jsonl(tmp_path / "data_test.jsonl")) == 2
+        assert len(_read_jsonl(tmp_path / "data_train.jsonl")) == 8
+
+    def test_val_rounding_to_zero_names_the_earlier_test_file(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _make_jsonl(tmp_path / "data.jsonl", 10)
+        self._split("--test", "20", "--seed", "2")
+        test_file = tmp_path / "data_test.jsonl"
+        earlier_test = test_file.read_bytes()
+
+        output = self._split("--val", "5", "--seed", "3")
+
+        assert "--val 5% rounds to 0 rows" in output
+        assert self._warning("data_test.jsonl") in output
+        assert "data_val.jsonl" not in output
+        assert not (tmp_path / "data_val.jsonl").exists()
+        assert test_file.read_bytes() == earlier_test
+        assert len(_read_jsonl(tmp_path / "data_train.jsonl")) == 10
+
+    def test_report_sequence_names_both_earlier_files(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _make_jsonl(tmp_path / "data.jsonl", 10)
+        self._split("--val", "20", "--seed", "1")
+        self._split("--test", "20", "--seed", "2")
+        earlier = {
+            name: (tmp_path / name).read_bytes()
+            for name in ("data_val.jsonl", "data_test.jsonl")
+        }
+
+        output = self._split("--val", "5", "--seed", "3")
+
+        assert self._warning("data_val.jsonl") in output
+        assert self._warning("data_test.jsonl") in output
+        for name, content in earlier.items():
+            assert (tmp_path / name).read_bytes() == content
+
+    def test_rerun_that_writes_the_split_overwrites_it_without_a_warning(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _make_jsonl(tmp_path / "data.jsonl", 10)
+        self._split("--val", "20", "--seed", "1")
+
+        output = self._split("--val", "20", "--seed", "2")
+
+        assert "from an earlier run" not in output
+        train = [row["text"] for row in _read_jsonl(tmp_path / "data_train.jsonl")]
+        val = [row["text"] for row in _read_jsonl(tmp_path / "data_val.jsonl")]
+        assert len(val) == 2
+        assert sorted(train + val) == sorted(f"sample {idx}" for idx in range(10))
+
+    def test_first_run_in_a_clean_directory_has_no_warning(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _make_jsonl(tmp_path / "data.jsonl", 10)
+
+        output = self._split("--test", "20", "--seed", "2")
+
+        assert "from an earlier run" not in output
+        assert not (tmp_path / "data_val.jsonl").exists()

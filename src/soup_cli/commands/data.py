@@ -1351,6 +1351,18 @@ def split_data(
 
     console.print(output_msg)
 
+    # A split file this run did not write may be left from an earlier run,
+    # and its rows can now be in the train file. Name it; never delete it.
+    for split_rows, suffix in ((val_data, "val"), (test_data, "test")):
+        leftover = parent / f"{stem}_{suffix}.jsonl"
+        if not split_rows and leftover.exists():
+            console.print(
+                f"[yellow]Warning: {for_terminal(leftover)} is from an earlier run "
+                "and was not updated by this one; it may hold rows that are now in "
+                f"{for_terminal(train_path)}. Move or delete it before using it as "
+                "a held-out set.[/]"
+            )
+
 
 def _random_split(
     data: list, val_count: int, test_count: int, seed: int | None = None,
