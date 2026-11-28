@@ -41,6 +41,7 @@ Sections:
 - [`training`](#training)
 - [`training.lora`](#traininglora)
 - [`training.packed_lora`](#trainingpacked_lora)
+- [`training.stream_experts`](#trainingstream_experts)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
 - [`eval.ship`](#evalship)
@@ -322,6 +323,18 @@ Sections:
 | `training.lisa_reset_optimizer` | `bool` | `true` |  | Clear optimizer state for decoder layers that LISA re-freezes on each interval (avoids stale Adam moments). Mirrors relora_reset_optimizer. |
 | `training.lisa_train_embeddings` | `bool` | `true` |  | Keep the always-on group (input embeddings + LM head + final norm) trainable every LISA interval. Default true is LISA as published (#267). Set false to freeze that group so only the sampled lisa_num_layers decoder layers train — the always-on set is the majority of LISA's memory, so this is the knob that buys the memory saving (#377). It is a real trade: the always-on set may be load-bearing for quality, so measure both ways. |
 | `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, simpo, kto, bco and ipo, including task='preference' with a single preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + text + quantization='none' or '4bit', LoRA and a concrete batch_size. Weighted preference_loss_weights do not stream yet. |
+| `training.l2l` | `bool` | `false` |  | BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each streamed decoder layer is loaded once per optimizer step and runs all k micro-batches, then the optimizer takes one step on the adapters. k is gradient_accumulation_steps. Needs stream_layers=true and a Llama, Mistral or (with stream_expert_layout='per_expert') DeepSeek-V3-family model on a single GPU; a MoE model with the fused expert layout is refused. k=1 behaves like plain streaming. A bool only: 1 or 'yes' is refused. |
+| `training.l2l_spill_dir` | `str \| null` | `null` |  | BETA — where training.l2l spills activations that do not fit the host-RAM budget. Default: a '\_l2l_spill' folder in the run's output directory. It must resolve under \$HOME, the working directory or the temp directory (realpath, so symlinks and Windows short names cannot step outside), and is refused at launch on RAM-backed, overlay and network filesystems and on a drive without room. Only valid with training.l2l=true. |
+| `training.l2l_activation_codec` | `str` | `"none"` | one of `"none"`, `"fp8_e4m3"` | BETA — how training.l2l stores the activations between layers. 'none' keeps them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the launch refuses it until it is shown to be safe for training: it is lossy and its gradients are not yet checked against the accumulation baseline. The value is recorded in the run's l2l_recipe.json, and a resume with another codec is refused. Only valid with training.l2l=true. |
+| `training.l2l_auto_k` | `bool` | `false` |  | BETA — let the memory planner pick the largest k that fits host RAM, up to gradient_accumulation_steps. Plans the window of a MoE model, whose host budget the launch does not resolve yet, so it refuses this for now. Off: k = gradient_accumulation_steps. Only valid with training.l2l=true. A bool only: 1 or 'yes' is refused. |
+| `training.l2l_two_read_experts` | `bool` | `false` |  | EXPERIMENTAL — under training.l2l with a per_expert MoE cache, replay each layer's routing decisions in the checkpoint recompute so a routed expert is read in the forward and in its own backward, not a third time in the recompute. Needs training.l2l=true and stream_expert_layout='per_expert'. Off by default. A bool only: 1 or 'yes' is refused. |
+| `training.l2l_grouped_expert_routes` | `bool` | `false` |  | EXPERIMENTAL — under training.l2l with a per_expert MoE cache, find each streamed MoE layer's hit experts and their token rows with one nonzero instead of one per expert. Needs training.l2l=true and stream_expert_layout='per_expert'. Off by default. A bool only: 1 or 'yes' is refused. |
+| `training.l2l_route_preserving_mbr` | `bool` | `false` |  | EXPERIMENTAL — group streamed DeepSeek-V3 routed experts across L2L micro-batches. Attention and routing still run per micro-batch. Requires training.l2l=true, stream_expert_layout='per_expert', l2l_two_read_experts=true and l2l_grouped_expert_routes=true. Off by default. |
+| `training.l2l_mbr_group_size` | `int \| null` | `null` | `>= 1` | Number of micro-batches per routed-expert group. Requires l2l_route_preserving_mbr=true and cannot exceed gradient_accumulation_steps. Null uses the full L2L window. |
+| `training.l2l_mbr_split_backward` | `bool` | `false` |  | EXPERIMENTAL — under l2l_route_preserving_mbr, differentiate grouped experts first, then backpropagate through the rest of the layer per micro-batch in L2L order. Excludes l2l_mbr_ordered_backward and deferred decoder forward hooks. |
+| `training.l2l_mbr_ordered_backward` | `bool` | `false` |  | EXPERIMENTAL — under l2l_route_preserving_mbr, build the recompute graph in reverse micro-batch order so a single backward per MoE layer visits the micro-batches in L2L order. Excludes l2l_mbr_split_backward. |
+| `training.stream_experts` | `section \| null` | `null` |  | Opt-in bounded grouped compute for frozen routed experts. Requires training.l2l=true and stream_expert_layout='per_expert'. See [`training.stream_experts`](#trainingstream_experts). |
+| `training.stream_expert_gemm` | `str` | `"native"` | one of `"native"`, `"batch_invariant"` | EXPERIMENTAL — use a fixed-order CUDA Triton GEMM for routed experts with 'batch_invariant'. Requires training.l2l=true, stream_expert_layout='per_expert' and l2l_route_preserving_mbr=true. The default keeps the native expert matmul. |
 | `training.stream_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where the streamed base lives. 'ram' (the only tier implemented in v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the store fits free-RAM headroom and the store plus resident extras fits the physical RAM ceiling. |
 | `training.stream_ngram_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer streaming. 'disk' gathers only requested rows from the original safetensors through a read-only mmap; 'ram' keeps the table in CPU RAM; 'auto' uses RAM only when the table and selected base tier plus resident extras fit within free-RAM headroom and the physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' (or 'auto') so only selected rows are dequantized. A non-default value warns when the checkpoint has no external PLE table. |
 | `training.stream_buffers` | `int` | `2` | `>= 2`, `<= 8` | Pre-allocated VRAM layer buffers. 2 = double buffering, which is what lets the next layer load while the current one computes. A single buffer cannot overlap load with compute. |
@@ -394,6 +407,19 @@ Sections:
 | `training.packed_lora.int8_backward` | `str` | `"auto"` | one of `"auto"`, `"on"`, `"stash"`, `"off"` | The MLP input-gradient GEMMs of the backward in int8. 'auto' keeps them on when a start-up gradient check passes, 'on' always, 'stash' only stores the gate/up activations as int8, 'off' is the exact mode (no int8 anywhere, about 21-24% slower). |
 | `training.packed_lora.int8_rounding` | `str` | `"grad"` | one of `"nearest"`, `"grad"`, `"stochastic"` | Rounding of the int8 gradient quantisers: 'grad' rounds the gradients stochastically (unbiased in expectation, the default), 'stochastic' also dithers the int8 weights, 'nearest' rounds to nearest (biased: the training loss drifts above plain Soup's). |
 | `training.packed_lora.on_unsupported` | `str` | `"error"` | one of `"error"`, `"stock"` | What to do when a run turns out not to be supported at setup ('error' stops with the reason, 'stock' prints it and trains with the stock step). |
+
+## `training.stream_experts`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.stream_experts.backend` | `str` | `"grouped"` | one of `"sequential"`, `"grouped"`, `"triton"`, `"fused_nf4"` | Compute backend for the leased expert group. |
+| `training.stream_experts.group_width` | `int` | `4` | `>= 1`, `<= 4` | Maximum experts per lease. |
+| `training.stream_experts.weight_budget_bytes` | `int` | `67108864` | `>= 1` | Expert weight arena ceiling in bytes. |
+| `training.stream_experts.activation_budget_bytes` | `int` | `268435456` | `>= 1` | Live expert activations in bytes. |
+| `training.stream_experts.call_budget_bytes` | `int` | `67108864` | `>= 1` | Projection call ceiling in bytes. |
+| `training.stream_experts.cublas_library` | `str \| null` | `null` |  | Absolute Linux cuBLAS library for CUDA grouped compute. |
+| `training.stream_experts.native_rows_max` | `int` | `128` | one of `16`, `128` | Native GEMM cutoff for small OLMoE row buckets. |
+| `training.stream_experts.native_rows_from` | `int \| null` | `481` | `>= 129`, `< 2147483648` | First large OLMoE row bucket using native GEMM. Null disables that fallback. |
 
 ## `training.eval_gate`
 
