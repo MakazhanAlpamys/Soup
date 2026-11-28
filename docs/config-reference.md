@@ -405,6 +405,8 @@ Sections:
 | `training.lora_layers.freeze_deadline` | `int \| null` | `null` | `>= 1` | Optimizer step by which the minimum cutoff takes effect. |
 | `training.lora_layers.min_freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Minimum cutoff enforced at freeze_deadline. |
 | `training.lora_layers.freeze_smoothing` | `float \| null` | `null` | `>= 0.0`, `< 1.0` | EMA decay for the rule (0 disables smoothing). |
+| `training.lora_layers.feature_step` | `int \| null` | `null` | `>= 1` | Optimizer step at which to record progressive LoRA diagnostics. |
+| `training.lora_layers.feature_rows` | `int \| null` | `null` | `>= 1`, `<= 1024` | Number of initial training rows for the activation probe (16 by default). |
 
 ## `training.eval_gate`
 

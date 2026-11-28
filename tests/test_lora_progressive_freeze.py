@@ -142,6 +142,60 @@ def test_scaler_skip_invalidates_even_a_window_with_finite_adapter_norms(tmp_pat
     assert [window["step"] for window in record["norms"]] == [2]
 
 
+def test_features_only_use_completed_valid_gradient_windows(tmp_path):
+    cb = _callback(tmp_path, feature_step=8, interval_steps=2, freeze_step=10, freeze_below=2)
+    args, state = _start(cb, _model(), tmp_path)
+    for step in range(1, 9):
+        optimizer = SimpleNamespace(step_was_skipped=(step == 5))
+        _step(cb, args, state, lambda idx, step: float("inf") if step == 1 else step,
+              optimizer)
+    record = _record(tmp_path)
+    assert record["skipped_windows"] == [2, 6]
+    assert [entry["step"] for entry in record["norms"]] == [4, 8]
+    assert record["features"]["layers"]["0"] == {"grad_mean": 11.0, "grad_cv": 0.363636}
+
+
+def test_grad_features_ignore_legacy_nonfinite_windows():
+    from soup_cli.utils.layer_features import grad_features
+
+    norms = [(10, {0: 100.0, 1: float("inf")}), (20, {0: 2.0}), (30, {0: 4.0})]
+    features = grad_features(norms)
+    assert features[0]["grad_mean"] == pytest.approx(3.0)
+    assert features[0]["grad_cv"] == pytest.approx(1.0 / 3.0)
+    assert 1 not in features
+
+
+def test_features_resume_from_old_checkpoint_and_persist_after_capture(tmp_path, caplog):
+    settings = {"interval_steps": 1, "freeze_step": 4, "freeze_below": 2}
+    original = _callback(tmp_path, **settings)
+    args, state = _start(original, _model(), tmp_path)
+    _step(original, args, state, lambda idx, step: 2.0)
+    original.on_save(args, state)
+    checkpoint = tmp_path / "checkpoint-1"
+    assert "feature_step" not in _record(checkpoint)["policy"]
+
+    output = tmp_path / "resumed"
+    resumed = _callback(output, feature_step=2, **settings)
+    resumed.resume_checkpoint = str(checkpoint)
+    args, state = _start(resumed, _model(), output, step=1)
+    assert (
+        "training.lora_layers: activation change requires a probe from the start of the run"
+        in caplog.text
+    )
+    _step(resumed, args, state, lambda idx, step: 4.0)
+    resumed.on_save(args, state)
+    features = _record(output / "checkpoint-2")["features"]
+    assert features["layers"]["0"] == {"grad_mean": 3.0, "grad_cv": 0.333333}
+
+    final_output = tmp_path / "final"
+    final = _callback(final_output, feature_step=2, **settings)
+    final.resume_checkpoint = str(output / "checkpoint-2")
+    args, state = _start(final, _model(), final_output, step=2)
+    _step(final, args, state, lambda idx, step: 8.0)
+    final.on_train_end(args, state)
+    assert _record(final_output)["features"] == features
+
+
 @pytest.mark.parametrize(("checkpoint_step", "skipped"), [(5, False), (5, True), (7, False)])
 def test_resume_restores_rule_history_and_partial_window(tmp_path, checkpoint_step, skipped):
     settings = {"interval_steps": 2, "freeze_smoothing": 0.8}

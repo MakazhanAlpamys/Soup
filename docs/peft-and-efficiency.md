@@ -854,6 +854,19 @@ Windows with non-finite norms or skipped optimizer updates are recorded in
 including when the cutoff never changes. Frozen adapters retain their weights and drop
 their optimizer state.
 
+Set `training.lora_layers.feature_step` to record a snapshot after that optimizer step.
+`feature_rows` controls how many initial training rows the activation probe uses (default
+16). The `features` entry in `lora_layers.json` reports the linear LoRA update size and
+effective rank, completed gradient-window statistics, activation change (linear CKA),
+residual turn, and a summary of training losses logged before that step when at least four are
+available. The activation probe runs two evaluation passes over the same rows and samples
+up to 32 non-padding tokens per row per layer. The configured freeze schedule or rule still
+controls the cutoff.
+
+Checkpoint records keep an existing snapshot. When resuming before the recording step,
+the CKA metrics are omitted because they require a baseline from the start of training.
+A failed activation probe logs a warning and leaves the other diagnostics available.
+
 The policy needs `lora.r > 0`. Use one of `lora_layers`, `freeze_layers`,
 `freeze_ratio`, `unfrozen_parameters`, or full-fine-tuning `lisa_enabled` at a time.
 Selections, probe scores, and sampling history are written to `lora_layers.json` in

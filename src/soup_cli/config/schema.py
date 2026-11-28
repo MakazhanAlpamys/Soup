@@ -1378,6 +1378,14 @@ class LoraLayersConfig(BaseModel):
     freeze_smoothing: Optional[float] = Field(
         default=None, ge=0.0, lt=1.0, description="EMA decay for the rule (0 disables smoothing)."
     )
+    feature_step: Optional[int] = Field(
+        default=None, ge=1, strict=True,
+        description="Optimizer step at which to record progressive LoRA diagnostics.",
+    )
+    feature_rows: Optional[int] = Field(
+        default=None, ge=1, le=1024, strict=True,
+        description="Number of initial training rows for the activation probe (16 by default).",
+    )
 
     @field_validator(
         "k",
@@ -1391,6 +1399,8 @@ class LoraLayersConfig(BaseModel):
         "freeze_deadline",
         "min_freeze_below",
         "freeze_smoothing",
+        "feature_step",
+        "feature_rows",
         mode="before",
     )
     @classmethod
@@ -1413,7 +1423,7 @@ class LoraLayersConfig(BaseModel):
             "min_freeze_below",
             "freeze_smoothing",
         )
-        for name in ("freeze_step", "freeze_below", *rule_fields):
+        for name in ("freeze_step", "freeze_below", "feature_step", "feature_rows", *rule_fields):
             if getattr(self, name) is not None and self.method != "progressive":
                 raise ValueError(
                     f"training.lora_layers: {name} only applies to method 'progressive'"
@@ -1429,6 +1439,8 @@ class LoraLayersConfig(BaseModel):
                 raise ValueError(
                     "training.lora_layers: freeze_deadline and min_freeze_below go together"
                 )
+            if self.feature_rows is not None and self.feature_step is None:
+                raise ValueError("training.lora_layers: feature_rows requires feature_step")
             if self.freeze_step is not None:
                 for name in rule_fields:
                     if getattr(self, name) is not None:

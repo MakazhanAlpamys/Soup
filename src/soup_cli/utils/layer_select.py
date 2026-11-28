@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import random
 import re
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Sequence
 
+if TYPE_CHECKING:
+    from soup_cli.utils.layer_features import LayerProbe
+
+logger = logging.getLogger(__name__)
 _LAYER_RE = re.compile(r"(?:^|\.)(?:layers|h)\.(\d+)\.")
 RECORD_NAME = "lora_layers.json"
 # The save guard counts these parameters even while the policy has frozen them.
@@ -33,6 +38,8 @@ class LayerSelectPolicy:
     freeze_deadline: int | None = None
     min_freeze_below: int | None = None
     freeze_smoothing: float = 0.0
+    feature_step: int | None = None
+    feature_rows: int = 16
 
     def __post_init__(self) -> None:
         if self.method == "fixed":
@@ -204,6 +211,7 @@ class Selection:
     backward_cut: str = ""
     norms: list[tuple[int, dict[int, float]]] = field(default_factory=list)
     skipped_windows: list[int] = field(default_factory=list)
+    features: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         record = {
@@ -219,6 +227,8 @@ class Selection:
                 for step, window in self.norms
             ]
             record["skipped_windows"] = self.skipped_windows
+            if self.features is not None:
+                record["features"] = self.features
         return record
 
 
@@ -319,11 +329,16 @@ class _LayerSelectCallback:
         self._window: dict[int, Any] = {}
         self._window_skipped = False
         self._ema: dict[int, float] = {}
+        self._feature_layers: dict[int, Any] = {}
+        self._feature_probe: LayerProbe | None = None
 
     def _policy_record(self) -> dict[str, Any]:
         policy = self.policy
         if policy.method == "progressive":
-            return {**asdict(policy), "layers": list(policy.layers)}
+            training_policy = asdict(policy)
+            # Diagnostic settings do not affect the saved optimizer or layer mask.
+            del training_policy["feature_step"], training_policy["feature_rows"]
+            return {**training_policy, "layers": list(policy.layers)}
         # Keep the existing checkpoint format for the other methods.
         return {
             "method": policy.method,
@@ -401,6 +416,10 @@ class _LayerSelectCallback:
         trainable = apply_layer_mask(self.by_layer, selection.layers)
         selection.backward_cut = cut_input_grads(model)
         self.selection = selection
+        self._feature_layers.clear()
+        self._feature_probe = None
+        if self.policy.feature_step is not None and step < self.policy.feature_step:
+            self._start_feature_probe(model, args.device, step)
         self._write_record(self.output_dir, step)
         if self.console is not None:
             self.console.print(
@@ -417,12 +436,65 @@ class _LayerSelectCallback:
         optimizer = kwargs.get("optimizer")
         if self.policy.method == "progressive":
             self._progressive_step(step, optimizer)
+            if step == self.policy.feature_step:
+                self._record_features(args, state, kwargs.get("model"))
             return control
         if self.policy.method != "lisa" or step % self.policy.interval_steps:
             return control
         active = draw(sorted(self.by_layer), self.policy.k, self.rng)
         self._change_layers(active, step, optimizer)
         return control
+
+    def _start_feature_probe(self, model: Any, device: Any, step: int) -> None:
+        from soup_cli.utils.layer_features import LayerProbe
+
+        try:
+            # Use the same numbered decoder container as the adapter parameter lookup.
+            name = next(iter(self.by_layer.values()))[0][0]
+            owner = model.get_submodule(name[: _LAYER_RE.search(name).start(1) - 1])
+            self._feature_layers = {
+                int(index): layer for index, layer in owner.named_children() if index.isdecimal()
+            }
+            if step:
+                logger.warning(
+                    "training.lora_layers: activation change requires a probe from the start "
+                    "of the run"
+                )
+            if self.dataset is None or self.collator is None:
+                return
+            probe = LayerProbe(self._feature_layers)
+            with self.autocast():
+                probe.start(
+                    model, probe_batches(self.dataset, self.collator, self.policy.feature_rows, 1),
+                    device, capture_baseline=step == 0,
+                )
+            self._feature_probe = probe
+        except Exception as exc:  # Diagnostics must not interrupt training.
+            logger.warning("training.lora_layers: the feature probe failed: %s", exc)
+
+    def _record_features(self, args: Any, state: Any, model: Any) -> None:
+        from soup_cli.utils import layer_features
+
+        parts = [layer_features.grad_features(self.selection.norms)]
+        try:
+            parts.append(layer_features.adapter_update_features(self._feature_layers))
+        except Exception as exc:
+            logger.warning("training.lora_layers: adapter update features failed: %s", exc)
+        if self._feature_probe is not None:
+            try:
+                with self.autocast():
+                    parts.append(self._feature_probe.finish(model, args.device))
+            except Exception as exc:
+                logger.warning("training.lora_layers: the feature probe failed: %s", exc)
+        self.selection.features = {
+            "step": state.global_step,
+            "n_layers": len(self._feature_layers) or max(self.by_layer) + 1,
+            "layers": layer_features.merge_features(*parts),
+            "loss": layer_features.loss_summary(getattr(state, "log_history", ())),
+        }
+        self._feature_layers.clear()
+        self._feature_probe = None
+        self._write_record(self.output_dir, state.global_step)
 
     def _change_layers(self, active: list[int], step: int, optimizer: Any) -> None:
         stale = set(self.selection.layers) - set(active)
@@ -481,6 +553,7 @@ class _LayerSelectCallback:
             for entry in record["norms"]
         ]
         selection.skipped_windows = record["skipped_windows"]
+        selection.features = record.get("features")
         if self.policy.freeze_smoothing:
             for _, window in selection.norms:
                 self._smooth(window)
@@ -560,6 +633,8 @@ class _LayerSelectCallback:
             )
 
     def on_train_end(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
+        self._feature_layers.clear()
+        self._feature_probe = None
         if self.policy.method == "progressive" and self.selection is not None:
             self._write_record(self.output_dir, state.global_step)
         return control
@@ -608,6 +683,8 @@ def attach_layer_select_callback(
             freeze_deadline=cfg.freeze_deadline,
             min_freeze_below=cfg.min_freeze_below,
             freeze_smoothing=cfg.freeze_smoothing or defaults.freeze_smoothing,
+            feature_step=cfg.feature_step,
+            feature_rows=cfg.feature_rows or defaults.feature_rows,
         ),
         dataset=trainer.train_dataset,
         collator=trainer.data_collator,

@@ -1,0 +1,1 @@
+- Add opt-in per-layer update, gradient, and activation diagnostics for progressive LoRA. (#PENDING by @nurseit14)
