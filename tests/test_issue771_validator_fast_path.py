@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from soup_cli.data.formats import VALID_FORMATS, format_to_messages_with_reason
 from soup_cli.data.validator import _to_hashable, extended_stats, validate_and_stats
+from soup_cli.utils.row_text import _extract_field_text_or_messages
 
 
 def _reference_validate_and_stats(data: list[dict], expected_format: str | None = None) -> dict:
@@ -26,8 +27,16 @@ def _reference_validate_and_stats(data: list[dict], expected_format: str | None 
     lengths = []
     empty_count = 0
     for row in data:
-        text = " ".join(str(v) for v in row.values() if v)
-        lengths.append(len(text))
+        # #3061: a list value contributes its extracted text, not its repr.
+        value_texts = []
+        for v in row.values():
+            if isinstance(v, list):
+                parts = _extract_field_text_or_messages(v)
+                if parts:
+                    value_texts.append(" ".join(parts))
+            elif v:
+                value_texts.append(str(v))
+        lengths.append(len(" ".join(value_texts)))
         for v in row.values():
             if v is None:
                 empty_count += 1

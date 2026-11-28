@@ -691,10 +691,15 @@ def filter_data(
     ),
     perplexity: float = typer.Option(
         None, "--perplexity", "--ppl",
+        min=0.0,
+        callback=refuse_nan,
         help="Max perplexity threshold (rows above this are removed)",
     ),
     coherence: float = typer.Option(
         None, "--coherence", "--min-coherence",
+        min=0.0,
+        max=1.0,
+        callback=refuse_nan,
         help="Min coherence threshold 0.0-1.0 (rows below this are removed)",
     ),
     perplexity_model: str = typer.Option(
@@ -2468,7 +2473,7 @@ def from_traces_cmd(
         trace_iter = parse_soup_serve(str(logs_path))
     else:
         if logs_path.is_file():
-            with logs_path.open("r", encoding="utf-8") as fh:
+            with logs_path.open("r", encoding="utf-8-sig") as fh:
                 for line_no, line in enumerate(fh, start=1):
                     if line_no > max_trace_lines:
                         console.print(

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from tests.conftest import strip_ansi
@@ -183,3 +184,70 @@ def test_the_openai_reason_uses_the_right_article(tmp_path, monkeypatch):
     text = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 0, text
     assert "no line parsed as an openai record" in text, text
+
+
+@pytest.mark.parametrize("fmt", ["langchain", "openai"])
+def test_from_traces_utf8_bom_matches_plain_output(tmp_path, monkeypatch, fmt):
+    """#3099: UTF-8 BOM must not drop line 1 for langchain or openai formats."""
+    runner = _runner(tmp_path, monkeypatch)
+
+    if fmt == "langchain":
+        rows = [
+            {
+                "id": "1",
+                "inputs": {"prompt": "Question"},
+                "outputs": {"output": "Good"},
+                "feedback": [{"key": "thumbs", "score": 1}],
+            },
+            {
+                "id": "2",
+                "inputs": {"prompt": "Question"},
+                "outputs": {"output": "Bad"},
+                "feedback": [{"key": "thumbs", "score": 0}],
+            },
+        ]
+    else:
+        rows = [
+            {
+                "id": "1",
+                "messages": [{"role": "user", "content": "Question"}],
+                "choices": [{"message": {"role": "assistant", "content": "Good"}}],
+                "feedback": {"rating": "thumbs_up"},
+            },
+            {
+                "id": "2",
+                "messages": [{"role": "user", "content": "Question"}],
+                "choices": [{"message": {"role": "assistant", "content": "Bad"}}],
+                "feedback": {"rating": "thumbs_down"},
+            },
+        ]
+
+    payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    plain_file = tmp_path / f"plain_{fmt}.jsonl"
+    bom_file = tmp_path / f"bom_{fmt}.jsonl"
+    plain_file.write_text(payload, encoding="utf-8")
+    bom_file.write_text(payload, encoding="utf-8-sig")
+
+    from soup_cli.cli import app
+
+    out_plain = f"prefs_plain_{fmt}.jsonl"
+    out_bom = f"prefs_bom_{fmt}.jsonl"
+
+    res_plain = runner.invoke(app, [
+        "data", "from-traces", "--logs", str(plain_file), "--format", fmt,
+        "--signal", "thumbs_up", "-o", out_plain,
+    ])
+    res_bom = runner.invoke(app, [
+        "data", "from-traces", "--logs", str(bom_file), "--format", fmt,
+        "--signal", "thumbs_up", "-o", out_bom,
+    ])
+
+    assert res_plain.exit_code == 0
+    assert res_bom.exit_code == 0
+
+    plain_content = (tmp_path / out_plain).read_text(encoding="utf-8")
+    bom_content = (tmp_path / out_bom).read_text(encoding="utf-8")
+
+    assert plain_content != "", "Plain control must have produced at least one pair"
+    assert bom_content == plain_content
+

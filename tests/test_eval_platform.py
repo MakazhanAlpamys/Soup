@@ -2,7 +2,9 @@
 
 import json
 import re
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1253,6 +1255,72 @@ class TestEvalCLI:
         )
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
+
+    @pytest.mark.parametrize(
+        "options,value",
+        [
+            (["--batch-size", "0"], "0"),
+            (["--batch-size=-1"], "-1"),
+        ],
+    )
+    def test_eval_benchmark_nonpositive_batch_size_is_refused(
+        self, tmp_path, monkeypatch, options, value
+    ):
+        """#3271: a nonpositive --batch-size is refused at the CLI boundary.
+
+        The bad value used to be forwarded to the lm-eval runner as a batch
+        size; now Click refuses it with a usage error before any benchmark
+        setup, so the runner is never called.
+        """
+        model = tmp_path / "model"
+        model.mkdir()
+        calls: list[dict] = []
+
+        def evaluate(**kwargs):
+            calls.append(kwargs)
+            return {"results": {"mmlu": {"acc,none": 1.0}}}
+
+        monkeypatch.setitem(
+            sys.modules, "lm_eval", SimpleNamespace(simple_evaluate=evaluate)
+        )
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+        result = runner.invoke(
+            app,
+            ["eval", "benchmark", "--model", str(model), *options, "--device", "cpu"],
+        )
+        assert result.exit_code == 2, result.output
+        plain = " ".join(_strip_ansi(result.output).split())
+        assert "--batch-size" in plain
+        assert f"{value} is not in the range x>=1" in plain
+        assert calls == []
+
+    def test_eval_benchmark_batch_size_one_reaches_runner(
+        self, tmp_path, monkeypatch
+    ):
+        """#3271 control: --batch-size 1 still reaches the runner unchanged."""
+        model = tmp_path / "model"
+        model.mkdir()
+        calls: list[dict] = []
+
+        def evaluate(**kwargs):
+            calls.append(kwargs)
+            return {"results": {"mmlu": {"acc,none": 1.0}}}
+
+        monkeypatch.setitem(
+            sys.modules, "lm_eval", SimpleNamespace(simple_evaluate=evaluate)
+        )
+        monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+        result = runner.invoke(
+            app,
+            [
+                "eval", "benchmark",
+                "--model", str(model),
+                "--batch-size", "1",
+                "--device", "cpu",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert [call["batch_size"] for call in calls] == [1]
 
     def test_eval_custom_missing_model(self, tmp_path):
         tasks_path = tmp_path / "tasks.jsonl"
