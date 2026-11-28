@@ -1,1 +1,0 @@
-- Add opt-in `training.stream_expert_gemm: segmented` for route-preserving L2L training, using native GEMMs at each micro-batch's expert row count and a direct expert backward. (#PENDING by @M1kado0)
