@@ -92,7 +92,8 @@ def benchmark(
     ),
     batch_size: int = typer.Option(
         8, "--batch-size",
-        help="Batch size for evaluation",
+        min=1,
+        help="Batch size for evaluation (at least 1)",
     ),
     run_id: Optional[str] = typer.Option(
         None, "--run-id",

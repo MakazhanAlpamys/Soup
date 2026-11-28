@@ -2133,7 +2133,7 @@ Usage: `soup eval benchmark [OPTIONS]`
 | `--model`, `-m` | text |  | yes | Path to model or LoRA adapter directory |
 | `--benchmarks`, `-b` | text | `mmlu` |  | Comma-separated benchmark names (mmlu, gsm8k, hellaswag, etc.) |
 | `--fewshot`, `-f` | integer |  |  | Number of few-shot examples (benchmark default if not set) |
-| `--batch-size` | integer | `8` |  | Batch size for evaluation |
+| `--batch-size` | integer, at least 1 | `8` |  | Batch size for evaluation (at least 1) |
 | `--run-id` | text |  |  | Link results to an existing training run |
 | `--device` | text |  |  | Device: cuda, mps, cpu. Auto-detected if not set. |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
