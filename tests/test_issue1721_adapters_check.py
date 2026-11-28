@@ -956,7 +956,8 @@ def test_bf16_adapter_diff_matches_float32(tmp_path: Path, monkeypatch: pytest.M
 
     got = compute_adapter_diff("bf_a", "bf_b")
     want = compute_adapter_diff("f_a", "f_b")
-    assert got.shared_layers == want.shared_layers == 2
+    # One q_proj module: its lora_A / lora_B pair is compared as a single ΔW.
+    assert got.shared_layers == want.shared_layers == 1
     assert [d.frobenius for d in got.per_layer] == pytest.approx(
         [d.frobenius for d in want.per_layer], rel=1e-9
     )
