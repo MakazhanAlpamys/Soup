@@ -38,12 +38,14 @@ _MAX_UI_SESSIONS = 64
 _MAX_CHAT_SEND_BODY_BYTES = 1024 * 1024
 _MAX_DATA_INSPECT_BODY_BYTES = 8 * 1024
 _MAX_YAML_REQUEST_BYTES = 1024 * 1024
+_MAX_EXPORT_BODY_BYTES = 8 * 1024
 _BODY_SIZE_LIMITS = {
     "/api/chat/send": _MAX_CHAT_SEND_BODY_BYTES,
     "/api/data/inspect": _MAX_DATA_INSPECT_BODY_BYTES,
     "/api/config/validate": _MAX_YAML_REQUEST_BYTES,
     "/api/train/start": _MAX_YAML_REQUEST_BYTES,
     "/api/config/from-form": _MAX_YAML_REQUEST_BYTES,
+    "/api/export/ollama": _MAX_EXPORT_BODY_BYTES,
 }
 
 
@@ -274,6 +276,17 @@ class DataInspectRequest(PydanticBaseModel):
     """Request body for data inspection."""
     path: str
     limit: int = Field(default=50, ge=1, le=_MAX_INSPECT_LIMIT)
+
+
+class ExportOllamaRequest(PydanticBaseModel):
+    """Request body for GGUF export and Ollama deployment."""
+    model_path: str = Field(..., description="Path to model or LoRA adapter directory")
+    deploy_name: Optional[str] = Field(None, description="Ollama model tag/name")
+    quant: str = Field("q4_k_m", description="Quantization type (q4_k_m, q8_0, f16)")
+    test_prompt: Optional[str] = Field(
+        None,
+        description="Optional test prompt to verify first reply in Ollama",
+    )
 
 
 class TrainLogBuffer:
@@ -1528,6 +1541,250 @@ def create_app(
                 }
                 for r in records
             ],
+        }
+
+    # --- Export to Ollama ---
+
+    @app.get("/api/export/ollama/status", dependencies=[Depends(_verify_token)])
+    def export_ollama_status():
+        """Check if local Ollama daemon is available."""
+        from soup_cli.utils.ollama import detect_ollama
+
+        version = detect_ollama()
+        return {
+            "available": version is not None,
+            "version": version,
+        }
+
+    @app.post("/api/export/ollama", dependencies=[Depends(_verify_token)])
+    def export_and_deploy_ollama(req: ExportOllamaRequest):
+        """Export model/adapter to GGUF and deploy to Ollama with first reply verification."""
+        from pathlib import Path
+
+        from starlette.responses import JSONResponse
+
+        from soup_cli.utils.ollama import (
+            create_modelfile,
+            deploy_to_ollama,
+            detect_ollama,
+            validate_model_name,
+        )
+
+        # 1. Check Ollama availability
+        version = detect_ollama()
+        if not version:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": (
+                        "Ollama is not installed or not in PATH. "
+                        "Install from https://ollama.com and run 'ollama serve'."
+                    ),
+                },
+            )
+
+        # 2. Validate model_path
+        model_path = Path(req.model_path)
+        if not model_path.exists():
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": f"Model path not found: {req.model_path}",
+                },
+            )
+
+        # 3. Derive and validate deployment model name
+        target_name = req.deploy_name or f"soup-{model_path.name}"
+        is_valid, err_msg = validate_model_name(target_name)
+        if not is_valid:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": f"Invalid model name: {err_msg}"},
+            )
+
+        # 4. GGUF Export via Soup's existing exporter
+        target_gguf = None
+        target_quant = req.quant.lower()
+        if model_path.is_file() and model_path.suffix.lower() == ".gguf":
+            target_gguf = model_path
+        else:
+            matching_ggufs = [
+                f for f in model_path.glob("*.gguf")
+                if f".{target_quant}." in f.name.lower()
+                or f.name.lower().endswith(f".{target_quant}.gguf")
+            ]
+            if matching_ggufs:
+                target_gguf = matching_ggufs[0]
+            else:
+                existing_ggufs = sorted(f.name for f in model_path.glob("*.gguf"))
+                out_gguf_path = model_path / f"{model_path.name}.{req.quant}.gguf"
+                try:
+                    import typer
+
+                    from soup_cli.commands.export import export as soup_export
+
+                    soup_export(
+                        model=str(model_path),
+                        fmt="gguf",
+                        quant=req.quant,
+                        output=str(out_gguf_path),
+                        base=None,
+                        llama_cpp_path=None,
+                        onnx_task="text-generation",
+                        validate_onnx=False,
+                        prompts=None,
+                        atol=None,
+                        deploy=None,
+                        deploy_name=None,
+                        calibration_data=None,
+                        registry_id=None,
+                        trust_remote_code=False,
+                        quant_config=None,
+                        gguf_flavour=None,
+                        hub="hf",
+                        verbose=False,
+                        no_install_deps=False,
+                    )
+                    if out_gguf_path.exists():
+                        target_gguf = out_gguf_path
+                    else:
+                        matching_after = [
+                            f
+                            for f in model_path.glob("*.gguf")
+                            if f".{target_quant}." in f.name.lower()
+                            or f.name.lower().endswith(f".{target_quant}.gguf")
+                        ]
+                        target_gguf = matching_after[0] if matching_after else out_gguf_path
+                except typer.Exit as exc:
+                    avail = (
+                        f" Available GGUF(s): {', '.join(existing_ggufs)}."
+                        if existing_ggufs
+                        else ""
+                    )
+                    if exc.exit_code != 0:
+                        return JSONResponse(
+                            status_code=400,
+                            content={
+                                "success": False,
+                                "error": (
+                                    f"GGUF export for '{req.quant}' failed with exit code "
+                                    f"{exc.exit_code}.{avail}"
+                                ),
+                            },
+                        )
+                except Exception as exc:
+                    avail = (
+                        f" Available GGUF(s): {', '.join(existing_ggufs)}."
+                        if existing_ggufs
+                        else ""
+                    )
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "success": False,
+                            "error": f"GGUF export for '{req.quant}' failed: {exc}.{avail}",
+                        },
+                    )
+
+        if not target_gguf or not target_gguf.exists():
+            existing_ggufs = (
+                sorted(f.name for f in model_path.glob("*.gguf"))
+                if model_path.is_dir()
+                else []
+            )
+            avail = (
+                f" Available GGUF(s): {', '.join(existing_ggufs)}."
+                if existing_ggufs
+                else ""
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": (
+                        f"No GGUF file found or generated for '{req.quant}'.{avail}"
+                    ),
+                },
+            )
+
+        # 5. Create Modelfile & Deploy to Ollama
+        try:
+            from soup_cli.commands.deploy import _auto_detect_template
+
+            resolved_template = _auto_detect_template() or "chatml"
+            modelfile = create_modelfile(gguf_path=target_gguf, template=resolved_template)
+            success, message = deploy_to_ollama(target_name, modelfile)
+            if not success:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": f"Ollama deployment failed: {message}",
+                    },
+                )
+        except Exception as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": f"Failed during Modelfile creation or deploy: {exc}",
+                },
+            )
+
+        # 6. Verify first reply if test_prompt is provided
+        verified: Optional[bool] = None
+        first_reply: Optional[str] = None
+        verification_error: Optional[str] = None
+
+        if req.test_prompt and req.test_prompt.strip():
+            try:
+                import httpx
+
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.post(
+                        "http://127.0.0.1:11434/api/generate",
+                        json={
+                            "model": target_name,
+                            "prompt": req.test_prompt.strip(),
+                            "stream": False,
+                        },
+                    )
+                    if resp.status_code == 200:
+                        reply_text = resp.json().get("response")
+                        if reply_text and str(reply_text).strip():
+                            verified = True
+                            first_reply = str(reply_text).strip()
+                        else:
+                            verified = False
+                            verification_error = "Model generated an empty response"
+                    else:
+                        verified = False
+                        verification_error = f"Ollama generation returned HTTP {resp.status_code}"
+            except Exception as exc:
+                verified = False
+                verification_error = f"Verification request failed: {exc}"
+                logger.debug("First reply verification check failed: %s", exc)
+
+        return {
+            "success": True,
+            "registered": True,
+            "verified": verified,
+            "model": target_name,
+            "gguf_path": str(target_gguf),
+            "first_reply": first_reply,
+            "verification_error": verification_error,
+            "message": (
+                f"Successfully exported and verified {target_name}"
+                if verified is True
+                else (
+                    f"Model {target_name} registered, but verification failed: "
+                    f"{verification_error}"
+                    if verified is False
+                    else f"Successfully exported and registered {target_name} with Ollama"
+                )
+            ),
         }
 
     # --- Health ---
