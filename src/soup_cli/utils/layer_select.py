@@ -26,11 +26,23 @@ class LayerSelectPolicy:
     probe_rows: int = 64
     interval_steps: int = 20
     seed: int = 0
+    freeze_step: int | None = None
+    freeze_below: int | None = None
+    freeze_threshold: float = 0.10
+    max_freeze_below: int | None = None
+    freeze_deadline: int | None = None
+    min_freeze_below: int | None = None
+    freeze_smoothing: float = 0.0
 
     def __post_init__(self) -> None:
         if self.method == "fixed":
             if not self.layers:
                 raise ValueError("training.lora_layers.method='fixed' requires nonnegative layers")
+        elif self.method == "progressive":
+            if self.k is not None or self.layers:
+                raise ValueError(
+                    "training.lora_layers: method='progressive' takes neither k nor layers"
+                )
         elif self.method not in ("random", "grad", "angular", "lisa"):
             raise ValueError(f"training.lora_layers: unknown method {self.method!r}")
         elif self.k is None or self.k < 1:
@@ -190,15 +202,24 @@ class Selection:
     scores: dict[int, float] = field(default_factory=dict)
     history: list[tuple[int, list[int]]] = field(default_factory=list)
     backward_cut: str = ""
+    norms: list[tuple[int, dict[int, float]]] = field(default_factory=list)
+    skipped_windows: list[int] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        record = {
             "method": self.method,
             "layers": self.layers,
             "backward_cut": self.backward_cut,
             "scores": {str(idx): score for idx, score in sorted(self.scores.items())},
             "history": [{"step": step, "layers": layers} for step, layers in self.history],
         }
+        if self.method == "progressive":
+            record["norms"] = [
+                {"step": step, "layers": {str(idx): norm for idx, norm in sorted(window.items())}}
+                for step, window in self.norms
+            ]
+            record["skipped_windows"] = self.skipped_windows
+        return record
 
 
 def choose(
@@ -212,6 +233,8 @@ def choose(
     """Choose the initial mask and isolate scoring from the training RNG and model mode."""
     if policy.method == "fixed":
         return Selection(policy.method, sorted(set(policy.layers)))
+    if policy.method == "progressive":
+        return Selection(policy.method, sorted(by_layer))
     if policy.method in ("random", "lisa"):
         return Selection(policy.method, draw(sorted(by_layer), policy.k, rng))
     if batches is None:
@@ -293,14 +316,30 @@ class _LayerSelectCallback:
         self.resume_checkpoint: str | None = None
         self.by_layer: AdapterLayers = {}
         self.selection: Selection | None = None
+        self._window: dict[int, Any] = {}
+        self._window_skipped = False
+        self._ema: dict[int, float] = {}
 
     def _policy_record(self) -> dict[str, Any]:
-        return {**asdict(self.policy), "layers": list(self.policy.layers)}
+        policy = self.policy
+        if policy.method == "progressive":
+            return {**asdict(policy), "layers": list(policy.layers)}
+        # Keep the existing checkpoint format for the other methods.
+        return {
+            "method": policy.method,
+            "k": policy.k,
+            "layers": list(policy.layers),
+            "probe_rows": policy.probe_rows,
+            "interval_steps": policy.interval_steps,
+            "seed": policy.seed,
+        }
 
-    def _write_record(self, directory: str | Path, step: int) -> None:
+    def _write_record(self, directory: str | Path, step: int, *, checkpoint: bool = False) -> None:
         path = Path(directory) / RECORD_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {**self.selection.to_json(), "policy": self._policy_record(), "step": step}
+        if checkpoint and self.policy.method == "progressive":
+            payload["pending_norms"] = self._window_norms()
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def _read_checkpoint(self, step: int) -> Selection:
@@ -322,6 +361,8 @@ class _LayerSelectCallback:
                         raise ValueError("the saved LISA draws differ from this model or policy")
                 if not selection.history or selection.history[-1][1] != selection.layers:
                     raise ValueError("the saved LISA mask differs from the last draw")
+            elif self.policy.method == "progressive":
+                self._restore_progressive(record, selection)
             return selection
         except (OSError, KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"training.lora_layers cannot resume from {path}: {exc}") from exc
@@ -334,6 +375,15 @@ class _LayerSelectCallback:
         if not self.by_layer:
             self.by_layer = adapter_params_by_layer(model)
         self.rng.seed(self.policy.seed)
+        self._window.clear()
+        self._window_skipped = False
+        self._ema.clear()
+        if self.policy.method == "progressive":
+            for cut in (self.policy.freeze_below, self.policy.min_freeze_below):
+                if cut is not None and cut > max(self.by_layer):
+                    raise ValueError(
+                        f"training.lora_layers: freezing below {cut} leaves no adapted layer"
+                    )
         if self.resume_checkpoint is not None:
             selection = self._read_checkpoint(step)
         else:
@@ -362,17 +412,22 @@ class _LayerSelectCallback:
 
     def on_step_end(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
         step = state.global_step
-        if (
-            self.selection is None
-            or self.policy.method != "lisa"
-            or step <= 0
-            or step % self.policy.interval_steps
-        ):
+        if self.selection is None or step <= 0:
+            return control
+        optimizer = kwargs.get("optimizer")
+        if self.policy.method == "progressive":
+            self._progressive_step(step, optimizer)
+            return control
+        if self.policy.method != "lisa" or step % self.policy.interval_steps:
             return control
         active = draw(sorted(self.by_layer), self.policy.k, self.rng)
+        self._change_layers(active, step, optimizer)
+        return control
+
+    def _change_layers(self, active: list[int], step: int, optimizer: Any) -> None:
         stale = set(self.selection.layers) - set(active)
         apply_layer_mask(self.by_layer, active)
-        optimizer_state = getattr(kwargs.get("optimizer"), "state", None)
+        optimizer_state = getattr(optimizer, "state", None)
         if optimizer_state is not None:
             for idx in stale:
                 for _, param in self.by_layer[idx]:
@@ -380,6 +435,133 @@ class _LayerSelectCallback:
         self.selection.layers = active
         self.selection.history.append((step, active))
         self._write_record(self.output_dir, step)
+
+    def on_pre_optimizer_step(
+        self, args: Any, state: Any, control: Any = None, **kwargs: Any
+    ) -> Any:
+        # Read the accumulated gradients before Trainer clears them at step end.
+        if self.policy.method != "progressive" or self.selection is None or self._window_skipped:
+            return control
+        for idx in self.selection.layers:
+            norms = [
+                param.grad.detach().float().norm()
+                for _, param in self.by_layer[idx]
+                if param.grad is not None
+            ]
+            if norms:
+                step_norm = sum(norms[1:], norms[0])
+                self._window[idx] = self._window.get(idx, 0) + step_norm
+        return control
+
+    def _window_norms(self) -> dict[int, float] | None:
+        if self._window_skipped:
+            return None
+        if not self._window:
+            return {}
+
+        import torch
+
+        values = torch.stack(list(self._window.values())).tolist()
+        if not all(math.isfinite(value) for value in values):
+            return None
+        return dict(zip(self._window, values))
+
+    def _restore_progressive(self, record: dict[str, Any], selection: Selection) -> None:
+        cut = min(selection.layers, default=0)
+        adapted_suffix = sorted(idx for idx in self.by_layer if idx >= cut)
+        if (
+            not selection.layers
+            or selection.layers != adapted_suffix
+            or not selection.history
+            or selection.layers != selection.history[-1][1]
+        ):
+            raise ValueError("the saved progressive mask differs from the model or last freeze")
+        selection.norms = [
+            (entry["step"], {int(idx): norm for idx, norm in entry["layers"].items()})
+            for entry in record["norms"]
+        ]
+        selection.skipped_windows = record["skipped_windows"]
+        if self.policy.freeze_smoothing:
+            for _, window in selection.norms:
+                self._smooth(window)
+        pending = record["pending_norms"]
+        self._window_skipped = pending is None
+        if pending:
+            import torch
+
+            for idx, norm in pending.items():
+                layer = int(idx)
+                param = self.by_layer[layer][0][1]
+                self._window[layer] = param.new_tensor(norm, dtype=torch.float32)
+
+    def _progressive_step(self, step: int, optimizer: Any) -> None:
+        policy = self.policy
+        if getattr(optimizer, "step_was_skipped", False):
+            self._window_skipped = True
+            self._window.clear()
+        if step % policy.interval_steps == 0:
+            window = self._window_norms()
+            self._window.clear()
+            self._window_skipped = False
+            if window is None:
+                self.selection.skipped_windows.append(step)
+            else:
+                self.selection.norms.append((step, window))
+                if policy.freeze_step is None:
+                    self._apply_progressive_rule(step, window, optimizer)
+        if policy.freeze_step == step:
+            self._freeze_below(policy.freeze_below, step, optimizer)
+        elif policy.freeze_deadline == step:
+            self._freeze_below(policy.min_freeze_below, step, optimizer)
+
+    def _smooth(self, window: dict[int, float]) -> None:
+        beta = self.policy.freeze_smoothing
+        for idx, norm in window.items():
+            self._ema[idx] = beta * self._ema[idx] + (1 - beta) * norm if idx in self._ema else norm
+
+    def _apply_progressive_rule(
+        self, step: int, window: dict[int, float], optimizer: Any
+    ) -> None:
+        policy = self.policy
+        norms = self.selection.norms
+        if policy.freeze_smoothing:
+            previous = self._ema.copy()
+            self._smooth(window)
+            if len(norms) < 3:
+                return
+            current = self._ema
+        else:
+            if len(norms) < 2:
+                return
+            previous, current = norms[-2][1], window
+        highest = max(self.by_layer)
+        cap = policy.max_freeze_below if policy.max_freeze_below is not None else (highest + 1) // 2
+        cut = min(self.selection.layers)
+        for idx in self.selection.layers:
+            if idx >= min(cap, highest):
+                break
+            before = previous.get(idx)
+            if not before or idx not in window:
+                break
+            if abs(current[idx] - before) / before >= policy.freeze_threshold:
+                break
+            cut = idx + 1
+        self._freeze_below(cut, step, optimizer)
+
+    def _freeze_below(self, cut: int, step: int, optimizer: Any) -> None:
+        active = [idx for idx in self.selection.layers if idx >= cut]
+        if active == self.selection.layers:
+            return
+        self._change_layers(active, step, optimizer)
+        if self.console is not None:
+            self.console.print(
+                f"[green]LoRA layers (progressive):[/] step {step}: layers below {cut} frozen, "
+                f"training {len(active)} of {len(self.by_layer)}"
+            )
+
+    def on_train_end(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
+        if self.policy.method == "progressive" and self.selection is not None:
+            self._write_record(self.output_dir, state.global_step)
         return control
 
     def on_save(self, args: Any, state: Any, control: Any = None, **kwargs: Any) -> Any:
@@ -387,7 +569,7 @@ class _LayerSelectCallback:
 
         if self.selection is not None:
             directory = Path(args.output_dir) / f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}"
-            self._write_record(directory, state.global_step)
+            self._write_record(directory, state.global_step, checkpoint=True)
         return control
 
 
@@ -419,6 +601,13 @@ def attach_layer_select_callback(
             probe_rows=cfg.probe_rows or defaults.probe_rows,
             interval_steps=cfg.interval_steps or defaults.interval_steps,
             seed=cfg.seed if cfg.seed is not None else defaults.seed,
+            freeze_step=cfg.freeze_step,
+            freeze_below=cfg.freeze_below,
+            freeze_threshold=cfg.freeze_threshold or defaults.freeze_threshold,
+            max_freeze_below=cfg.max_freeze_below,
+            freeze_deadline=cfg.freeze_deadline,
+            min_freeze_below=cfg.min_freeze_below,
+            freeze_smoothing=cfg.freeze_smoothing or defaults.freeze_smoothing,
         ),
         dataset=trainer.train_dataset,
         collator=trainer.data_collator,

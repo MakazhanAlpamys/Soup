@@ -1,0 +1,1 @@
+- Add scheduled and gradient-based progressive LoRA freezing. (#PENDING by @nurseit14)

@@ -837,6 +837,22 @@ training:
   `probe_rows` prepared training rows (default 64).
 - `lisa` draws `k` adapted layers every `interval_steps` optimizer steps (default 20),
   using an optional `seed` (default 0). It clears optimizer state for adapters that freeze.
+- `progressive` starts with all matched adapters trainable and freezes the bottom up.
+  Set `freeze_step` and `freeze_below` to freeze adapted layer indices below the cutoff
+  after that step. With both omitted, Soup compares the sums of adapter gradient norms
+  over `interval_steps` optimizer steps (default 20). The rule freezes consecutive
+  bottom layers while their relative norm change is below `freeze_threshold` (default
+  0.10), up to `max_freeze_below` (default half the decoder depth inferred from adapted
+  indices). It leaves at least one adapted layer trainable.
+
+For the progressive rule, `freeze_smoothing` sets an optional exponential moving average
+decay. The smoothed comparison starts at the third valid window. Set `freeze_deadline`
+and `min_freeze_below` together to enforce a minimum cutoff at that step. The minimum
+can exceed the default cap. If you set an explicit cap, it must cover the minimum.
+Windows with non-finite norms or skipped optimizer updates are recorded in
+`skipped_windows`. Completed valid windows are written to `norms` in `lora_layers.json`,
+including when the cutoff never changes. Frozen adapters retain their weights and drop
+their optimizer state.
 
 The policy needs `lora.r > 0`. Use one of `lora_layers`, `freeze_layers`,
 `freeze_ratio`, `unfrozen_parameters`, or full-fine-tuning `lisa_enabled` at a time.

@@ -1351,14 +1351,48 @@ class LoraLayersConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    method: Literal["fixed", "random", "grad", "angular", "lisa"]
+    method: Literal["fixed", "random", "grad", "angular", "lisa", "progressive"]
     layers: Optional[List[int]] = None
     k: Optional[int] = Field(default=None, ge=1)
     probe_rows: Optional[int] = Field(default=None, ge=1)
     interval_steps: Optional[int] = Field(default=None, ge=1)
     seed: Optional[int] = Field(default=None, ge=0)
+    freeze_step: Optional[int] = Field(
+        default=None, ge=1, description="Scheduled optimizer step after which the bottom freezes."
+    )
+    freeze_below: Optional[int] = Field(
+        default=None, ge=1, le=1024, description="Freeze adapted layer indices below this cutoff."
+    )
+    freeze_threshold: Optional[float] = Field(
+        default=None, gt=0.0, lt=1.0, description="Relative norm change allowed by the rule (0.10)."
+    )
+    max_freeze_below: Optional[int] = Field(
+        default=None, ge=1, le=1024, description="Exclusive layer cutoff cap for the rule."
+    )
+    freeze_deadline: Optional[int] = Field(
+        default=None, ge=1, description="Optimizer step by which the minimum cutoff takes effect."
+    )
+    min_freeze_below: Optional[int] = Field(
+        default=None, ge=1, le=1024, description="Minimum cutoff enforced at freeze_deadline."
+    )
+    freeze_smoothing: Optional[float] = Field(
+        default=None, ge=0.0, lt=1.0, description="EMA decay for the rule (0 disables smoothing)."
+    )
 
-    @field_validator("k", "probe_rows", "interval_steps", "seed", mode="before")
+    @field_validator(
+        "k",
+        "probe_rows",
+        "interval_steps",
+        "seed",
+        "freeze_step",
+        "freeze_below",
+        "freeze_threshold",
+        "max_freeze_below",
+        "freeze_deadline",
+        "min_freeze_below",
+        "freeze_smoothing",
+        mode="before",
+    )
     @classmethod
     def _reject_boolean_numeric_inputs(cls, value: Any, info: ValidationInfo) -> Any:
         return _reject_boolean_numeric_field(cls, info.field_name, value)
@@ -1372,7 +1406,44 @@ class LoraLayersConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_method_fields(self) -> "LoraLayersConfig":
-        if self.method == "fixed":
+        rule_fields = (
+            "freeze_threshold",
+            "max_freeze_below",
+            "freeze_deadline",
+            "min_freeze_below",
+            "freeze_smoothing",
+        )
+        for name in ("freeze_step", "freeze_below", *rule_fields):
+            if getattr(self, name) is not None and self.method != "progressive":
+                raise ValueError(
+                    f"training.lora_layers: {name} only applies to method 'progressive'"
+                )
+        if self.method == "progressive":
+            if self.k is not None or self.layers is not None:
+                raise ValueError(
+                    "training.lora_layers: method='progressive' takes neither k nor layers"
+                )
+            if (self.freeze_step is None) != (self.freeze_below is None):
+                raise ValueError("training.lora_layers: freeze_step and freeze_below go together")
+            if (self.freeze_deadline is None) != (self.min_freeze_below is None):
+                raise ValueError(
+                    "training.lora_layers: freeze_deadline and min_freeze_below go together"
+                )
+            if self.freeze_step is not None:
+                for name in rule_fields:
+                    if getattr(self, name) is not None:
+                        raise ValueError(
+                            f"training.lora_layers: {name} only applies to the progressive rule"
+                        )
+            if (
+                self.min_freeze_below is not None
+                and self.max_freeze_below is not None
+                and self.min_freeze_below > self.max_freeze_below
+            ):
+                raise ValueError(
+                    "training.lora_layers: min_freeze_below must be at most max_freeze_below"
+                )
+        elif self.method == "fixed":
             if self.k is not None:
                 raise ValueError("training.lora_layers.k only applies to sampled or scored methods")
             if not self.layers or any(index < 0 for index in self.layers):
@@ -1384,8 +1455,10 @@ class LoraLayersConfig(BaseModel):
                 raise ValueError(f"training.lora_layers.method={self.method!r} requires k")
         if self.probe_rows is not None and self.method not in ("grad", "angular"):
             raise ValueError("training.lora_layers.probe_rows only applies to grad and angular")
-        if self.interval_steps is not None and self.method != "lisa":
-            raise ValueError("training.lora_layers.interval_steps only applies to lisa")
+        if self.interval_steps is not None and self.method not in ("lisa", "progressive"):
+            raise ValueError(
+                "training.lora_layers.interval_steps only applies to lisa or progressive"
+            )
         if self.seed is not None and self.method not in ("random", "lisa"):
             raise ValueError("training.lora_layers.seed only applies to random and lisa")
         return self

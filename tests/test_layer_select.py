@@ -480,6 +480,15 @@ def test_lisa_checkpoint_restores_mask_and_next_draw(tmp_path):
     state.global_step = 1
     cb.on_step_end(args, state, model=model)
     cb.on_save(args, state, model=model)
+    record = json.loads((tmp_path / "checkpoint-1" / "lora_layers.json").read_text())
+    assert record["policy"] == {
+        "method": "lisa",
+        "k": 2,
+        "layers": [],
+        "probe_rows": 64,
+        "interval_steps": 1,
+        "seed": 5,
+    }
     resumed = _callback("lisa", tmp_path, k=2, interval_steps=1, seed=5)
     resumed.resume_checkpoint = str(tmp_path / "checkpoint-1")
     new_model = _model()

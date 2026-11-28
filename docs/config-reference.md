@@ -392,12 +392,19 @@ Sections:
 
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
-| `training.lora_layers.method` | `str` | **required** | one of `"fixed"`, `"random"`, `"grad"`, `"angular"`, `"lisa"` |  |
+| `training.lora_layers.method` | `str` | **required** | one of `"fixed"`, `"random"`, `"grad"`, `"angular"`, `"lisa"`, `"progressive"` |  |
 | `training.lora_layers.layers` | `list[int] \| null` | `null` |  |  |
 | `training.lora_layers.k` | `int \| null` | `null` | `>= 1` |  |
 | `training.lora_layers.probe_rows` | `int \| null` | `null` | `>= 1` |  |
 | `training.lora_layers.interval_steps` | `int \| null` | `null` | `>= 1` |  |
 | `training.lora_layers.seed` | `int \| null` | `null` | `>= 0` |  |
+| `training.lora_layers.freeze_step` | `int \| null` | `null` | `>= 1` | Scheduled optimizer step after which the bottom freezes. |
+| `training.lora_layers.freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Freeze adapted layer indices below this cutoff. |
+| `training.lora_layers.freeze_threshold` | `float \| null` | `null` | `> 0.0`, `< 1.0` | Relative norm change allowed by the rule (0.10). |
+| `training.lora_layers.max_freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Exclusive layer cutoff cap for the rule. |
+| `training.lora_layers.freeze_deadline` | `int \| null` | `null` | `>= 1` | Optimizer step by which the minimum cutoff takes effect. |
+| `training.lora_layers.min_freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Minimum cutoff enforced at freeze_deadline. |
+| `training.lora_layers.freeze_smoothing` | `float \| null` | `null` | `>= 0.0`, `< 1.0` | EMA decay for the rule (0 disables smoothing). |
 
 ## `training.eval_gate`
 
