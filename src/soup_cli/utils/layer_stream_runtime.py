@@ -36,6 +36,7 @@ from typing import (
     Tuple,
     Union,
 )
+from weakref import ReferenceType, ref
 
 from rich.text import Text
 
@@ -755,6 +756,7 @@ def plan_pinned_arenas(
     *,
     arena_bytes: int = PINNED_ARENA_BYTES,
     align: int = PINNED_ARENA_ALIGN,
+    base_slack_bytes: int = 0,
 ) -> ArenaPlan:
     """Pack ``sizes`` (bytes, allocation order) into power-of-two arenas.
 
@@ -790,6 +792,9 @@ def plan_pinned_arenas(
     either way. Each arena is finally trimmed to the power of two above what
     it holds — the last one is usually part-filled, and a tiny model must not
     page-lock a whole default arena for a 5 MB store. Pure arithmetic, no torch.
+
+    ``base_slack_bytes`` reserves padding in each arena so a caller can align its
+    actual allocation address. Placements are relative to the aligned base.
     """
     if arena_bytes <= 0 or arena_bytes & (arena_bytes - 1):
         raise ValueError(f"arena_bytes must be a power of two; got {arena_bytes}")
@@ -797,6 +802,8 @@ def plan_pinned_arenas(
         raise ValueError(f"align must be a power of two; got {align}")
     if align > arena_bytes:
         raise ValueError(f"align ({align}) cannot exceed arena_bytes ({arena_bytes})")
+    if type(base_slack_bytes) is not int or base_slack_bytes < 0:
+        raise ValueError("base_slack_bytes must be a non-negative integer")
     sizes = [int(size) for size in sizes]
     if any(size < 0 for size in sizes):
         raise ValueError(f"a negative tensor size was planned: {min(sizes)}")
@@ -804,12 +811,14 @@ def plan_pinned_arenas(
         return ArenaPlan(arena_sizes=(), placements=(), requested_bytes=0)
     ceiling = max(arena_bytes, PINNED_ARENA_MAX_BYTES)
     capacity = min(max(arena_bytes, _next_power_of_two(4 * max(sizes))), ceiling)
-    in_order = _plan_in_order(sizes, capacity, align)
-    largest_first = _plan_largest_first(sizes, capacity, align)
+    in_order = _plan_in_order(sizes, capacity, align, base_slack_bytes)
+    largest_first = _plan_largest_first(sizes, capacity, align, base_slack_bytes)
     return largest_first if largest_first.pinned_bytes < in_order.pinned_bytes else in_order
 
 
-def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+def _plan_in_order(
+    sizes: Sequence[int], capacity: int, align: int, base_slack_bytes: int = 0
+) -> ArenaPlan:
     """Allocation order: each tensor into the arena opened last, else a new one."""
     fills: List[int] = []
     capacities: List[int] = []
@@ -817,22 +826,25 @@ def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan
     for size in sizes:
         if fills:
             start = -(-fills[-1] // align) * align
-            if start + size <= capacities[-1]:
+            if start + size + base_slack_bytes <= capacities[-1]:
                 placements.append((len(fills) - 1, start))
                 fills[-1] = start + size
                 continue
         fills.append(size)
-        # Only a tensor beyond the ceiling opens an arena wider than the rest.
-        capacities.append(max(capacity, _next_power_of_two(size)))
+        capacities.append(max(capacity, _next_power_of_two(size + base_slack_bytes)))
         placements.append((len(fills) - 1, 0))
     return ArenaPlan(
-        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        arena_sizes=tuple(
+            max(align, _next_power_of_two(fill + base_slack_bytes)) for fill in fills
+        ),
         placements=tuple(placements),
         requested_bytes=sum(sizes),
     )
 
 
-def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+def _plan_largest_first(
+    sizes: Sequence[int], capacity: int, align: int, base_slack_bytes: int = 0
+) -> ArenaPlan:
     """Largest tensor first, each into the FIRST arena with room, else a new one.
 
     The sort is stable, so equal sizes keep their allocation order. Each
@@ -845,16 +857,18 @@ def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> Aren
     for original, size in sorted(enumerate(sizes), key=lambda item: -item[1]):
         for arena, fill in enumerate(fills):
             start = -(-fill // align) * align
-            if start + size <= capacities[arena]:
+            if start + size + base_slack_bytes <= capacities[arena]:
                 placements[original] = (arena, start)
                 fills[arena] = start + size
                 break
         else:
             placements[original] = (len(fills), 0)
             fills.append(size)
-            capacities.append(max(capacity, _next_power_of_two(size)))
+            capacities.append(max(capacity, _next_power_of_two(size + base_slack_bytes)))
     return ArenaPlan(
-        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        arena_sizes=tuple(
+            max(align, _next_power_of_two(fill + base_slack_bytes)) for fill in fills
+        ),
         placements=tuple(placements),
         requested_bytes=sum(sizes),
     )
@@ -1310,6 +1324,11 @@ class LayerBufferPool:
         # Bumped on every load into a slot, so a reader can tell a slot that was
         # refilled (even with the same layer) from one that was not.
         self.generation: list = [0] * self.n
+        # Persistent decoder layers (training.stream_resident_layers): layer
+        # index -> private slot past the rotating ones. Empty unless opted in.
+        self.resident_slots: Dict[int, int] = {}
+        self.resident_bytes = 0
+        self._resident_generation: Dict[int, int] = {}
         if active_keys_by_layer is None:
             shared = tuple(layer_spec)
             self.active_keys_by_layer = [shared]
@@ -1321,36 +1340,159 @@ class LayerBufferPool:
         )
 
     def slot_for(self, idx: int) -> int:
-        return idx % self.n
+        return self.resident_slots.get(idx, idx % self.n)
 
-    def load_async(self, idx: int, source: RamSource, stream: Any = None) -> int:
-        import torch
-
-        slot = self.slot_for(idx)
-        keys = (
+    def _keys_for(self, idx: int) -> Tuple[str, ...]:
+        return (
             self.active_keys_by_layer[0]
             if len(self.active_keys_by_layer) == 1
             else self.active_keys_by_layer[idx]
         )
+
+    def resident_slot_bytes(self, idx: int) -> int:
+        """Exact private-slot payload, including quantisation sidecars."""
+        return sum(
+            self.buffers[0][name].numel() * self.buffers[0][name].element_size()
+            for name in self._keys_for(idx)
+        )
+
+    def reserve_layers(
+        self, indices: Sequence[int], source: Any, stream: Any = None
+    ) -> Dict[str, Any]:
+        """Preload immutable private slots, then publish them atomically.
+
+        Call only between completed steps, before a live autograd graph exists.
+        Rotating slots keep their original modulo and source-release ordering.
+        A failed allocation or preload leaves the original pool usable.
+        """
+        import torch
+
+        chosen = tuple(indices)
+        if self.resident_slots:
+            raise ValueError("resident layers already reserved; clear them before changing them")
+        if len(self.buffers) != self.n or len(self.owner) != self.n:
+            raise ValueError("cannot reserve layers in an externally modified pool")
+        if any(type(idx) is not int or idx < 0 for idx in chosen):
+            raise ValueError("resident layer indices must be non-negative integers")
+        if tuple(sorted(set(chosen))) != chosen:
+            raise ValueError("resident layer indices must be unique and sorted")
+        layer_count = len(self.active_keys_by_layer)
+        if layer_count == 1:
+            store = getattr(source, "store", None)
+            layer_count = len(store) if store is not None else 0
+        if layer_count and any(idx >= layer_count for idx in chosen):
+            raise ValueError("resident layer index outside the source")
+        if not chosen:
+            return {"indices": [], "bytes": 0, "resident_bytes": 0}
+        if self.is_cuda:
+            torch.cuda.synchronize(self.device)
+        pending: list = []
+        events: list = []
+        total_bytes = 0
+        copying = None
+        try:
+            for idx in chosen:
+                buffers: Dict[str, Any] = {}
+                pending.append(buffers)
+                for name in self._keys_for(idx):
+                    buffers[name] = torch.empty_like(self.buffers[0][name])
+                events.append(torch.cuda.Event() if self.is_cuda else None)
+                total_bytes += sum(buf.numel() * buf.element_size() for buf in buffers.values())
+            for idx, buffers, event in zip(chosen, pending, events):
+                copying = idx
+                self._copy_layer(idx, buffers, event, source, stream)
+            if self.is_cuda:
+                torch.cuda.synchronize(self.device)
+        except BaseException:
+            # A partial non-blocking copy must drain before its temporary device
+            # tensors or a staging source's host buffers can be recycled.
+            try:
+                if self.is_cuda and copying is not None:
+                    torch.cuda.synchronize(self.device)
+                if copying is not None:
+                    _release_source(source, copying, None)
+            except Exception:
+                logger.warning("failed to drain a resident preload during cleanup", exc_info=True)
+            # A caller may catch the OOM and fall back while the traceback is
+            # alive: empty the dictionaries its frames hold so the failed trial
+            # allocations do not stay live.
+            for held in pending:
+                held.clear()
+            pending.clear()
+            events.clear()
+            raise
+        start = len(self.buffers)
+        self.buffers.extend(pending)
+        self.owner.extend(chosen)
+        if self.is_cuda:
+            self.events.extend(events)
+        self.generation.extend([1] * len(chosen))
+        self.resident_slots = {idx: start + offset for offset, idx in enumerate(chosen)}
+        self._resident_generation = {idx: 1 for idx in chosen}
+        self.resident_bytes = total_bytes
+        self.nbytes += total_bytes
+        self.loads += len(chosen)
+        return {"indices": list(chosen), "bytes": total_bytes, "resident_bytes": total_bytes}
+
+    def clear_resident_layers(self, *, model: Any = None) -> None:
+        """Release private slots between completed steps; safe to call repeatedly.
+
+        Pass the decoder owner to clear its cached views after device work drains.
+        """
+        if not self.resident_slots:
+            return
+        if self.is_cuda:
+            import torch
+
+            torch.cuda.synchronize(self.device)
+        if model is not None:
+            clear_stream_substitution_cache(model)
+        del self.buffers[self.n :]
+        del self.owner[self.n :]
+        if self.is_cuda:
+            del self.events[self.n :]
+        del self.generation[self.n :]
+        self.nbytes -= self.resident_bytes
+        self.resident_bytes = 0
+        self.resident_slots.clear()
+        self._resident_generation.clear()
+
+    def _copy_layer(
+        self, idx: int, buffers: Dict[str, Any], event: Any, source: Any, stream: Any
+    ) -> None:
+        """The shared dynamic/preload copy path and source lifetime contract."""
+        import torch
+
+        keys = self._keys_for(idx)
         if self.is_cuda and stream is not None:
             # The slot's previous owner may still be in flight on the compute
             # stream; the prefetch must not clobber it (plan P1).
             stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(stream):
                 for name in keys:
-                    dst = self.buffers[slot][name]
-                    dst.copy_(source.get(idx, name), non_blocking=True)
-                self.events[slot].record(stream)
-            _release_source(source, idx, self.events[slot])
+                    buffers[name].copy_(source.get(idx, name), non_blocking=True)
+                event.record(stream)
+            _release_source(source, idx, event)
         else:
             for name in keys:
-                dst = self.buffers[slot][name]
-                dst.copy_(source.get(idx, name))
+                buffers[name].copy_(source.get(idx, name))
             # No event: this branch's copy has already finished when `copy_`
             # returns, so the source's buffer is free NOW rather than when a
-            # stream drains. Saying so is not decoration — a source that stages
+            # stream drains. Saying so is not decoration: a source that stages
             # into a small reusable pool refills sooner for it.
             _release_source(source, idx, None)
+
+    def load_async(self, idx: int, source: RamSource, stream: Any = None) -> int:
+        slot = self.slot_for(idx)
+        if idx in self.resident_slots:
+            if self.owner[slot] != idx:
+                raise RuntimeError(f"resident layer {idx} slot owner changed")
+            if self.generation[slot] != self._resident_generation[idx]:
+                raise RuntimeError(f"resident layer {idx} slot generation changed")
+            return slot
+        self._copy_layer(
+            idx, self.buffers[slot], self.events[slot] if self.is_cuda else None, source, stream
+        )
         self.owner[slot] = idx
         self.generation[slot] += 1
         self.loads += 1
@@ -1372,9 +1514,36 @@ class LayerBufferPool:
                 f"{self.owner[slot]}, but layer {idx} was requested. Raise "
                 f"training.stream_buffers (currently {self.n}) or report this."
             )
+        if idx in self.resident_slots:
+            if self.generation[slot] != self._resident_generation[idx]:
+                raise RuntimeError(f"resident layer {idx} slot generation changed")
         if self.is_cuda:
             torch.cuda.current_stream().wait_event(self.events[slot])
         return self.buffers[slot]
+
+
+def clear_stream_substitution_cache(model: Any) -> None:
+    """Drop decoder views before changing private slots between completed steps.
+
+    A no-recompute runtime can also cache the storage pointers by slot number;
+    clear those when present so a reallocated slot cannot inherit stale pointers.
+    This cannot release tensors held by a live autograd graph: callers must have
+    completed its backward before reconfiguring residency.
+    """
+    pending = [model]
+    seen = set()
+    while pending:
+        module = pending.pop()
+        if id(module) in seen:
+            continue
+        seen.add(id(module))
+        pending.extend(child for child in module._modules.values() if child is not None)
+        if "_cached_substitution_buffers" in vars(module):
+            module._cached_substitution_buffers = None
+            module._cached_substitution_weights = None
+        pointers = vars(module).get("_slot_ptrs")
+        if pointers is not None:
+            pointers.clear()
 
 
 class LargeLayerBufferPool:
@@ -3778,17 +3947,23 @@ class StreamRuntime:
     scale_cache: Any = None
     #: Per MoE layer, the reader of its experts file (expert_layout "per_expert").
     expert_readers: Tuple[Any, ...] = ()
+    #: The bounded expert buffer pool (``install_streaming(expert_pool=True)``), or None.
+    expert_pool: Any = None
+    _decoder_owner_ref: Optional[ReferenceType[Any]] = None
 
     def close(self) -> None:
-        """Release the weight source and detach the prefetch hook.
+        """Release resident weights and the weight source, then detach the hook.
 
         On the disk tier this stops the reader THREAD and frees its host
         staging buffers, which on a pinned run are page-locked and so cost the
         box until they are released. It holds no shard handles to leak:
         ``AsyncDiskSource`` opens each shard per read precisely because a
         mapping charges Windows commit for the file's whole size (#926).
-        A no-op for the RAM tier, which owns neither a thread nor handles.
+        The RAM source owns neither a thread nor handles.
         """
+        if getattr(self.pool, "resident_slots", None):
+            owner = self._decoder_owner_ref() if self._decoder_owner_ref is not None else None
+            self.pool.clear_resident_layers(model=owner)
         try:
             source_close = getattr(self.source, "close", None)
             if callable(source_close):
@@ -3799,8 +3974,12 @@ class StreamRuntime:
                     external_close()
         finally:
             # One open handle per MoE layer's experts file (expert_layout "per_expert").
-            for reader in self.expert_readers:
-                reader.close()
+            try:
+                if self.expert_pool is not None:
+                    self.expert_pool.close()
+            finally:
+                for reader in self.expert_readers:
+                    reader.close()
         if self.hook is not None:
             self.hook.remove()
             self.hook = None
@@ -3810,12 +3989,22 @@ class StreamRuntime:
             self.scale_cache.clear()
 
     def stats(self) -> Dict[str, Any]:
+        expert_compute = getattr(self.expert_pool, "group_compute", None)
         return {
             "n_layers": self.n_layers,
             "buffers": self.pool.n,
             "buffer_bytes": self.pool.nbytes + getattr(self.large_pool, "nbytes", 0),
+            "resident_layer_bytes": getattr(self.pool, "resident_bytes", 0),
+            "resident_layer_indices": sorted(getattr(self.pool, "resident_slots", {})),
             "large_buffer_bytes": getattr(self.large_pool, "nbytes", 0),
             "store_bytes": self.source.nbytes,
+            "staging_bytes": getattr(self.source, "staging_bytes", 0),
+            "resident_bytes": getattr(self.source, "resident_bytes", 0),
+            "host_allocated_bytes": getattr(self.source, "host_allocated_bytes", None),
+            "accounted_peak_bytes": getattr(self.source, "accounted_peak_bytes", None),
+            "resident_tensor_bytes_served": getattr(
+                self.source, "resident_tensor_bytes_served", 0
+            ),
             "pinned": self.pinned,
             # What is actually page-locked for the store (#901): the arenas'
             # power-of-two sizes on a pinned RamSource, 0 on a pageable one, and
@@ -3828,6 +4017,10 @@ class StreamRuntime:
             # number there would be an invented one.
             "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
+            "ram_cache_allocated_bytes": getattr(self.source, "_cache_stats", {}).get(
+                "allocated_bytes", 0
+            ),
+            "ram_cache_indices": list(getattr(self.source, "_cache_stats", {}).get("indices", [])),
             "drive_count": len(getattr(self.source, "direct_io_roots", {})),
             "direct_io_drives": sum(
                 getattr(self.source, "direct_io_roots", {}).values()
@@ -3838,8 +4031,26 @@ class StreamRuntime:
             "device": self.device,
             "total_params": self.total_params,
             "nf4_scale_cache_bytes": getattr(self.scale_cache, "nbytes", 0),
-            "expert_fetches": sum(reader.fetches for reader in self.expert_readers),
-            "expert_bytes_read": sum(reader.bytes_read for reader in self.expert_readers),
+            # With a pool, one fetch is one expert read into the arena (a host-cache hit reads
+            # nothing); without one, the readers count every fetch.
+            "expert_fetches": (
+                self.expert_pool.fetches
+                if self.expert_pool is not None
+                else sum(reader.fetches for reader in self.expert_readers)
+            ),
+            "expert_bytes_read": (
+                self.expert_pool.logical_bytes_read
+                if self.expert_pool is not None
+                else sum(reader.bytes_read for reader in self.expert_readers)
+            ),
+            "expert_buffer_bytes": (
+                self.expert_pool.plan.weight_bytes if self.expert_pool is not None else 0
+            ),
+            **({
+                "expert_group_width": self.expert_pool.group_width,
+                "expert_groups_loaded": self.expert_pool.groups_loaded,
+                "expert_group_backend": expert_compute.options.backend,
+            } if expert_compute is not None else {}),
         }
 
 
@@ -3928,30 +4139,72 @@ def _install_expert_streaming(
     device: str,
     codes: Optional[Mapping[str, Any]],
     two_reads: bool = False,
-) -> Tuple[Any, ...]:
+    grouped_expert_routes: bool = False,
+    expert_pool: bool = False,
+    expert_transfer: str = "sync",
+    expert_host_cache_bytes: int = 0,
+    expert_prefetch: bool = False,
+    expert_gemm: str = "native",
+    stream_experts: Any = None,
+) -> Tuple[Any, Tuple[Any, ...]]:
     """Swap each MoE layer's experts module for a ``StreamedExperts``.
 
-    Only for a cache sharded with ``expert_layout="per_expert"``; returns the
-    experts-file readers (closed by ``StreamRuntime.close``). ``two_reads`` on
-    any other cache is refused: accepted, it would read three times while the
-    caller believes two.
+    Only for a cache sharded with ``expert_layout="per_expert"``; returns ``(pool, readers)``:
+    the bounded :class:`ExpertBufferPool` (None unless ``expert_pool``) and the experts-file
+    readers, both closed by ``StreamRuntime.close``. A lever (``two_reads``,
+    ``grouped_expert_routes``, ``expert_pool``) on any other cache is refused: accepted, it
+    would be ignored while the caller believes it is on. The pool's ``expert_transfer``,
+    ``expert_host_cache_bytes`` and ``expert_prefetch`` need ``expert_pool``. On any failure
+    the pool and the readers opened so far are closed.
     """
     from soup_cli.utils.expert_stream import (
         EXPERT_LAYOUT_PER_EXPERT,
+        ExpertBufferPool,
         ExpertFetcher,
         ExpertShardReader,
+        expert_allocation_budget,
         install_expert_streaming,
+        plan_expert_buffer,
     )
     from soup_cli.utils.layer_shard import expert_paths
 
+    for name, value in (("expert_pool", expert_pool), ("expert_prefetch", expert_prefetch)):
+        if type(value) is not bool:
+            raise ValueError(f"{name} must be a bool")
+    pool_options = (
+        ("expert_transfer", expert_transfer != "sync"),
+        ("expert_host_cache_bytes", bool(expert_host_cache_bytes)),
+        ("expert_prefetch", expert_prefetch),
+    )
+    if not expert_pool:
+        for name, set_ in pool_options:
+            if set_:
+                raise ValueError(f"{name} needs expert_pool=True")
+        if stream_experts is not None:
+            raise ValueError("training.stream_experts needs expert_pool=True")
+    if stream_experts is not None and (
+        any(enabled for _, enabled in pool_options) or expert_gemm != "native"
+    ):
+        raise ValueError(
+            "training.stream_experts requires synchronous expert transfer and native expert GEMM"
+        )
     if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
-        if two_reads:
-            raise ValueError(
-                "two_read_experts needs a cache sharded with expert_layout='per_expert'; "
-                f"this one is {getattr(index, 'expert_layout', '') or 'fused'!r}"
-            )
-        return ()
+        for name, set_ in (
+            ("training.stream_experts", stream_experts is not None),
+            ("training.stream_expert_gemm", expert_gemm != "native"),
+            ("two_read_experts", two_reads),
+            ("grouped_expert_routes", grouped_expert_routes),
+            ("expert_pool", expert_pool),
+        ):
+            if set_:
+                raise ValueError(
+                    f"{name} needs a cache sharded with expert_layout='per_expert'; "
+                    f"this one is {getattr(index, 'expert_layout', '') or 'fused'!r}"
+                )
+        return None, ()
     readers: Dict[int, Any] = {}
+    pool = None
+    compute = None
     try:
         for layer, path in expert_paths(shard_dir, index).items():
             readers[layer] = ExpertShardReader(
@@ -3961,13 +4214,59 @@ def _install_expert_streaming(
                 quant_specs=index.expert_quant_specs,
                 dtype=index.dtype,
             )
-        fetcher = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
-        install_expert_streaming(layers, readers, fetcher, two_reads=two_reads)
+        if expert_pool:
+            if not readers:
+                raise ValueError("per-expert cache has no expert layers — reshard the checkpoint")
+            # A shard's alignment can make its largest read span differ by layer: size the
+            # staging for the largest one, not whichever reader happens to be first.
+            first = max(readers.values(), key=lambda reader: reader.max_span)
+            if stream_experts is None:
+                plan = plan_expert_buffer(first, dtype=index.dtype, transfer=expert_transfer)
+                pool = ExpertBufferPool(
+                    first, device=device, dtype=index.dtype,
+                    weight_budget_bytes=expert_allocation_budget(plan, device=device), codes=codes,
+                    **({"transfer": expert_transfer} if expert_transfer != "sync" else {}),
+                    **({"host_cache_bytes": expert_host_cache_bytes} if expert_host_cache_bytes
+                       else {}),
+                    **({"prefetch": True} if expert_prefetch else {}),
+                )
+            else:
+                from soup_cli.utils.expert_training import (
+                    ExpertGroupCompute,
+                    expert_group_width,
+                )
+
+                compute = ExpertGroupCompute(
+                    first, stream_experts, device=device, dtype=index.dtype,
+                )
+                pool = ExpertBufferPool(
+                    first, device=device, dtype=index.dtype, codes=codes,
+                    weight_budget_bytes=stream_experts.weight_budget_bytes,
+                    group_width=expert_group_width(stream_experts),
+                    packed_only=stream_experts.backend == "fused_nf4",
+                )
+                pool.group_compute = compute
+            source: Any = pool
+        else:
+            source = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
+        install_expert_streaming(
+            layers, readers, source,
+            two_reads=two_reads, grouped_expert_routes=grouped_expert_routes,
+            expert_gemm=expert_gemm,
+        )
     except BaseException:
-        for reader in readers.values():
-            reader.close()
+        closers = [reader.close for reader in readers.values()]
+        if pool is not None:
+            closers.insert(0, pool.close)
+        elif compute is not None:
+            closers.insert(0, compute.close)
+        for close in closers:
+            try:
+                close()
+            except BaseException:  # noqa: BLE001 - the original failure is the one to report
+                logger.exception("failed to clean up expert preparation")
         raise
-    return tuple(readers.values())
+    return pool, tuple(readers.values())
 
 
 def install_streaming(
@@ -3987,8 +4286,22 @@ def install_streaming(
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
+    grouped_expert_routes: bool = False,
+    expert_pool: bool = False,
+    expert_transfer: str = "sync",
+    expert_host_cache_bytes: int = 0,
+    expert_prefetch: bool = False,
+    expert_gemm: str = "native",
+    stream_experts: Any = None,
+    partial_ram_budget: Any = None,
+    shared_host_budget: Any = None,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
+
+    ``partial_ram_budget`` (a ``partial_ram_source.PartialRamBudget``,
+    ``training.stream_partial_ram``): keep a bounded prefix of the decoder layers in host
+    RAM beside the async disk reader. Disk tier, dense Llama, unquantized only.
+    ``shared_host_budget`` lets that source draw from an existing host envelope.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
@@ -4005,7 +4318,16 @@ def install_streaming(
     layer's checkpoint recompute replays its routers' top-k decisions and reads no
     expert, so a step reads every routed-to expert twice instead of three times
     (``expert_stream.two_read_checkpoint_contexts``).
+
+    ``grouped_expert_routes`` (same caches): each MoE layer finds its hit experts and their
+    rows with one ``nonzero``. ``expert_pool`` (same caches) reads every routed expert through
+    one bounded :class:`ExpertBufferPool` instead of a fresh fetch per use; ``expert_transfer``
+    (``"packed"``, CUDA NF4), ``expert_host_cache_bytes`` and ``expert_prefetch`` tune that
+    pool and need ``expert_pool``. All are off by default and change no numbers.
     """
+    if shared_host_budget is not None and partial_ram_budget is None:
+        raise ValueError("shared_host_budget requires an explicit partial_ram_budget")
+
     import torch
 
     from soup_cli.utils.layer_shard import (
@@ -4035,6 +4357,12 @@ def install_streaming(
                 logger.warning(message)
         pin = False
         require_pin = False
+
+    if partial_ram_budget is not None:
+        if tier != "disk" or getattr(model.config, "model_type", None) != "llama":
+            raise ValueError("partial RAM currently requires disk streaming of dense Llama")
+        if getattr(index, "quant", "none") != "none":
+            raise ValueError("partial RAM NF4 model validation is pending; use quant='none'")
 
     # Validate the index BEFORE touching the model: an index whose `quant` and
     # `quant_specs` disagree passes the cache key (which reads `quant`) and
@@ -4067,227 +4395,254 @@ def install_streaming(
     _require_stripe_folders(shard_dir, index)
     # Before the name maps: the fused expert parameters leave the layer here,
     # so the layer pool never allocates them.
-    expert_readers = _install_expert_streaming(
-        layers, shard_dir, index, device=str(device), codes=codes, two_reads=two_read_experts
+    expert_pool_obj, expert_readers = _install_expert_streaming(
+        layers, shard_dir, index, device=str(device), codes=codes, two_reads=two_read_experts,
+        grouped_expert_routes=grouped_expert_routes, expert_pool=expert_pool,
+        expert_transfer=expert_transfer, expert_host_cache_bytes=expert_host_cache_bytes,
+        expert_prefetch=expert_prefetch,
+        expert_gemm=expert_gemm,
+        **({"stream_experts": stream_experts} if stream_experts is not None else {}),
     )
-    context_fns = [None] * n_layers
-    if two_read_experts:
-        from soup_cli.utils.expert_stream import checkpoint_context_fn
+    close_source = None
+    try:
+        context_fns = [None] * n_layers
+        if two_read_experts:
+            from soup_cli.utils.expert_stream import checkpoint_context_fn
 
-        context_fns = [checkpoint_context_fn(layer) for layer in layers]
-    layer_name_maps = [_layer_name_map(layer) for layer in layers]
-    if not any(layer_name_maps):
-        raise RuntimeError(
-            "no meta decoder weights found — the base was materialised, which "
-            "defeats layer streaming entirely"
-        )
-    decoder_paths = layer_paths(shard_dir, index)
-    layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
-    large_specs = large_layer_specs(shard_dir, index)
-    large_keys = tuple(large_specs)
-    role_keys = {large_weight_role(key): key for key in large_keys}
-    embed_key = role_keys.get("embed_tokens")
-    explicit_head_key = role_keys.get("lm_head")
-    if large_keys and embed_key is None:
-        raise ValueError(
-            "shard index has large-layer weights but no model.embed_tokens.weight; "
-            "reshard the checkpoint"
-        )
-
-    # NF4 streams the packed nibbles AND the statistics needed to rebuild the
-    # QuantState; the two code tables are shared and stay resident.
-    needed_specs_by_layer = []
-    active_keys_by_layer = []
-    for idx, name_map in enumerate(layer_name_maps):
-        if not name_map:
+            context_fns = [checkpoint_context_fn(layer) for layer in layers]
+        layer_name_maps = [_layer_name_map(layer) for layer in layers]
+        if not any(layer_name_maps):
             raise RuntimeError(
-                f"decoder layer {idx} exposes no meta weights — the base was "
-                f"materialised, which defeats layer streaming entirely"
+                "no meta decoder weights found — the base was materialised, which "
+                "defeats layer streaming entirely"
             )
-        shard_spec = layer_specs[idx]
-        missing = sorted(set(name_map.values()) - set(shard_spec))
-        if missing:
-            raise ValueError(f"shard is missing decoder weights: {missing[:4]}")
-        needed: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-        for ckpt in name_map.values():
-            spec_q = quant_specs.get(ckpt)
-            wanted = quant_sidecar_keys(ckpt, spec_q) if spec_q is not None else (ckpt,)
-            for key in wanted:
-                if key not in shard_spec:
-                    raise ValueError(
-                        f"shard is missing the NF4 sidecar {key!r} — reshard the checkpoint"
-                    )
-                needed[key] = shard_spec[key]
-            if spec_q is not None:
-                validate_quant_shape(ckpt, spec_q, shard_spec)
-        needed_specs_by_layer.append(needed)
-        active_keys_by_layer.append(tuple(sorted(needed)))
-    spec = RamSource.merge_layer_specs(needed_specs_by_layer)
-    # Before the source exists: a refusal here leaves no reader thread or
-    # page-locked staging behind.
-    _load_layer_buffers(
-        layers, decoder_paths, layer_specs, layer_buffer_keys(getattr(index, "arch", ""))
-    )
+        decoder_paths = layer_paths(shard_dir, index)
+        layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
+        large_specs = large_layer_specs(shard_dir, index)
+        large_keys = tuple(large_specs)
+        role_keys = {large_weight_role(key): key for key in large_keys}
+        embed_key = role_keys.get("embed_tokens")
+        explicit_head_key = role_keys.get("lm_head")
+        if large_keys and embed_key is None:
+            raise ValueError(
+                "shard index has large-layer weights but no model.embed_tokens.weight; "
+                "reshard the checkpoint"
+            )
 
-    large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
-    source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
-    source_paths = list(decoder_paths) + [large_shard_path(shard_dir, key) for key in large_keys]
-    placement = tuple(getattr(index, "layer_roots", ()) or ())
-    source_roots = placement + (0,) * len(large_keys) if placement else None
-    source, pinned = _build_source(
-        shard_dir,
-        len(source_specs),
-        source_specs,
-        pin,
-        console,
-        tier,
-        require_pin=require_pin,
-        shard_paths=source_paths,
-        read_ahead=read_ahead,
-        layer_roots=source_roots,
-        read_ahead_decision=read_ahead_decision,
-    )
-    pool = LayerBufferPool(
-        spec,
-        n_buffers=buffers,
-        device=device,
-        active_keys_by_layer=active_keys_by_layer,
-    )
-    stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
-    large_pool = (
-        LargeLayerBufferPool(large_specs, large_source_indices, device=device)
-        if large_specs
-        else None
-    )
-    output_key = explicit_head_key or embed_key
-
-    def _prefetch_output() -> None:
-        if large_pool is not None and output_key is not None:
-            large_pool.load_async(output_key, source, stream)
-
-    def _prefetch_embed() -> None:
-        if large_pool is not None and embed_key is not None:
-            large_pool.load_async(embed_key, source, stream)
-
-    prefetcher = StreamPrefetcher(
-        pool,
-        source,
-        n_layers,
-        stream,
-        tail_prefetch=_prefetch_output if large_pool is not None else None,
-        backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
-        # #1174 part 2: the head's load right after the embedding lookup. Set
-        # `prefetcher.head_prefetch_layer = None` to restore the last-layer timing.
-        head_prefetch_layer=0 if large_pool is not None else None,
-    )
-
-    layer_cls = _streamed_layer_class()
-    for idx in range(n_layers):
-        layers[idx] = layer_cls(
-            layers[idx],
-            idx,
-            pool,
-            prefetcher,
-            layer_name_maps[idx],
-            quant_specs=quant_specs,
-            codes=codes,
-            scale_cache=scale_cache,
-            checkpoint_context_fn=context_fns[idx],
+        # NF4 streams the packed nibbles AND the statistics needed to rebuild the
+        # QuantState; the two code tables are shared and stay resident.
+        needed_specs_by_layer = []
+        active_keys_by_layer = []
+        for idx, name_map in enumerate(layer_name_maps):
+            if not name_map:
+                raise RuntimeError(
+                    f"decoder layer {idx} exposes no meta weights — the base was "
+                    f"materialised, which defeats layer streaming entirely"
+                )
+            shard_spec = layer_specs[idx]
+            missing = sorted(set(name_map.values()) - set(shard_spec))
+            if missing:
+                raise ValueError(f"shard is missing decoder weights: {missing[:4]}")
+            needed: Dict[str, Tuple[Tuple[int, ...], str]] = {}
+            for ckpt in name_map.values():
+                spec_q = quant_specs.get(ckpt)
+                wanted = quant_sidecar_keys(ckpt, spec_q) if spec_q is not None else (ckpt,)
+                for key in wanted:
+                    if key not in shard_spec:
+                        raise ValueError(
+                            f"shard is missing the NF4 sidecar {key!r} — reshard the checkpoint"
+                        )
+                    needed[key] = shard_spec[key]
+                if spec_q is not None:
+                    validate_quant_shape(ckpt, spec_q, shard_spec)
+            needed_specs_by_layer.append(needed)
+            active_keys_by_layer.append(tuple(sorted(needed)))
+        spec = RamSource.merge_layer_specs(needed_specs_by_layer)
+        # Before the source exists: a refusal here leaves no reader thread or
+        # page-locked staging behind.
+        _load_layer_buffers(
+            layers, decoder_paths, layer_specs, layer_buffer_keys(getattr(index, "arch", ""))
         )
 
-    if large_pool is not None:
-        input_module = model.get_input_embeddings()
-        output_module = model.get_output_embeddings()
-        if input_module is None or output_module is None:
-            raise RuntimeError("layer streaming needs both input and output embedding modules")
-        for role, module, key in (
-            ("input embedding", input_module, embed_key),
-            ("output head", output_module, output_key),
-        ):
-            weight = getattr(module, "weight", None)
-            if key is None or weight is None or not getattr(weight, "is_meta", False):
-                raise RuntimeError(f"streamed {role} is not an unmaterialised meta weight")
-            expected_shape = tuple(large_specs[key][0])
-            if tuple(weight.shape) != expected_shape:
-                raise ValueError(
-                    f"streamed {role} shape {tuple(weight.shape)} does not match "
-                    f"the shard {expected_shape} — reshard the checkpoint"
+        large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
+        source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
+        source_paths = [
+            *decoder_paths, *(large_shard_path(shard_dir, key) for key in large_keys),
+        ]
+        placement = tuple(getattr(index, "layer_roots", ()) or ())
+        source_roots = placement + (0,) * len(large_keys) if placement else None
+        source, pinned = _build_source(
+            shard_dir,
+            len(source_specs),
+            source_specs,
+            pin,
+            console,
+            tier,
+            require_pin=require_pin,
+            shard_paths=source_paths,
+            read_ahead=read_ahead,
+            layer_roots=source_roots,
+            read_ahead_decision=read_ahead_decision,
+            partial_ram_budget=partial_ram_budget,
+            cacheable_layers=n_layers,
+            shared_host_budget=shared_host_budget,
+        )
+        close_source = getattr(source, "close", None)
+        pool = LayerBufferPool(
+            spec,
+            n_buffers=buffers,
+            device=device,
+            active_keys_by_layer=active_keys_by_layer,
+        )
+        stream = torch.cuda.Stream() if str(device).startswith("cuda") else None
+        large_pool = (
+            LargeLayerBufferPool(large_specs, large_source_indices, device=device)
+            if large_specs
+            else None
+        )
+        output_key = explicit_head_key or embed_key
+
+        def _prefetch_output() -> None:
+            if large_pool is not None and output_key is not None:
+                large_pool.load_async(output_key, source, stream)
+
+        def _prefetch_embed() -> None:
+            if large_pool is not None and embed_key is not None:
+                large_pool.load_async(embed_key, source, stream)
+
+        prefetcher = StreamPrefetcher(
+            pool,
+            source,
+            n_layers,
+            stream,
+            tail_prefetch=_prefetch_output if large_pool is not None else None,
+            backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
+            # #1174 part 2: the head's load right after the embedding lookup. Set
+            # `prefetcher.head_prefetch_layer = None` to restore the last-layer timing.
+            head_prefetch_layer=0 if large_pool is not None else None,
+        )
+
+        layer_cls = _streamed_layer_class()
+        for idx in range(n_layers):
+            layers[idx] = layer_cls(
+                layers[idx],
+                idx,
+                pool,
+                prefetcher,
+                layer_name_maps[idx],
+                quant_specs=quant_specs,
+                codes=codes,
+                scale_cache=scale_cache,
+                checkpoint_context_fn=context_fns[idx],
+            )
+
+        if large_pool is not None:
+            input_module = model.get_input_embeddings()
+            output_module = model.get_output_embeddings()
+            if input_module is None or output_module is None:
+                raise RuntimeError("layer streaming needs both input and output embedding modules")
+            for role, module, key in (
+                ("input embedding", input_module, embed_key),
+                ("output head", output_module, output_key),
+            ):
+                weight = getattr(module, "weight", None)
+                if key is None or weight is None or not getattr(weight, "is_meta", False):
+                    raise RuntimeError(f"streamed {role} is not an unmaterialised meta weight")
+                expected_shape = tuple(large_specs[key][0])
+                if tuple(weight.shape) != expected_shape:
+                    raise ValueError(
+                        f"streamed {role} shape {tuple(weight.shape)} does not match "
+                        f"the shard {expected_shape} — reshard the checkpoint"
+                    )
+
+            large_cls = _streamed_large_layer_class()
+            if input_module is output_module:
+                # UNEXERCISED by the test suite, deliberately (#1010 review): no
+                # supported architecture returns ONE module object for both
+                # boundaries -- a tied Llama shares the Parameter, not the module,
+                # and takes the resident path above -- so this branch has no fixture
+                # and its `named_modules()` memo de-duplication (one wrapper reached
+                # under two attribute names yields once, as torch's own walk would)
+                # is read, not run. Kept for the architecture that does share it.
+                if embed_key != output_key:
+                    raise ValueError("one module cannot represent two untied large-layer weights")
+                shared = large_cls(
+                    input_module,
+                    embed_key,
+                    large_pool,
+                    refill_before_backward=refill_before_backward,
+                    weight_path=large_shard_path(shard_dir, embed_key),
                 )
+                if not _replace_module_references(model, input_module, shared):
+                    raise RuntimeError("could not install the streamed tied embedding module")
+            else:
+                streamed_input = large_cls(
+                    input_module,
+                    embed_key,
+                    large_pool,
+                    refill_before_backward=refill_before_backward,
+                    weight_path=large_shard_path(shard_dir, embed_key),
+                )
+                streamed_output = large_cls(
+                    output_module,
+                    output_key,
+                    large_pool,
+                    refill_before_backward=refill_before_backward,
+                    weight_path=large_shard_path(shard_dir, output_key),
+                )
+                if not _replace_module_references(model, input_module, streamed_input):
+                    raise RuntimeError("could not install the streamed input embedding")
+                if not _replace_module_references(model, output_module, streamed_output):
+                    raise RuntimeError("could not install the streamed output head")
+            _attach_streamed_boundary_adapter_bridge(model)
 
-        large_cls = _streamed_large_layer_class()
-        if input_module is output_module:
-            # UNEXERCISED by the test suite, deliberately (#1010 review): no
-            # supported architecture returns ONE module object for both
-            # boundaries -- a tied Llama shares the Parameter, not the module,
-            # and takes the resident path above -- so this branch has no fixture
-            # and its `named_modules()` memo de-duplication (one wrapper reached
-            # under two attribute names yields once, as torch's own walk would)
-            # is read, not run. Kept for the architecture that does share it.
-            if embed_key != output_key:
-                raise ValueError("one module cannot represent two untied large-layer weights")
-            shared = large_cls(
-                input_module,
-                embed_key,
-                large_pool,
-                refill_before_backward=refill_before_backward,
-                weight_path=large_shard_path(shard_dir, embed_key),
-            )
-            if not _replace_module_references(model, input_module, shared):
-                raise RuntimeError("could not install the streamed tied embedding module")
-        else:
-            streamed_input = large_cls(
-                input_module,
-                embed_key,
-                large_pool,
-                refill_before_backward=refill_before_backward,
-                weight_path=large_shard_path(shard_dir, embed_key),
-            )
-            streamed_output = large_cls(
-                output_module,
-                output_key,
-                large_pool,
-                refill_before_backward=refill_before_backward,
-                weight_path=large_shard_path(shard_dir, output_key),
-            )
-            if not _replace_module_references(model, input_module, streamed_input):
-                raise RuntimeError("could not install the streamed input embedding")
-            if not _replace_module_references(model, output_module, streamed_output):
-                raise RuntimeError("could not install the streamed output head")
-        _attach_streamed_boundary_adapter_bridge(model)
+        def _prime(*_args: Any, **_kwargs: Any) -> None:
+            # #975 — the backward-tail prefetch above already loads this for every
+            # step but the first, so `load_async`'s own-owner check makes this a
+            # no-op on the hot path. Kept unconditional: it is the only load for
+            # step 0, and for any forward that follows a backward that never
+            # reached layer 0.
+            if large_pool is not None and embed_key is not None:
+                large_pool.load_async(embed_key, source, stream)
+            prefetcher.prime()
 
-    def _prime(*_args: Any, **_kwargs: Any) -> None:
-        # #975 — the backward-tail prefetch above already loads this for every
-        # step but the first, so `load_async`'s own-owner check makes this a
-        # no-op on the hot path. Kept unconditional: it is the only load for
-        # step 0, and for any forward that follows a backward that never
-        # reached layer 0.
-        if large_pool is not None and embed_key is not None:
-            large_pool.load_async(embed_key, source, stream)
-        prefetcher.prime()
+        handle = owner.register_forward_pre_hook(_prime)
 
-    handle = owner.register_forward_pre_hook(_prime)
+        # transformers' Trainer.__init__ calls _move_model_to_device -> model.to(),
+        # and .to() on a module holding meta parameters raises NotImplementedError.
+        # The decoder weights stay on meta BY DESIGN, so declare that this model
+        # manages its own placement — exactly the marker a device_map-sharded model
+        # carries, and the one _move_model_to_device short-circuits on.
+        model.hf_device_map = {"": _device_map_value(device)}
 
-    # transformers' Trainer.__init__ calls _move_model_to_device -> model.to(),
-    # and .to() on a module holding meta parameters raises NotImplementedError.
-    # The decoder weights stay on meta BY DESIGN, so declare that this model
-    # manages its own placement — exactly the marker a device_map-sharded model
-    # carries, and the one _move_model_to_device short-circuits on.
-    model.hf_device_map = {"": _device_map_value(device)}
+        return StreamRuntime(
+            pool=pool,
+            source=source,
+            prefetcher=prefetcher,
+            n_layers=n_layers,
+            pinned=pinned,
+            device=str(device),
+            large_pool=large_pool,
+            hook=handle,
+            total_params=int(getattr(index, "total_params", 0) or 0),
+            expert_readers=expert_readers,
+            expert_pool=expert_pool_obj,
+            tier=tier,
+            scale_cache=scale_cache,
+            _decoder_owner_ref=ref(owner),
+        )
 
-    return StreamRuntime(
-        pool=pool,
-        source=source,
-        prefetcher=prefetcher,
-        n_layers=n_layers,
-        pinned=pinned,
-        device=str(device),
-        large_pool=large_pool,
-        hook=handle,
-        total_params=int(getattr(index, "total_params", 0) or 0),
-        expert_readers=expert_readers,
-        tier=tier,
-        scale_cache=scale_cache,
-    )
+    except BaseException:
+        closers = ([expert_pool_obj.close] if expert_pool_obj is not None else [])
+        closers.extend(reader.close for reader in expert_readers)
+        if callable(close_source):
+            closers.append(close_source)
+        for close in closers:
+            try:
+                close()
+            except BaseException:  # noqa: BLE001 - preserve the setup error
+                logger.exception("failed to clean up streaming preparation")
+        raise
 
 
 def _is_out_of_memory(exc: BaseException) -> bool:
@@ -4491,6 +4846,9 @@ def _build_source(
     read_ahead=DEFAULT_STREAM_READ_AHEAD,
     layer_roots=None,
     read_ahead_decision=None,
+    partial_ram_budget=None,
+    cacheable_layers=None,
+    shared_host_budget=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -4524,6 +4882,21 @@ def _build_source(
     The second element of the returned tuple means the same thing on both tiers:
     the host-side source memory is page-locked.
     """
+    if shared_host_budget is not None and partial_ram_budget is None:
+        raise ValueError("shared_host_budget requires an explicit partial_ram_budget")
+    if partial_ram_budget is not None:
+        from soup_cli.utils.partial_ram_source import PartialRamSource
+
+        if tier != "disk":
+            raise ValueError("partial RAM needs the disk tier")
+        # Explicit mode: do not silently retry with a different allocation plan.
+        source = PartialRamSource(
+            shard_dir, n_layers, spec, budget=partial_ram_budget, pin=pin,
+            shard_paths=shard_paths, read_ahead=read_ahead, layer_roots=layer_roots,
+            cacheable_layers=cacheable_layers,
+            host_budget=shared_host_budget,
+        )
+        return source, source.pinned
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
         from soup_cli.utils.async_disk_source import AsyncDiskSource
@@ -4693,6 +5066,15 @@ def build_streamed_model(
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
+    grouped_expert_routes: bool = False,
+    expert_pool: bool = False,
+    expert_transfer: str = "sync",
+    expert_host_cache_bytes: int = 0,
+    expert_prefetch: bool = False,
+    expert_gemm: str = "native",
+    stream_experts: Any = None,
+    partial_ram_budget: Any = None,
+    shared_host_budget: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
@@ -4705,9 +5087,16 @@ def build_streamed_model(
     the supported entry point.
 
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
-    handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
-    ``install_streaming``'s: an API switch, no config field.
+    handed to ``install_streaming`` for its page-lock advice. ``two_read_experts``,
+    ``grouped_expert_routes``, ``expert_pool``, ``expert_transfer``,
+    ``expert_host_cache_bytes``, ``expert_prefetch`` and ``expert_gemm``
+    and ``stream_experts`` are forwarded to ``install_streaming``.
+    ``partial_ram_budget`` and ``shared_host_budget`` configure its partial RAM source.
     """
+    if shared_host_budget is not None and partial_ram_budget is None:
+        raise ValueError("shared_host_budget requires an explicit partial_ram_budget")
+    if getattr(index, "arch", "") == "olmoe" and stream_experts is None:
+        raise ValueError("OLMoE streaming requires training.stream_experts")
     if lora_config is not None:
         from peft import get_peft_model
 
@@ -4759,6 +5148,15 @@ def build_streamed_model(
             read_ahead_decision=read_ahead_decision,
             nf4_scale_cache=nf4_scale_cache,
             two_read_experts=two_read_experts,
+            grouped_expert_routes=grouped_expert_routes,
+            expert_pool=expert_pool,
+            expert_transfer=expert_transfer,
+            expert_host_cache_bytes=expert_host_cache_bytes,
+            expert_prefetch=expert_prefetch,
+            expert_gemm=expert_gemm,
+            **({"stream_experts": stream_experts} if stream_experts is not None else {}),
+            partial_ram_budget=partial_ram_budget,
+            shared_host_budget=shared_host_budget,
         )
         if lora_config is None:
             try:

@@ -512,23 +512,45 @@ class Instruments:
             type(pool),
             "load_async",
             (
+                "slot = self.slot_for(idx)",
+                "if idx in self.resident_slots:\n"
+                "            if self.owner[slot] != idx:\n"
+                '                raise RuntimeError(f"resident layer {idx} slot owner changed")\n'
+                "            if self.generation[slot] != self._resident_generation[idx]:\n"
+                "                raise RuntimeError("
+                'f"resident layer {idx} slot generation changed")\n'
+                "            return slot",
+                "self._copy_layer(\n"
+                "            idx, self.buffers[slot], self.events[slot] if self.is_cuda else None, "
+                "source, stream\n"
+                "        )",
+                "self.owner[slot] = idx\n"
+                "        self.generation[slot] += 1\n"
+                "        self.loads += 1\n"
+                "        return slot",
+            ),
+        )
+        self._guard(
+            type(pool),
+            "_copy_layer",
+            (
+                "keys = self._keys_for(idx)",
+                "if self.is_cuda and stream is not None:",
                 "stream.wait_stream(torch.cuda.current_stream())",
-                "dst.copy_(source.get(idx, name), non_blocking=True)",
-                "self.events[slot].record(stream)",
-                "_release_source(source, idx, self.events[slot])",
+                "with torch.cuda.stream(stream):",
+                "buffers[name].copy_(source.get(idx, name), non_blocking=True)",
+                "event.record(stream)",
+                "_release_source(source, idx, event)",
+                "buffers[name].copy_(source.get(idx, name))",
                 "_release_source(source, idx, None)",
-                "self.generation[slot] += 1",
             ),
         )
         inst = self
 
-        def load_async(idx: int, source: Any, stream: Any = None) -> int:
-            slot = pool.slot_for(idx)
-            keys = (
-                pool.active_keys_by_layer[0]
-                if len(pool.active_keys_by_layer) == 1
-                else pool.active_keys_by_layer[idx]
-            )
+        def copy_layer(
+            idx: int, buffers: Dict[str, Any], event: Any, source: Any, stream: Any
+        ) -> None:
+            keys = pool._keys_for(idx)
             if pool.is_cuda and stream is not None:
                 stream.wait_stream(torch.cuda.current_stream())
                 with torch.cuda.stream(stream):
@@ -538,18 +560,29 @@ class Instruments:
                         start.record(stream)
                     if not inst.nocopy:
                         for name in keys:
-                            dst = pool.buffers[slot][name]
-                            dst.copy_(source.get(idx, name), non_blocking=True)
+                            buffers[name].copy_(source.get(idx, name), non_blocking=True)
                     if inst.events_on:
                         end = torch.cuda.Event(enable_timing=True)
                         end.record(stream)
                         inst._copy_pairs.append((start, end))
-                    pool.events[slot].record(stream)
-                _release_source(source, idx, pool.events[slot])
+                    event.record(stream)
+                _release_source(source, idx, event)
             else:
                 for name in keys:
-                    pool.buffers[slot][name].copy_(source.get(idx, name))
+                    buffers[name].copy_(source.get(idx, name))
                 _release_source(source, idx, None)
+
+        def load_async(idx: int, source: Any, stream: Any = None) -> int:
+            slot = pool.slot_for(idx)
+            if idx in pool.resident_slots:
+                if pool.owner[slot] != idx:
+                    raise RuntimeError(f"resident layer {idx} slot owner changed")
+                if pool.generation[slot] != pool._resident_generation[idx]:
+                    raise RuntimeError(f"resident layer {idx} slot generation changed")
+                return slot
+            copy_layer(
+                idx, pool.buffers[slot], pool.events[slot] if pool.is_cuda else None, source, stream
+            )
             pool.owner[slot] = idx
             # The no-recompute backward refuses a slot whose load generation
             # moved since its first visit; a replacement load must bump it too.

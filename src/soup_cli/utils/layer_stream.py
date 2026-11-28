@@ -106,6 +106,7 @@ SUPPORTED_STREAM_ARCHS = (
     "phi",
     "phi3",
     "deepseek_v3",
+    "olmoe",
 )
 
 # Model types whose text decoders reuse an admitted streaming family.  Each
@@ -1929,6 +1930,7 @@ def build_stream_plan(
     available_ram_bytes: int,
     pinned_limit_bytes: Optional[int],
     total_ram_bytes: Optional[int] = None,
+    persistent_host_bytes: int = 0,
     buffers: int = DEFAULT_STREAM_BUFFERS,
     disk_kind: DiskKind = _NVME,
     stream_pin: Optional[bool] = None,
@@ -1937,13 +1939,13 @@ def build_stream_plan(
     large_buffer_bytes: int = 0,
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
 ) -> StreamPlan:
-    """Decide tier + pinning and record every caveat as a visible note."""
+    """Decide tier and pinning, including persistent host memory in RAM admission."""
     buffers = validate_stream_buffers(buffers)
     if n_layers <= 0:
         raise ValueError(f"n_layers must be positive; got {n_layers}")
     store_bytes = n_layers * layer_bytes if store_bytes is None else int(store_bytes)
     host_store_bytes = store_bytes + int(large_store_bytes)
-    resident_bytes = int(embed_bytes)
+    resident_bytes = int(embed_bytes) + persistent_host_bytes
     model_bytes = host_store_bytes + resident_bytes
     physical_limit = (
         None
