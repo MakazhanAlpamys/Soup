@@ -225,7 +225,13 @@ def test_builder_keeps_one_hf_gpu_and_attaches_split_devices(streamed, monkeypat
     state = trainer._soup_l2l
     assert state.split_devices == ("cuda:1",)
     assert state.effective_k == 3
+
+    def unexpected_cuda_sync(*_args, **_kwargs):
+        pytest.fail("CPU layer-call capture must not synchronize CUDA")
+
+    monkeypatch.setattr(torch.cuda, "synchronize", unexpected_cuda_sync)
     stepper, _calls = _l2l_step_for(state, wrapper.model, _micro_batches(2))
+    assert state.captures == 1
     assert stepper.split_overlap is True
     assert stepper.split_defer_read is True
     state.close()

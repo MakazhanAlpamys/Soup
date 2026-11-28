@@ -428,7 +428,7 @@ SFT_WINDOW_LOSS = WindowLoss(
 
 
 @contextmanager
-def _timed_capture(state: L2LState) -> Iterator[None]:
+def _timed_capture(state: L2LState, device: Any) -> Iterator[None]:
     """Add one capture, its layer loads and its wall time to the state's totals."""
     import time
 
@@ -437,8 +437,8 @@ def _timed_capture(state: L2LState) -> Iterator[None]:
     from soup_cli.utils.l2l_step import count_loads
 
     def sync() -> None:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
 
     sync()
     start = time.perf_counter()
@@ -466,7 +466,7 @@ def _calls_for(state: L2LState, model: Any, ids_list: Sequence[Any]) -> List[Any
             if len(state.calls_by_shape) >= MAX_CACHED_SHAPES:
                 state.calls_by_shape.clear()
             # Only a model with dropout needs the full forward, to record the draws.
-            with _timed_capture(state):
+            with _timed_capture(state, ids.device):
                 call = capture_layer_call(model, ids, draws=state.has_dropout)
             state.calls_by_shape[shape] = call
         calls.append(call)
