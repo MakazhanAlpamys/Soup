@@ -1238,7 +1238,9 @@ For CPU validation, callers of `L2LStep.run` can opt in with `mbr_decoupled_subw
 This backward mode leases each routed expert once per MBR group and preserves per-micro-batch
 expert math shapes. `mbr_recompute_subwindow` bounds the number of live attention, router and
 shared-expert graphs and defaults to one micro-batch. Detached activations are held for one
-expert group. The mode requires the native pooled expert path and refuses batch-invariant GEMM,
+expert group. Before backpropagating through a rebuilt subwindow, the step checks that its expert
+inputs, route IDs and gate weights match those used to compute the expert gradients.
+The mode requires the native pooled expert path and refuses batch-invariant GEMM,
 grouped expert compute, fused expert nodes, split or ordered backward, and deferred decoder
 forward hooks. This experimental mode is exposed through the step API pending GPU review.
 

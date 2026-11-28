@@ -548,6 +548,47 @@ def test_decoupled_backward_checks_routes_again_when_building_the_graph(
         handle.remove()
 
 
+def test_decoupled_backward_refuses_changed_expert_inputs_with_fixed_routing(window) -> None:
+    import torch
+
+    router_input = None
+    backward_started = False
+
+    def observe_backward(_grad: Any) -> None:
+        nonlocal backward_started
+        backward_started = True
+
+    def change_expert_input(_module: Any, _args: Any, output: Any) -> Any:
+        nonlocal router_input
+        router_input = output
+        if torch.is_grad_enabled():
+            if output.shape[-2] == 6:  # The second micro-batch in the rebuild subwindow.
+                output = output + 0.25
+            output.register_hook(observe_backward)
+        return output
+
+    def keep_router_input(_module: Any, _args: Any) -> tuple[Any]:
+        # Give the native router the unmodified norm output in both replays.
+        return (router_input,)
+
+    layer = window[1].layers[2].inner
+    norm_handle = layer.post_attention_layernorm.register_forward_hook(change_expert_input)
+    gate_handle = layer.mlp.gate.register_forward_pre_hook(keep_router_input)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            _run(
+                window, route_preserving_mbr=True, mbr_group_size=3,
+                mbr_decoupled_subwindow=True, mbr_recompute_subwindow=2,
+            )
+        assert str(caught.value) == (
+            "decoupled MBR expert inputs changed between replays at layer 2, micro-batch 1"
+        )
+        assert not backward_started
+    finally:
+        norm_handle.remove()
+        gate_handle.remove()
+
+
 @pytest.mark.parametrize(
     ("window", "group_size", "subwindow", "autocast"),
     [
