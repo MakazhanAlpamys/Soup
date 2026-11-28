@@ -2769,9 +2769,10 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # training.packed_lora: the hook comes off and the pinned memory goes back.
             train_ctx.callback(self._close_packed_lora)
-            if tcfg.frozen_prefix_cache and tcfg.stream_layers and layer_select is not None:
+            use_frozen_prefix_cache = getattr(tcfg, "frozen_prefix_cache", False)
+            if use_frozen_prefix_cache and tcfg.stream_layers and layer_select is not None:
                 train_ctx.callback(layer_select.close_prefix_cache)
-            resident_prefix_cache = tcfg.frozen_prefix_cache and not tcfg.stream_layers
+            resident_prefix_cache = use_frozen_prefix_cache and not tcfg.stream_layers
             if resident_prefix_cache:
                 from soup_cli.utils.frozen_prefix_forward import frozen_prefix_session
 
