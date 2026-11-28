@@ -40,6 +40,7 @@ Sections:
 - [`data`](#data)
 - [`training`](#training)
 - [`training.lora`](#traininglora)
+- [`training.lora_layers`](#traininglora_layers)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
 - [`eval.ship`](#evalship)
@@ -118,6 +119,7 @@ Sections:
 | `training.weight_decay` | `float` | `0.01` | `>= 0.0` | Weight decay factor (decoupled, AdamW-style) applied to weights during optimization; 0 disables it. |
 | `training.max_grad_norm` | `float` | `1.0` | `> 0` | Maximum gradient norm for gradient clipping. |
 | `training.lora` | `section` | section defaults |  | LoRA (Low-Rank Adaptation) adapter architecture and target modules. See [`training.lora`](#traininglora). |
+| `training.lora_layers` | `section \| null` | `null` |  | Select trainable decoder LoRA adapters in Transformers text SFT. See [`training.lora_layers`](#traininglora_layers). |
 | `training.quantization` | `str` | `"4bit"` | one of `"4bit"`, `"8bit"`, `"none"`, `"gptq"`, `"awq"`, `"hqq:1bit"`, `"hqq:2bit"`, `"hqq:3bit"`, `"hqq:4bit"`, `"hqq:5bit"`, `"hqq:6bit"`, `"hqq:8bit"`, `"aqlm"`, `"eetq"`, `"mxfp4"`, `"fp8"`, `"bitnet_1.58"` | Quantization (v0.38.0 — Quant Menu): 4bit (BNB QLoRA), 8bit (BNB), none, gptq / awq (load pre-quantized checkpoint, train LoRA on top), hqq:Nbit (HQQ 1-8 bit, N in {1..6, 8}), aqlm (extreme 2-bit), eetq (8-bit fast), mxfp4 (MXFP4 pre-quantized base, dequantized on load), fp8 (load FP8 checkpoint with dequantize-on-load), bitnet_1.58 (reserved until BitNet trainer routing is available). A task whose trainer never quantises the base (distill, classifier, reranker, cross_encoder, prm, moe_lora_routing, unlearn, asr) resolves an unset value to none, and an explicit value other than none, 4bit and 8bit included, is refused at load (#795). |
 | `training.gptq_disable_exllama` | `bool` | `true` |  | v0.38.0 — disable exllama backend for GPTQ. PEFT requires triton backend; exllama silently breaks adapter training. |
 | `training.bnb_4bit_quant_storage` | `str \| null` | `null` | one of `"uint8"`, `"float16"`, `"bfloat16"`, `"float32"` | v0.38.0 — BNB 4-bit storage dtype. FSDP+QLoRA resolves this automatically to the effective floating compute dtype; outside FSDP, None keeps BNB's legacy uint8 default. |
@@ -385,6 +387,17 @@ Sections:
 | `training.lora.init_strategy` | `str` | `"random"` | one of `"random"`, `"pissa"`, `"olora"`, `"loftq"` | LoRA init strategy. 'random' (default) is standard Kaiming init. 'pissa' (PiSSA) initializes A/B from the SVD of the base weight — faster early convergence but adds an SVD pass on the first epoch. 'olora' is equivalent to use_olora=True (orthogonal QR init). 'loftq' (v0.41.0) initialises A/B + a low-bit base together, useful with QLoRA. Cannot be combined with use_dora or use_vera. |
 | `training.lora.loftq_iter` | `int` | `1` | `>= 1`, `<= 10` | LoftQ iteration count (1-10). Higher = better quant-aware init at the cost of one-time setup latency. Used only when init_strategy='loftq'. |
 | `training.lora.loftq_bits` | `int` | `4` | one of `2`, `4`, `8` | LoftQ target bitwidth — must be one of {2, 4, 8}. Used only when init_strategy='loftq'. |
+
+## `training.lora_layers`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.lora_layers.method` | `str` | **required** | one of `"fixed"`, `"random"`, `"grad"`, `"angular"`, `"lisa"` |  |
+| `training.lora_layers.layers` | `list[int] \| null` | `null` |  |  |
+| `training.lora_layers.k` | `int \| null` | `null` | `>= 1` |  |
+| `training.lora_layers.probe_rows` | `int \| null` | `null` | `>= 1` |  |
+| `training.lora_layers.interval_steps` | `int \| null` | `null` | `>= 1` |  |
+| `training.lora_layers.seed` | `int \| null` | `null` | `>= 0` |  |
 
 ## `training.eval_gate`
 
