@@ -537,6 +537,15 @@ Limits and refusals:
 - **Adapters on routed experts.** `moe_lora` is refused with this layout, because a streamed expert has nowhere to keep an adapter between its visits. Adapt attention or the shared expert instead.
 - **Older Soup versions.** A Soup from before this layout accepts a per-expert cache as reusable and then fails at install ("shard is missing decoder weights"). Delete the cache directory, or re-shard with `fused`, before going back to an older version.
 
+**Python expert prefetch.** In `build_streamed_model()` or `install_streaming()`, set
+`expert_pool=True`, `expert_prefetch=True` and `expert_prefetch_staging=2` on a
+`per_expert` cache to stage up to two upcoming experts from the same layer. One worker handles
+hints in forward visit order and in reverse visit order during backward. Prefetch defaults to
+off and uses one slot when enabled without a depth. Two slots use one additional aligned
+expert read buffer in pageable host memory. The pool's plan includes both the direct-read
+buffer and the prefetch buffers in `host_staging_bytes`. Grouped compute through
+`training.stream_experts` is incompatible with this option.
+
 **FP8 block-quantised bases (DeepSeek-V3 family).** Layer streaming keeps a frozen base off the card and streams it in layer by layer (layer-to-layer streaming, L2L: Pudipeddi et al. 2020). DeepSeek-V3 is published as an FP8 block-quantised checkpoint, and Kimi K2 uses the same format. Soup now shards such a checkpoint by dequantising it as it writes the layer cache, instead of refusing it. There is no config key for this: the format is detected from the checkpoint.
 
 What the format is:

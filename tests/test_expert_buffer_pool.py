@@ -395,7 +395,9 @@ def test_stats_describe_the_slot(tmp_path):
         assert stats["slot_count"] == 1 and stats["fetches"] == 1
         assert stats["logical_bytes_read"] == pool.last_lease_bytes > 0
         assert stats["transfer"] == "sync" and stats["host_cache"] is None
-        assert stats["prefetch"] == {"enabled": False, "hits": 0, "discards": 0}
+        assert stats["prefetch"] == {
+            "enabled": False, "staging": 1, "host_staging_bytes": 0, "hits": 0, "discards": 0,
+        }
         assert stats["plan"]["weight_bytes"] == pool.plan.weight_bytes
         assert stats["closed"] is False and stats["cpu_nf4_temporaries"] is False
     finally:
@@ -484,7 +486,7 @@ def test_prefetch_is_off_by_default_and_starts_no_thread(tmp_path):
     reader, pool = _store(tmp_path, _experts())
     try:
         pool.prefetch(reader, 1)  # a hint on a pool built without prefetch does nothing
-        assert pool._pending is None and pool._prefetch_executor is None
+        assert not pool._pending and pool._prefetch_executor is None
         assert not [t for t in threading.enumerate() if t.name.startswith("expert-prefetch")]
     finally:
         _close(reader, pool)
@@ -507,6 +509,8 @@ def test_prefetch_must_be_a_bool(tmp_path, bad):
 
 
 def test_a_hinted_expert_is_used_and_a_hint_for_another_is_discarded(tmp_path):
+    from soup_cli.utils.safetensors_reader import SECTOR_BYTES
+
     experts = _experts()
     reader, pool = _store(tmp_path, experts, prefetch=True)
     try:
@@ -525,10 +529,13 @@ def test_a_hinted_expert_is_used_and_a_hint_for_another_is_discarded(tmp_path):
         assert pool.prefetch_discards == 2
         with pool.lease(reader, 5) as (gate_up, _down):
             assert torch.equal(gate_up, experts[5][0])
-        assert pool.stats()["prefetch"] == {"enabled": True, "hits": 2, "discards": 2}
+        assert pool.stats()["prefetch"] == {
+            "enabled": True, "staging": 1, "host_staging_bytes": reader.max_span + SECTOR_BYTES,
+            "hits": 2, "discards": 2,
+        }
         pool.prefetch_enabled = False
         pool.prefetch(reader, 6)
-        assert pool._pending is None
+        assert not pool._pending
     finally:
         _close(reader, pool)
     assert not [t for t in threading.enumerate() if t.name.startswith("expert-prefetch")]
@@ -558,7 +565,7 @@ def test_a_prefetch_after_close_does_nothing(tmp_path):
     reader, pool = _store(tmp_path, _experts(), prefetch=True)
     pool.close()
     pool.prefetch(reader, 1)
-    assert pool._pending is None and pool._prefetch_executor is None
+    assert not pool._pending and pool._prefetch_executor is None
     reader.close()
 
 

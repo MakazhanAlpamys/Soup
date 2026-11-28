@@ -3958,6 +3958,7 @@ def _install_expert_streaming(
     expert_transfer: str = "sync",
     expert_host_cache_bytes: int = 0,
     expert_prefetch: bool = False,
+    expert_prefetch_staging: int = 1,
     expert_gemm: str = "native",
     stream_experts: Any = None,
 ) -> Tuple[Any, Tuple[Any, ...]]:
@@ -3976,6 +3977,7 @@ def _install_expert_streaming(
         ExpertBufferPool,
         ExpertFetcher,
         ExpertShardReader,
+        _check_prefetch_staging,
         expert_allocation_budget,
         install_expert_streaming,
         plan_expert_buffer,
@@ -3985,6 +3987,18 @@ def _install_expert_streaming(
     for name, value in (("expert_pool", expert_pool), ("expert_prefetch", expert_prefetch)):
         if type(value) is not bool:
             raise ValueError(f"{name} must be a bool")
+    _check_prefetch_staging(expert_prefetch_staging, expert_prefetch, field="expert_prefetch")
+    if expert_prefetch_staging == 2:
+        if not expert_pool:
+            raise ValueError("expert_prefetch_staging=2 needs expert_pool=True")
+        if stream_experts is not None:
+            raise ValueError(
+                "expert_prefetch_staging=2 cannot be combined with training.stream_experts"
+            )
+        if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+            raise ValueError(
+                "expert_prefetch_staging=2 needs a cache sharded with expert_layout='per_expert'"
+            )
     pool_options = (
         ("expert_transfer", expert_transfer != "sync"),
         ("expert_host_cache_bytes", bool(expert_host_cache_bytes)),
@@ -4047,6 +4061,7 @@ def _install_expert_streaming(
                     **({"host_cache_bytes": expert_host_cache_bytes} if expert_host_cache_bytes
                        else {}),
                     **({"prefetch": True} if expert_prefetch else {}),
+                    **({"prefetch_staging": 2} if expert_prefetch_staging == 2 else {}),
                 )
             else:
                 from soup_cli.utils.expert_training import (
@@ -4109,6 +4124,7 @@ def install_streaming(
     expert_transfer: str = "sync",
     expert_host_cache_bytes: int = 0,
     expert_prefetch: bool = False,
+    expert_prefetch_staging: int = 1,
     expert_gemm: str = "native",
     stream_experts: Any = None,
 ) -> StreamRuntime:
@@ -4135,6 +4151,8 @@ def install_streaming(
     one bounded :class:`ExpertBufferPool` instead of a fresh fetch per use; ``expert_transfer``
     (``"packed"``, CUDA NF4), ``expert_host_cache_bytes`` and ``expert_prefetch`` tune that
     pool and need ``expert_pool``. All are off by default and change no numbers.
+    ``expert_prefetch_staging=2`` adds a second background slot and needs
+    ``expert_prefetch=True`` on the single-expert Python pool.
     """
     import torch
 
@@ -4202,6 +4220,7 @@ def install_streaming(
         grouped_expert_routes=grouped_expert_routes, expert_pool=expert_pool,
         expert_transfer=expert_transfer, expert_host_cache_bytes=expert_host_cache_bytes,
         expert_prefetch=expert_prefetch,
+        expert_prefetch_staging=expert_prefetch_staging,
         expert_gemm=expert_gemm,
         **({"stream_experts": stream_experts} if stream_experts is not None else {}),
     )
@@ -4851,6 +4870,7 @@ def build_streamed_model(
     expert_transfer: str = "sync",
     expert_host_cache_bytes: int = 0,
     expert_prefetch: bool = False,
+    expert_prefetch_staging: int = 1,
     expert_gemm: str = "native",
     stream_experts: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
@@ -4867,8 +4887,8 @@ def build_streamed_model(
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
     handed to ``install_streaming`` for its page-lock advice. ``two_read_experts``,
     ``grouped_expert_routes``, ``expert_pool``, ``expert_transfer``,
-    ``expert_host_cache_bytes``, ``expert_prefetch`` and ``expert_gemm``
-    are forwarded to ``install_streaming``.
+    ``expert_host_cache_bytes``, ``expert_prefetch``, ``expert_prefetch_staging`` and
+    ``expert_gemm`` are forwarded to ``install_streaming``.
     """
     if getattr(index, "arch", "") == "olmoe" and stream_experts is None:
         raise ValueError("OLMoE streaming requires training.stream_experts")
@@ -4928,6 +4948,7 @@ def build_streamed_model(
             expert_transfer=expert_transfer,
             expert_host_cache_bytes=expert_host_cache_bytes,
             expert_prefetch=expert_prefetch,
+            expert_prefetch_staging=expert_prefetch_staging,
             expert_gemm=expert_gemm,
             **({"stream_experts": stream_experts} if stream_experts is not None else {}),
         )
