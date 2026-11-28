@@ -912,8 +912,8 @@ The resident cache requires Transformers text SFT with a resident freeze plan. I
 embeddings on every step), `training.lora.use_vera` or `training.lora.target_parameters`. It
 supports Mistral and OLMoE decoders on a single device; any other decoder, a run on more than one
 visible GPU through `torch.nn.DataParallel`, `output_router_logits` and `output_attentions` refuse
-when training starts. For an OLMoE model set `training.moe_aux_loss_coeff: 0`, because the cached
-prefix has no router logits.
+when training starts. The resident cache also refuses decoder calls with KV caching. For an
+OLMoE model set `training.moe_aux_loss_coeff: 0`, because the cached prefix has no router logits.
 
 #### Layer streaming and L2L
 
@@ -925,7 +925,8 @@ architecture and SFT input limits.
 
 The streamed cache keeps rows in host RAM for one run. `training.frozen_prefix_cache_gib`
 sets its ceiling, 8 GiB by default, further capped at one quarter of the available host RAM when
-measurable. At the limit, new rows are computed as usual. Evaluation runs the full decoder.
+measurable. At the limit, new rows are computed as usual. Evaluation and calls with a KV cache
+run the full decoder.
 Ordinary streaming resumes a batch when its rows share a cached cutoff. L2L can resume each
 micro-batch separately. The training summary and `lora_layers.json` record cache activity.
 

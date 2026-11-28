@@ -14,7 +14,7 @@ from soup_cli.utils.layer_stream_runtime import decoder_owner
 OWNER_ATTR = "_soup_streamed_prefix_cache"
 SUPPORTED_DECODERS = ("llama", "mistral", "qwen2", "qwen3", "qwen3_5", "qwen3_5_text")
 _DECODER_INPUTS = {
-    "input_ids", "inputs_embeds", "attention_mask", "position_ids", "cache_position",
+    "input_ids", "inputs_embeds", "attention_mask", "position_ids", "cache_position", "cache",
     "past_key_values", "use_cache", "output_attentions", "output_hidden_states",
     "output_router_logits", "return_dict", "num_items_in_batch",
 }
@@ -257,7 +257,9 @@ class StreamedPrefixCache:
 
         if len(args) > 1 or kwargs.keys() - _DECODER_INPUTS:
             return []
-        if kwargs.get("past_key_values") is not None or any(
+        if kwargs.get("past_key_values") is not None or kwargs.get("cache") is not None:
+            return []
+        if any(
             kwargs.get(name) or getattr(self.decoder.config, name, False) for name in (
                 "use_cache", "output_attentions", "output_hidden_states", "output_router_logits",
             )

@@ -104,6 +104,22 @@ def test_streamed_keys_track_padding_positions_and_embedded_values(tmp_path):
             assert (cache.stats.hits, cache.stats.misses) == (2, 5)
 
 
+def test_streamed_prefix_cache_bypasses_calls_with_kv_state(tmp_path):
+    from transformers import DynamicCache
+
+    from soup_cli.utils.streamed_prefix_cache import StreamedPrefixCache
+
+    model, runtime = build_streamed(tmp_path)
+    with closing(runtime):
+        model.train()
+        _freeze(model, 1)
+        ids = _micro_batches(1)[0]
+        with closing(StreamedPrefixCache(model, 1, 1 << 20).install()) as cache:
+            _stream_forward(model, ids)
+            model(input_ids=ids, past_key_values=DynamicCache(), use_cache=False)
+            assert (cache.stats.hits, cache.stats.misses, cache.stats.rows_stored) == (0, 1, 1)
+
+
 def test_streamed_qwen_hybrid_prefix_matches_the_full_forward(tmp_path, monkeypatch):
     import torch
     from peft import LoraConfig
@@ -119,7 +135,7 @@ def test_streamed_qwen_hybrid_prefix_matches_the_full_forward(tmp_path, monkeypa
         vocab_size=64,
         hidden_size=64,
         intermediate_size=128,
-        num_hidden_layers=4,
+        num_hidden_layers=6,
         num_attention_heads=4,
         num_key_value_heads=2,
         head_dim=16,
@@ -163,7 +179,7 @@ def test_progressive_cache_raises_cutoff_and_preserves_old_rows(tmp_path, monkey
 
     from soup_cli.utils.streamed_prefix_cache import StreamedPrefixCache
 
-    model, runtime = build_streamed(tmp_path)
+    model, runtime = build_streamed(tmp_path, n_layers=4)
     with closing(runtime):
         model.train()
         _freeze(model, 1)
@@ -248,7 +264,8 @@ def test_l2l_reuses_an_older_cutoff_after_progressive_freeze(tmp_path, monkeypat
     from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
     from soup_cli.utils.streamed_prefix_cache import StreamedPrefixCache
 
-    model, runtime = build_streamed(tmp_path)
+    # The resumed suffix must span more layers than the pool has slots.
+    model, runtime = build_streamed(tmp_path, n_layers=4)
     with closing(runtime):
         model.train()
         _freeze(model, 1)

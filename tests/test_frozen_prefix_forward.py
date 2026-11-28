@@ -243,7 +243,9 @@ def test_half_precision_hit_equals_the_plain_forward(tmp_path):
 @pytest.mark.parametrize(
     "kwargs, message",
     [
-        ({"use_cache": True}, "does not support KV caching"),
+        ({"use_cache": True}, "The frozen-prefix cache does not support KV caching"),
+        ({"cache": object()}, "The frozen-prefix cache does not support KV caching"),
+        ({"past_key_values": object()}, "The frozen-prefix cache does not support KV caching"),
         ({"output_router_logits": True}, "output_router_logits=True"),
         ({"output_attentions": True}, "output_attentions=True"),
         ({"output_hidden_states": True}, "output_hidden_states=True"),

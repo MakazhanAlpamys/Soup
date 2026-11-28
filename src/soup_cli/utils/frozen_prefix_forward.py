@@ -168,6 +168,8 @@ class FrozenPrefixRunner:
         past_key_values: Any = None,
         inputs_embeds: Any = None,
         use_cache: bool = False,
+        *,
+        cache: Any = None,
         **kwargs: Any,
     ) -> Any:
         import torch
@@ -180,7 +182,7 @@ class FrozenPrefixRunner:
             MoeModelOutputWithPast,
         )
 
-        if past_key_values is not None or use_cache:
+        if past_key_values is not None or cache is not None or use_cache:
             raise ValueError("The frozen-prefix cache does not support KV caching")
 
         if inputs_embeds is not None or input_ids is None:
@@ -229,12 +231,9 @@ class FrozenPrefixRunner:
             else create_sliding_window_causal_mask
         )
 
+        # The fourth argument is the KV cache, renamed from past_key_values to cache.
         causal_mask = mask_function(
-            config=decoder.config,
-            inputs_embeds=embeddings,
-            attention_mask=attention_mask,
-            past_key_values=None,
-            position_ids=position_ids,
+            decoder.config, embeddings, attention_mask, None, position_ids=position_ids
         )
 
         position_embeddings = decoder.rotary_emb(embeddings, position_ids=position_ids)
@@ -272,7 +271,6 @@ class FrozenPrefixRunner:
                             hidden,
                             attention_mask=causal_mask,
                             position_ids=position_ids,
-                            past_key_values=None,
                             use_cache=False,
                             position_embeddings=position_embeddings,
                         )
@@ -291,7 +289,6 @@ class FrozenPrefixRunner:
                     hidden,
                     attention_mask=causal_mask,
                     position_ids=position_ids,
-                    past_key_values=None,
                     use_cache=False,
                     position_embeddings=position_embeddings,
                 )
@@ -306,7 +303,7 @@ class FrozenPrefixRunner:
             if type(decoder).__name__ == "OlmoeModel"
             else BaseModelOutputWithPast
         )
-        return output_class(last_hidden_state=hidden, past_key_values=None)
+        return output_class(last_hidden_state=hidden)
 
 
 def _layer_output(output: Any) -> Any:
