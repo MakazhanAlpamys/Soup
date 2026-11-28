@@ -150,7 +150,7 @@ soup data demo alpaca_demo --output ./d.jsonl  Copy a bundled demo JSONL fixture
 soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (PDF/DOCX: pip install "soup-cli[documents]")
 soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
 soup data recipe <path>                         Validate / execute a Data Recipe DAG
-soup data mix                                 BETA mixture-weight optimiser (proxy runs)
+soup data mix                                 BETA mixture search (synthetic default; --live for training)
 soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
 soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch the teacher from an alternative hub
 soup data score --input rows.jsonl            Composite quality scorecard (PII + keyword triage + lang + edu)

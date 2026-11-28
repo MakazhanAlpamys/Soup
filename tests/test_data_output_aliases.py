@@ -340,7 +340,8 @@ _CASES = (
         ) for position in (0, 1)
     ),
     Case(
-        "mix-base-yaml", "d.jsonl", ({"base": "fake/model"},),
+        "mix-base-yaml", "d.jsonl",
+        ({"base": "fake/model", "data": {"train": "a.jsonl", "val_split": 0.1}},),
         lambda inp, out: ["data", "mix", "--optimize", "--datasets", "a.jsonl,b.jsonl",
                           "--live", "--base-yaml", inp, "--num-probes", "1", "--overwrite",
                           "-o", out],
