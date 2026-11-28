@@ -204,8 +204,13 @@ def test_copied_adapter_pins_live_eval_and_export_loaders(tmp_path, monkeypatch,
     merged = tmp_path / "merged"
     _merge_adapter(str(copied), selected_base, str(merged))
     assert (merged / "config.json").is_file()
-    expected_calls = [] if mode == "implicit" else [("tokenizer", expected_revision)]
-    assert calls == expected_calls + [("model", expected_revision), ("model", expected_revision)]
+    if mode == "implicit":
+        # Reconstruction validates the saved IDs against the recorded base tokenizer.
+        assert calls == [("model", expected_revision), ("tokenizer", expected_revision),
+                         ("model", expected_revision)]
+    else:
+        assert calls == [("tokenizer", expected_revision), ("model", expected_revision),
+                         ("model", expected_revision)]
 
 
 def test_dry_run_does_not_capture_training_identity(tmp_path, monkeypatch):

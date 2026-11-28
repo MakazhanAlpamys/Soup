@@ -210,14 +210,19 @@ def test_recorded_commit_selects_the_real_offline_merge_weights(
         assert base == BASE
         return str(recorded if kwargs.get("revision") == RECORDED else moved)
 
-    def save_tokenizer(path: str | Path) -> None:
-        (Path(path) / "tokenizer.json").write_text("{}")
+    from tokenizers import Tokenizer, models
+    from transformers import PreTrainedTokenizerFast
+
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>")),
+        unk_token="<unk>",
+    )
 
     monkeypatch.setattr(transformers, "AutoModelForCausalLM", SimpleNamespace(
         from_pretrained=select_model,
     ))
     monkeypatch.setattr(transformers, "AutoTokenizer", SimpleNamespace(
-        from_pretrained=lambda *args, **kwargs: SimpleNamespace(save_pretrained=save_tokenizer),
+        from_pretrained=lambda *args, **kwargs: tokenizer,
     ))
     monkeypatch.setattr("soup_cli.utils.hubs.snapshot_download", select_snapshot)
     args = ["--low-memory"] if low_memory else []

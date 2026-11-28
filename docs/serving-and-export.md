@@ -52,6 +52,15 @@ base, a non-Hugging-Face source or a legacy adapter keeps its existing loading
 behavior and prints the revision as unknown; Soup does not query today's Hub
 head to fill missing training history.
 
+Standard Transformers merge and the shared live-evaluation loader reconstruct
+vocabulary-expanded PEFT adapters on unquantized bases. Keep the saved tokenizer
+and full embedding/head weights beside the adapter: Soup checks existing token
+IDs and tensor dimensions, resizes the base, then loads the saved weights.
+Incomplete or incompatible expanded artifacts fail before merged output is written.
+Quantized-base reconstruction is refused; it never falls back to a different
+precision. This support does not extend to `--low-memory`, native MLX (#3089),
+or the separate `chat`, `diff`, `infer`, `serve` and `export` loaders (#3425).
+
 `--low-memory` reads the base `.safetensors` files and writes the merged files
 one tensor at a time, so peak RAM is about one shard (the largest `.safetensors`
 file; a single-file model is memory-mapped as a whole, so it saves little). The

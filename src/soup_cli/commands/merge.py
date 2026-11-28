@@ -284,6 +284,12 @@ def merge(
             **revision_kwargs,
         )
 
+        from soup_cli.utils.adapter_vocab import prepare_adapter_vocab
+
+        tokenizer = prepare_adapter_vocab(
+            model, str(adapter_path), base, tokenizer=tokenizer,
+            trust_remote_code=trc, revision_kwargs=revision_kwargs,
+        )
         console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")
         model = PeftModel.from_pretrained(model, str(adapter_path))
 
