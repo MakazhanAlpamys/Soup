@@ -470,21 +470,26 @@ def mbr_deferred_forward_hook(hook: Callable[..., Any]) -> Callable[..., Any]:
     return hook
 
 
+_MODULE_HOOKS = ("forward_hooks", "forward_pre_hooks", "backward_hooks", "backward_pre_hooks")
+
+
+def _split_can_defer(layers: Sequence[Any]) -> bool:
+    """The deferred call enters the inner decoder directly, so keep wrapper hooks intact."""
+    import torch.nn.modules.module as module_hooks
+
+    return not (
+        any(getattr(module_hooks, f"_global_{name}", None) for name in _MODULE_HOOKS)
+        or any(getattr(layer, f"_{name}", None) for layer in layers for name in _MODULE_HOOKS)
+    )
+
+
 def _validate_route_preserving_mbr(layers: Sequence[Any], causal: Any) -> None:
     """Refuse unsupported models before the first streamed layer is loaded."""
     import torch.nn.modules.module as module_hooks
 
     if str(getattr(getattr(causal, "config", None), "model_type", "")) != "deepseek_v3":
         raise ValueError("route-preserving MBR currently supports DeepSeek-V3 decoder layers only")
-    if any(
-        getattr(module_hooks, name, None)
-        for name in (
-            "_global_forward_hooks",
-            "_global_forward_pre_hooks",
-            "_global_backward_hooks",
-            "_global_backward_pre_hooks",
-        )
-    ):
+    if any(getattr(module_hooks, f"_global_{name}", None) for name in _MODULE_HOOKS):
         raise ValueError("route-preserving MBR does not support global module hooks")
     moe_layers = 0
     for index, layer in enumerate(layers):
@@ -855,6 +860,8 @@ class L2LStep:
         call: LayerCall,
         *,
         split_devices: Sequence[Any] = (),
+        split_overlap: bool = False,
+        split_defer_read: bool = False,
     ) -> None:
         self.causal, self.owner = model_parts(model)
         self.model = model
@@ -870,6 +877,8 @@ class L2LStep:
         self._prime = prime
         self.runtime = runtime
         self.split_devices = tuple(split_devices)
+        self.split_overlap = split_overlap
+        self.split_defer_read = split_defer_read
         self._replicas: Dict[int, Any] = {}
         #: Loads and restores of the last ``run``; ``None`` before the first.
         self.counters: Optional[LoadCounters] = None
@@ -1299,6 +1308,9 @@ class L2LStep:
             DROPOUT_REFUSAL,
             ROUTED_EXPERTS_REFUSAL,
             DeviceReplica,
+            SplitProfile,
+            SplitTransfers,
+            WeightCopy,
             device_context,
             refuse_unsupported_split_model,
             to_device,
@@ -1347,76 +1359,149 @@ class L2LStep:
             if index and key not in moved_calls:
                 moved_calls[key] = to_device((call.args, call.kwargs), devices[mb])
 
-        def copy_layer(layer: Any) -> Dict[int, Any]:
-            if not replicas:
-                return {}
-            # The primary wrapper advances the prefetcher. Queue all secondary copies
-            # from the current slot before either device computes this layer.
-            buffers = layer.pool.wait(layer.idx)
-            return {index: replica.weights(layer, buffers) for index, replica in replicas.items()}
+        replica_devices = [replica.device for replica in replicas.values()]
+        transfers = SplitTransfers(main, replica_devices, overlap=self.split_overlap)
+        profile = SplitProfile([main, *replica_devices])
+        defer = self.split_defer_read and _split_can_defer(self.layers)
+        ahead: Dict[int, Dict[int, WeightCopy]] = {}
 
-        def run_layer(layer: Any, weights: Dict[int, Any], mb: int, hidden: Any) -> Any:
+        def copy_layer(layer: Any, buffers: Any, ready: Any) -> Dict[int, WeightCopy]:
+            keys = buffers.keys() if layer.quant_specs else layer.name_map.values()
+            needed = {key: buffers[key] for key in keys}
+            return {
+                index: transfers.weights(needed, replica.device, ready)
+                for index, replica in replicas.items()
+            }
+
+        def prefetch(idx: int) -> None:
+            if not transfers.enabled:
+                return
+            layer = self.layers[idx]
+            pool = layer.pool
+            slot = pool.slot_for(idx)
+            if pool.owner[slot] == idx:
+                with profile.span("copy_ahead"):
+                    ahead[idx] = copy_layer(layer, pool.buffers[slot], pool.events[slot])
+
+        def load(layer: Any) -> Tuple[Any, Dict[int, Any]]:
+            if not replicas and not defer:
+                return None, {}
+            with profile.span("load"):
+                pool = layer.pool
+                buffers = pool.wait(layer.idx)
+                copies = ahead.pop(layer.idx, None)
+                if replicas and copies is None:
+                    ready = pool.events[pool.slot_for(layer.idx)] if transfers.enabled else None
+                    copies = copy_layer(layer, buffers, ready)
+                weights = {}
+                for index, copy in (copies or {}).items():
+                    replica = replicas[index]
+                    copy.wait(main, replica.device)
+                    weights[index] = replica.weights(layer, copy.buffers)
+                return buffers, weights
+
+        def run_layer(
+            layer: Any, buffers: Any, weights: Dict[int, Any], mb: int, hidden: Any, phase: str
+        ) -> Any:
             index = owners[mb]
-            if index == 0:
-                return self._layer(layer, hidden, None, calls[mb])
-            args, kwargs = moved_calls[index, id(calls[mb])]
-            return replicas[index].forward(layer, weights[index], hidden, args, kwargs)
+            with profile.span(phase, devices[mb]):
+                if index:
+                    args, kwargs = moved_calls[index, id(calls[mb])]
+                    return replicas[index].forward(layer, weights[index], hidden, args, kwargs)
+                if not defer:
+                    return self._layer(layer, hidden, None, calls[mb])
+                call = calls[mb]
+                out = layer._forward_with_buffers(buffers, hidden, *call.args, **call.kwargs)
+                return out[0] if isinstance(out, tuple) else out
 
-        with device_context(main):
-            self._prime(self.owner, ())
-            with torch.no_grad():
+        def read_next(layer: Any) -> None:
+            if defer:
+                with profile.span("read", main):
+                    layer.prefetcher.advance(layer.idx)
+
+        with device_context(main), transfers.window():
+            profile.start()
+            with profile.span("embed"), torch.no_grad():
+                self._prime(self.owner, ())
                 hidden = [
-                    self.owner.embed_tokens(ids).to(device, non_blocking=True)
+                    transfers.activation(self.owner.embed_tokens(ids), device)
                     for ids, device in zip(micro_batches, devices)
                 ]
+            with torch.no_grad():
                 for idx, layer in enumerate(self.layers):
-                    weights = copy_layer(layer)
+                    buffers, weights = load(layer)
                     if idx >= backward_floor:
-                        for mb in range(k):
-                            store.put(idx, mb, hidden[mb].to(main, non_blocking=True))
+                        for mb, device in enumerate(devices):
+                            stream = transfers.activation_stream() if owners[mb] else nullcontext()
+                            phase = "put_cross" if owners[mb] else "put"
+                            phase_devices = (main, device) if owners[mb] else (main,)
+                            with profile.span(phase, *phase_devices), stream:
+                                store.put(idx, mb, transfers.activation(hidden[mb], main))
                     for mb in range(k):
-                        hidden[mb] = run_layer(layer, weights, mb, hidden[mb])
+                        hidden[mb] = run_layer(layer, buffers, weights, mb, hidden[mb], "fwd")
                     del weights
+                    read_next(layer)
+                    if idx + 1 < len(self.layers):
+                        prefetch(idx + 1)
 
             losses: List[Any] = []
             grads: List[Any] = []
             for mb, device in enumerate(devices):
-                last = hidden[mb].to(main, non_blocking=True).detach().requires_grad_(True)
-                hidden[mb] = None
-                with torch.enable_grad():
-                    loss = head(self.causal, self.owner, last, mb)
-                with self._backward_context(last):
-                    loss.backward()
-                losses.append(loss.detach())
-                grads.append(
-                    last.grad.to(device, non_blocking=True) if backward_floor < len(self.layers)
-                    else None
-                )
-                del last, loss
+                phase = "head_cross" if owners[mb] else "head"
+                phase_devices = (main, device) if owners[mb] else (main,)
+                with profile.span(phase, *phase_devices):
+                    last = transfers.activation(hidden[mb], main).detach().requires_grad_(True)
+                    hidden[mb] = None
+                    with torch.enable_grad():
+                        loss = head(self.causal, self.owner, last, mb)
+                    with self._backward_context(last):
+                        loss.backward()
+                    losses.append(loss.detach())
+                    grads.append(
+                        transfers.activation(last.grad, device)
+                        if backward_floor < len(self.layers) else None
+                    )
+                    del last, loss
 
             store.begin_backward()
             for idx in range(len(self.layers) - 1, backward_floor - 1, -1):
                 layer = self.layers[idx]
-                weights = copy_layer(layer)
+                buffers, weights = load(layer)
                 saved = layer.use_checkpoint
                 layer.use_checkpoint = False
                 try:
                     for mb, device in enumerate(devices):
-                        inputs = store.get(idx, mb).to(device, non_blocking=True).requires_grad_()
+                        stream = transfers.activation_stream() if owners[mb] else nullcontext()
+                        phase = "get_cross" if owners[mb] else "get"
+                        phase_devices = (main, device) if owners[mb] else (main,)
+                        with profile.span(phase, *phase_devices), stream:
+                            inputs = transfers.activation(store.get(idx, mb), device)
+                            inputs.requires_grad_()
                         with torch.enable_grad():
-                            out = run_layer(layer, weights, mb, inputs)
+                            out = run_layer(layer, buffers, weights, mb, inputs, "recompute")
+                        if not defer and mb == 0 and idx > backward_floor:
+                            prefetch(idx - 1)
                         # Separate calls prevent concurrent autograd callbacks from tuning
                         # the same kernel on different devices.
-                        with device_context(device), self._backward_context(inputs):
+                        with (
+                            profile.span("bwd", device),
+                            device_context(device),
+                            self._backward_context(inputs),
+                        ):
                             torch.autograd.backward(out, grad_tensors=grads[mb])
                         grads[mb] = inputs.grad
                         del inputs, out
                 finally:
                     layer.use_checkpoint = saved
                 del weights
+                read_next(layer)
+                if defer and idx > backward_floor:
+                    prefetch(idx - 1)
             store.end_step()
-            for replica in replicas.values():
-                replica.merge_grads()
+            with profile.span("merge"):
+                for replica in replicas.values():
+                    replica.merge_grads()
+        profile.finish(k)
         return losses
 
     def _run(

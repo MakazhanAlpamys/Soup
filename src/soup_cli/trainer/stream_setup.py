@@ -2033,6 +2033,8 @@ class StreamingSetupMixin:
             weight_dirs=self._stream_weight_dirs,
             effective_k=effective_k,
             split_devices=devices,
+            split_overlap=getattr(tcfg, "l2l_split_overlap", False),
+            split_defer_read=getattr(tcfg, "l2l_split_defer_read", False),
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "

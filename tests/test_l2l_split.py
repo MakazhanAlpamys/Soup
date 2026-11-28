@@ -42,6 +42,41 @@ def test_split_config_defaults_and_bounds():
     assert TrainingConfig(l2l_split_gpus=8).l2l_split_gpus == 8
 
 
+@pytest.mark.parametrize("key", ["l2l_split_overlap", "l2l_split_defer_read"])
+def test_split_scheduling_config_is_opt_in(key):
+    assert getattr(_config().training, key) is False
+    assert getattr(_config(l2l_split_gpus=2, **{key: True}).training, key) is True
+
+
+@pytest.mark.parametrize("key", ["l2l_split_overlap", "l2l_split_defer_read"])
+@pytest.mark.parametrize("value", [1, 0, "yes"])
+def test_split_scheduling_config_requires_bool(key, value):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc:
+        _config(l2l_split_gpus=2, **{key: value})
+    error, = exc.value.errors()
+    assert error["loc"] == ("training", key)
+    assert error["msg"] == (
+        f"Value error, training.{key} must be true or false, got {type(value).__name__} {value!r}"
+    )
+
+
+@pytest.mark.parametrize("key", ["l2l_split_overlap", "l2l_split_defer_read"])
+@pytest.mark.parametrize(
+    "training", [{}, {"l2l": False, "l2l_split_gpus": 2}, {"task": "ipo", "l2l_split_gpus": 2}]
+)
+def test_split_scheduling_config_requires_split_sft(key, training):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc:
+        _config(**{key: True}, **training)
+    assert exc.value.errors()[0]["msg"] == (
+        f"Value error, training.{key} requires training.l2l=true and "
+        "training.l2l_split_gpus>1 for text SFT with backend='transformers'."
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [
@@ -162,6 +197,7 @@ def test_split_setup_refuses_moe_before_tokenizer_or_weights(monkeypatch):
 def test_builder_keeps_one_hf_gpu_and_attaches_split_devices(streamed, monkeypatch):  # noqa: F811
     import torch
 
+    from soup_cli.trainer.l2l_trainer import _l2l_step_for
     from soup_cli.trainer.stream_setup import StreamingSetupMixin
 
     monkeypatch.delenv("WORLD_SIZE", raising=False)
@@ -170,7 +206,7 @@ def test_builder_keeps_one_hf_gpu_and_attaches_split_devices(streamed, monkeypat
     monkeypatch.setattr("soup_cli.utils.layer_stream.resolve_stream_dtype", lambda _: "float32")
     wrapper = StreamingSetupMixin()
     wrapper.device = "cuda"
-    wrapper.config = _config(l2l_split_gpus=2)
+    wrapper.config = _config(l2l_split_gpus=2, l2l_split_overlap=True, l2l_split_defer_read=True)
     wrapper.model, wrapper._stream_runtime = streamed
 
     class Args(SimpleNamespace):
@@ -189,16 +225,18 @@ def test_builder_keeps_one_hf_gpu_and_attaches_split_devices(streamed, monkeypat
     state = trainer._soup_l2l
     assert state.split_devices == ("cuda:1",)
     assert state.effective_k == 3
-    state.stepper = object()
+    stepper, _calls = _l2l_step_for(state, wrapper.model, _micro_batches(2))
+    assert stepper.split_overlap is True
+    assert stepper.split_defer_read is True
     state.close()
     assert state.stepper is None
 
 
-def _make_step(model, runtime, ids, split=()):
+def _make_step(model, runtime, ids, split=(), **options):
     from soup_cli.utils.l2l_step import L2LStep, capture_layer_call
 
     return L2LStep(
-        model, runtime, capture_layer_call(model, ids, draws=False), split_devices=split
+        model, runtime, capture_layer_call(model, ids, draws=False), split_devices=split, **options
     )
 
 
@@ -214,8 +252,9 @@ def _assert_gradients_match(actual, expected, *, rtol=1e-5, atol=1e-7):
 @pytest.mark.parametrize(
     ("k", "devices"), [(k, ("cpu",)) for k in (1, 2, 3, 4)] + [(4, ("cpu", "cpu"))]
 )
+@pytest.mark.parametrize("defer", [False, True], ids=["early-read", "deferred-read"])
 def test_split_window_matches_single_device_loss_gradients_and_reads(
-    streamed, k, devices  # noqa: F811
+    streamed, k, devices, defer  # noqa: F811
 ):
     import torch
 
@@ -229,7 +268,7 @@ def test_split_window_matches_single_device_loss_gradients_and_reads(
         # Give each step the same pool residency before measuring the reads.
         with torch.no_grad():
             model(batches[0])
-        step = _make_step(model, runtime, batches[0], devices)
+        step = _make_step(model, runtime, batches[0], devices, split_defer_read=defer)
         with closing(_store(k)) as store:
             losses = step.run(batches, store)
         return torch.stack(losses), harness.collect_grads(model), step.counters.layer_loads
@@ -332,32 +371,186 @@ def test_split_calls_backward_once_per_micro_batch_and_layer(streamed, monkeypat
     assert sizes == [1] * (4 * (len(step.layers) + 1))
 
 
+@pytest.mark.parametrize("defer", [False, True])
+@pytest.mark.parametrize("hook", [None, "wrapper", "global"])
+def test_split_read_order_preserves_hooks(streamed, monkeypatch, defer, hook):  # noqa: F811
+    from torch.nn.modules.module import register_module_forward_pre_hook
+
+    model, runtime = streamed
+    batches = _micro_batches(2)
+    step = _make_step(model, runtime, batches[0], ("cpu",), split_defer_read=defer)
+    events = []
+    advance = runtime.prefetcher.advance
+
+    def record_advance(idx):
+        events.append(("read", idx))
+        advance(idx)
+
+    monkeypatch.setattr(runtime.prefetcher, "advance", record_advance)
+
+    def watch(idx):
+        def record_compute(_layer, _args):
+            events.append(("compute", idx))
+        return record_compute
+
+    handles = [layer.inner.register_forward_pre_hook(watch(idx))
+               for idx, layer in enumerate(step.layers)]
+    def record_wrapper(module, _args):
+        if module is step.layers[1]:
+            events.append(("wrapper", 1))
+
+    if hook == "wrapper":
+        handles.append(step.layers[1].register_forward_pre_hook(record_wrapper))
+    elif hook == "global":
+        handles.append(register_module_forward_pre_hook(record_wrapper))
+    try:
+        with closing(_store(2)) as store:
+            step.run(batches, store)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    expected = (
+        ["compute", "compute", "read"] if defer and not hook
+        else (["wrapper"] if hook else []) + ["read", "compute", "compute"]
+    )
+    assert [kind for kind, idx in events if idx == 1] == expected * 2
+
+
+def test_split_overlap_uses_side_streams_only_when_requested(monkeypatch):
+    import torch
+
+    from soup_cli.utils.l2l_split import SplitTransfers
+
+    streams = []
+
+    def new_stream(device):
+        streams.append(str(device))
+        return object()
+
+    monkeypatch.setattr(torch.cuda, "Stream", new_stream)
+    assert not SplitTransfers("cuda:0", ["cuda:1"]).enabled
+    assert not SplitTransfers("cpu", ["cpu"], overlap=True).enabled
+    assert not SplitTransfers("cuda:0", [], overlap=True).enabled
+    assert streams == []
+    assert SplitTransfers("cuda:0", ["cuda:1"], overlap=True).enabled
+    assert streams == ["cuda:0", "cuda:0", "cuda:1", "cuda:1"]
+
+
+def test_split_profile_requires_opt_in_and_cuda(monkeypatch, tmp_path):
+    from soup_cli.utils.l2l_split import PROFILE_ENV, SplitProfile
+
+    monkeypatch.delenv(PROFILE_ENV, raising=False)
+    assert not SplitProfile(["cuda:0", "cuda:1"]).enabled
+    path = tmp_path / "profile.jsonl"
+    monkeypatch.setenv(PROFILE_ENV, str(path))
+    assert SplitProfile(["cuda:0", "cuda:1"]).enabled
+    profile = SplitProfile(["cpu", "cpu"])
+    assert not profile.enabled
+    profile.start()
+    with profile.span("fwd"):
+        pass
+    assert profile.finish(2) is None
+    assert not path.exists()
+
+
+def test_split_profile_aggregates_phases_and_appends(monkeypatch, tmp_path):
+    import json
+
+    import torch
+
+    from soup_cli.utils.l2l_split import PROFILE_ENV, SplitProfile
+
+    class Event:
+        def __init__(self, time):
+            self.time = time
+
+        def elapsed_time(self, other):
+            return other.time - self.time
+
+    clock = {"cuda:0": 0.0, "cuda:1": 0.0}
+
+    def fake_event(_profile, device):
+        clock[str(device)] += 10.0
+        return Event(clock[str(device)])
+
+    synchronized = []
+    path = tmp_path / "profile.jsonl"
+    monkeypatch.setenv(PROFILE_ENV, str(path))
+    monkeypatch.setattr(SplitProfile, "_event", fake_event)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: synchronized.append(str(device)))
+    profile = SplitProfile(["cuda:0", "cuda:1"])
+    records = []
+    for k in (3, 2):
+        profile.start()
+        for _ in range(2):
+            with profile.span("fwd", "cuda:1"):
+                pass
+        with profile.span("load"):
+            pass
+        records.append(profile.finish(k))
+
+    assert synchronized == ["cuda:0", "cuda:1"] * 2
+    assert [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] == records
+    for record, k in zip(records, (3, 2)):
+        assert record["devices"] == {
+            "cuda:0": {"wall_ms": 30.0, "busy_ms": {"load": 10.0}, "idle_ms": 20.0},
+            "cuda:1": {"wall_ms": 70.0, "busy_ms": {"fwd": 20.0, "load": 10.0}, "idle_ms": 40.0},
+        }
+        assert record["k"] == k
+        assert set(record["host_ms"]) == {"fwd", "load"}
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize("bf16", [False, True], ids=["fp32", "bf16"])
-def test_two_cuda_split_matches_single_device_after_update(tmp_path, monkeypatch, bf16):
+@pytest.mark.parametrize("overlap", [False, True], ids=["plain-copy", "overlapped-copy"])
+@pytest.mark.parametrize("defer", [False, True], ids=["early-read", "deferred-read"])
+def test_two_cuda_split_matches_single_device_after_update(
+    tmp_path, monkeypatch, bf16, overlap, defer
+):
+    import json
+
     import torch
 
     from soup_cli.utils.l2l_activations import ActivationStore
-    from soup_cli.utils.l2l_split import DeviceReplica
+    from soup_cli.utils.l2l_split import PROFILE_ENV, DeviceReplica
 
     if torch.cuda.device_count() < 2:
         pytest.skip("requires two CUDA devices")
     if bf16 and any(torch.cuda.get_device_capability(i)[0] < 8 for i in range(2)):
         pytest.skip("requires native BF16 on both devices")
+    profile_path = tmp_path / "split.jsonl"
+    monkeypatch.delenv(PROFILE_ENV, raising=False)
+    if overlap and defer:
+        monkeypatch.setenv(PROFILE_ENV, str(profile_path))
     with torch.cuda.device(0):
         model, runtime = build_streamed(tmp_path, device="cuda:0")
         with closing(runtime):
-            _check_two_cuda_split(model, runtime, monkeypatch, bf16, ActivationStore, DeviceReplica)
+            _check_two_cuda_split(
+                model, runtime, monkeypatch, bf16, ActivationStore, DeviceReplica,
+                split_overlap=overlap, split_defer_read=defer,
+            )
+    if overlap and defer:
+        lines = profile_path.read_text(encoding="utf-8").splitlines()
+        records = [json.loads(line) for line in lines]
+        assert len(records) == 2
+        phases = {"load", "copy_ahead", "read", "put_cross", "get_cross"}
+        for record in records:
+            assert record["k"] == 3
+            assert set(record["devices"]) == {"cuda:0", "cuda:1"}
+            assert phases <= record["host_ms"].keys()
+    else:
+        assert not profile_path.exists()
 
 
-def _check_two_cuda_split(model, runtime, monkeypatch, bf16, store_cls, replica_cls):
+def _check_two_cuda_split(model, runtime, monkeypatch, bf16, store_cls, replica_cls, **options):
     import torch
 
     harness = _load("l2l_schedule")
     harness.make_non_vacuous(model)
     batches = [ids.to("cuda:0") for ids in _micro_batches(3)]
     single = _make_step(model, runtime, batches[0])
-    split = _make_step(model, runtime, batches[0], ("cuda:1",))
+    split = _make_step(model, runtime, batches[0], ("cuda:1",), **options)
     optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=0.5)
     events = []
     backward_devices = []
@@ -421,3 +614,54 @@ def _check_two_cuda_split(model, runtime, monkeypatch, bf16, store_cls, replica_
         )
     ]
     assert backward_devices == [0, 0, 0] + [0, 1, 0] * 3
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("overlap", [False, True], ids=["plain-copy", "overlapped-copy"])
+@pytest.mark.parametrize("defer", [False, True], ids=["early-read", "deferred-read"])
+def test_two_cuda_split_matches_chunked_fp16_with_scaler(tmp_path, overlap, defer):
+    import torch
+
+    from soup_cli.utils.l2l_activations import ActivationStore
+    from soup_cli.utils.l2l_step import label_tokens
+    from soup_cli.utils.stream_loss_chunk import chunked_causal_lm_loss
+
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+    with torch.cuda.device(0):
+        model, runtime = build_streamed(tmp_path, device="cuda:0")
+        with closing(runtime), closing(ActivationStore(
+            n_layers=3, k=3, chunk_shape=(1, 8, 64), dtype=torch.float32, device="cuda:0",
+        )) as store:
+            harness = _load("l2l_schedule")
+            harness.make_non_vacuous(model)
+            batches = [ids.to("cuda:0") for ids in _micro_batches(3)]
+            single = _make_step(model, runtime, batches[0])
+            split = _make_step(
+                model, runtime, batches[0], ("cuda:1",),
+                split_overlap=overlap, split_defer_read=defer,
+            )
+            optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=0.5)
+
+            def run(step):
+                optimizer.zero_grad(set_to_none=True)
+                scaler = torch.amp.GradScaler("cuda", init_scale=128)
+
+                def head(causal, owner, hidden, mb):
+                    # Exercise the shipped chunked primitive through the step's head contract.
+                    loss, _ = chunked_causal_lm_loss(
+                        owner.norm(hidden), causal.lm_head, batches[mb], 3,
+                        num_items_in_batch=label_tokens(batches),
+                    )
+                    return scaler.scale(loss)
+
+                with torch.autocast("cuda", dtype=torch.float16):
+                    losses = step.run(batches, store, head=head)
+                scaler.unscale_(optimizer)
+                return torch.stack(losses) / scaler.get_scale(), harness.collect_grads(model)
+
+            expected_loss, expected_grads = run(single)
+            for _ in range(2):
+                loss, grads = run(split)
+                torch.testing.assert_close(loss, expected_loss, rtol=1e-3, atol=1e-5)
+                _assert_gradients_match(grads, expected_grads, rtol=0.02, atol=1e-5)

@@ -2012,6 +2012,11 @@ def _build_streamed_layer_class():
         def _body(self, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
             buffers = self.pool.wait(self.idx)
             self.prefetcher.advance(self.idx)
+            return self._forward_with_buffers(buffers, hidden_states, *args, **kwargs)
+
+        def _forward_with_buffers(
+            self, buffers: Any, hidden_states: Any, *args: Any, **kwargs: Any
+        ) -> Any:
             return functional_call(
                 self.inner,
                 self._substituted_weights(buffers),

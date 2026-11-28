@@ -4150,6 +4150,20 @@ class TrainingConfig(BaseModel):
             "Launch without --gpus."
         ),
     )
+    l2l_split_overlap: bool = Field(
+        default=False,
+        description=(
+            "BETA. Copy split L2L weights and activations on separate CUDA streams. "
+            "Can increase GPU memory use. Requires multiple GPUs in a split SFT window."
+        ),
+    )
+    l2l_split_defer_read: bool = Field(
+        default=False,
+        description=(
+            "BETA. Queue a split L2L layer's compute before asking for the next layer. "
+            "Requires multiple GPUs in a split SFT window."
+        ),
+    )
     l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
         default="none",
         description=(
@@ -4756,7 +4770,9 @@ class TrainingConfig(BaseModel):
             f"{type(v).__name__} {v!r}"
         )
 
-    @field_validator("l2l", "l2l_auto_k", mode="before")
+    @field_validator(
+        "l2l", "l2l_auto_k", "l2l_split_overlap", "l2l_split_defer_read", mode="before"
+    )
     @classmethod
     @_type_error_as_value_error
     def _validate_l2l_switch_is_bool(cls, v, info: ValidationInfo):
@@ -8516,6 +8532,16 @@ class SoupConfig(BaseModel):
         launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
         """
         tcfg = self.training
+        for name in ("l2l_split_overlap", "l2l_split_defer_read"):
+            if getattr(tcfg, name) and (
+                not tcfg.l2l
+                or tcfg.l2l_split_gpus == 1
+                or (self.task, self.backend, self.modality) != ("sft", "transformers", "text")
+            ):
+                raise ValueError(
+                    f"training.{name} requires training.l2l=true and "
+                    "training.l2l_split_gpus>1 for text SFT with backend='transformers'."
+                )
         options = {
             "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
             "l2l_activation_codec": tcfg.l2l_activation_codec != "none",

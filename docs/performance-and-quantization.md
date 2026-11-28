@@ -1215,6 +1215,8 @@ training:
 | `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
 | `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
 | `l2l_split_gpus` | `1` | Number of visible CUDA devices sharing one dense SFT window in one process (1–8). |
+| `l2l_split_overlap` | `false` | Use separate CUDA streams for cross-device weight and activation copies. Can increase GPU memory use. |
+| `l2l_split_defer_read` | `false` | Queue the layer's compute before asking for the next layer. Windows with decoder wrapper hooks keep the usual read order. |
 | `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
 | `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
 
@@ -1229,6 +1231,11 @@ training:
   layer and its share of the compute. Split windows require `lora.dropout: 0`, zero model
   dropout and a frozen embedding. Routed experts, reference passes and frozen-prefix
   caching are refused.
+- **Tune and profile transfers.** Both scheduling switches require `l2l_split_gpus`
+  greater than one. For debugging, set `SOUP_L2L_PROFILE` to a writable JSONL path.
+  Each CUDA split window appends host phase timings and per-device compute-stream timings,
+  including waits. Time outside the measured phases can include side-stream work.
+  Profiling synchronizes the participating GPUs at each window boundary.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
 - **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
 - **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`

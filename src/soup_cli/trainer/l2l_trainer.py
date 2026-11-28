@@ -193,6 +193,8 @@ class L2LState:
     #: The recipe's effective k (``soup_cli.utils.l2l_recipe``); None when the caller gave none.
     effective_k: Optional[int] = None
     split_devices: Tuple[str, ...] = ()
+    split_overlap: bool = False
+    split_defer_read: bool = False
     two_read_experts: bool = False
     grouped_expert_routes: bool = False
     route_preserving_mbr: bool = False
@@ -477,7 +479,14 @@ def _l2l_step_for(state: L2LState, model: Any, ids_list: List[Any]) -> Tuple[Any
 
     calls = _calls_for(state, model, ids_list)
     if state.stepper is None:
-        state.stepper = L2LStep(model, state.runtime, calls[0], split_devices=state.split_devices)
+        state.stepper = L2LStep(
+            model,
+            state.runtime,
+            calls[0],
+            split_devices=state.split_devices,
+            split_overlap=state.split_overlap,
+            split_defer_read=state.split_defer_read,
+        )
     return state.stepper, calls
 
 
@@ -843,6 +852,8 @@ def attach_l2l_state(
     weight_dirs: Sequence[str] = (),
     effective_k: Optional[int] = None,
     split_devices: Sequence[str] = (),
+    split_overlap: bool = False,
+    split_defer_read: bool = False,
     two_read_experts: bool = False,
     grouped_expert_routes: bool = False,
     route_preserving_mbr: bool = False,
@@ -876,6 +887,8 @@ def attach_l2l_state(
         host_budget=host_budget,
         effective_k=effective_k,
         split_devices=tuple(split_devices),
+        split_overlap=split_overlap,
+        split_defer_read=split_defer_read,
         spill_dir=spill_dir,
         weight_dirs=tuple(str(path) for path in weight_dirs),
         two_read_experts=two_read_experts,
