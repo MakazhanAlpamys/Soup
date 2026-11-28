@@ -23,6 +23,8 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.test_ci_full_matrix_on_approval import _render
+
 ROOT = Path(__file__).resolve().parent.parent
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PYPROJECT = ROOT / "pyproject.toml"
@@ -114,6 +116,26 @@ class TestTheTestJobRunsInParallel:
         args = _pytest_args(NO_COV_STEP)
         assert "--no-cov" in args
         assert not [arg for arg in args if arg.startswith("--cov")], args
+
+    @pytest.mark.parametrize(
+        ("os_name", "version", "expected"),
+        [
+            ("ubuntu-latest", "3.12", ["50"]),
+            ("ubuntu-latest", "3.11", []),
+            ("ubuntu-latest", "3.13", []),
+            ("windows-latest", "3.12", []),
+            ("macos-latest", "3.12", []),
+        ],
+    )
+    def test_only_the_linux_312_receipt_lists_slowest_test_phases(
+        self,
+        os_name: str,
+        version: str,
+        expected: list[str],
+    ) -> None:
+        ctx = {"matrix": {"os": os_name, "python-version": version}}
+        command = _render(str(_step(NO_COV_STEP)["run"]), ctx)
+        assert _option(shlex.split(command), "--durations") == expected
 
     def test_no_step_of_any_job_spreads_one_file_over_workers(self) -> None:
         text = CI.read_text(encoding="utf-8")

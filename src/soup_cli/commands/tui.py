@@ -11,6 +11,8 @@ from __future__ import annotations
 import typer
 from rich.console import Console
 
+from soup_cli.commands._common import refuse_nan
+
 console = Console()
 
 
@@ -26,6 +28,7 @@ def tui(
     refresh: float = typer.Option(
         1.0,
         "--refresh",
+        callback=refuse_nan,
         help="Refresh interval in seconds (0.25 - 10.0).",
     ),
     limit: int = typer.Option(

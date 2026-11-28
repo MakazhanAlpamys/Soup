@@ -116,7 +116,12 @@ class TestTheSwitch:
     def test_warn_deprecated_value_still_only_warns_by_default(self, warn):
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             deprecation.warn_deprecated_value("x: y is ignored.", refusal="x: y is refused.")
-        assert str(record[0].message) == f"x: y is ignored. {WILL_REFUSE}"
+        message = next(
+            str(item.message)
+            for item in record
+            if issubclass(item.category, SoupConfigDeprecationWarning)
+        )
+        assert message == f"x: y is ignored. {WILL_REFUSE}"
 
     def test_another_refusals_fix_follows_the_deadline(self, refuse):
         """The deadline belongs to the deprecated value; an older refusal's fix that
@@ -132,7 +137,12 @@ class TestTheSwitch:
             deprecation.warn_deprecated_value(
                 "x: y is ignored.", refusal="x: y is refused.", after_deadline="Also, z."
             )
-        assert str(record[0].message) == f"x: y is ignored. {WILL_REFUSE}"
+        message = next(
+            str(item.message)
+            for item in record
+            if issubclass(item.category, SoupConfigDeprecationWarning)
+        )
+        assert message == f"x: y is ignored. {WILL_REFUSE}"
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +304,11 @@ class TestRetiredBeta:
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             cfg = MsprtConfig(metric="judge_score", beta=0.2)
         assert cfg.beta == 0.2
-        message = str(record[0].message)
+        message = next(
+            str(item.message)
+            for item in record
+            if issubclass(item.category, SoupConfigDeprecationWarning)
+        )
         assert message == f"{retired_beta_message()} {WILL_REFUSE}"
         assert message.startswith(_BETA_HEAD)
         assert message.endswith(f"{_BETA_TAIL} {WILL_REFUSE}")

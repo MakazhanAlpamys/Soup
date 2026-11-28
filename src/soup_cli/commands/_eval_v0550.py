@@ -330,6 +330,15 @@ def register(app: typer.Typer, console: Console) -> None:
                 )
                 for source_metric in metric_spec.source_metrics
             ]
+            if metric.startswith("judge:") and metric != metric_spec.name:
+                source, baseline, candidate = candidates[0]
+                # Older rows may still use the original label. Prefer the safe
+                # label independently for each run so old and new runs can pair.
+                candidates[0] = (
+                    source,
+                    baseline or tracker.get_metric_series(baseline_run_id, metric),
+                    candidate or tracker.get_metric_series(candidate_run_id, metric),
+                )
         except AttributeError:
             # Older trackers (or the lazy import surface) may not expose
             # get_metric_series — print an actionable advisory.
@@ -385,7 +394,7 @@ def register(app: typer.Typer, console: Console) -> None:
             # Plain stdout, not console.print: Rich folds a document wider than
             # the console and reads "[...]" in a string as markup (#1468).
             typer.echo(_json.dumps({
-                "metric": metric,
+                "metric": metric_spec.name,
                 "source_metric": source_metric,
                 "regressed": verdict.regressed,
                 "offenders": list(verdict.offenders),
@@ -407,7 +416,7 @@ def register(app: typer.Typer, console: Console) -> None:
                     f"ci=[{verdict.ci_lower:+.4f}, {verdict.ci_upper:+.4f}]"
                 )
             console.print(
-                f"[{color}]{tag}[/] {escape(metric)} delta_mean="
+                f"[{color}]{tag}[/] {escape(metric_spec.name)} delta_mean="
                 f"{verdict.delta_mean:+.4f} {interval}"
             )
         raise typer.Exit(EXIT_GATE_FAILED if verdict.regressed else EXIT_OK)

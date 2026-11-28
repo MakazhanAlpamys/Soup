@@ -243,15 +243,14 @@ def choose(
     import torch
 
     device = torch.device(device)
-    cuda = (
-        [device.index if device.index is not None else torch.cuda.current_device()]
-        if (device.type == "cuda")
-        else []
-    )
+    if device.type in ("cuda", "mps"):
+        rng_fork = torch.random.fork_rng(devices=[device], device_type=device.type)
+    else:
+        rng_fork = torch.random.fork_rng(devices=[])
     was_training = model.training
     python_state = random.getstate()
     try:
-        with torch.random.fork_rng(devices=cuda):
+        with rng_fork:
             if policy.method == "grad":
                 model.train()
                 scores = grad_scores(model, by_layer, batches, device)
@@ -587,6 +586,22 @@ def __getattr__(name: str) -> Any:
         globals()[name] = cls
         return cls
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def validate_resume_selection(checkpoint: str, *, enabled: bool) -> None:
+    """Require layer selection to be enabled on both sides of a checkpoint resume."""
+    path = Path(checkpoint) / RECORD_NAME
+    has_record = path.exists()
+    if has_record and not enabled:
+        raise ValueError(
+            f"training.lora_layers cannot resume from {path}: "
+            "the checkpoint used layer selection but the current run has no policy"
+        )
+    if enabled and not has_record:
+        raise ValueError(
+            f"training.lora_layers cannot resume from {path}: "
+            "the checkpoint has no layer selection metadata"
+        )
 
 
 def attach_layer_select_callback(
