@@ -13,7 +13,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from soup_cli.kernels.packed_lora.triton.nf4_fused import validate_supported  # noqa: E402
+from soup_cli.kernels.packed_lora.nf4_layout import validate_supported  # noqa: E402
 
 
 def _state(n: int = 256, k: int = 256):

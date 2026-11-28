@@ -28,9 +28,12 @@ import triton
 import triton.language as tl
 from triton.language.extra import libdevice
 
+from soup_cli.kernels.packed_lora.nf4_layout import BLOCK_K, validate_supported
+
 BLOCK_M = 32
 BLOCK_N = 64
-BLOCK_K = 64  # one NF4 block: sequential K traversal, no atomics or split-K
+# BLOCK_K is one NF4 block per accumulation: sequential K traversal,
+# no atomics or split-K.
 
 
 @triton.jit
@@ -109,41 +112,6 @@ def _state_tensors(quant_state):
         empty = absmax.new_empty((0,))
         state2_absmax = state2_code = offset = empty
     return absmax, state2_absmax, state2_code, offset
-
-
-def validate_supported(packed, quant_state) -> None:
-    """Refuse a shape or quant state the kernel cannot decode (#3455).
-
-    The kernel assumes an aligned NF4 layout: both dimensions are multiples of
-    BLOCK_K (64, the NF4 blocksize), the state is nested double quant with
-    state2 blocksize 256, the first-level absmax holds one code per 64 weights,
-    the second-level absmax is indexed in groups of 256 blocks, and the offset
-    is the single scalar bitsandbytes stores. An unsupported layout is refused
-    before any launch rather than reading out of bounds in the kernel.
-    """
-    shape = quant_state.shape
-    if len(shape) != 2:
-        raise ValueError(f"fused NF4 expects a 2-D shape, got {shape}")
-    n, k = int(shape[0]), int(shape[1])
-    if n % BLOCK_K or k % BLOCK_K:
-        raise ValueError(f"fused NF4 needs dimensions divisible by {BLOCK_K}: {n}x{k}")
-    if int(quant_state.blocksize) != BLOCK_K:
-        raise ValueError(f"fused NF4 needs blocksize {BLOCK_K}, got {quant_state.blocksize}")
-    if quant_state.quant_type != "nf4":
-        raise ValueError(f"fused NF4 needs quant_type nf4, got {quant_state.quant_type}")
-    if not quant_state.nested or int(quant_state.state2.blocksize) != 256:
-        raise ValueError("fused NF4 needs nested double quant with state2 blocksize 256")
-    if packed.numel() != n * k // 2:
-        raise ValueError(f"packed weight has {packed.numel()} bytes, expected {n * k // 2}")
-    if quant_state.absmax.numel() != n * k // BLOCK_K:
-        raise ValueError("absmax must hold one code per 64 weights")
-    if quant_state.absmax.dtype != torch.uint8:
-        raise ValueError("absmax codes must be uint8")
-    n_groups = quant_state.absmax.numel() // 256
-    if quant_state.state2.absmax.numel() != n_groups:
-        raise ValueError("state2 absmax must hold one value per 256-block group")
-    if quant_state.offset.numel() != 1:
-        raise ValueError("bitsandbytes stores one scalar offset per weight")
 
 
 def fused_nf4_linear(x, packed, quant_state) -> torch.Tensor:
