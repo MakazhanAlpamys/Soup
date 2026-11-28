@@ -24,6 +24,7 @@ def _config(task="sft", **training):
             "data": {"train": "train.jsonl", "format": "chatml"},
             "training": {
                 "stream_layers": True,
+                "batch_size": 1,
                 "quantization": "none",
                 "l2l": True,
                 "lora": {"dropout": 0},
