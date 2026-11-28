@@ -168,6 +168,10 @@ class MalformedSuiteError(ValueError):
     """Invalid YAML syntax, root shape or top-level key that must abort training setup."""
 
 
+class JudgeJSONLError(ValueError):
+    """Judge prompts JSONL could not be parsed (coordinates included)."""
+
+
 def _require_gate_tasks(suite: EvalSuite) -> None:
     if not suite.tasks:
         raise ValueError(
@@ -729,15 +733,23 @@ def _run_judge_task(
 
     validated_rows: list[tuple[str, str]] = []
     with prompts_path.open("r", encoding="utf-8") as fh:
-        for line_number, line in enumerate(fh, start=1):
-            line = line.strip()
-            if not line:
+        for line_number, raw_line in enumerate(fh, start=1):
+            row_text = raw_line.rstrip("\r\n")
+            stripped = row_text.strip()
+            if not stripped:
                 continue
             try:
-                row = json.loads(line)
+                # Keep the base behavior of parsing surrounding whitespace
+                # (including NBSP and other unicode blanks) away, but feed the
+                # decoder the content padded back to the same width with ASCII
+                # spaces so its column coordinates match the physical row.
+                leading = len(row_text) - len(row_text.lstrip())
+                trailing = len(row_text) - len(stripped) - leading
+                row = json.loads(" " * leading + stripped + " " * trailing)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"invalid JSONL in {task.prompts}: {exc}"
+                raise JudgeJSONLError(
+                    f"judge task {task.name!r} file {task.prompts!r} "
+                    f"line {line_number} column {exc.colno}: {exc.msg}"
                 ) from exc
             if not isinstance(row, dict):
                 raise ValueError(
@@ -900,6 +912,9 @@ def run_gate(
                 # Pydantic Literal already restricts task.type, so this is a
                 # belt-and-braces fallthrough.
                 raise ValueError(f"unknown task type: {task.type}")
+        except JudgeJSONLError as exc:
+            score = None
+            error = f"invalid JSONL: {exc}"
         except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
             score = None
             error = str(exc)
