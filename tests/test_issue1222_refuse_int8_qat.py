@@ -250,7 +250,7 @@ def test_soup_train_stops_at_config_load(tmp_path, monkeypatch, extra_args):
 
     output = _plain(result.output)
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "training -> quantization_aware" in output, output
+    assert "training.quantization_aware: true is refused" in output, output
     assert "#1222" in output, output
     assert "quantization_aware: fp8" in output, output
     # The refusal itself says "zero trainable parameters", so the check is on
