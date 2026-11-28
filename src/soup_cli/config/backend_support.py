@@ -280,6 +280,7 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
 
 _TRANSFORMERS_SFT_MODULES = (
     "soup_cli/trainer/sft.py",
+    "soup_cli/trainer/finite_state.py",
     "soup_cli/trainer/save_args.py",
     "soup_cli/trainer/loss_summary.py",
     "soup_cli/trainer/stream_setup.py",

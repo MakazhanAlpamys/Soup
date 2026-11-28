@@ -14,6 +14,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.monitoring.manual_save import manual_save_context
+from soup_cli.trainer.finite_state import assert_finite_training_state
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.utils import final_answer
@@ -934,6 +935,12 @@ class GRPOTrainerWrapper:
             with manual_save_context(self.trainer):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
+
+        assert_finite_training_state(
+            self.trainer.state.log_history,
+            model=self.trainer.model,
+            metric_key="loss",
+        )
 
         if self.config.training.relora_steps is None:
             self.trainer.save_model(self._output_dir)
