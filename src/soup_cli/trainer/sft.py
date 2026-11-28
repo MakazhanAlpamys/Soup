@@ -1253,6 +1253,10 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
 
             attach_empty_param_group_guard(self.trainer)
 
+        # Every branch of setup() has built self.trainer by now, and train() has not yet
+        # prepared the optimizer (which is when accelerate takes the scaler).
+        self._apply_fp16_init_scale(tcfg)
+
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
 
@@ -1277,6 +1281,23 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
 
             self.trainer.add_callback(
                 QuestMetadataCallback(self._output_dir, self._quest_metadata)
+            )
+
+    def _apply_fp16_init_scale(self, tcfg) -> None:
+        """``training.fp16_init_scale``: start the fp16 GradScaler low.
+
+        Prints one line either way, so a set key that did nothing is visible in the log.
+        """
+        if tcfg.fp16_init_scale is None:
+            return
+        from soup_cli.utils.mixed_precision import apply_fp16_init_scale
+
+        if apply_fp16_init_scale(self.trainer, tcfg.fp16_init_scale):
+            console.print(f"[green]fp16 GradScaler:[/] starts at {tcfg.fp16_init_scale}")
+        else:
+            console.print(
+                "[yellow]training.fp16_init_scale ignored:[/] this run has no plain "
+                "fp16 GradScaler (a bf16 run, or fp16 under DeepSpeed or FSDP)"
             )
 
     def _setup_quest(self, train_ds: Any) -> None:

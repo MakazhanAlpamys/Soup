@@ -111,6 +111,7 @@
     "training.forgetting_eval_steps": 100,
     "training.forgetting_stop": false,
     "training.forgetting_threshold": 0.1,
+    "training.fp16_init_scale": null,
     "training.fp8_attention": false,
     "training.fp8_recipe": "tensorwise",
     "training.freeze_layers": null,

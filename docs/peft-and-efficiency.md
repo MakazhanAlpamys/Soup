@@ -1038,6 +1038,15 @@ The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
 config load because its evidence covers BF16, not FP16; see the
 [QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
 
+### fp16 loss-scale start (`training.fp16_init_scale`)
+
+```yaml
+training:
+  fp16_init_scale: 256    # power of two, 1..65536; unset = torch's 65536
+```
+
+The fp16 GradScaler starts at 65536 and halves on every step whose gradients overflow, skipping that step. A model that overflows far below the start therefore skips its first optimizer steps before it trains. A lower start (a power of two) lets such a run train from the first step; the scaler still grows and backs off as usual. Transformers SFT only (`task: sft`, `backend: transformers`); a note is printed when the run has no plain fp16 GradScaler, such as a bf16 run.
+
 ### Loss Spike Auto-Recovery
 
 When the watchdog halts training on a loss spike, it writes
