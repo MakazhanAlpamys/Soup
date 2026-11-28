@@ -18,6 +18,7 @@ from typing import Annotated, Any, Iterator, NoReturn, Optional
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli import __version__
 from soup_cli.commands._common import refuse_nan, refuse_output_over_input
@@ -1642,6 +1643,16 @@ def _format_count(count: int) -> str:
 # HuggingFace Dataset Hub CLI commands
 # ---------------------------------------------------------------------------
 
+# In search / preview / download / register / unregister / registry / push,
+# queries, dataset ids, splits, formats, names, paths, Hub metadata and error
+# text come from outside the program, so every line that carries them is
+# printed as ``Text``: shown as typed, never read as markup or ``:name:``
+# emoji, control characters removed (#2489).
+
+
+def _refuse(message: object) -> None:
+    console.print(terminal_text(message, "red"))
+
 
 @app.command(name="search")
 def search_datasets(
@@ -1655,10 +1666,8 @@ def search_datasets(
     """Search HuggingFace Hub for datasets."""
     valid_sorts = {"downloads", "likes", "lastModified", "trending", "createdAt"}
     if sort not in valid_sorts:
-        console.print(
-            f"[red]Invalid sort: {for_terminal(sort)}[/]\n"
-            f"Valid options: {', '.join(sorted(valid_sorts))}"
-        )
+        _refuse(f"Invalid sort: {sort}")
+        console.print(f"Valid options: {', '.join(sorted(valid_sorts))}")
         raise typer.Exit(1)
 
     try:
@@ -1670,33 +1679,32 @@ def search_datasets(
         )
         raise typer.Exit(1)
     except Exception as exc:
-        console.print(f"[red]Search failed: {for_terminal(exc)}[/]")
+        _refuse(f"Search failed: {exc}")
         raise typer.Exit(1)
 
     if not datasets:
-        console.print(f"[yellow]No datasets found for '{for_terminal(query)}'.[/]")
+        console.print(terminal_text(f"No datasets found for '{query}'.", "yellow"))
         return
 
-    table = Table(title=f"HuggingFace Datasets: '{for_terminal(query)}'")
+    # A Text title does not pick up the table.title style on its own.
+    table = Table(title=terminal_text(f"HuggingFace Datasets: '{query}'", "table.title"))
     table.add_column("Dataset", style="bold cyan", max_width=45)
     table.add_column("Downloads", justify="right")
     table.add_column("Likes", justify="right")
     table.add_column("Tags", max_width=30)
 
-    # HF-hub metadata (ids, tags) is attacker-authored — escape before it
-    # reaches a Rich table (MarkupError crash / phishing-link injection).
-    from rich.markup import escape as _escape
-
+    # HF-hub metadata (ids, tags) is attacker-authored — cells are Text, so it
+    # is never read as markup (MarkupError crash / phishing-link injection).
     for ds_item in datasets[:limit]:
         ds_tags = getattr(ds_item, "tags", []) or []
         tag_str = ", ".join(str(t) for t in ds_tags[:5])
         if len(ds_tags) > 5:
             tag_str += "..."
         table.add_row(
-            _escape(str(ds_item.id)),
+            terminal_text(ds_item.id),
             _format_count(getattr(ds_item, "downloads", 0) or 0),
             _format_count(getattr(ds_item, "likes", 0) or 0),
-            _escape(tag_str),
+            terminal_text(tag_str),
         )
 
     console.print(table)
@@ -1713,7 +1721,7 @@ def preview_dataset(
     try:
         info = _hf_dataset_info(dataset_id)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        _refuse(exc)
         raise typer.Exit(1)
     except ImportError:
         console.print(
@@ -1723,36 +1731,33 @@ def preview_dataset(
         raise typer.Exit(1)
 
     # HF-hub metadata (id, description, tags, feature/split names) is
-    # attacker-authored — escape before it reaches a Rich table.
-    from rich.markup import escape as _escape
-
-    table = Table(title=f"Dataset: {_escape(str(info['id']))}")
+    # attacker-authored — it reaches the table only as Text.
+    table = Table(title=terminal_text(f"Dataset: {info['id']}", "table.title"))
     table.add_column("Field", style="bold")
     table.add_column("Value", max_width=80)
 
-    table.add_row("ID", _escape(str(info["id"])))
+    table.add_row("ID", terminal_text(info["id"]))
     desc = info["description"]
     if len(desc) > 200:
         desc = desc[:200] + "..."
-    table.add_row("Description", _escape(desc) if desc else "[dim]No description[/]")
+    table.add_row("Description", terminal_text(desc) if desc else "[dim]No description[/]")
     table.add_row("Downloads", _format_count(info["downloads"]))
     table.add_row("Likes", _format_count(info["likes"]))
     table.add_row("Size", _format_size_bytes(info["size_bytes"]))
 
     if info["splits"]:
         splits_str = ", ".join(
-            f"{_escape(str(name))} ({_format_count(count)})"
-            for name, count in info["splits"].items()
+            f"{name} ({_format_count(count)})" for name, count in info["splits"].items()
         )
-        table.add_row("Splits", splits_str)
+        table.add_row("Splits", terminal_text(splits_str))
     else:
         table.add_row("Splits", "[dim]Not available (use streaming to explore)[/]")
 
     if info["features"]:
-        table.add_row("Features", ", ".join(_escape(str(f)) for f in info["features"]))
+        table.add_row("Features", terminal_text(", ".join(str(f) for f in info["features"])))
 
     if info["tags"]:
-        table.add_row("Tags", ", ".join(_escape(str(t)) for t in info["tags"][:10]))
+        table.add_row("Tags", terminal_text(", ".join(str(t) for t in info["tags"][:10])))
 
     console.print(table)
 
@@ -1805,7 +1810,7 @@ def download_dataset(
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        _refuse(exc)
         raise typer.Exit(code=2) from exc
     # v0.53.10 #153 — non-HF hub live dataset download. ModelScope uses
     # the ``MsDataset`` API (different shape from snapshot_download), so
@@ -1828,11 +1833,12 @@ def download_dataset(
                 _ms_ds = MsDataset.load(  # noqa: F841 — touched for side effect
                     dataset_id, split=split
                 )
-                console.print(
-                    f"[dim]ModelScope dataset {for_terminal(dataset_id)} loaded; "
+                console.print(terminal_text(
+                    f"ModelScope dataset {dataset_id} loaded; "
                     "use soup_cli.utils.hubs.download_repo for raw "
-                    "snapshot download.[/]"
-                )
+                    "snapshot download.",
+                    "dim",
+                ))
             else:  # modelers
                 try:
                     out_dir = _download_repo(
@@ -1844,14 +1850,13 @@ def download_dataset(
                         repo_type="dataset",
                     )
                 except ImportError as exc:
-                    console.print(f"[red]{for_terminal(exc)}[/]")
+                    _refuse(exc)
                     raise typer.Exit(1) from exc
-                console.print(
-                    f"[green]Downloaded {for_terminal(dataset_id)} "
-                    f"from {for_terminal(hub_canonical)} → {for_terminal(out_dir)}[/]"
-                )
+                console.print(terminal_text(
+                    f"Downloaded {dataset_id} from {hub_canonical} → {out_dir}", "green"
+                ))
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{for_terminal(exc)}[/]")
+            _refuse(exc)
             raise typer.Exit(2) from exc
         return
     max_download_samples = 1_000_000
@@ -1906,10 +1911,7 @@ def download_dataset(
             title="Remote Code Warning",
             border_style="yellow",
         ))
-    console.print(
-        f"[dim]Downloading {for_terminal(dataset_id)} "
-        f"(split={for_terminal(split)})...[/]"
-    )
+    console.print(terminal_text(f"Downloading {dataset_id} (split={split})...", "dim"))
 
     try:
         data = _hf_download_dataset(
@@ -1917,7 +1919,7 @@ def download_dataset(
             trust_remote_code=trust_remote_code,
         )
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        _refuse(exc)
         raise typer.Exit(1)
     except ImportError:
         console.print(
@@ -1940,10 +1942,8 @@ def download_dataset(
         )
 
         if fmt not in CONVERTIBLE_FORMATS:
-            console.print(
-                f"[red]Invalid format: {for_terminal(fmt)}[/]\n"
-                f"Supported: {', '.join(CONVERTIBLE_FORMATS)}"
-            )
+            _refuse(f"Invalid format: {fmt}")
+            console.print(f"Supported: {', '.join(CONVERTIBLE_FORMATS)}")
             raise typer.Exit(1)
 
         try:
@@ -1968,24 +1968,24 @@ def download_dataset(
                 raise typer.Exit(1)
             left_out = len(data) - len(converted)
             data = converted
+            # fmt is one of CONVERTIBLE_FORMATS here.
             console.print(
-                f"[dim]Converted {len(data)} rows to {for_terminal(fmt)} format.[/]"
+                terminal_text(f"Converted {len(data)} rows to {fmt} format.", "dim")
             )
             if left_out:
-                console.print(
-                    f"[yellow]{left_out} rows were left out because they do "
-                    f"not convert to {for_terminal(fmt)}.[/]"
-                )
+                console.print(terminal_text(
+                    f"{left_out} rows were left out because they do "
+                    f"not convert to {fmt}.",
+                    "yellow",
+                ))
 
     # Apply samples limit if data came from non-streaming path
     if samples is not None and len(data) > samples:
         data = data[:samples]
 
     _write_jsonl(out_path, data)
-    console.print(
-        f"[green]Downloaded {len(data)} rows.[/]\n"
-        f"Output: [bold]{for_terminal(out_path)}[/]"
-    )
+    console.print(f"[green]Downloaded {len(data)} rows.[/]")
+    console.print(Text.assemble("Output: ", terminal_text(out_path, "bold")))
 
 
 # ---------------------------------------------------------------------------
@@ -2310,14 +2310,14 @@ def register_data(
     try:
         register_dataset(final_name, str(resolved), fmt, registry_path=registry_path)
     except ValueError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        _refuse(exc)
         raise typer.Exit(1)
 
-    console.print(
-        f"[green]Registered dataset '[bold]{for_terminal(final_name)}[/bold]'[/]\n"
-        f"  Path: {for_terminal(final_path)}\n"
-        f"  Format: {for_terminal(fmt)}"
-    )
+    console.print(Text.assemble(
+        "Registered dataset '", terminal_text(final_name, "bold"), "'", style="green"
+    ))
+    console.print(Text.assemble("  Path: ", terminal_text(final_path)))
+    console.print(Text.assemble("  Format: ", terminal_text(fmt)))
 
 
 @app.command(name="unregister")
@@ -2350,9 +2350,11 @@ def unregister_data(
     removed = unregister_dataset(final_name, registry_path=registry_path)
 
     if removed:
-        console.print(f"[green]Removed dataset '{for_terminal(final_name)}' from registry.[/]")
+        console.print(
+            terminal_text(f"Removed dataset '{final_name}' from registry.", "green")
+        )
     else:
-        console.print(f"[red]Dataset '{for_terminal(final_name)}' not found in registry.[/]")
+        _refuse(f"Dataset '{final_name}' not found in registry.")
         raise typer.Exit(1)
 
 
@@ -2674,13 +2676,11 @@ def list_registry():
     table.add_column("Path")
     table.add_column("Format")
 
-    from rich.markup import escape
-
     for ds_name, ds_info in sorted(registry.items()):
         table.add_row(
-            escape(ds_name),
-            escape(ds_info.get("path", "")),
-            escape(ds_info.get("format", "")),
+            terminal_text(ds_name),
+            terminal_text(ds_info.get("path", "")),
+            terminal_text(ds_info.get("format", "")),
         )
 
     console.print(table)
@@ -2731,15 +2731,15 @@ def push_dataset_cmd(
     try:
         hub_canonical = validate_hub_name(hub)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        _refuse(exc)
         raise typer.Exit(2) from exc
 
     file_path = Path(input_path)
     if not file_path.exists():
-        console.print(f"[red]Dataset file not found: {for_terminal(file_path)}[/]")
+        _refuse(f"Dataset file not found: {file_path}")
         raise typer.Exit(1)
     if not file_path.is_file():
-        console.print(f"[red]Expected a file, got a directory: {for_terminal(file_path)}[/]")
+        _refuse(f"Expected a file, got a directory: {file_path}")
         raise typer.Exit(1)
     if not is_under_cwd(file_path):
         console.print(
@@ -2750,10 +2750,12 @@ def push_dataset_cmd(
     try:
         validate_repo_id(hf_dataset)
     except ValueError as exc:
-        console.print(
-            f"[red]Invalid --{for_terminal(hub_canonical)}-dataset repo id:[/] "
-            f"{for_terminal(exc)}"
-        )
+        # hub_canonical is one of SUPPORTED_HUBS here.
+        console.print(Text.assemble(
+            terminal_text(f"Invalid --{hub_canonical}-dataset repo id:", "red"),
+            " ",
+            terminal_text(exc),
+        ))
         raise typer.Exit(1) from exc
 
     # v0.71.5 #157 — non-HF hubs route through the shared upload_repo adapter.
@@ -2776,13 +2778,13 @@ def push_dataset_cmd(
     try:
         endpoint = resolve_endpoint()
     except ValueError as exc:
-        console.print(f"[red]HF_ENDPOINT invalid:[/] {for_terminal(exc)}")
+        console.print(Text.assemble(("HF_ENDPOINT invalid:", "red"), " ", terminal_text(exc)))
         raise typer.Exit(1) from exc
 
     try:
         api = get_hf_api(token=token, endpoint=endpoint)
     except ImportError as exc:
-        console.print(f"[red]{for_terminal(exc)}[/]")
+        _refuse(exc)
         raise typer.Exit(1) from exc
 
     # Sanitise commit message to a single short line — prevents multi-line
@@ -2801,12 +2803,19 @@ def push_dataset_cmd(
             commit_message=safe_commit,
         )
     except Exception as exc:
-        console.print(f"[red]Upload failed:[/] {for_terminal(exc)}")
+        _print_upload_failed(exc)
         raise typer.Exit(1) from exc
 
-    console.print(
-        f"[green]Uploaded to[/] https://huggingface.co/datasets/{for_terminal(hf_dataset)}"
-    )
+    # hf_dataset passed validate_repo_id: [A-Za-z0-9._-] and at most one '/'.
+    console.print(Text.assemble(
+        ("Uploaded to", "green"),
+        " ",
+        terminal_text(f"https://huggingface.co/datasets/{hf_dataset}"),
+    ))
+
+
+def _print_upload_failed(exc: Exception) -> None:
+    console.print(Text.assemble(("Upload failed:", "red"), " ", terminal_text(exc)))
 
 
 def _push_dataset_non_hf(
@@ -2820,8 +2829,6 @@ def _push_dataset_non_hf(
     """
     import shutil
     import tempfile
-
-    from rich.markup import escape
 
     from soup_cli.utils.hubs import upload_repo
 
@@ -2839,21 +2846,25 @@ def _push_dataset_non_hf(
                 repo_type="dataset",
             )
         except ImportError as exc:
-            console.print(f"[red]{for_terminal(exc)}[/]")
+            _refuse(exc)
             raise typer.Exit(1) from exc
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Upload failed:[/] {for_terminal(exc)}")
+            _print_upload_failed(exc)
             raise typer.Exit(1) from exc
         except Exception as exc:  # noqa: BLE001 — surface SDK errors generically
-            console.print(f"[red]Upload failed:[/] {for_terminal(exc)}")
+            _print_upload_failed(exc)
             raise typer.Exit(1) from exc
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    console.print(
-        f"[green]Uploaded[/] {escape(file_path.name)} to {escape(hub)} "
-        f"dataset [bold]{escape(repo_id)}[/]"
-    )
+    # hub is one of SUPPORTED_HUBS and repo_id passed validate_repo_id.
+    console.print(Text.assemble(
+        ("Uploaded", "green"),
+        " ",
+        terminal_text(file_path.name),
+        terminal_text(f" to {hub} dataset "),
+        terminal_text(repo_id, "bold"),
+    ))
 
 
 # --- v0.42.0 Part C / F: AOT preprocess + document ingestion ---------------
