@@ -1,1 +1,0 @@
-- Add benchmark records for Mistral NF4 layer-major arithmetic, backward autocast, layer-call capture, host-to-host accumulation spread, isolated dense Fast-LoRA timing, Fast-LoRA operator qualification, and resident SQuAD FP16 calibration. (#PENDING by @M1kado0, @kok-o)
