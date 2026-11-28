@@ -195,7 +195,13 @@ def test_ties_does_not_look_at_tensor_names() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write(name: str, tensors: dict[str, np.ndarray], *, rank: int = 2) -> str:
+def _write(
+    name: str,
+    tensors: dict[str, np.ndarray],
+    *,
+    rank: int = 2,
+    lora_alpha: float | None = None,
+) -> str:
     from safetensors.numpy import save_file
 
     folder = Path(name)
@@ -206,7 +212,7 @@ def _write(name: str, tensors: dict[str, np.ndarray], *, rank: int = 2) -> str:
             {
                 "peft_type": "LORA",
                 "r": rank,
-                "lora_alpha": rank,
+                "lora_alpha": rank if lora_alpha is None else lora_alpha,
                 "base_model_name_or_path": "tiny-base",
             }
         ),
@@ -388,27 +394,47 @@ def test_arithmetic_weights_tensor_spellings(suffix: str, expected: float) -> No
 
 
 @pytest.mark.parametrize("strategy", ["linear", "dare"])
+@pytest.mark.parametrize("source_alpha", [2, 4])
 def test_merge_command_weights_named_factors_and_bias(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strategy: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    strategy: str,
+    source_alpha: float,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     a_key = f"{MODULE}.lora_A.default.weight"
     b_key = f"{MODULE}.lora_B.default.weight"
     bias_key = f"{MODULE}.lora_B.default.bias"
-    _write("a", {**_unit(0, 0, a_key=a_key, b_key=b_key), bias_key: FIRST_BIAS})
-    _write("b", {**_unit(1, 1, a_key=a_key, b_key=b_key), bias_key: SECOND_BIAS})
+    _write(
+        "a",
+        {**_unit(0, 0, a_key=a_key, b_key=b_key), bias_key: FIRST_BIAS},
+        lora_alpha=2,
+    )
+    _write(
+        "b",
+        {**_unit(1, 1, a_key=a_key, b_key=b_key), bias_key: SECOND_BIAS},
+        lora_alpha=source_alpha,
+    )
 
     result = _soup(
         "adapters", "merge", "a", "b", "-o", "out", "--weights", "0.7,0.3",
         "--strategy", strategy, "--density", "1.0", "--allow-unscanned",
     )
     assert result.exit_code == 0, _plain(result.output)
+
     written = _load("out")
     delta = _delta(written, a_key, b_key)
-    assert [delta[0, 0], delta[1, 1]] == pytest.approx([0.7, 0.3], abs=1e-6)
-    np.testing.assert_allclose(written[bias_key], 0.7 * FIRST_BIAS + 0.3 * SECOND_BIAS, rtol=1e-6)
 
+    source_scale = source_alpha / 2.0
 
+    assert [delta[0, 0], delta[1, 1]] == pytest.approx(
+        [0.7, 0.3 * source_scale], abs=1e-6
+    )
+    np.testing.assert_allclose(
+        written[bias_key],
+        0.7 * FIRST_BIAS + 0.3 * source_scale * SECOND_BIAS,
+        rtol=1e-6,
+    )
 @pytest.mark.parametrize("second_name", ["my_adapter", "lora_A"])
 def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_name: str
@@ -420,6 +446,7 @@ def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
     ]
     # Same module and name as the first weight pair; only the factor kind differs.
     pairs.append((f"{MODULE}.lora_embedding_A.default", f"{MODULE}.lora_embedding_B.default"))
+
     for folder, slot in (("a", 0), ("b", 1)):
         rank = slot + 1
         tensors = {}
@@ -434,6 +461,7 @@ def test_mixed_rank_arithmetic_keeps_named_pairs_separate(
         "-o", "out", "--rank", "2", "--allow-unscanned",
     )
     assert result.exit_code == 0, _plain(result.output)
+
     written = _load("out")
     assert set(written) == {key for pair in pairs for key in pair}
     expected_diagonals = (
