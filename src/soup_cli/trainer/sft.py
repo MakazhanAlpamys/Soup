@@ -1038,6 +1038,11 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         if getattr(self, "_liger_applied", False):
             training_kwargs["use_liger_kernel"] = True
 
+        # An explicit CPU device must stay on the CPU: without `use_cpu`, HF
+        # moves the model to CUDA when a card is visible.
+        if self.device == "cpu":
+            training_kwargs["use_cpu"] = True
+
         training_args = TrainingArguments(**training_kwargs)
 
         # #78 — `data.max_length` above 1024 was silently ignored on EVERY SFT run.
