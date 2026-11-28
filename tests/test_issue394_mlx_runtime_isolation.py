@@ -49,6 +49,13 @@ def test_mlx_cli_route_does_not_touch_transformers_training_stack(
         }
         data_format = "chatml"
     data_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    data_extra = training_extra = ""
+    if task == "unlearn":
+        forget_path = tmp_path / "forget.jsonl"
+        forget_row = {"prompt": "Say hi", "completion": "Hi"}
+        forget_path.write_text(json.dumps(forget_row) + "\n", encoding="utf-8")
+        data_extra = f"  forget_set: {json.dumps(str(forget_path))}\n"
+        training_extra = "  unlearn_method: simnpo\n"
     config_path = tmp_path / "soup.yaml"
     config_path.write_text(
         "base: mlx-community/tiny\n"
@@ -58,11 +65,13 @@ def test_mlx_cli_route_does_not_touch_transformers_training_stack(
         f"  train: {json.dumps(str(data_path))}\n"
         f"  format: {data_format}\n"
         "  val_split: 0\n"
+        f"{data_extra}"
         "training:\n"
         "  epochs: 1\n"
         "  lr: 0.0002\n"
         f"  batch_size: {2 if task == 'kto' else 1}\n"
         "  quantization: none\n"
+        f"{training_extra}"
         f"output: {json.dumps(str(tmp_path / 'out'))}\n",
         encoding="utf-8",
     )

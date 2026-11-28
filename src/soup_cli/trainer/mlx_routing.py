@@ -36,16 +36,21 @@ class _MLXRegistry(dict):
             from soup_cli.trainer.mlx_grpo import MLXGRPOTrainerWrapper
 
             return MLXGRPOTrainerWrapper
+        if task == "unlearn":
+            # #2005: SimNPO only; the schema refuses every other unlearn_method.
+            from soup_cli.trainer.mlx_unlearn import MLXSimNPOTrainerWrapper
+
+            return MLXSimNPOTrainerWrapper
         raise KeyError(task)
 
     def __contains__(self, key: object) -> bool:
-        return key in ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
+        return key in ("sft", "dpo", "orpo", "simpo", "kto", "grpo", "unlearn")
 
     def __getitem__(self, key: str):
         return self._resolve(key)
 
     def keys(self):  # noqa: D401
-        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo")
+        return ("sft", "dpo", "orpo", "simpo", "kto", "grpo", "unlearn")
 
 
 MLX_TRAINER_REGISTRY: _MLXRegistry = _MLXRegistry()
