@@ -7705,12 +7705,14 @@ class SoupConfig(BaseModel):
         (with no DoRA/VeRA and init_strategy='random' only), mutual exclusions
         (moe_expert_quant, quantization_aware, fp8_attention, nvfp4,
         unfrozen_parameters, lisa_enabled, packing, multipack, use_fsdp2_compile,
-        train_router_only, expand_layers, relora_steps, lora.target_parameters),
-        stream_vram_probe on sft only, stream_* flags without stream_layers,
-        and non-default stream_read_ahead with stream_source='ram'.
+        train_router_only, expand_layers), stream_vram_probe on sft only,
+        stream_* flags without stream_layers, and non-default stream_read_ahead
+        with stream_source='ram'. (`relora_steps` and `lora.target_parameters`
+        are refused by their own dedicated validators.)
         Architecture allowlist, disk-tier host-staging fit, and layer-shape count
         are checked later at setup when the run is set up.
-        """
+       """
+
 
         tcfg = self.training
         if not tcfg.stream_layers:
