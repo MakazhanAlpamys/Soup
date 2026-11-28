@@ -48,7 +48,8 @@ TREE_MASK_KEY = "prefix_tree_mask"
 
 #: Planning holds every training example as two ``array('i')`` (ids, labels),
 #: 8 bytes per token, and for a while a second copy of the shareable beginnings.
-#: Measured peak on 10,000 examples / 4,000,000 tokens: 66 MB, 16 bytes per token.
+#: Measured peak on 10,000 examples / 4,000,000 tokens: 66 MB, 16 bytes per token
+#: (``benchmarks/gate-prefix-tree.md``, section 5, "Planning cost").
 PLAN_BYTES_PER_TOKEN = 16
 
 #: Reading and planning are pure Python over every token: 7.5 s for the same

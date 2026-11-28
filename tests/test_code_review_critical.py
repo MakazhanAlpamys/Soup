@@ -265,13 +265,27 @@ def test_modal_stub_cannot_inject_via_output_dir():
     )
     tree = ast.parse(stub)  # must parse — no breakout from the string literal
 
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(a.name for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
-    assert "os" not in imported, "output_dir injected an `import os` statement"
+    baseline = ast.parse(
+        render_modal_stub(
+            "task: sft\nbase: x\n",
+            gpu="a100",
+            output_dir="out",
+            soup_version="0.0.1",
+        )
+    )
+
+    def imports(parsed_tree):
+        result = []
+        for node in ast.walk(parsed_tree):
+            if isinstance(node, ast.Import):
+                result.append(("import", tuple(a.name for a in node.names)))
+            elif isinstance(node, ast.ImportFrom):
+                result.append(("from", node.module, tuple(a.name for a in node.names)))
+        return sorted(result)
+
+    assert imports(tree) == imports(baseline), (
+        "output_dir injected an additional import"
+    )
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):

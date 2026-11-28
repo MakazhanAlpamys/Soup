@@ -586,17 +586,197 @@ class TestJudgeModelValidation:
         assert strip_ansi(str(caught.value)) == message
 
     @pytest.mark.parametrize(
+        ("url", "shown", "reason"),
+        [
+            pytest.param(
+                "http://fixture-user:fixture-password@judge.example.com/m",
+                "http://judge.example.com/m",
+                "uses http to a host that is not loopback", id="userinfo-password",
+            ),
+            pytest.param(
+                "ftp://fixture-user@judge.example.com/m", "ftp://judge.example.com/m",
+                "uses unsupported scheme 'ftp'", id="userinfo-no-password",
+            ),
+            pytest.param(
+                "http://localhost@judge.example.com/m", "http://judge.example.com/m",
+                "uses http to a host that is not loopback", id="userinfo-is-not-the-host",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture@password@judge.example.com/",
+                "https://judge.example.com/", "missing model id", id="userinfo-last-at",
+            ),
+            pytest.param(
+                "http://fixture-user:fixture-password@[2001:db8::1]:8000/m",
+                "http://[2001:db8::1]:8000/m",
+                "uses http to a host that is not loopback", id="ipv6-authority",
+            ),
+            pytest.param(
+                "http://judge.example.com/path/with@sign", "http://judge.example.com/path/with@sign",
+                "uses http to a host that is not loopback", id="path-at",
+            ),
+            pytest.param(
+                "http://judge.example.com?label=with@sign",
+                "http://judge.example.com?label=with@sign",
+                "uses http to a host that is not loopback", id="pathless-query-at",
+            ),
+            pytest.param(
+                "http://judge.example.com#with@sign", "http://judge.example.com#with@sign",
+                "uses http to a host that is not loopback", id="pathless-fragment-at",
+            ),
+            pytest.param(
+                "fixture-user@judge.example.com/m", "judge.example.com/m",
+                "uses unsupported scheme ''", id="no-scheme-userinfo",
+            ),
+            pytest.param(
+                "fixture-user:fixture-password@judge.example.com/m", "judge.example.com/m",
+                "uses unsupported scheme ''", id="no-scheme-colon",
+            ),
+            pytest.param(
+                "https:fixture-user:fixture-password@judge.example.com/",
+                "https:judge.example.com/", "missing model id", id="https-without-double-slash",
+            ),
+            pytest.param(
+                "https://judge.example.com/", "https://judge.example.com/", "missing model id",
+                id="missing-model",
+            ),
+            pytest.param("", "", "uses unsupported scheme ''", id="empty"),
+        ],
+    )
+    def test_refusal_shows_the_url_without_its_userinfo_part(self, url, shown, reason):
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        message = strip_ansi(str(caught.value))
+        assert message.startswith(f"judge_model {shown!r} {reason}")
+        assert "fixture-user" not in message
+        assert "fixture-password" not in message
+        assert "fixture@password" not in message
+        assert "localhost@" not in message
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param(
+                "https://fixture-user:fixture-password@[::1/m", id="unbalanced-ipv6",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password@judge.example.com\uff1a443/m",
+                id="fullwidth-colon",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password\uff20judge.example.com/m",
+                id="fullwidth-at",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password\ufe6bjudge.example.com/m",
+                id="small-at",
+            ),
+            pytest.param("https://[::1/m", id="malformed-without-userinfo"),
+        ],
+    )
+    def test_malformed_url_is_refused_without_a_raw_parser_diagnostic(self, url):
+        import traceback
+
+        from soup_cli.eval.gate import _parse_judge_url
+        from tests.conftest import strip_ansi
+
+        with pytest.raises(ValueError) as caught:
+            _parse_judge_url(url)
+        message = strip_ansi(str(caught.value))
+        assert message == "judge_model is not a valid URL"
+        diagnostic = strip_ansi("".join(traceback.format_exception(caught.value)))
+        assert url not in diagnostic
+        assert "fixture-user" not in diagnostic
+        assert "fixture-password" not in diagnostic
+
+    def test_a_url_without_userinfo_is_shown_unchanged(self):
+        from soup_cli.utils.redaction import url_without_userinfo
+
+        for url in (
+            "http://judge.example.com/m",
+            "https://judge.example.com/path/with@sign",
+            "https://judge.example.com?label=with@sign",
+            "https://judge.example.com#with@sign",
+            "ollama://llama3.1",
+            "judge.example.com/m",
+            "",
+        ):
+            assert url_without_userinfo(url) == url
+
+    @pytest.mark.parametrize(
         ("url", "parsed"),
         [
             ("http://localhost:8000/m", ("server", "m", "http://localhost:8000")),
             ("https://judge.example.com/m", ("server", "m", "https://judge.example.com")),
             ("ollama://llama3.1", ("ollama", "llama3.1", None)),
+            pytest.param(
+                "https://fixture-user:fixture-password@judge.example.com/m",
+                ("server", "m", "https://fixture-user:fixture-password@judge.example.com"),
+                id="https-userinfo",
+            ),
+            pytest.param(
+                "http://fixture-user@[::1]:8000/m", ("server", "m", "http://fixture-user@[::1]:8000"),
+                id="loopback-ipv6-userinfo",
+            ),
+            pytest.param(
+                "https:judge.example.com/m", ("server", "m", "https:judge.example.com"),
+                id="https-without-double-slash",
+            ),
         ],
     )
     def test_accepted_urls_parse_as_before(self, url, parsed):
         from soup_cli.eval.gate import _parse_judge_url
 
         assert _parse_judge_url(url) == parsed
+
+    def test_ollama_digest_reference_is_displayed_and_parsed_unchanged(self):
+        from soup_cli.eval.gate import _parse_judge_url
+        from soup_cli.utils.redaction import url_without_userinfo
+
+        model = "llama3.1@sha256:" + "a" * 64
+        url = f"ollama://{model}"
+        assert url_without_userinfo(url) == url
+        assert _parse_judge_url(url) == ("ollama", model, None)
+
+    @pytest.mark.parametrize(
+        ("url", "diagnostic"),
+        [
+            pytest.param(
+                "ftp://fixture-user:fixture-password@judge.example.com/m",
+                "judge_model URL 'ftp://judge.example.com/m' uses disallowed scheme - "
+                "use ollama://, https://, or http://localhost",
+                id="disallowed-scheme",
+            ),
+            pytest.param(
+                "https://fixture-user:fixture-password@[::1/m",
+                "judge_model URL is not a valid URL", id="malformed-authority",
+            ),
+        ],
+    )
+    def test_loading_suite_refuses_judge_url_without_echoing_userinfo(
+        self, tmp_path, monkeypatch, url, diagnostic,
+    ):
+        from soup_cli.eval.gate import load_suite
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        suite = tmp_path / "gate.yaml"
+        suite.write_text(yaml.safe_dump({
+            "suite": "judge",
+            "tasks": [{
+                "type": "judge", "name": "quality", "threshold": 0.5,
+                "prompts": "prompts.jsonl", "judge_model": url,
+            }],
+        }), encoding="utf-8")
+
+        with pytest.raises(ValueError) as caught:
+            load_suite(str(suite))
+        message = strip_ansi(str(caught.value))
+        assert message == f"eval-gate suite '{suite}': tasks[0].judge_model: {diagnostic}"
+        assert "fixture-user" not in message
+        assert "fixture-password" not in message
 
 
 # ---------------------------------------------------------------------------

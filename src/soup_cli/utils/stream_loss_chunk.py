@@ -9,9 +9,10 @@ that shape at the backward peak. With a 128 256-token vocabulary that is
 Here the head and the loss run ``chunk`` positions at a time. Each chunk runs
 the head, takes the cross-entropy sum, takes the gradient on its own slice of
 the hidden states and drops its logits; the slices fill one ``[batch, seq,
-hidden]`` tensor that the backward pass hands on. No graph over the logits
-outlives its chunk, so the logits term is ``vocab x chunk x batch`` and no
-longer depends on the sequence length.
+hidden]`` tensor that the backward pass hands on. An FP16 projection is
+recomputed in backward so AMP scales the gradient before it rounds to FP16.
+No graph over the logits outlives its chunk, so the logits term is
+``vocab x chunk x batch`` and no longer depends on the sequence length.
 
 The per-token terms are the ones ``ForCausalLMLoss`` computes. What differs is
 the order of the final sum and the shape of each matmul, so the loss and the
@@ -59,13 +60,25 @@ def shift_for_next_token(labels: Any, ignore_index: int = IGNORE_INDEX) -> Any:
     return functional.pad(labels, (0, 1), value=ignore_index)[..., 1:]
 
 
-def _chunk_terms(head: Callable[[Any], Any], piece: Any, target: Any, ignore_index: int):
+def _chunk_cross_entropy(logits: Any, target: Any, ignore_index: int):
+    from torch.nn import functional
+
+    # ForCausalLMLoss upcasts the logits before cross-entropy.
+    wide = logits.float()
+    return functional.cross_entropy(
+        wide.view(-1, wide.shape[-1]),
+        target.reshape(-1),
+        ignore_index=ignore_index,
+        reduction="sum",
+    )
+
+
+def _chunk_terms(logits: Any, target: Any, ignore_index: int):
     """One chunk: the cross-entropy sum, and what the metrics need, the latter
     without gradients."""
     import torch
     from torch.nn import functional
 
-    logits = head(piece)
     with torch.no_grad():
         # In the head's own dtype, as TRL's `entropy_from_logits` reads them.
         log_probs = functional.log_softmax(logits, dim=-1)
@@ -77,59 +90,68 @@ def _chunk_terms(head: Callable[[Any], Any], piece: Any, target: Any, ignore_ind
         token_loss = (-at_label).float() * labelled
         # Gone before the fp32 copy below is made, so the two do not add up.
         del log_probs
-    # `ForCausalLMLoss` upcasts before the loss; so does each chunk.
-    wide = logits.float()
-    total = functional.cross_entropy(
-        wide.view(-1, wide.shape[-1]),
-        target.reshape(-1),
-        ignore_index=ignore_index,
-        reduction="sum",
-    )
-    return total, entropy, token_loss, correct
+    return _chunk_cross_entropy(logits, target, ignore_index), entropy, token_loss, correct
 
 
 def _chunked_function():
     import torch
 
     class _ChunkedHeadLoss(torch.autograd.Function):
-        """The loss, with the gradient on the hidden states taken in ``forward``."""
+        """Take hidden-state gradients in forward except for FP16 projections."""
 
         @staticmethod
         def forward(ctx, hidden, head, target, chunk, denominator, ignore_index, with_grad):
-            grad = torch.zeros_like(hidden) if with_grad else None
+            grad = None
+            deferred_starts = []
             total = torch.zeros((), dtype=torch.float32, device=hidden.device)
             entropies, losses = [], []
             correct = torch.zeros((), dtype=torch.long, device=hidden.device)
             for start in range(0, hidden.shape[1], chunk):
                 stop = start + chunk
-                piece = hidden[:, start:stop].detach()
+                piece = hidden[:, start:stop].detach().requires_grad_(with_grad)
                 labels = target[:, start:stop]
-                if with_grad:
-                    piece.requires_grad_(True)
-                    with torch.enable_grad():
-                        part, entropy, token_loss, hits = _chunk_terms(
-                            head, piece, labels, ignore_index
-                        )
-                        # Scaled BEFORE the gradient is taken, so each token's
-                        # gradient is rounded to the head's dtype at the scale
-                        # the unchunked step rounds it at. Scaling the summed
-                        # gradient afterwards moved bf16 gradients by up to
-                        # 9e-3 of the largest one.
+                with torch.set_grad_enabled(with_grad):
+                    logits = head(piece)
+                    defer_gradient = with_grad and logits.dtype == torch.float16
+                    if defer_gradient:
+                        deferred_starts.append(start)
+                        logits = logits.detach()
+                    part, entropy, token_loss, hits = _chunk_terms(logits, labels, ignore_index)
+                    if with_grad and not defer_gradient:
+                        # Divide before the VJP to match the unchunked loss's per-token rounding.
                         (piece_grad,) = torch.autograd.grad(part / denominator, piece)
-                    grad[:, start:stop] = piece_grad
-                else:
-                    part, entropy, token_loss, hits = _chunk_terms(
-                        head, piece, labels, ignore_index
-                    )
+                        if grad is None:
+                            grad = torch.zeros_like(hidden)
+                        grad[:, start:stop] = piece_grad
+                del logits
                 total = total + part.detach()
+                del part
                 entropies.append(entropy)
                 losses.append(token_loss)
                 correct = correct + hits
-            token_entropy = torch.cat(entropies, dim=1)
-            token_loss = torch.cat(losses, dim=1)
+            if entropies:
+                token_entropy = torch.cat(entropies, dim=1)
+                token_loss = torch.cat(losses, dim=1)
+            else:
+                token_entropy = hidden.new_empty(target.shape)
+                token_loss = total.new_empty(target.shape)
             ctx.with_grad = with_grad
-            if with_grad:
-                ctx.save_for_backward(grad)
+            ctx.deferred_starts = deferred_starts
+            if deferred_starts:
+                ctx.head = head
+                ctx.chunk = chunk
+                ctx.ignore_index = ignore_index
+                ctx.device_type = hidden.device.type
+                ctx.autocast_kwargs = {
+                    "enabled": torch.is_autocast_enabled(ctx.device_type),
+                    "dtype": torch.get_autocast_dtype(ctx.device_type),
+                    "cache_enabled": torch.is_autocast_cache_enabled(),
+                }
+                tensor_denominator = denominator if torch.is_tensor(denominator) else None
+                ctx.scalar_denominator = denominator if tensor_denominator is None else None
+                ctx.save_for_backward(grad, hidden, target, tensor_denominator)
+            elif with_grad:
+                ctx.save_for_backward(grad if grad is not None else torch.zeros_like(hidden))
             ctx.mark_non_differentiable(token_entropy, token_loss, correct)
             return total / denominator, token_entropy, token_loss, correct
 
@@ -137,8 +159,26 @@ def _chunked_function():
         def backward(ctx, grad_loss, _grad_entropy, _grad_token_loss, _grad_correct):
             if not ctx.with_grad:  # pragma: no cover — nothing asked for a gradient
                 return (None,) * 7
-            (grad,) = ctx.saved_tensors
-            return (grad * grad_loss, None, None, None, None, None, None)
+            if not ctx.deferred_starts:
+                (grad,) = ctx.saved_tensors
+                return (grad * grad_loss, None, None, None, None, None, None)
+
+            eager_grad, hidden, target, denominator = ctx.saved_tensors
+            if denominator is None:
+                denominator = ctx.scalar_denominator
+            grad = torch.zeros_like(hidden) if eager_grad is None else eager_grad * grad_loss
+            # Backward normally runs outside the forward's autocast region.
+            with torch.enable_grad(), torch.autocast(ctx.device_type, **ctx.autocast_kwargs):
+                for start in ctx.deferred_starts:
+                    stop = start + ctx.chunk
+                    piece = hidden[:, start:stop].detach().requires_grad_(True)
+                    logits = ctx.head(piece)
+                    part = _chunk_cross_entropy(logits, target[:, start:stop], ctx.ignore_index)
+                    # Seed the VJP before the derivative crosses into FP16.
+                    (piece_grad,) = torch.autograd.grad(part / denominator, piece, grad_loss)
+                    grad[:, start:stop] = piece_grad
+                    del logits, part
+            return grad, None, None, None, None, None, None
 
     return _ChunkedHeadLoss
 

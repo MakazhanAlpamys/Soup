@@ -42,6 +42,14 @@ _JSON_POINTER_PATTERN = r"^(?:/(?:[^~/]|~[01])*)+$"
 _Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.]*$", max_length=96)]
 
 
+def _is_relative_reference(path: str) -> bool:
+    return not (
+        PureWindowsPath(path).drive
+        or "\\" in path
+        or any(part in ("", ".", "..") for part in path.split("/"))
+    )
+
+
 def _single_line_text(value: str) -> str:
     if strip_control(value, single_line=True) != value:
         raise ValueError("text must not contain controls or bidi formatting")
@@ -50,7 +58,13 @@ def _single_line_text(value: str) -> str:
 
 _Text = Annotated[str, Field(min_length=1, max_length=1024), AfterValidator(_single_line_text)]
 _Fraction = Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
-_Pointer = Literal["/reasons", "/warnings", "/artifacts"]
+_NonnegativeFloat = Annotated[FiniteFloat, Field(ge=0.0)]
+_PositiveFloat = Annotated[FiniteFloat, Field(gt=0.0)]
+_Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+_LocationName = Annotated[str, Field(pattern=r"^(?:[A-Za-z_][A-Za-z0-9_]*|<key>)$", max_length=96)]
+_PRODUCER_POINTER = re.compile(
+    r"^/(?:reasons|warnings|artifacts|reasons/(?:0|[1-9][0-9]*)/details/errors)$"
+)
 _Phase = Literal[
     "preflight", "validate", "evaluate", "plan", "execute", "launch", "export", "finalize",
     "transport",
@@ -67,17 +81,33 @@ class _StrictModel(BaseModel):
     )
 
 
+class _ConfigError(_StrictModel):
+    loc: list[_LocationName | NonNegativeInt] = Field(max_length=16)
+    type: _Name
+
+
+
 class ResultDetails(_StrictModel):
-    """Fixed numeric details emitted by data validation."""
+    """Typed details for data validation and training preflight."""
 
     actual: _Fraction | None = None
     minimum: _Fraction | None = None
     skipped: NonNegativeInt | None = None
     total: NonNegativeInt | None = None
+    category: Literal[
+        "unreadable", "yaml_parse", "yaml_limit", "wrong_root", "validation",
+    ] | None = None
+    errors: list[_ConfigError] | None = Field(default=None, max_length=_LIST_LIMIT)
+    required_gb: _NonnegativeFloat | None = None
+    available_gb: _NonnegativeFloat | None = None
 
     @model_serializer(mode="wrap")
     def _supplied_values(self, serialize: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        return {key: value for key, value in serialize(self).items() if value is not None}
+        explicit_nullable = self.model_fields_set & {"required_gb", "available_gb"}
+        return {
+            key: value for key, value in serialize(self).items()
+            if value is not None or key in explicit_nullable
+        }
 
 
 class ResultReason(_StrictModel):
@@ -98,11 +128,7 @@ class ArtifactRef(_StrictModel):
     @field_validator("relative_path")
     @classmethod
     def _canonical_relative_path(cls, path: str) -> str:
-        if (
-            PureWindowsPath(path).drive
-            or "\\" in path
-            or any(part in ("", ".", "..") for part in path.split("/"))
-        ):
+        if not _is_relative_reference(path):
             raise ValueError("artifact path must be a canonical slash-separated relative path")
         return path
 
@@ -138,6 +164,103 @@ class DataValidateResult(_StrictModel):
         return self
 
 
+class PreflightVram(_StrictModel):
+    estimated_peak_gb: _NonnegativeFloat | None = None
+    available_gb: _NonnegativeFloat | None = None
+    margin_fraction: _Fraction | None = None
+    required_gb: _NonnegativeFloat | None = None
+
+
+class PreflightDisk(_StrictModel):
+    estimated_output_gb: _NonnegativeFloat | None = None
+    estimated_checkpoints_gb: _NonnegativeFloat | None = None
+
+
+class PreflightEstimateBasis(_StrictModel):
+    vram: Literal["analytical_model", "unavailable"] = "unavailable"
+    disk: Literal["checkpoint_projection", "unavailable"] = "unavailable"
+    wall_time: Literal["local_timing_profile", "unavailable"] = "unavailable"
+
+
+class PreflightResolved(_StrictModel):
+    base_model: _Text | None = None
+    task: _Name | None = None
+    backend: _Name | None = None
+    device_name: _Text | None = None
+    max_steps: PositiveInt | None = None
+    batch_size_per_device: PositiveInt | None = None
+    effective_batch_size: PositiveInt | None = None
+    context_length: PositiveInt | None = None
+    adapter_rank: PositiveInt | None = None
+    epochs: _PositiveFloat | None = None
+
+    @field_validator("base_model")
+    @classmethod
+    def _model_reference(cls, value: str | None) -> str | None:
+        if value is not None and not _is_relative_reference(value):
+            raise ValueError("model reference must be local-relative or a model identifier")
+        return value
+
+
+class PreflightInputDigests(_StrictModel):
+    config_sha256: _Sha256 | None = None
+    data_sha256: _Sha256 | None = None
+
+
+class TrainPreflightData(_StrictModel):
+    """Measurements and estimates from a reached local training preflight."""
+
+    dry_run: Literal[True] = Field(json_schema_extra={"type": "boolean"})
+    training_rows: NonNegativeInt | None = None
+    validation_rows: NonNegativeInt | None = None
+    vram: PreflightVram = Field(default_factory=PreflightVram)
+    disk: PreflightDisk = Field(default_factory=PreflightDisk)
+    estimated_wall_time_s: _PositiveFloat | None = None
+    estimate_basis: PreflightEstimateBasis = Field(default_factory=PreflightEstimateBasis)
+    resolved: PreflightResolved = Field(default_factory=PreflightResolved)
+    input_digests: PreflightInputDigests = Field(default_factory=PreflightInputDigests)
+
+    @field_validator("dry_run", mode="before")
+    @classmethod
+    def _explicit_true(cls, value: object) -> object:
+        if value is not True:
+            raise ValueError("dry_run must be true")
+        return value
+
+    @model_validator(mode="after")
+    def _consistent_estimates(self) -> Self:
+        vram = self.vram
+        priced = (vram.estimated_peak_gb, vram.required_gb, vram.margin_fraction)
+        if self.estimate_basis.vram == "analytical_model":
+            if any(value is None for value in priced):
+                raise ValueError("analytical VRAM requires a peak, margin and required capacity")
+        elif any(value is not None for value in priced):
+            raise ValueError("VRAM estimates require an analytical basis")
+        disk = self.disk
+        has_disk_estimate = (
+            disk.estimated_output_gb is not None or disk.estimated_checkpoints_gb is not None
+        )
+        if has_disk_estimate != (self.estimate_basis.disk == "checkpoint_projection"):
+            raise ValueError("disk estimates require a checkpoint projection basis")
+        if (self.estimated_wall_time_s is not None) != (
+            self.estimate_basis.wall_time == "local_timing_profile"
+        ):
+            raise ValueError("wall time estimates require a local timing profile")
+        return self
+
+
+def _cap_fields(
+    document: dict[str, Any], names: tuple[str, ...], prefix: str, omissions: dict[str, int],
+) -> dict[str, Any]:
+    trimmed = document.copy()
+    for name in names:
+        rows = document.get(name)
+        if isinstance(rows, list) and len(rows) > _LIST_LIMIT:
+            trimmed[name] = rows[:_LIST_LIMIT]
+            omissions[f"{prefix}/{name}"] = len(rows) - _LIST_LIMIT
+    return trimmed
+
+
 class CommandResult(_StrictModel):
     """Command result v1. Producers validate strictly. Reader schemas allow optional additions."""
 
@@ -156,9 +279,9 @@ class CommandResult(_StrictModel):
     decision: Literal["valid", "invalid", "pass", "fail", "ship", "dont_ship"] | None = None
     reasons: list[ResultReason] = Field(default_factory=list, max_length=_LIST_LIMIT)
     warnings: list[ResultReason] = Field(default_factory=list, max_length=_LIST_LIMIT)
-    data: DataValidateResult | None = None
+    data: DataValidateResult | TrainPreflightData | None = None
     artifacts: list[ArtifactRef] = Field(default_factory=list, max_length=_LIST_LIMIT)
-    truncated: dict[_Pointer, PositiveInt] = Field(
+    truncated: dict[str, PositiveInt] = Field(
         default_factory=dict,
         json_schema_extra={"propertyNames": {"pattern": _JSON_POINTER_PATTERN}},
     )
@@ -169,26 +292,38 @@ class CommandResult(_StrictModel):
     def _cap_lists(cls, value: Any) -> Any:
         if not isinstance(value, dict):
             return value
-        over = {
-            name: len(value[name]) - _LIST_LIMIT
-            for name in _LIST_FIELDS
-            if isinstance(value.get(name), list) and len(value[name]) > _LIST_LIMIT
-        }
-        if not over:
+        omissions: dict[str, int] = {}
+        capped = _cap_fields(value, _LIST_FIELDS, "", omissions)
+        reasons = capped.get("reasons")
+        if isinstance(reasons, list):
+            reasons = reasons.copy()
+            for index, reason in enumerate(reasons):
+                if isinstance(reason, dict) and isinstance(reason.get("details"), dict):
+                    details = _cap_fields(
+                        reason["details"], ("errors",), f"/reasons/{index}/details",
+                        omissions,
+                    )
+                    reasons[index] = {**reason, "details": details}
+            capped["reasons"] = reasons
+        if not omissions:
             return value
         counts = value.get("truncated", {})
         if not isinstance(counts, dict):
             raise ValueError("truncated must contain omission counts")
         counts = counts.copy()
-        value = value.copy()
-        for name, count in over.items():
-            pointer = f"/{name}"
+        for pointer, count in omissions.items():
             if pointer in counts and (type(counts[pointer]) is not int or counts[pointer] <= 0):
                 raise ValueError("truncated counts must be positive integers")
             counts[pointer] = counts.get(pointer, 0) + count
-            value[name] = value[name][:_LIST_LIMIT]
-        value["truncated"] = counts
-        return value
+        capped["truncated"] = counts
+        return capped
+
+    @field_validator("truncated")
+    @classmethod
+    def _known_omission_lists(cls, counts: dict[str, int]) -> dict[str, int]:
+        if any(_PRODUCER_POINTER.fullmatch(pointer) is None for pointer in counts):
+            raise ValueError("truncated must name a supported result list")
+        return counts
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -226,8 +361,12 @@ class CommandResult(_StrictModel):
             raise ValueError("an ok command result cannot have refusal reasons")
         if self.phase == "launch" and self.status == "ok" and self.run_id is None:
             raise ValueError("an ok launch result requires a run_id")
-        if self.data is not None and self.command != "data.validate":
+        if isinstance(self.data, DataValidateResult) and self.command != "data.validate":
             raise ValueError("the preview payload belongs to data.validate")
+        if isinstance(self.data, TrainPreflightData) and (self.command, self.phase) != (
+            "train", "preflight",
+        ):
+            raise ValueError("the training payload belongs to train preflight")
         return self
 
 
@@ -259,14 +398,17 @@ def encode_command_result(result: CommandResult) -> bytes:
     try:
         return _bounded_line(result)
     except (TypeError, ValueError, OverflowError, PydanticSerializationError):
-        # The preview producer is data.validate. The fallback carries no
-        # dynamic diagnostic text or unvalidated payload values.
+        # Keep only a recognized producer identity and the historical exit code.
+        if result.command == "train" and result.phase == "preflight":
+            command, phase = "train", "preflight"
+        else:
+            command, phase = "data.validate", "validate"
         fallback = CommandResult(
             schema="soup.command_result",
             schema_version=1,
             soup_version=__version__,
-            command="data.validate",
-            phase="validate",
+            command=command,
+            phase=phase,
             status="failed",
             exit_code=result.exit_code if type(result.exit_code) is int else None,
             reasons=[

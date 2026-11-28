@@ -27,6 +27,9 @@ if TYPE_CHECKING:  # static types only — numpy stays a lazy runtime import
 
 # O(n^2) in the worst case — refuse loudly rather than silently subsample.
 _MAX_SEMDEDUP_ROWS = 50_000
+# Float32 normalization/dot products can put an identical row just below 1.0.
+# Apply only to the comparison; pairs retain the measured similarity for auditing.
+_FLOAT32_SLACK = 1e-6
 
 
 @dataclass(frozen=True)
@@ -85,17 +88,29 @@ def greedy_semdedup(
     kept: list[int] = []
     dropped: list[int] = []
     pairs: list[tuple[int, int, float]] = []
+    # Advanced indexing (arr[kept]) copies every kept row on every iteration.
+    # Store them once in the same C-contiguous layout and multiply a view;
+    # retain matrix-vector products so the raw audit scores are unchanged.
+    kept_vectors = np.empty(arr.shape, dtype=np.float32, order="C")
     for idx in range(n_rows):
         if not kept:
+            kept_vectors[0] = arr[idx]
             kept.append(idx)
             continue
-        sims = arr[kept] @ arr[idx]
+        sims = kept_vectors[:len(kept)] @ arr[idx]
         best = int(np.argmax(sims))
         best_sim = float(sims[best])
-        if best_sim >= thresh:
+        if thresh == 0.0:
+            matches = best_sim >= thresh
+        else:
+            # The tolerance must not lower a positive threshold to zero: exact
+            # zero similarity is a distinct row unless the user chose threshold 0.
+            matches = best_sim > 0.0 and best_sim >= thresh - _FLOAT32_SLACK
+        if matches:
             dropped.append(idx)
             pairs.append((idx, kept[best], best_sim))
         else:
+            kept_vectors[len(kept)] = arr[idx]
             kept.append(idx)
     return DedupReport(
         kept=tuple(kept),

@@ -24,10 +24,11 @@ from soup_cli.utils.command_result import (
     ResultReason,
     encode_command_result,
 )
+from soup_cli.utils.run_status import RunStatus, encode_run_status
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCHEMA = "command-result-v1.json"
-_WHEEL_SCHEMA = f"soup_cli/schemas/{_SCHEMA}"
+_RUN_STATUS_SCHEMA = "run-status-v1.json"
 _NOW = datetime(2026, 11, 24, 9, 0, tzinfo=UTC)
 _IDENTITY = {"schema": "soup.command_result", "schema_version": 1, "soup_version": __version__}
 
@@ -96,6 +97,23 @@ def test_command_result_schema_snapshot() -> None:
     truncated = properties["truncated"]
     assert "pattern" in truncated["propertyNames"] and "maxProperties" not in truncated
     assert truncated["additionalProperties"] == {"exclusiveMinimum": 0, "type": "integer"}
+
+
+def test_run_status_schema_snapshot() -> None:
+    resource = resources.files("soup_cli.schemas").joinpath(_RUN_STATUS_SCHEMA)
+    schema = json.loads(resource.read_text("utf-8"))
+    assert schema == RunStatus.model_json_schema(by_alias=True)
+    properties = schema["properties"]
+    assert properties["schema"]["const"] == "soup.run_status"
+    assert properties["schema"]["type"] == "string"
+    assert properties["schema_version"]["const"] == 1
+    assert properties["schema_version"]["type"] == "integer"
+    assert properties["soup_version"]["maxLength"] == 96
+    assert set(_IDENTITY) <= set(schema["required"])
+    assert "schema_id" not in properties
+    assert "additionalProperties" not in schema
+    assert "additionalProperties" not in schema["$defs"]["ResultReason"]
+    assert properties["truncated"]["maxProperties"] == 0
 
 
 def test_reader_schema_accepts_additive_fields_and_checks_truncation() -> None:
@@ -361,8 +379,8 @@ def test_installed_wheel_command_result_schema(tmp_path: Path) -> None:
     assert build.returncode == 0, build.stderr
     (wheel,) = wheel_dir.glob("soup_cli-*.whl")
     with zipfile.ZipFile(wheel) as bundle:
-        assert bundle.namelist().count(_WHEEL_SCHEMA) == 1
-        assert "soup_cli/schemas/run-status-v1.json" not in bundle.namelist()
+        for name in (_SCHEMA, _RUN_STATUS_SCHEMA):
+            assert bundle.namelist().count(f"soup_cli/schemas/{name}") == 1
 
     install_dir = tmp_path / "installed"
     install = subprocess.run(
@@ -375,24 +393,140 @@ def test_installed_wheel_command_result_schema(tmp_path: Path) -> None:
     assert install.returncode == 0, install.stderr
     sample_path = tmp_path / "sample.json"
     sample_path.write_bytes(encode_command_result(_blocked()))
+    status_path = tmp_path / "status.json"
+    status_path.write_bytes(encode_run_status(RunStatus(
+        schema="soup.run_status",
+        schema_version=1,
+        soup_version=__version__,
+        command="train",
+        run_id="run_wheel",
+        started_by="cli",
+        state="done",
+        started_at=_NOW,
+        updated_at=_NOW,
+        finished_at=_NOW,
+        step=1,
+        total_steps=1,
+        exit_code=0,
+    )))
     check = subprocess.run(
         [
             sys.executable, "-I", "-c",
             "import json, pathlib, sys\n"
             "from importlib.resources import files\n"
+            "from jsonschema import Draft202012Validator\n"
             "sys.path.insert(0, sys.argv[1])\n"
             "import soup_cli\n"
             "from soup_cli.utils.command_result import CommandResult\n"
+            "from soup_cli.utils.run_status import RunStatus, decode_run_status\n"
             "package = pathlib.Path(sys.argv[1]) / 'soup_cli'\n"
             "assert pathlib.Path(soup_cli.__file__).parent == package\n"
             f"resource = files('soup_cli.schemas').joinpath({_SCHEMA!r})\n"
             "schema = json.loads(resource.read_text('utf-8'))\n"
             "assert schema == CommandResult.model_json_schema(by_alias=True)\n"
             "sample = pathlib.Path(sys.argv[2]).read_bytes()\n"
+            "Draft202012Validator(schema).validate(json.loads(sample))\n"
             "result = CommandResult.model_validate_json(sample)\n"
-            "assert result.exit_code == 2 and result.data.total == 4\n",
-            str(install_dir), str(sample_path),
+            "assert result.exit_code == 2 and result.data.total == 4\n"
+            f"resource = files('soup_cli.schemas').joinpath({_RUN_STATUS_SCHEMA!r})\n"
+            "schema = json.loads(resource.read_text('utf-8'))\n"
+            "assert schema == RunStatus.model_json_schema(by_alias=True)\n"
+            "status_sample = pathlib.Path(sys.argv[3]).read_bytes()\n"
+            "Draft202012Validator(schema).validate(json.loads(status_sample))\n"
+            "status = decode_run_status(status_sample)\n"
+            "assert (status.state, status.step, status.exit_code) == ('done', 1, 0)\n",
+            str(install_dir), str(sample_path), str(status_path),
         ],
         cwd=tmp_path, capture_output=True, text=True, timeout=30, check=False,
     )
     assert check.returncode == 0, check.stderr
+
+
+def _train_preflight_data() -> dict:
+    return {
+        "dry_run": True,
+        "training_rows": 4,
+        "validation_rows": 1,
+        "vram": {
+            "estimated_peak_gb": 8.0, "available_gb": 10.0,
+            "margin_fraction": 0.1, "required_gb": 8.8,
+        },
+        "disk": {"estimated_output_gb": None, "estimated_checkpoints_gb": None},
+        "estimated_wall_time_s": None,
+        "estimate_basis": {
+            "vram": "analytical_model", "disk": "unavailable", "wall_time": "unavailable",
+        },
+        "resolved": {
+            "base_model": "org/model", "task": "sft", "backend": "transformers",
+            "device_name": "Test CUDA", "max_steps": None, "batch_size_per_device": 2,
+            "effective_batch_size": 8, "context_length": 512, "adapter_rank": 8, "epochs": 2.0,
+        },
+        "input_digests": {"config_sha256": None, "data_sha256": "a" * 64},
+    }
+
+
+def test_train_preflight_wire_roundtrip() -> None:
+    data = _train_preflight_data()
+    model = CommandResult(
+        **_IDENTITY, command="train", phase="preflight", status="ok", exit_code=0, data=data,
+    )
+    wire = encode_command_result(model)
+    assert json.loads(wire)["data"] == data
+    assert CommandResult.model_validate_json(wire) == model
+    schema = CommandResult.model_json_schema(by_alias=True)
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.Draft202012Validator(schema).validate(json.loads(wire))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (("training_rows",), True),
+        (("vram", "estimated_peak_gb"), float("inf")),
+        (("estimate_basis", "vram"), "unavailable"),
+        (("resolved", "base_model"), "/private/model"),
+        (("resolved", "base_model"), "C:/private/model"),
+        (("resolved", "base_model"), "../model"),
+        (("resolved", "adapter_rank"), 0),
+        (("input_digests", "data_sha256"), "A" * 64),
+    ],
+)
+def test_train_preflight_wire_rejects_invalid_fields(field: tuple[str, ...], value: object) -> None:
+    data = _train_preflight_data()
+    target = data if len(field) == 1 else data[field[0]]
+    target[field[-1]] = value
+    with pytest.raises(ValidationError):
+        CommandResult(
+            **_IDENTITY, command="train", phase="preflight", status="ok", exit_code=0, data=data,
+        )
+
+
+def test_train_identifier_survives_serializer_fallback() -> None:
+    result = CommandResult(
+        **_IDENTITY, command="train", phase="preflight", status="refused", exit_code=7,
+    )
+    broken = result.model_copy(update={"duration_s": float("inf")})
+    wire = json.loads(encode_command_result(broken))
+    assert (wire["command"], wire["phase"], wire["status"], wire["exit_code"]) == (
+        "train", "preflight", "failed", 7,
+    )
+    assert wire["reasons"][0]["code"] == "soup.cli.result_serialization_failed"
+
+
+def test_train_config_error_details_are_bounded_with_pointer() -> None:
+    errors = [
+        {"loc": ["training", "batch_size", index], "type": "float_type"}
+        for index in range(33)
+    ]
+    result = CommandResult(
+        **_IDENTITY, command="train", phase="preflight", status="refused", exit_code=1,
+        reasons=[{
+            "code": "soup.config.invalid",
+            "message": "The configuration could not be loaded.",
+            "fix": "Check the fields listed in the result.",
+            "details": {"errors": errors},
+        }],
+    )
+    data = json.loads(encode_command_result(result))
+    assert data["reasons"][0]["details"]["errors"] == errors[:32]
+    assert data["truncated"] == {"/reasons/0/details/errors": 1}

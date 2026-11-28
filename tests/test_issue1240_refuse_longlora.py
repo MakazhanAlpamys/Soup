@@ -183,7 +183,10 @@ _OLDER_GATES = {
     "task-sft-only": {"task": "dpo"},
     "backend-mlx": {"base": "mlx-community/Llama-3.1-8B-Instruct-4bit", "backend": "mlx"},
     "backend-unsloth": {"backend": "unsloth"},
-    "ring-attention": {"training_extra": "  use_ring_attention: true\n"},
+    # "ring-attention" used to be an older gate here, but #2044 now refuses
+    # use_ring_attention: true at config load, so that config can no longer be
+    # a valid control. Its interaction with #1240 is pinned in
+    # tests/test_config_ring_attention_refusal.py instead.
     "full-ft-lora-conflict": {"training_extra": "  lora: {r: 0}\n"},
     "spectrum-lora-conflict": {
         "training_extra": "  unfrozen_parameters: [model.layers.0.mlp.down_proj]\n"

@@ -1,0 +1,109 @@
+# This default-branch workflow reads GitHub metadata and requests stale CI
+# cancellation. The ordinary pull_request CI workflow owns all tests and keeps
+# a read-only token for forks. This workflow cannot edit PRs or labels.
+name: Cancel obsolete CI approval
+on:
+  pull_request_target:
+    branches: [main]
+    types: [synchronize]
+
+permissions: {}
+concurrency:
+  group: cancel-obsolete-ci-approval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  supersede:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Cancel only approved CI for an obsolete head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from urllib.parse import urlencode
+
+          def api(endpoint, *flags):
+              return subprocess.run(
+                  ["gh", "api", endpoint, *flags],
+                  check=True, capture_output=True, text=True, timeout=30,
+              ).stdout
+
+          def head(pr, number, repo):
+              if pr["number"] != number or pr["base"]["repo"]["full_name"] != repo:
+                  raise ValueError("API returned a different pull request")
+              if pr["base"]["ref"] != "main" or pr["state"] != "open":
+                  return None
+              source = pr["head"]
+              if not re.fullmatch(r"[0-9a-f]{40}", source["sha"]):
+                  raise ValueError("PR head SHA is missing")
+              source_id, branch = source["repo"]["id"], source["ref"]
+              if type(source_id) is not int or source_id < 1 or not isinstance(branch, str):
+                  raise ValueError("PR source identity is missing")
+              return source_id, branch, source["sha"]
+
+          def obsolete(run, number, source_id, branch, live_sha):
+              identifier = run.get("id")
+              associations = run.get("pull_requests")
+              return (
+                  type(identifier) is int and identifier > 0
+                  and (not associations or any(pr["number"] == number for pr in associations))
+                  and run.get("path") == ".github/workflows/ci.yml"
+                  and run.get("event") == "pull_request"
+                  and run.get("display_title") == f"PR #{number} approval"
+                  and run.get("head_branch") == branch
+                  and (run.get("head_repository") or {}).get("id") == source_id
+                  and run.get("status") in {"queued", "in_progress", "waiting", "requested", "pending"}
+                  and re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha") or "")
+                  and run["head_sha"] != live_sha
+              )
+
+          def supersede():
+              repo, raw_number = os.environ["REPOSITORY"], os.environ["PR_NUMBER"]
+              if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+                  raise ValueError("invalid repository")
+              if not re.fullmatch(r"[1-9][0-9]*", raw_number):
+                  raise ValueError("invalid pull request number")
+              number = int(raw_number)
+              root = f"repos/{repo}"
+              endpoint = f"{root}/pulls/{number}"
+              live = head(json.loads(api(endpoint)), number, repo)
+              if live is None:
+                  return
+              source_id, branch, live_sha = live
+              query = urlencode({"event": "pull_request", "branch": branch, "per_page": 100})
+              pages = json.loads(api(f"{root}/actions/workflows/ci.yml/runs?{query}",
+                                     "--paginate", "--slurp"))
+              candidates = {
+                  run["id"]
+                  for page in pages
+                  for run in page["workflow_runs"]
+                  if obsolete(run, number, source_id, branch, live_sha)
+              }
+              for run_id in sorted(candidates):
+                  if head(json.loads(api(endpoint)), number, repo) != live:
+                      print("PR head moved again; the newer synchronize run will retry.")
+                      return
+                  try:
+                      api(f"{root}/actions/runs/{run_id}/cancel", "--method", "POST", "--silent")
+                  except subprocess.CalledProcessError:
+                      # A run may complete between the listing and cancellation.
+                      print(f"::warning::Could not cancel obsolete CI run {run_id}.")
+                  else:
+                      print(f"Requested cancellation of obsolete CI run {run_id}.")
+
+          try:
+              supersede()
+          except (TypeError, KeyError, ValueError, OSError, subprocess.SubprocessError):
+              raise SystemExit("Stopped supersession because GitHub metadata could not be verified.")
+          PY

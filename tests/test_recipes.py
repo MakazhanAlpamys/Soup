@@ -1,5 +1,6 @@
 """Tests for soup recipes — ready-made configs for popular models."""
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -182,6 +183,7 @@ class TestRecipesCLI:
         assert out_path.exists()
         content = out_path.read_text(encoding="utf-8")
         assert "meta-llama/Llama-3.1-8B-Instruct" in content
+        assert "Next: soup train --config soup.yaml" in strip_ansi(result.output).splitlines()
 
     def test_use_custom_output(self, tmp_path, monkeypatch):
         """soup recipes use <name> -o custom.yaml writes to custom path."""
@@ -193,6 +195,35 @@ class TestRecipesCLI:
         ])
         assert result.exit_code == 0
         assert (tmp_path / "my_config.yaml").exists()
+
+    def test_use_hint_keeps_output_as_one_argument(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        output = Path("run configs") / "config [green]&.yaml"
+        output.parent.mkdir()
+        result = runner.invoke(app, [
+            "recipes", "use", "qwen2.5-7b-sft", "-o", str(output), "--yes",
+        ])
+        assert result.exit_code == 0
+        assert output.is_file()
+        lines = strip_ansi(result.output).splitlines()
+        hint = next(line.removeprefix("Next: ") for line in lines if line.startswith("Next: "))
+        assert hint == 'soup train --config "run configs/config [green]&.yaml"'
+        assert shlex.split(hint) == ["soup", "train", "--config", output.as_posix()]
+
+    def test_use_hint_describes_shell_specific_output(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        output = Path("config %done%.yaml")
+        result = runner.invoke(app, [
+            "recipes", "use", "qwen2.5-7b-sft", "-o", str(output), "--yes",
+        ])
+        assert result.exit_code == 0
+        assert output.is_file()
+        lines = strip_ansi(result.output).splitlines()
+        assert "✓ Recipe qwen2.5-7b-sft written to config %done%.yaml" in lines
+        assert "Next: pass the path above as --config to soup train. Quote it for your shell." in (
+            lines
+        )
+        assert not any(line.startswith("Next: soup train --config") for line in lines)
 
     def test_use_overwrite_confirmation(self, tmp_path, monkeypatch):
         """Existing file asks for confirmation."""
@@ -611,6 +642,41 @@ class TestGlm51GrpoRecipe:
 
         assert grpo.size == sft.size == dpo.size == "754B"
         assert grpo.model == sft.model == dpo.model == self.MODEL
+
+
+class TestGlm5GrpoRecipe:
+    RECIPE = "glm-5-grpo"
+    MODEL = "zai-org/GLM-5"
+
+    def test_metadata_names_original_glm5(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        assert (recipe.model, recipe.task, recipe.size) == (self.MODEL, "grpo", "744B")
+
+    def test_cli_writes_original_glm5_with_inherited_grpo_settings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        monkeypatch.chdir(tmp_path)
+        shown = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert shown.exit_code == 0, shown.output
+        lines = [line.strip("│| ") for line in strip_ansi(shown.output).splitlines()]
+        assert f"base: {self.MODEL}" in lines
+
+        used = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert used.exit_code == 0, used.output
+        actual = load_config_from_string((tmp_path / "soup.yaml").read_text(encoding="utf-8"))
+        assert actual.base == self.MODEL
+        assert actual.task == "grpo"
+
+        reference = get_recipe("glm-5.1-grpo")
+        assert reference is not None
+        inherited = load_config_from_string(reference.yaml_str)
+        assert actual.model_dump(exclude={"base"}) == inherited.model_dump(exclude={"base"})
 
 
 class TestDeepSeekV4FlashDpoRecipe:
