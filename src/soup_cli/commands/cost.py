@@ -94,6 +94,8 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
             splits = load_dataset_builder(train_path).info.splits
             if splits is not None:
                 size = splits["train"].num_examples
+                if "validation" in splits:
+                    return size, False
                 return int(size * split), False
         except (OSError, ValueError, KeyError, ImportError):
             pass
