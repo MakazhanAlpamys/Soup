@@ -83,16 +83,29 @@ def _stream_source_line(stats: dict) -> str:
         )
     # Since #974 the staging lives in the same power-of-two arenas as the RAM
     # store, so the disk tier can say what was page-locked too.
+    if stats.get("resident_bytes", 0):
+        return (
+            f"{stats['resident_bytes'] / 1e6:.1f} MB resident decoder tensors, "
+            f"{stats['staging_bytes'] / 1e6:.1f} MB disk staging, "
+            f"{stats['host_allocated_bytes'] / 1e6:.1f} MB owned host allocations; "
+            f"read_ahead={stats['read_ahead']}"
+        ) + _page_locked_note(stats)
     drive_count = stats.get("drive_count", 1)
     direct_io = stats.get("direct_io_drives", drive_count)
     media = "an NVMe volume"
     if drive_count > 1:
         media = f"{drive_count} NVMe volumes, direct I/O {direct_io}/{drive_count}"
+    cache = ""
+    if stats.get("ram_cache_allocated_bytes", 0):
+        cache = (
+            f", {stats['ram_cache_allocated_bytes'] / 1e9:.2f} GB RAM cache "
+            f"({len(stats['ram_cache_indices'])} layers)"
+        )
     return (
         f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on {media}) "
         f"by an async reader, read_ahead={stats['read_ahead']}, "
         f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
-    ) + _page_locked_note(stats)
+    ) + cache + _page_locked_note(stats)
 
 
 def _page_locked_note(stats: dict) -> str:
@@ -959,6 +972,8 @@ class StreamingSetupMixin:
 
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
+    #: The ResidencyPlan chosen by training.stream_resident_layers, else None.
+    _stream_residency_plan = None
     # #1693 -- the head-and-loss hook of a run with `stream_loss_chunk` set.
     _stream_loss_chunk_hook = None
     #: Set by :meth:`_stream_budget_lines` when the dense-retaining NF4 backward is
@@ -1121,6 +1136,7 @@ class StreamingSetupMixin:
             stripe_dirs,
         )
         from soup_cli.utils.layer_stream import (
+            PHYSICAL_RAM_TIER_HEADROOM,
             RAM_TIER_HEADROOM,
             TIER_DISK,
             build_stream_plan,
@@ -1161,6 +1177,9 @@ class StreamingSetupMixin:
             cfg.base, trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
             **base_revision_kwargs(cfg.base),
         )
+        auto_k = getattr(tcfg, "l2l_auto_k", False)
+        if auto_k and getattr(model_config, "model_type", None) != "deepseek_v3":
+            raise ValueError("training.l2l_auto_k requires a DeepSeek-V3 model")
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         try:
@@ -1193,6 +1212,9 @@ class StreamingSetupMixin:
                 raise ValueError("training.stream_experts on OLMoE requires moe_aux_loss_coeff=0")
             if getattr(tcfg, "l2l_two_read_experts", False):
                 raise ValueError("OLMoE streaming requires training.l2l_two_read_experts=false")
+        partial_config = getattr(tcfg, "stream_partial_ram", None)
+        if partial_config is not None and arch != "llama":
+            raise ValueError("training.stream_partial_ram currently supports dense Llama only")
         # training.stream_expert_layout, in the sharder's spelling ("" = fused).
         # Refused here for an architecture the layout is not gated on: before any
         # weight is resolved, downloaded or sharded.
@@ -1254,6 +1276,11 @@ class StreamingSetupMixin:
         # made the entire free tier unsupported without saying so, and could not
         # fail on the Ampere card every published measurement came from.
         dtype = expert_gemm_dtype or resolve_stream_dtype(str(self.device))
+        if auto_k and not (
+            (on_cuda and dtype == "bfloat16")
+            or (str(self.device) == "cpu" and dtype == "float32")
+        ):
+            raise ValueError("training.l2l_auto_k requires CPU FP32 or CUDA BF16 streaming")
         if stream_experts is not None:
             from soup_cli.utils.expert_training import validate_expert_training
 
@@ -1599,11 +1626,33 @@ class StreamingSetupMixin:
             if total_ram is not None:
                 total_ram -= expert_host_bytes
         if free_ram is None:
+            if partial_config is not None:
+                raise ValueError("training.stream_partial_ram requires a known host RAM budget")
             console.print(
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
                 "proceeding and letting the allocation fail loudly if it must[/]"
             )
             free_ram = (layer_bytes * index.n_layers + large_store_bytes + embed_bytes) * 10
+        if partial_config is not None or getattr(tcfg, "stream_ram_cache_mb", 0):
+            from soup_cli.utils.stream_ram_cache import available_memory
+
+            # A large host may give this process only a small cgroup. Do not
+            # select a whole-model RAM store using physical-host availability.
+            memory = available_memory(host_available=free_ram)
+            free_ram = memory["available_bytes"]
+            if partial_config is not None:
+                if "error" in memory:
+                    raise ValueError(
+                        "training.stream_partial_ram requires a known host RAM budget"
+                    )
+                ceiling = int(free_ram * RAM_TIER_HEADROOM)
+                if total_ram is not None:
+                    ceiling = min(ceiling, int(total_ram * PHYSICAL_RAM_TIER_HEADROOM))
+                if partial_config.limit_bytes > ceiling:
+                    raise ValueError(
+                        "training.stream_partial_ram.limit_bytes exceeds the current safe "
+                        "host RAM budget"
+                    )
 
         store_total = layer_store_bytes + large_store_bytes
         ngram_source = "disk"
@@ -1816,6 +1865,46 @@ class StreamingSetupMixin:
                 "a pageable CPU source.[/]"
             )
 
+        partial_budget = None
+        self._l2l_host_budget_plan = None
+        self._moe_l2l_memory_plan = None
+        if partial_config is not None:
+            # Free RAM already excludes live allocations. This intentionally conservative
+            # envelope also reserves the caller-declared host consumers plus the resident
+            # extras.
+            from soup_cli.utils.partial_ram_source import PartialRamBudget
+
+            partial_budget = PartialRamBudget(
+                partial_config.limit_bytes,
+                partial_config.reserved_bytes
+                + embed_bytes
+                + (ngram_bytes if ngram_source == "ram" else 0),
+                partial_config.cache_bytes,
+            )
+            if getattr(tcfg, "l2l", False):
+                from soup_cli.utils.l2l_host_budget import plan_l2l_host_budget
+
+                recipe = getattr(self, "_l2l_recipe", None)
+                self._l2l_host_budget_plan = plan_l2l_host_budget(
+                    partial_budget,
+                    n_layers=int(model_config.num_hidden_layers),
+                    batch_size=tcfg.batch_size,
+                    max_length=cfg.data.max_length,
+                    hidden_size=int(model_config.hidden_size),
+                    microbatches=(
+                        recipe.effective_k if recipe is not None
+                        else tcfg.gradient_accumulation_steps
+                    ),
+                    dtype=dtype,
+                    pin=on_cuda,
+                )
+                partial_budget = self._l2l_host_budget_plan.weights
+            console.print(
+                "[yellow]training.stream_partial_ram is experimental: you reserve the other "
+                "host users, and the envelope is an allocation budget, not a process-RSS "
+                "limit. CUDA performance is not validated.[/]"
+            )
+
         model, runtime = build_streamed_model(
             model_id=cfg.base,
             shard_dir=shard_dir,
@@ -1860,6 +1949,7 @@ class StreamingSetupMixin:
                 if l2l_experts
                 else {}
             ),
+            **({"partial_ram_budget": partial_budget} if partial_budget is not None else {}),
         )
         self._stream_weight_dirs = tuple(
             stripe_dirs(shard_dir, tuple(getattr(index, "stripe_roots", None) or ()))
@@ -1924,20 +2014,167 @@ class StreamingSetupMixin:
             except Exception:
                 self._close_stream_runtime()
                 raise
+        # training.stream_resident_layers -- after the recompute mode and before
+        # the probe, so that the residency measurement and the probe both see the
+        # step that will train. Off by default: nothing is read or imported.
+        if getattr(tcfg, "stream_resident_layers", 0) != 0:
+            try:
+                self._configure_stream_residency(
+                    model, runtime, cfg, tcfg, model_config=model_config,
+                )
+            except BaseException:
+                self._close_stream_runtime()
+                raise
+        # training.stream_ram_cache_mb -- after residency, so the hotset is sized
+        # without the layers the GPU already holds. Off by default.
+        cache_mb = getattr(tcfg, "stream_ram_cache_mb", 0)
+        if cache_mb:
+            if tier == TIER_DISK:
+                try:
+                    runtime.source.configure_ram_cache(cache_mb * 2**20)
+                except BaseException:
+                    self._close_stream_runtime()
+                    raise
+            else:
+                console.print(
+                    "[dim]RAM cache is unnecessary: the complete streamed store fits in RAM.[/]"
+                )
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
+        if auto_k:
+            try:
+                self._resolve_moe_l2l_plan(cfg, model_config, index, dtype)
+            except BaseException:
+                self._close_stream_runtime()
+                raise
         stats = runtime.stats()
         source_line = _stream_source_line(stats)
         large_runtime_buffer = stats.get("large_buffer_bytes", 0)
-        decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer
+        resident_bytes = stats.get("resident_layer_bytes", 0)
+        decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer - resident_bytes
         buffer_line = (
             f"{stats['buffers']} x "
             f"{decoder_buffers / stats['buffers'] / 1e6:.0f} MB decoder buffers + "
             f"1 x {large_runtime_buffer / 1e6:.0f} MB large-layer slot"
         )
+        if resident_bytes:
+            buffer_line += (
+                f", {len(stats['resident_layer_indices'])} persistent decoder layers "
+                f"({resident_bytes / 1e6:.0f} MB)"
+            )
         console.print(
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
             f"{source_line}, {buffer_line}"
+        )
+
+    def _resolve_moe_l2l_plan(self, cfg: Any, model_config: Any, index: Any, dtype: str) -> None:
+        """Reserve a RAM-only accumulation window with the weight buffers already live."""
+        from soup_cli.utils.host_memory_budget import HostMemoryBudget
+        from soup_cli.utils.l2l_host_budget import plan_l2l_host_budget
+        from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
+        from soup_cli.utils.l2l_spill import allocation_cost, ram_budget
+        from soup_cli.utils.layer_stream import (
+            dtype_bytes,
+            estimate_activation_bytes,
+            estimate_logits_bytes,
+        )
+        from soup_cli.utils.moe_l2l_budget import (
+            estimate_moe_l2l_optimizer_host_bytes,
+            plan_moe_l2l,
+        )
+        from soup_cli.utils.partial_ram_source import PartialRamBudget
+
+        ram = ram_budget()
+        if ram.budget_bytes is None or ram.failed_levels:
+            raise ValueError("training.l2l_auto_k could not establish a safe host RAM budget")
+        tcfg = cfg.training
+        batch, length, hidden = tcfg.batch_size, cfg.data.max_length, model_config.hidden_size
+        top_k = getattr(model_config, "num_experts_per_tok", None)
+        if type(top_k) is not int or not 1 <= top_k <= index.expert_count:
+            raise ValueError("training.l2l_auto_k needs a valid DeepSeek expert routing count")
+        pin = str(self.device).startswith("cuda")
+        tokens = batch * length
+        # Input IDs, labels, attention masks and positions can be live for the window.
+        window_bytes = 4 * allocation_cost(tokens * 8, pin=pin)
+        fixed = estimate_moe_l2l_optimizer_host_bytes(self.model, tcfg)
+        if not pin:
+            window_bytes += 2 * tokens * hidden * dtype_bytes(dtype)
+            intermediate = max(
+                self._stream_intermediate_size(model_config),
+                model_config.moe_intermediate_size * top_k,
+            )
+            fixed += estimate_activation_bytes(
+                hidden_size=hidden, intermediate_size=intermediate, n_layers=1,
+                seq_len=length, batch_size=batch, dtype=dtype,
+            ) + estimate_logits_bytes(
+                vocab_size=model_config.vocab_size, seq_len=length, batch_size=batch,
+            )
+        if ram.budget_bytes <= fixed:
+            raise MemoryError(
+                f"training.l2l_auto_k: fixed workspace needs {fixed} host bytes, "
+                f"only {ram.budget_bytes} available before the first micro-batch"
+            )
+        try:
+            memory = plan_moe_l2l(
+                HostMemoryBudget(ram.budget_bytes, fixed),
+                n_layers=index.n_layers,
+                n_moe_layers=len(index.expert_layers),
+                max_shape=(batch, length, hidden),
+                experts_per_token=top_k,
+                requested_k=tcfg.gradient_accumulation_steps,
+                dtype=dtype,
+                pin=pin,
+                device_type="cuda" if pin else "cpu",
+                host_workspace_bytes_per_batch=window_bytes,
+            )
+        except MemoryError as exc:
+            raise MemoryError(f"training.l2l_auto_k: {exc}") from None
+        recipe = resolve_l2l_recipe(tcfg, effective_k=memory.effective_k)
+        # Weights are already live. The shared planner gives routing and activations
+        # one lease budget and charges the rest of the window as fixed workspace.
+        partition = plan_l2l_host_budget(
+            PartialRamBudget(ram.budget_bytes, fixed + memory.window_host_bytes, 0),
+            n_layers=index.n_layers,
+            batch_size=batch,
+            max_length=length,
+            hidden_size=hidden,
+            microbatches=memory.effective_k,
+            dtype=dtype,
+            pin=pin,
+            shape_round=1,
+            routing_bytes=memory.routing_record_bytes + memory.routing_comparison_bytes,
+        )
+        self._l2l_recipe = recipe
+        self._l2l_host_budget_plan = partition
+        self._moe_l2l_memory_plan = memory
+        console.print(
+            f"[green]L2L auto-k:[/] k={recipe.effective_k} of {recipe.requested_k}; "
+            f"window {memory.host_bytes:,} / {memory.available_host_bytes:,} host bytes "
+            f"after fixed workspace ({fixed:,} bytes)"
+        )
+
+    def _configure_stream_residency(
+        self, model, runtime, cfg, tcfg, *, model_config
+    ) -> None:
+        """``training.stream_resident_layers``: keep a measured block of decoder
+        layers on the GPU for the whole run. Dense decoders only."""
+        from soup_cli.utils.stream_residency import configure_stream_residency
+
+        if self._stream_total_experts(model_config) > 1:
+            raise ValueError(
+                "training.stream_resident_layers supports dense decoders only; this "
+                "base routes over several experts. Remove training.stream_resident_layers."
+            )
+        rows, seq_len, vocab_size = self._stream_step_shape(cfg, tcfg, model_config)
+        self._stream_residency_plan = configure_stream_residency(
+            model,
+            runtime,
+            tcfg.stream_resident_layers,
+            rows=rows,
+            seq_len=seq_len,
+            vocab_size=vocab_size,
+            override_bytes=getattr(tcfg, "stream_vram_override", None),
+            notify=console.print,
         )
 
     def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:
@@ -2065,7 +2302,11 @@ class StreamingSetupMixin:
         assert_streamed_adapter_saved(self.trainer.model, output_dir)
 
     def _close_stream_runtime(self) -> None:
-        """Release the streaming weight source, if this run had one."""
+        """Release shared activations before closing the streaming weight source."""
+        state = getattr(getattr(self, "trainer", None), "_soup_l2l", None)
+        if getattr(state, "host_budget_plan", None) is not None:
+            # A failed drain keeps its activation lease and leaves the runtime open.
+            state.close()
         runtime = getattr(self, "_stream_runtime", None)
         if runtime is not None:
             runtime.close()
@@ -2142,6 +2383,8 @@ class StreamingSetupMixin:
                 "L2L does not resize the optimizer schedule or trim batches"
             )
         trainer = make_l2l_trainer_class(base_cls)(**trainer_kwargs)
+        host_budget_plan = getattr(self, "_l2l_host_budget_plan", None)
+        memory_plan = getattr(self, "_moe_l2l_memory_plan", None)
         attach_l2l_state(
             trainer,
             self._stream_runtime,
@@ -2157,6 +2400,9 @@ class StreamingSetupMixin:
             mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
             mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
             expert_gemm=getattr(tcfg, "stream_expert_gemm", "native"),
+            host_budget_plan=host_budget_plan,
+            memory_plan=memory_plan,
+            host_budget=host_budget_plan.activations if memory_plan is not None else None,
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "

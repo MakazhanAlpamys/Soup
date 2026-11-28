@@ -61,6 +61,7 @@ from soup_cli.utils.l2l_step import (
 )
 
 if TYPE_CHECKING:
+    from soup_cli.utils.l2l_host_budget import L2LHostBudgetPlan
     from soup_cli.utils.moe_l2l_budget import MoEL2LMemoryPlan
 
 #: Architectures ``training.l2l`` admits at launch with any weight layout.
@@ -186,7 +187,7 @@ class L2LState:
     spill_plan: Optional[Dict[str, Any]] = None
     #: Files of dead runs the last ``train`` removed from the spill directory.
     stale_removed: List[str] = field(default_factory=list)
-    c3_plan: Any = None
+    host_budget_plan: Optional[L2LHostBudgetPlan] = None
     #: Boundary storage only; compute and routing checks retain their existing behavior.
     activation_codec: Literal["none", "fp8_e4m3"] = "none"
     #: An already-resolved MoEL2LMemoryPlan. The trainer never selects accumulation k.
@@ -208,6 +209,11 @@ class L2LState:
             self.loss = SFT_WINDOW_LOSS
         if self.activation_codec not in ("none", "fp8_e4m3"):
             raise ValueError(f"unsupported L2L activation codec {self.activation_codec!r}")
+        if self.host_budget_plan is not None and self.activation_codec != "none":
+            raise ValueError(
+                "training.stream_partial_ram with training.l2l requires "
+                "training.l2l_activation_codec='none'"
+            )
         if self.activation_codec == "fp8_e4m3":
             if self.loss is not SFT_WINDOW_LOSS:
                 raise ValueError("FP8 activation storage supports the SFT window loss only")
@@ -218,7 +224,7 @@ class L2LState:
             and self.memory_plan is None
             and (
                 self.activation_codec != "none"
-                or self.host_budget is not None or self.c3_plan is not None
+                or self.host_budget is not None or self.host_budget_plan is not None
             )
         ):
             raise ValueError("budgeted MoE routing requires a resolved memory_plan")
@@ -228,17 +234,17 @@ class L2LState:
             if self.memory_plan.codec != self.activation_codec:
                 raise ValueError("L2L activation codec differs from the resolved memory plan")
         if (
-            self.c3_plan is not None and self.host_budget is not None
-            and self.host_budget is not self.c3_plan.activations
+            self.host_budget_plan is not None and self.host_budget is not None
+            and self.host_budget is not self.host_budget_plan.activations
         ):
             raise ValueError(
                 "L2L host_budget must be the reserved activation partition of a shared-budget store"
             )
-        if self.c3_plan is not None and self.memory_plan is not None:
+        if self.host_budget_plan is not None and self.memory_plan is not None:
             routing_bytes = (
                 self.memory_plan.routing_record_bytes + self.memory_plan.routing_comparison_bytes
             )
-            if self.c3_plan.routing_bytes != routing_bytes:
+            if self.host_budget_plan.routing_bytes != routing_bytes:
                 raise ValueError(
                     "combined shared-budget and L2L memory plans require matching routing_bytes "
                     "reserved "
@@ -538,12 +544,10 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
     if n_layers < 1 or hidden < 1:
         raise ValueError("L2L activation windows need positive layer and hidden dimensions")
     shapes = [(int(ids.shape[0]), int(ids.shape[1]), hidden) for ids in ids_list]
-    if state.c3_plan is not None:
+    if state.host_budget_plan is not None:
         # Before any release: an out-of-plan window retains the current store and lease.
-        state.c3_plan.validate_microbatches(
+        state.host_budget_plan.validate_microbatches(
             n_layers=n_layers, shapes=shapes, dtype=dtype, pin=pin,
-            codec=state.activation_codec,
-            device_type=torch.device(device).type,
         )
     if state.memory_plan is not None:
         state.memory_plan.validate_microbatches(
@@ -628,8 +632,8 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
                 "to host RAM, so the new plan may need extra free RAM."
             )
     host_budget = state.host_budget
-    if state.c3_plan is not None:
-        host_budget = state.c3_plan.activations
+    if state.host_budget_plan is not None:
+        host_budget = state.host_budget_plan.activations
     if fp8 or host_budget is not None:
         if host_budget is None:
             safe_budget = l2l_spill.ram_budget().budget_bytes
@@ -787,9 +791,10 @@ def make_l2l_trainer_class(base_cls: type) -> type:
             state = self._soup_l2l
             if state is None:
                 return super().train(*args, **kwargs)
-            from soup_cli.utils.l2l_spill import sweep_stale
+            if state.host_budget_plan is None:
+                from soup_cli.utils.l2l_spill import sweep_stale
 
-            state.stale_removed = sweep_stale(state.spill_directory())
+                state.stale_removed = sweep_stale(state.spill_directory())
             try:
                 return super().train(*args, **kwargs)
             finally:
@@ -872,7 +877,7 @@ def attach_l2l_state(
     *,
     dtype: Any,
     loss: Optional[WindowLoss] = None,
-    c3_plan: Any = None,
+    host_budget_plan: Optional[L2LHostBudgetPlan] = None,
     activation_codec: Literal["none", "fp8_e4m3"] = "none",
     memory_plan: Optional[MoEL2LMemoryPlan] = None,
     host_budget: Optional[HostMemoryBudget] = None,
@@ -909,7 +914,7 @@ def attach_l2l_state(
         runtime=runtime,
         dtype=dtype,
         loss=loss,
-        c3_plan=c3_plan,
+        host_budget_plan=host_budget_plan,
         activation_codec=activation_codec,
         memory_plan=memory_plan,
         host_budget=host_budget,
