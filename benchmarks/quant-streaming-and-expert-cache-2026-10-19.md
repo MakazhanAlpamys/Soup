@@ -7,7 +7,7 @@ cache measurements and follow-up preparation are dated 2026-10-25 and 2026-10-26
 
 How does nested NF4 affect pretrained loss, and does the scoped streaming
 kernel preserve updates while reducing memory? Can an immutable expert
-hotset avoid the cost of replacing cached experts during two-read streaming?
+hotset avoid the overhead of replacing cached experts during two-read streaming?
 
 - The resident quality screen ran on an RTX 3090 (24,576 MiB), Linux,
   driver 565.57.01, PyTorch 2.11.0+cu126, Transformers 5.17.0,
