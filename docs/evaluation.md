@@ -637,13 +637,20 @@ precision and double quantization. Soup loads the models and adapters through it
 shared loader, then passes them to lm-eval for task-specific scoring. The existing
 `numerics` stamp records that shared precision.
 
+Without `--device`, external benchmarks previously defaulted to CPU; they now use
+the live device (CUDA when available, otherwise CPU), so scores can change. The
+external pass loads its own model copies while both live models remain loaded,
+increasing GPU memory demand. Use `--device cpu` to keep both paths on CPU.
+
 This path requires lm-eval 0.4.1 or newer and the model-loading dependencies
 (`pip install "soup-cli[train,eval]"`). Version 0.4.0 cannot accept the loaded model;
 upgrade before retrying. This is an API minimum; older evaluator releases can still
 require incompatible Transformers/datasets versions, so upgrade if their imports fail.
-Missing dependencies, invalid/unavailable CPU/CUDA/MPS
-devices and quantized MPS are refused before model loading (exit `3`). For MPS,
-use `training.quantization: none` or select a supported CPU/CUDA environment.
+An incompatible evaluator API, missing dependencies, devices outside CPU/CUDA/MPS,
+invalid/unavailable devices and quantized MPS are refused before model loading
+(exit `3`). These preflight refusals and model names containing `,` or `=` now
+exit `3` instead of the previous runtime exit `1`. For MPS, use
+`training.quantization: none` or select a supported CPU/CUDA environment.
 Model-loading or benchmark execution failures remain runtime errors (exit `1`).
 The harness keeps its own task prompts; `--chat-template-kwargs` remains live-only.
 The evidence schema and legacy replay rules are unchanged: older external scores
