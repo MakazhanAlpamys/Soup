@@ -687,7 +687,7 @@ def _read_json_object(path: str) -> dict:
         )
     try:
         payload = json.loads(
-            data.decode("utf-8"),
+            data.decode("utf-8-sig"),
             object_pairs_hook=_no_duplicate_keys,
             parse_constant=_refuse_constant,
         )

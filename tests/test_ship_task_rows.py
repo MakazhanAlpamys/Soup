@@ -816,6 +816,16 @@ def test_the_file_is_found_through_the_pointer_of_a_verdict_or_of_evidence(tmp_p
 
 
 @pytest.mark.parametrize("key", ["task_win", "task"])
+def test_parent_json_with_utf8_bom_loads_the_same_task_rows_as_plain_utf8(tmp_path, key):
+    path = Path(_write_pair(tmp_path, key=key))
+    plain_rows = load_task_rows_for(str(path)).rows
+
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    assert load_task_rows_for(str(path)).rows == plain_rows
+
+
+@pytest.mark.parametrize("key", ["task_win", "task"])
 @pytest.mark.parametrize("equal", [False, True], ids=["different", "equal"])
 @pytest.mark.parametrize("location", ["pointer", "count", "unused"])
 def test_parent_json_refuses_repeated_keys_at_any_depth(tmp_path, key, equal, location):
