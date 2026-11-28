@@ -1,1 +1,0 @@
-- Select a RAM-bounded L2L accumulation window for DeepSeek-V3 per-expert SFT with `training.l2l_auto_k`. (#PENDING by @kok-o)
