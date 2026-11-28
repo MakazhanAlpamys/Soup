@@ -293,7 +293,17 @@ def test_split_step_refuses_unsupported_model_or_window(
     elif kind == "dropout":
         monkeypatch.setattr(step.causal.config, "attention_dropout", 0.1)
     elif kind == "embedding":
-        step.owner.embed_tokens.register_parameter("offset", torch.nn.Parameter(torch.zeros(1)))
+        # The streaming wrapper enumerates and runs the inner embedding.
+        embedding = step.owner.embed_tokens
+        offset = torch.nn.Parameter(torch.zeros(1))
+        monkeypatch.setattr(embedding.inner, "offset", offset, raising=False)
+        embedding.inner.register_forward_hook(lambda module, _args, output: output + module.offset)
+        assert any(param is offset and param.requires_grad for param in embedding.parameters())
+
+        def unexpected_prime(*_args):
+            pytest.fail("the split step primed the model with a trainable embedding")
+
+        monkeypatch.setattr(step, "_prime", unexpected_prime)
     elif kind == "experts":
         monkeypatch.setattr("soup_cli.utils.l2l_step._streamed_moe_experts", lambda _: object())
     else:
