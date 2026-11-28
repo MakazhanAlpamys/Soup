@@ -182,6 +182,11 @@ have been checked on meta, and a tiny random hybrid decoder passes a CPU LoRA
 forward/backward check. This does not validate full 27B weights, GRPO rollouts,
 NF4 execution, GPU memory fit or training quality.
 
+`soup recipes use qwen3.8-27b-dpo` selects the `Qwen/Qwen3.8-27B` language decoder
+for text preference rows with `prompt`, `chosen` and `rejected` in
+`./data/preference_train.jsonl`. It inherits the `qwen3.5-27b-dpo` starting settings,
+including the 4096-token limit, 4-bit base quantization and LoRA rank 16 / alpha 32.
+
 `soup recipes use qwen3.5-122b-a10b-dpo` selects the 122B-A10B language decoder
 for `prompt`, `chosen` and `rejected` text preferences in
 `./data/preference_train.jsonl`. It inherits the 122B SFT recipe's one epoch,

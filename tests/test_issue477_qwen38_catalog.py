@@ -1,4 +1,4 @@
-"""Regression coverage for #477's Qwen3.8-27B text-only SFT recipe."""
+"""Regression coverage for Qwen3.8-27B text recipes (#477, #275)."""
 
 from pathlib import Path
 
@@ -7,18 +7,20 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.config.loader import load_config_from_string
-from soup_cli.recipes.catalog import get_recipe, search_recipes
+from soup_cli.recipes.catalog import RECIPES, get_recipe, search_recipes
 
 from .conftest import strip_ansi
 
 runner = CliRunner()
+BASE = "Qwen/Qwen3.8-27B"
+DPO_RECIPE = "qwen3.8-27b-dpo"
 
 
 def test_qwen38_27b_recipe_has_expected_text_sft_shape() -> None:
     recipe = get_recipe("qwen3.8-27b-sft")
 
     assert recipe is not None
-    assert recipe.model == "Qwen/Qwen3.8-27B"
+    assert recipe.model == BASE
     assert recipe.task == "sft"
     assert recipe.size == "27B"
     assert {"qwen", "qwen3.8", "sft", "text"}.issubset(recipe.tags)
@@ -36,16 +38,37 @@ def test_qwen38_27b_recipe_has_expected_text_sft_shape() -> None:
 
 def test_qwen38_27b_recipe_is_searchable() -> None:
     matches = search_recipes(query="qwen3.8")
-    assert [recipe.model for recipe in matches] == ["Qwen/Qwen3.8-27B"]
+    assert get_recipe("qwen3.8-27b-sft") in matches
 
 
+def test_qwen38_27b_dpo_metadata() -> None:
+    recipe = get_recipe(DPO_RECIPE)
+    assert recipe is not None
+    assert recipe.model == BASE
+    assert recipe.task == "dpo"
+    assert recipe.size == "27B"
+    assert {"qwen", "qwen3.8", "dpo", "alignment", "preference", "text"} <= set(recipe.tags)
+    assert recipe in search_recipes(query="qwen3.8", task="dpo", size="27b")
+
+
+def test_qwen38_27b_dpo_inherits_qwen35_27b_settings() -> None:
+    config = load_config_from_string(RECIPES[DPO_RECIPE].yaml_str)
+    donor = load_config_from_string(RECIPES["qwen3.5-27b-dpo"].yaml_str)
+
+    assert config.base == BASE
+    assert config.model_dump(exclude={"base"}) == donor.model_dump(exclude={"base"})
+
+
+@pytest.mark.parametrize(("name", "task"), [("qwen3.8-27b-sft", "sft"), (DPO_RECIPE, "dpo")])
 def test_qwen38_27b_recipe_show_and_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    task: str,
 ) -> None:
-    show_result = runner.invoke(app, ["recipes", "show", "qwen3.8-27b-sft"])
+    show_result = runner.invoke(app, ["recipes", "show", name])
     assert show_result.exit_code == 0
-    assert "Qwen/Qwen3.8-27B" in show_result.output
+    assert BASE in show_result.output
     # #633: "modality: text" spans three Pygments tokens, so escapes land
     # inside it whenever colour is enabled. The model id above is one token and
     # survives raw, which is why only this line broke.
@@ -54,9 +77,12 @@ def test_qwen38_27b_recipe_show_and_use(
     monkeypatch.chdir(tmp_path)
     use_result = runner.invoke(
         app,
-        ["recipes", "use", "qwen3.8-27b-sft", "--yes"],
+        ["recipes", "use", name, "--yes"],
     )
     assert use_result.exit_code == 0
     content = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
-    assert "base: Qwen/Qwen3.8-27B" in content
-    assert "modality: text" in content
+    config = load_config_from_string(content)
+    assert config.base == BASE
+    assert config.task == task
+    assert config.modality == "text"
+    assert content == RECIPES[name].yaml_str
