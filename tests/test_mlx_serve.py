@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import json
 import logging
+import queue
 import threading
 from types import SimpleNamespace
 
@@ -995,27 +996,46 @@ def test_a_reader_that_keeps_reading_slowly_gets_the_whole_stream(monkeypatch):
     assert mlx_serve.OUTPUT_PUT_TIMEOUT_SECONDS == 30.0
     budget = 0.5
     monkeypatch.setattr(mlx_serve, "OUTPUT_PUT_TIMEOUT_SECONDS", budget)
+    elapsed = 0.0
+    monkeypatch.setattr(
+        mlx_serve, "time", SimpleNamespace(monotonic=lambda: elapsed, time=mlx_serve.time.time),
+    )
     count = 40
+
+    class SlowReaderQueue(queue.Queue):
+        waited = False
+
+        def put(self, item, block=True, timeout=None):
+            nonlocal elapsed
+            if not self.waited:
+                # Model one missed put before the reader can accept each event.
+                elapsed += budget / 4
+                self.waited = True
+                raise queue.Full
+            super().put(item, block=block, timeout=timeout)
+            self.waited = False
+
+    job_type = mlx_serve._Job
+
+    def new_job(options):
+        job = job_type(options)
+        job.events = SlowReaderQueue(maxsize=job.events.maxsize)
+        return job
+
+    monkeypatch.setattr(mlx_serve, "_Job", new_job)
 
     def generate(*args, **options):
         for index in range(1, count):
             yield Chunk("x", 2, index)
         yield Chunk("x", 2, count, "stop")
 
-    async def read_slowly(body, incoming):
-        await asyncio.sleep(0.025)
-
     async def run():
         app, _ = _application(generator=generate)
         async with app.router.lifespan_context(app):
-            start = asyncio.get_running_loop().time()
-            events = await _asgi_post(
-                app, _body(stream=True, max_tokens=count), on_body=read_slowly,
-            )
-            elapsed = asyncio.get_running_loop().time() - start
-            return b"".join(event.get("body", b"") for event in events).decode(), elapsed
+            events = await _asgi_post(app, _body(stream=True, max_tokens=count))
+            return b"".join(event.get("body", b"") for event in events).decode()
 
-    text, elapsed = asyncio.run(run())
+    text = asyncio.run(run())
     frames = _frames(text)
     assert elapsed > budget, "the healthy stream must outlive one put deadline"
     assert "".join(frame["choices"][0]["delta"].get("content", "")

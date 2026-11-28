@@ -32,6 +32,10 @@ _MAX_NOTES_CHARS = 4096
 # history file with a single multi-MiB JSON object (security-review MEDIUM
 # fix — matches v0.40.3 TraceLogWriter policy).
 _MAX_HISTORY_LINE_BYTES = 64 * 1024
+# Windows: retry the byte lock for a bounded time instead of writing unlocked
+# when the first attempt fails (#2569).
+_NT_LOCK_DEADLINE_SEC = 5.0
+_NT_LOCK_SLEEP_SEC = 0.01
 
 
 @dataclass(frozen=True)
@@ -198,26 +202,45 @@ def _append_with_lock(target: str, line: str) -> None:
     POSIX: ``fcntl.flock(LOCK_EX)``. Windows: separate ``<target>.lock``
     file with ``msvcrt.locking`` — this avoids the seek-position pitfall
     where unlocking the data file at offset 0 wouldn't match the locked
-    range (security-review MEDIUM fix). When locking is unavailable on
-    the host, the append proceeds without a lock (POSIX-only writes
-    < PIPE_BUF stay atomic at the OS level for append-mode anyway).
+    range (security-review MEDIUM fix). A Windows lock that cannot be
+    taken before the deadline raises ``TimeoutError`` naming the file:
+    writing unlocked would let two writers overwrite one verdict (#2569).
+    On POSIX the append proceeds without a lock if ``flock`` is
+    unavailable (writes < PIPE_BUF stay atomic at the OS level).
     """
     lock_handle = None
     lock_kind: Optional[str] = None
     if os.name == "nt":
         try:
             import msvcrt  # type: ignore[import-not-found]
-
-            lock_path = target + ".lock"
-            lock_handle = open(lock_path, "a+")
-            try:
-                msvcrt.locking(lock_handle.fileno(), msvcrt.LK_LOCK, 1)
-                lock_kind = "nt"
-            except OSError:
-                lock_handle.close()
-                lock_handle = None
-        except (ImportError, OSError):
+        except ImportError:
             lock_handle = None
+        else:
+            lock_path = target + ".lock"
+            try:
+                lock_handle = open(lock_path, "a+")
+            except OSError:
+                lock_handle = None
+            else:
+                # A failed lock must not become an unlocked append: "a" mode
+                # is not atomic across handles on Windows, so two writers can
+                # land on the same offset and overwrite a verdict (#2569).
+                import time
+
+                deadline = time.monotonic() + _NT_LOCK_DEADLINE_SEC
+                while lock_kind is None:
+                    try:
+                        msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        lock_kind = "nt"
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            lock_handle.close()
+                            lock_handle = None
+                            raise TimeoutError(
+                                f"could not lock advise history file {target}: "
+                                f"the lock was busy for {_NT_LOCK_DEADLINE_SEC:g}s"
+                            ) from None
+                        time.sleep(_NT_LOCK_SLEEP_SEC)
     try:
         with open(target, "a", encoding="utf-8") as fh:
             posix_locked = False

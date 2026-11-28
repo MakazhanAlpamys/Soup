@@ -343,11 +343,10 @@ def _validate_judge_model_url(url: str) -> None:
     private / link-local / reserved IP literal as a usage error before any
     measurement runs.
     """
-    from urllib.parse import urlparse
-
     from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+    from soup_cli.utils.redaction import parse_url_with_safe_error, url_without_userinfo
 
-    parsed = urlparse(url)
+    parsed = parse_url_with_safe_error(url, label="judge_model")
     if parsed.scheme == "ollama":
         return
     if parsed.scheme == "https":
@@ -359,7 +358,7 @@ def _validate_judge_model_url(url: str) -> None:
     if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
         return
     _fail(
-        f"--judge-model {url!r} uses a disallowed scheme/host; "
+        f"--judge-model {url_without_userinfo(url)!r} uses a disallowed scheme/host; "
         "use ollama://, https://, or http://localhost",
         _EXIT_USAGE,
     )

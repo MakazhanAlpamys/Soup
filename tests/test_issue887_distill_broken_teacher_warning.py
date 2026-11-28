@@ -128,15 +128,19 @@ def test_persistent_nonfinite_teacher_warns_once_with_diagnostics(
     )
 
     with caplog.at_level(logging.WARNING, logger="soup_cli.trainer.distill"):
-        with pytest.warns(UserWarning) as warn_info:
+        with pytest.warns(UserWarning, match="Distillation teacher") as warn_info:
             for _ in range(5):
                 tracker.record_step(torch.tensor(float("nan")))
 
     assert tracker.warned
 
-    # Exactly one UserWarning emitted
-    assert len(warn_info) == 1
-    user_warn_text = str(warn_info[0].message)
+    teacher_warnings = [
+        str(item.message)
+        for item in warn_info
+        if issubclass(item.category, UserWarning) and "Distillation teacher" in str(item.message)
+    ]
+    assert len(teacher_warnings) == 1
+    user_warn_text = teacher_warnings[0]
     assert "meta-llama/Llama-3.1-70B-Teacher" in user_warn_text
     assert "5 consecutive non-finite steps detected" in user_warn_text
     assert "distill_temperature=0.05" in user_warn_text
@@ -308,4 +312,3 @@ training:
 
     assert wrapper.nonfinite_tracker.warned
     assert any("broken-teacher-e2e" in r.message for r in caplog.records)
-
