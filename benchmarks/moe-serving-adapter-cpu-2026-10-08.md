@@ -88,4 +88,4 @@ residuals outside the FP32 rule. The full MLA checkpoint was never executed.
 The real Qwen3.5 result covers one prompt and two synthetic adapters. SSD
 serving, expert prefetch, GPU inference and quantized serving remained unmeasured.
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/d647cefb695dfcd6865efe8698b78ab45880187c/benchmarks
+Evidence: benchmarks/evidence/moe-serving-adapter-cpu-2026-10-08/ (source commit d647cefb695d)

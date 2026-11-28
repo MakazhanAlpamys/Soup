@@ -130,4 +130,4 @@ The preparation and the separate profiling harness established no real
   physical SSD throughput or long-run quality was established.
   Earlier GPU cache comparison
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/33a68aac8c6fec6274866aee836850a4ebb473d4/followups
+Evidence: benchmarks/evidence/quant-streaming-and-expert-cache-2026-10-19/ (source commit 33a68aac8c6f)

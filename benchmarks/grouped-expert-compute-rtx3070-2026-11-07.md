@@ -109,4 +109,4 @@ against sequential execution, with bitwise equality and medians of
   or a torchvision mismatch. The working PyTorch 2.11.0 runs replaced those
   attempts, and the second valid run extended the first.
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/8bd47cfbe94baec15cab9e167b39f4d3dc362645/benchmarks/results/b14-group-diagnostic-20261107
+Evidence: benchmarks/evidence/grouped-expert-compute-rtx3070-2026-11-07/ (source commit 8bd47cfbe94b)

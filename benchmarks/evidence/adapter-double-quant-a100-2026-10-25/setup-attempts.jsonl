@@ -1,0 +1,4 @@
+{"attempt_id": "75034fef06954336a52e064a8fe8d2d9", "event": "start", "kind": "F", "meta": {}, "pid": 4520, "run_id": "F_A_off", "ts": "2026-10-25T21:02:39Z", "unix_s": 1792962159.281814}
+{"attempt_id": "75034fef06954336a52e064a8fe8d2d9", "event": "end", "meta": {}, "outcome": "void", "reasons": ["inputs: verified.json is missing; the instance was not verified by the transfer pull"], "ts": "2026-10-25T21:02:39Z"}
+{"attempt_id": "cf497e3abc5f47a991d81b78c96fce3e", "event": "start", "kind": "F", "meta": {}, "pid": 4708, "run_id": "F_A_off", "ts": "2026-10-25T21:02:46Z", "unix_s": 1792962166.8605664}
+{"attempt_id": "cf497e3abc5f47a991d81b78c96fce3e", "event": "end", "meta": {}, "outcome": "void", "reasons": ["inputs: verified.json is missing; the instance was not verified by the transfer pull"], "ts": "2026-10-25T21:02:47Z"}

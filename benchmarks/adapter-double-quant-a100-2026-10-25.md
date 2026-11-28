@@ -99,4 +99,4 @@ python $H report --out $RUN
   loading, evaluation, controls and retries. The safety mini-suite was already
   at its floor, leaving refusal behavior unverified.
 
-Evidence: https://github.com/SoupTeam/soup-rnd/tree/fc75a515698476923e9e92abbcee9baf7f5569c7/benchmarks/results/e4-part2-calibration-2026-10-25-b
+Evidence: benchmarks/evidence/adapter-double-quant-a100-2026-10-25/ (source commit fc75a5156984)
