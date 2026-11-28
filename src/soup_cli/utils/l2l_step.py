@@ -976,7 +976,10 @@ class L2LStep:
                 try:
                     joined_output = experts(
                         joined_hidden, joined_ids, joined_weights,
-                        group_sizes=sizes if preserve_expert_shapes else None,
+                        group_sizes=(
+                            sizes if preserve_expert_shapes or experts.expert_gemm == "segmented"
+                            else None
+                        ),
                     )
                 finally:
                     experts.materialize_recompute = previous_materialize
@@ -1346,14 +1349,15 @@ class L2LStep:
                     store.put(idx, mb, hidden[mb])
                 experts = _streamed_moe_experts(layer) if route_preserving_mbr else None
                 if experts is not None:
-                    invariant_gemm = experts.expert_gemm == "batch_invariant"
+                    expert_gemm = experts.expert_gemm
                     pair = contexts.get(idx)
                     before = self._expert_read_snapshot() if phase_stats is not None else None
                     with (
                         _defer_decoder_forward_hooks(
                             layer,
                             split_backward=mbr_split_backward or (
-                                invariant_gemm and not mbr_ordered_backward
+                                expert_gemm in ("batch_invariant", "segmented")
+                                and not mbr_ordered_backward
                             ),
                         ) as deferred_hooks,
                         pair[0] if pair else nullcontext(),
@@ -1368,7 +1372,7 @@ class L2LStep:
                                 deferred_hooks,
                                 reverse_graph_order=mbr_ordered_backward,
                                 preserve_expert_shapes=(
-                                    preserve_expert_shapes and not invariant_gemm
+                                    preserve_expert_shapes and expert_gemm != "batch_invariant"
                                 ),
                             )
                         )
@@ -1467,9 +1471,9 @@ class L2LStep:
             try:
                 experts = _streamed_moe_experts(layer) if route_preserving_mbr else None
                 if experts is not None:
-                    invariant_gemm = experts.expert_gemm == "batch_invariant"
+                    expert_gemm = experts.expert_gemm
                     split_backward = mbr_split_backward or (
-                        invariant_gemm and not mbr_ordered_backward
+                        expert_gemm in ("batch_invariant", "segmented") and not mbr_ordered_backward
                     )
                     inputs = [store.get(idx, mb).requires_grad_(True) for mb in range(k)]
                     pair = contexts.pop(idx, None)
@@ -1506,7 +1510,7 @@ class L2LStep:
                                 split_records=split_records,
                                 reverse_graph_order=mbr_ordered_backward,
                                 preserve_expert_shapes=(
-                                    preserve_expert_shapes and not invariant_gemm
+                                    preserve_expert_shapes and expert_gemm != "batch_invariant"
                                 ),
                             )
                         )

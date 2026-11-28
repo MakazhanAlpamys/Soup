@@ -3997,11 +3997,15 @@ def _install_expert_streaming(
         if stream_experts is not None:
             raise ValueError("training.stream_experts needs expert_pool=True")
     if stream_experts is not None and (
-        any(enabled for _, enabled in pool_options) or expert_gemm != "native"
+        any(enabled for _, enabled in pool_options) or expert_gemm == "batch_invariant"
     ):
         raise ValueError(
             "training.stream_experts requires synchronous expert transfer and native expert GEMM"
         )
+    if stream_experts is not None and expert_gemm == "segmented":
+        from soup_cli.utils.expert_training import validate_segmented_group_backend
+
+        validate_segmented_group_backend(stream_experts.backend, device=device)
     if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
         for name, set_ in (
             ("training.stream_experts", stream_experts is not None),

@@ -1217,7 +1217,7 @@ training:
 | `l2l_mbr_group_size` | `null` | Micro-batches per expert group. `null` uses the full accumulation window. An explicit size must be between 1 and `gradient_accumulation_steps`. |
 | `l2l_mbr_split_backward` | `false` | Backpropagate through the grouped experts, then through each micro-batch's attention, router and shared experts in L2L order. Refuses deferred decoder forward hooks. |
 | `l2l_mbr_ordered_backward` | `false` | Recompute in reverse micro-batch order so one backward per MoE layer accumulates adapter gradients in L2L order. Excludes split backward. |
-| `stream_expert_gemm` | `native` | Set to `batch_invariant` to use fixed-order Triton matmuls for routed experts. Requires L2L, per-expert streaming and MBR. CUDA only, with compute capability 8.0+ for BF16. |
+| `stream_expert_gemm` | `native` | Set to `segmented` for native per-micro-batch matmuls and a direct expert backward, or `batch_invariant` for fixed-order Triton matmuls. Both require L2L, per-expert streaming and MBR. |
 
 Both settings require `stream_expert_layout: per_expert` with L2L. Routing replay reads a routed
 expert in the forward pass and again in its backward pass. Grouped routing gathers the hit
@@ -1232,10 +1232,17 @@ split and ordered backward preserve the per-micro-batch expert operation shapes 
 LoRA gradient accumulation. With both switches off, native grouping can change floating-point
 results.
 
+With `stream_expert_gemm: segmented`, each hit expert shares a lease across the group and
+runs native matmuls at each micro-batch's routed row count. Backward computes input and routing
+weight gradients directly, segment by segment. It defaults to split backward and honors
+`l2l_mbr_ordered_backward: true`. With `training.stream_experts` enabled, use `grouped` on CPU
+or `sequential` on CPU or CUDA.
+
 With `stream_expert_gemm: batch_invariant`, each expert computes its joined rows in one call
 using a fixed reduction order. The same order applies to input and routing-weight gradients.
 MBR uses split backward by default with this GEMM, and honors an explicit ordered backward
-setting. Split backward excludes deferred decoder forward hooks.
+setting. This mode requires CUDA, with compute capability 8.0+ for BF16. Split backward
+excludes deferred decoder forward hooks.
 
 With deterministic PyTorch kernels, MBR losses and LoRA gradients match per-micro-batch
 L2L using the same GEMM on the same GPU and software stack. Set

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Tuple
 
-EXPERT_GEMMS = ("native", "batch_invariant")
+EXPERT_GEMMS = ("native", "batch_invariant", "segmented")
 
 
 @dataclass(frozen=True)

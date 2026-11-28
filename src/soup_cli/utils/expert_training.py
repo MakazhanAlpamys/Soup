@@ -74,8 +74,23 @@ def expert_training_reservations(reader: Any, options: Any, *, dtype: str, devic
     )
 
 
-def validate_expert_training(options: Any, *, device: str, dtype: str) -> None:
+def validate_segmented_group_backend(backend: str, *, device: Any = None) -> None:
+    """Segmented VJP recomputes native projections and the ordinary SwiGLU."""
+    if backend != "sequential" and (
+        backend != "grouped" or (device is not None and str(device).split(":", 1)[0] != "cpu")
+    ):
+        raise ValueError(
+            "training.stream_expert_gemm='segmented' requires "
+            "training.stream_experts.backend='sequential' or CPU 'grouped'"
+        )
+
+
+def validate_expert_training(
+    options: Any, *, device: str, dtype: str, expert_gemm: str = "native",
+) -> None:
     """Refuse backend/device mismatches before cache reads and allocations."""
+    if expert_gemm == "segmented":
+        validate_segmented_group_backend(options.backend, device=device)
     kind = str(device).split(":", 1)[0]
     if kind not in ("cpu", "cuda"):
         raise ValueError(f"{_FIELD} requires CPU or CUDA")

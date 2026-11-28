@@ -1406,7 +1406,8 @@ def _build_streamed_experts_class():
         ``PooledExpert``. The forward's routing decisions reach a recompute through the router
         replay of ``_routing_forward``; a recompute that routed elsewhere would be a bug there.
         A group can keep its micro-batch GEMM and routing-weight multiply shapes while sharing
-        each expert lease. The segment sizes are saved here for the corresponding backward.
+        each expert lease. This node saves its own segment sizes for backward, including when
+        the replay skips computation. Segmented mode uses the direct VJP for those segments.
         """
 
         @staticmethod
@@ -1418,6 +1419,7 @@ def _build_streamed_experts_class():
             ctx.device_type = hidden.device.type
             ctx.autocast_kwargs = _autocast_state(ctx.device_type)
             ctx.segments = segments
+            ctx.direct_vjp = segments is not None and owner.expert_gemm == "segmented"
             ctx.save_for_backward(hidden, weights)
             if replay:
                 # The consumers of this product (the cast and index_add_) keep it for its
@@ -1431,7 +1433,7 @@ def _build_streamed_experts_class():
                 owner.reader, expert, phase=phase, layer_idx=owner.layer_idx
             ) as (gate_up, down):
                 owner.pool.prefetch(owner.reader, nxt)
-                if segments is not None:
+                if segments is not None and len(segments) > 1:
                     return torch.cat([
                         weighted_mlp(rows, routing, gate_up, down, owner, ctx.act_fn)
                         for rows, routing in zip(hidden.split(segments), weights.split(segments))
@@ -1449,6 +1451,17 @@ def _build_streamed_experts_class():
             hidden, weights = ctx.saved_tensors
 
             def vjp(rows: Any, routing: Any, grad: Any) -> Tuple[Any, ...]:
+                if ctx.direct_vjp:
+                    from soup_cli.utils.direct_expert_backward import expert_vjp
+
+                    autocast = ctx.autocast_kwargs
+                    with torch.autocast(ctx.device_type, enabled=False):
+                        pair = expert_vjp(
+                            rows, routing, gate_up, down, grad,
+                            need_hidden=need_hidden, need_weights=need_weights,
+                            autocast_dtype=autocast["dtype"] if autocast["enabled"] else None,
+                        )
+                    return tuple(value for value in pair if value is not None)
                 if ctx.owner.pool.packed_only:
                     packed = ctx.owner.pool.group_compute.gemm
                     pair = packed.vjp(
@@ -1471,7 +1484,7 @@ def _build_streamed_experts_class():
                 ctx.owner.reader, ctx.expert, phase="backward_dX", layer_idx=ctx.owner.layer_idx
             ) as (gate_up, down):
                 ctx.owner.pool.prefetch(ctx.owner.reader, ctx.hint_prev)
-                if ctx.segments is None:
+                if ctx.segments is None or len(ctx.segments) == 1:
                     grads = vjp(hidden, weights, grad_out)
                 else:
                     segment_grads = [
@@ -1529,6 +1542,18 @@ def _build_streamed_experts_class():
             self.num_experts = reader.count
             self.two_reads = bool(two_reads)
             self.grouped_expert_routes = grouped_expert_routes
+            if expert_gemm == "segmented":
+                if not (self.pool is not None and self.two_reads and grouped_expert_routes):
+                    raise ValueError(
+                        "training.stream_expert_gemm='segmented' requires pooled experts, "
+                        "two_reads=True and grouped_expert_routes=True"
+                    )
+                if self.pool.group_compute is not None:
+                    from soup_cli.utils.expert_training import validate_segmented_group_backend
+
+                    validate_segmented_group_backend(
+                        self.pool.group_compute.options.backend, device=self.pool.device,
+                    )
             self.expert_gemm = expert_gemm
             self.linear, self.scale = functional.linear, torch.mul
             if expert_gemm == "batch_invariant":
@@ -1571,10 +1596,13 @@ def _build_streamed_experts_class():
                 # Preserve top-k/row order inside each micro-batch segment.
                 batch = torch.bucketize(token_idx.contiguous(), boundaries, right=True)
                 counts = torch.bincount(batch, minlength=len(group_sizes)).tolist()
-                segments = [count for count in counts if count]
+                segments = tuple(count for count in counts if count)
                 if len(segments) > 1:
                     order = batch.argsort(stable=True)
                     return token_idx[order], top_k_pos[order], segments
+            if group_sizes is not None and self.expert_gemm == "segmented":
+                # An expert reached by only one micro-batch still uses the direct VJP.
+                return token_idx, top_k_pos, (token_idx.numel(),)
             return token_idx, top_k_pos, None
 
         def _forward_grouped(self, hidden, route_weights, output, routes, boundaries, sizes):
@@ -1683,6 +1711,14 @@ def _build_streamed_experts_class():
                 self.last_trace = []
                 self.pool.validate_reader(self.reader)
                 _validate_routing(hidden_states, top_k_index, top_k_weights, self.pool)
+                if group_sizes is not None:
+                    rows = hidden_states.shape[0]
+                    if not isinstance(group_sizes, Sequence) or not group_sizes or any(
+                        type(size) is not int or size <= 0 for size in group_sizes
+                    ) or sum(group_sizes) != rows:
+                        raise ValueError(
+                            f"group_sizes must be positive integers covering all {rows} rows"
+                        )
                 differentiable = torch.is_grad_enabled() and (
                     hidden_states.requires_grad or top_k_weights.requires_grad
                 )
@@ -1832,6 +1868,8 @@ def install_expert_streaming(
     :func:`_routing_forward`, whose decisions a two-read recompute replays.
     ``expert_gemm="batch_invariant"`` selects the fixed-order CUDA matmul and
     routing-weight reduction for pooled, two-read experts with grouped routes.
+    ``expert_gemm="segmented"`` uses native per-micro-batch projections and a direct VJP
+    for those experts when called with group sizes.
 
     Two-read contract. Each checkpointed layer call keeps its own record, so gradient
     accumulation, several forwards before one backward, ``retain_graph`` backwards, no-grad

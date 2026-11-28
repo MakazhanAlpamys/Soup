@@ -1257,7 +1257,9 @@ class StreamingSetupMixin:
         if stream_experts is not None:
             from soup_cli.utils.expert_training import validate_expert_training
 
-            validate_expert_training(stream_experts, device=str(self.device), dtype=dtype)
+            validate_expert_training(
+                stream_experts, device=str(self.device), dtype=dtype, expert_gemm=expert_gemm,
+            )
             if stream_experts.backend == "fused_nf4" and not run_is_4bit:
                 raise ValueError(
                     "training.stream_experts.backend='fused_nf4' requires "

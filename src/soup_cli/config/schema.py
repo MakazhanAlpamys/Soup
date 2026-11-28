@@ -4184,12 +4184,13 @@ class TrainingConfig(BaseModel):
             "Requires training.l2l=true and stream_expert_layout='per_expert'."
         ),
     )
-    stream_expert_gemm: Literal["native", "batch_invariant"] = Field(
+    stream_expert_gemm: Literal["native", "batch_invariant", "segmented"] = Field(
         default="native",
         description=(
-            "EXPERIMENTAL — use a fixed-order CUDA Triton GEMM for routed experts with "
-            "'batch_invariant'. Requires training.l2l=true, stream_expert_layout='per_expert' "
-            "and l2l_route_preserving_mbr=true. The default keeps the native expert matmul."
+            "EXPERIMENTAL — 'batch_invariant' uses fixed-order CUDA Triton GEMM and "
+            "'segmented' uses native GEMM per micro-batch with a direct expert backward. "
+            "Both require training.l2l=true, stream_expert_layout='per_expert' and "
+            "l2l_route_preserving_mbr=true."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
@@ -8522,15 +8523,20 @@ class SoupConfig(BaseModel):
                     "training.stream_experts.backend='fused_nf4' requires "
                     "training.quantization=4bit"
                 )
-            if tcfg.stream_expert_gemm != "native":
+            if tcfg.stream_expert_gemm == "batch_invariant":
                 raise ValueError(
                     "training.stream_experts requires training.stream_expert_gemm='native'"
                 )
-        if tcfg.stream_expert_gemm == "batch_invariant" and not (
+            if tcfg.stream_expert_gemm == "segmented":
+                from soup_cli.utils.expert_training import validate_segmented_group_backend
+
+                validate_segmented_group_backend(tcfg.stream_experts.backend)
+        if tcfg.stream_expert_gemm != "native" and not (
             tcfg.l2l and tcfg.stream_expert_layout == "per_expert" and tcfg.l2l_route_preserving_mbr
         ):
             raise ValueError(
-                "training.stream_expert_gemm='batch_invariant' requires training.l2l=true, "
+                f"training.stream_expert_gemm={tcfg.stream_expert_gemm!r} requires "
+                "training.l2l=true, "
                 "training.stream_expert_layout='per_expert' and "
                 "training.l2l_route_preserving_mbr=true"
             )
