@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -56,7 +58,8 @@ def main(
             pairs_per_round=pairs_per_round,
         )
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        # A Text is not parsed as markup and has no emoji codes, so the message is shown as typed.
+        console.print(Text.assemble(("Error:", "red"), " ", strip_control(exc)))
         raise typer.Exit(code=2) from exc
 
     if not plan_only:
@@ -65,7 +68,7 @@ def main(
         except Exception as exc:  # noqa: BLE001 — CLI boundary: friendly exit-1
             console.print(
                 Panel(
-                    f"[red]Iterative DPO failed:[/red] {escape(str(exc))}",
+                    Text.assemble(("Iterative DPO failed:", "red"), " ", strip_control(exc)),
                     title="Iterative DPO",
                 )
             )
@@ -79,8 +82,8 @@ def main(
     for r in plan.rounds:
         table.add_row(
             str(r.round_index),
-            escape(r.pairs_path),
-            escape(r.adapter_path),
+            Text(strip_control(r.pairs_path)),
+            Text(strip_control(r.adapter_path)),
             str(r.pairs_count),
         )
     console.print(table)
@@ -100,7 +103,7 @@ def main(
     except Exception as exc:  # noqa: BLE001 — CLI boundary: friendly exit-1
         console.print(
             Panel(
-                f"[red]Iterative DPO failed:[/red] {escape(str(exc))}",
+                Text.assemble(("Iterative DPO failed:", "red"), " ", strip_control(exc)),
                 title="Iterative DPO",
             )
         )
@@ -108,9 +111,12 @@ def main(
 
     console.print(
         Panel(
-            f"[green]Done[/green] — {result.rounds_completed} round(s); "
-            f"final adapter: {escape(result.final_adapter)}; "
-            f"pairs/round: {list(result.per_round_pairs)}",
+            Text.assemble(
+                ("Done", "green"),
+                f" \u2014 {result.rounds_completed} round(s); "
+                f"final adapter: {strip_control(result.final_adapter)}; "
+                f"pairs/round: {list(result.per_round_pairs)}",
+            ),
             title="Iterative DPO",
         )
     )

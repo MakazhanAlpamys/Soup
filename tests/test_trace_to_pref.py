@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -395,6 +396,29 @@ class TestFromTracesCLI:
 
 
 class TestReviewCLI:
+    @pytest.mark.parametrize("pair_count", [1, 2])
+    def test_review_keeps_first_pair_with_utf8_bom(self, tmp_path, pair_count):
+        prefs = tmp_path / "prefs.jsonl"
+        prompts = ["First question", "Second question"][:pair_count]
+        payload = "".join(
+            json.dumps({"prompt": prompt, "chosen": "Yes", "rejected": "No"}) + "\n"
+            for prompt in prompts
+        )
+
+        def preview(encoding):
+            prefs.write_text(payload, encoding=encoding)
+            result = runner.invoke(app, ["data", "review", str(prefs)])
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+            return " ".join(strip_ansi(result.output).split())
+
+        plain = preview("utf-8")
+        bom = preview("utf-8-sig")
+        assert bom == plain
+        assert "No pairs found in file." not in bom
+        for index, prompt in enumerate(prompts, start=1):
+            panel = bom.split(f"Pair {index}", 1)[1].split(f"Pair {index + 1}", 1)[0]
+            assert f"Prompt: {prompt}" in panel
+
     def test_review_requires_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["data", "review"])

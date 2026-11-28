@@ -738,6 +738,25 @@ files from runs before this version are not comparable.
 
 `training.rl_checkpoint_save_every_steps` saves the adapter, the optimizer state and a manifest under `<output>/rl-checkpoints/step-N/`; the `pid_lagrangian` rollback below restores from them. The optimizer state (`optimizer.pt`) is loaded with `weights_only=True`, only when `rl_checkpoint_include_optimizer` is on, and only from inside the run's output directory (the adapter is loaded under the same containment). A file that needs more than tensors and plain containers, or that is truncated, is refused by name in the log and skipped; delete it or restore from a checkpoint written by soup. An optimizer whose state holds objects other than tensors and plain containers is no longer saved: a rollback then restores the adapter only, and the log says so at each save. A save refuses, by name in the log, a checkpoint directory that resolves outside the run's output directory, any link inside the checkpoint directory, and a checkpoint path that is a file instead of a directory; it writes nothing in those cases and training goes on.
 
+PID rollback counts as restored only after the adapter and every required component have
+been applied. The optimizer is required when the manifest declares it present and
+`rl_checkpoint_include_optimizer` is on. The controller validates the manifest, adapter
+keys/shapes, and required optimizer file and parameter-group/populated-slot types and shapes before
+changing live state. Missing or invalid required state stops training before another
+update. An unexpected application failure also stops training; state already applied is
+not undone. Single-process `mitigation_log.jsonl` records `recovery.adapter`, `recovery.optimizer`,
+`recovery.required` and any `recovery.error`, alongside `restored=False` on failure.
+A component flag is true only when its application completed without an error; it does
+not imply that a failed application left that component untouched. `required` is `null`
+if validation failed before the component outcome was returned.
+
+Intentional adapter-only checkpoints remain supported, including optimizer recovery
+disabled in config or `has_optimizer: false`. The low-level `restore_checkpoint()` boolean
+still means that at least one artifact loaded; the controller uses component outcomes
+instead. On v0.78.0 a partial restore could continue with `restored=True`; PID recovery now
+stops on a missing manifest or failed required component. Take a complete checkpoint
+under this run's output directory before retrying. Checkpoint publication is unchanged.
+
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
 For replicated DDP with a PEFT policy, RL checkpoint callbacks share rank 0's save status
@@ -760,10 +779,12 @@ Communication failures propagate to the launcher; a lost process uses the proces
 timeout rather than an additional callback timeout. All ranks need access to the same
 checkpoint storage.
 
-Collectives run only with an initialized process group of more than one rank. Single-process
-behavior and the `RANK`/`LOCAL_RANK` fallback without a group are unchanged. FSDP and
-DeepSpeed behavior is unchanged: each rank still keeps its own list of saved steps, as
-before; collective recovery for sharded state is not qualified. The agreement on controller
+Collectives run only with an initialized process group of more than one rank. The
+`RANK`/`LOCAL_RANK` fallback without a group is unchanged; single-process PID recovery uses
+the required-component checks described above. FSDP and DeepSpeed still keep per-rank
+saved-step lists; these checks add no collective recovery for sharded state. A rollback
+whose live policy or optimizer layout cannot be validated stops as a required recovery
+failure. Sharded recovery remains unqualified. The agreement on controller
 decisions and recovery stops covers `pid_lagrangian` only. `kl_control` and independently
 halting detectors remain rank-local.
 

@@ -63,7 +63,12 @@ def export(
         None,
         "--output",
         "-o",
-        help="Output file path. Default: <model-name>.<quant>.gguf",
+        help=(
+            "Output path: a file or a directory, depending on --format. "
+            "GGUF writes a file (default: <model-name>.<quant>.gguf). "
+            "ONNX and TensorRT write a directory (default: <model-name>_onnx "
+            "or <model-name>_trt, next to the model)."
+        ),
     ),
     base: Optional[str] = typer.Option(
         None,

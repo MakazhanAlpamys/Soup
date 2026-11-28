@@ -1,4 +1,7 @@
 tests/fixtures/recipe_config_snapshots.json text eol=lf
+benchmarks/protocols/giant-moe-acceptance-2026-10-29/*.json text eol=lf
 benchmarks/evidence/flash-liger-378-h200/*.json text eol=lf
 benchmarks/evidence/flash-liger-378-preflight/*.json text eol=lf
 tests/fixtures/expert_shard_main_7b7697307/** -text
+# Frozen protocol inputs are hashed byte for byte: keep their line endings as committed.
+benchmarks/protocols/giant-moe-acceptance-2026-10-29/evaluation-data.json -text

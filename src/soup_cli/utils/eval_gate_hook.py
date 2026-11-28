@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 from soup_cli.eval.aider_polyglot import TASK_NAME as AIDER_POLYGLOT_TASK_NAME
 from soup_cli.eval.custom import TASK_NAME as CUSTOM_TASK_NAME
+from soup_cli.eval.judge import judge_model_label
 from soup_cli.utils.paths import is_under_cwd
 
 _MAX_FILE_BYTES = 64 * 1024  # hooks are tiny — 64 KiB plenty
@@ -282,7 +283,8 @@ def resolve_gate_metric(metric: str) -> GateMetricSpec:
     if metric in _METRIC_SPECS:
         sources, threshold_attr, direction = _METRIC_SPECS[metric]
         return GateMetricSpec(metric, sources, threshold_attr, direction)
-    if metric.startswith("judge:"):
+    is_judge = metric.startswith("judge:")
+    if is_judge:
         suffix = metric.removeprefix("judge:")
         source_metric = metric
     elif metric.startswith("benchmark:"):
@@ -303,6 +305,9 @@ def resolve_gate_metric(metric: str) -> GateMetricSpec:
         )
     if any(ord(char) < 0x20 for char in source_metric):
         raise ValueError("metric source name must not contain control characters")
+    if is_judge:
+        source_metric = f"judge:{judge_model_label(suffix)}"
+        metric = source_metric
     return GateMetricSpec(metric, (source_metric,), "task_accuracy", +1)
 
 
@@ -342,7 +347,7 @@ def decide_regression(
         regressed = lo > tol
     return RegressionVerdict(
         regressed=regressed,
-        offenders=(metric,) if regressed else (),
+        offenders=(spec.name,) if regressed else (),
         ci_lower=lo,
         ci_upper=hi,
         delta_mean=mean,

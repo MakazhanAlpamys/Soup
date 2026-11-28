@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "dataset": "Salesforce/wikitext",
+  "config": "wikitext-2-raw-v1",
+  "split": "test",
+  "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+  "source_url": "https://huggingface.co/datasets/Salesforce/wikitext/resolve/b08601e04326c79dfdd32d625aee71d232d685c3/wikitext-2-raw-v1/test-00000-of-00001.parquet",
+  "source_parquet_sha256": "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91",
+  "selection": "Eligible rows: >=512 stripped characters, not heading (=). In original test order choose eligible-list positions floor((i+0.5)*N/8), i=0..7; preserve original text; tokenize with truncation max_length=64.",
+  "examples": [
+    {
+      "id": "wikitext2-test-row-260",
+      "source_row": 260,
+      "text": " The IJN then decided to use the sisters and their escorts to bring a load of petrol , rubber , tin and other strategic minerals back to Japan after the American carriers departed the South China Sea ( Operation Kita ) . They loaded their cargoes beginning on 6 February at Singapore and departed four days later . Also carrying some 1 @,@ 150 oilfield workers , they were escorted by Ōyodo and three destroyers . Decrypted Japanese radio signals revealed the Japanese plan to the Allies , and 15 submarines were positioned along their anticipated route in an attempt to intercept and sink the ships . An additional 11 were moved into position while the group was en route , but only three were ultimately able to attack . None of them were successful before the Japanese reached Kure on 20 February . The Fourth Carrier Division was disbanded on 1 March and the sisters were reduced to 1st rank reserve ships . On 19 March Kure was attacked by aircraft from Task Force 58 and Hyūga was hit three times by bombs that killed 37 men and wounded 52 . Her gunners claimed to have shot down one American dive bomber during the attack . Ise was hit twice during the attack , but her casualties , if any , are unknown . \n",
+      "text_sha256": "bdd95b0d1edef717e02b749368a9b3858b43e9e86ac72ef1726eff5b18e6b871"
+    },
+    {
+      "id": "wikitext2-test-row-711",
+      "source_row": 711,
+      "text": " Following the completion of the third Four Quartets poem , The Dry Salvages , Eliot 's health declined and he stayed in Shamley Green , Surrey while he recovered . During this time , Eliot started writing Little Gidding . The first draft was completed in July 1941 but he was dissatisfied with it . He believed the problems with the poem lay with his own inability to write , and that , precipitated by air raids on London , he had started the poem with too little preparation and had written it too quickly . After the first draft was written , he set the poem aside , and he left in September to lecture throughout Great Britain . \n",
+      "text_sha256": "33c9838e727292d2d7845e826c99c7d3a312dfce1c06d569baa832006742a6fa"
+    },
+    {
+      "id": "wikitext2-test-row-1275",
+      "source_row": 1275,
+      "text": " Well @-@ known poets of the Edwardian era of the 1890s , such as Alfred Austin , Stephen Phillips , and William Watson , had been working very much in the shadow of Tennyson , producing weak imitations of the poetry of the Victorian era . They continued to work in this vein into the early years of the 20th century . As the new century opened , Austin was still the serving British Poet Laureate , a post which he held up to 1913 . In the century 's first decade , poetry still had a large audience ; volumes of verse published in that time included Thomas Hardy 's The Dynasts , Christina Rossetti 's posthumous Poetical Works , Ernest Dowson 's Poems , George Meredith 's Last Poems , Robert Service 's Ballads of a Cheechako and John Masefield 's Ballads and Poems . Future Nobel Prize winner William Butler Yeats was devoting much of his energy to the Abbey Theatre and writing for the stage , producing relatively little lyric poetry during this period . In 1907 , the Nobel Prize for Literature was awarded to Rudyard Kipling . \n",
+      "text_sha256": "6a2fb66a39db571768d6d8c28a7eb1e37f010b336292892ce0fc14e0d4c043d9"
+    },
+    {
+      "id": "wikitext2-test-row-1775",
+      "source_row": 1775,
+      "text": " Together , Schmitt , Kutuzov and the other generals , with von Stiebar 's advice on the local terrain , concocted a plan to encircle the French at Dürenstein . Russian commander Mikhail Andreyevich Miloradovich would approach Gazan 's division from the east , supported by Petr Bagration 's corps , and pin the French in place . Three additional columns , commanded by Dmitry Dokhturov ( Doctorov ) , Maj. Gen. Strik and Schmitt , would outflank the French from the west and the north . They would offer , as bait , a rumor : the Russian army was retreating into Moravia and only a rearguard would be left at Krems . \n",
+      "text_sha256": "f17e27b787b5639d419906e29065eaa733792c021c986bbd9595496d88fafd12"
+    },
+    {
+      "id": "wikitext2-test-row-2380",
+      "source_row": 2380,
+      "text": " San Lorenzo Colossal Head 1 ( also known as San Lorenzo Monument 1 ) was lying facing upwards when excavated . The erosion of a path passing on top of the monument uncovered its eye and led to the discovery of the Olmec site . Colossal Head 1 is 2 @.@ 84 metres ( 9 @.@ 3 ft ) high ; it measures 2 @.@ 11 metres ( 6 @.@ 9 ft ) wide and it weighs 25 @.@ 3 tons . The monument was discovered partially buried at the edge of a gully by Matthew Stirling in 1945 . When discovered it was lying on its back , looking upwards . It was associated with a large number of broken ceramic vessels and figurines . The majority of these ceramic remains have been dated to between 800 and 400 BC ; some pieces have been dated to the Villa Alta phase ( Late Classic period , 800 – 1000 AD ) . The headdress possesses a plain band that is tied at the back of the head . The upper portion of the headdress is decorated with a U @-@ shaped motif . This element descends across the front of the headdress , terminating on the forehead . On the front portion it is decorated with five semicircular motifs . The scalp piece does not meet the horizontal band , leaving a space between the two pieces . On each side of the face a strap descends from the headdress and passes in front of the ear . The forehead is wrinkled in a frown . The lips are slightly parted without revealing the teeth . The cheeks are pronounced and the ears are particularly well executed . The face is slightly asymmetric , which may be due to error on the part of the sculptors or may accurately reflect the physical features of the portrait 's subject . The head has been moved to the Museo de Antropología de Xalapa ( \" Anthropological Museum of Xalapa \" ) . \n",
+      "text_sha256": "90f76376deb31b6f574dfa4fa19be7f1f2894bfc8580b3c021c711446a5daf78"
+    },
+    {
+      "id": "wikitext2-test-row-2761",
+      "source_row": 2761,
+      "text": " The Gore 's social circle in England revolved around his good friend Rufus King , who was appointed Ambassador to Great Britain in 1796 , along with other Massachusetts expatriates . When King left his post in May 1803 he named Gore to head the London embassy as chargé d 'affaires . Although President Thomas Jefferson never issued a formal appointment , the British government accepted his role for the two @-@ month interval between King 's departure and the arrival of James Monroe as King 's replacement . The Gores sailed for Boston in the spring of 1804 . \n",
+      "text_sha256": "ca54bf381dcbc77718390f539b43544367c423e8316ffea9f6ebb78954a2174d"
+    },
+    {
+      "id": "wikitext2-test-row-3373",
+      "source_row": 3373,
+      "text": " On June 26 , 2007 , Stone Sour released a special edition version of the album with six previously unreleased tracks and a bonus DVD . The DVD featured a full concert performance by the band from October 2006 in Moscow and the music videos for \" 30 / 30 @-@ 150 , \" \" Through Glass , \" and \" Sillyworld . \" When talking about the special edition , vocalist Taylor said , \" we really wanted to do something which was really cool , \" saying that this shows the band 's different musical elements and them in their live element , which he says \" people really gravitate towards . \" In addition to this , Stone Sour released a live album of their concert in Moscow exclusively on iTunes , entitled Live in Moscow . \n",
+      "text_sha256": "8dc1151a92550b510ba3b0c298767d0539da676a30a91023e9e8d37fa8a1e08f"
+    },
+    {
+      "id": "wikitext2-test-row-4034",
+      "source_row": 4034,
+      "text": " Boats of the Type UB I design were built by two manufacturers , Germaniawerft of Kiel and AG Weser of Bremen , which led to some variations in boats from the two shipyards . The eight Germaniawerft @-@ built boats were slightly longer at 28 @.@ 10 metres ( 92 ft 2 in ) length overall , while the twelve Weser @-@ built boats came in 22 centimetres ( 8 @.@ 7 in ) shorter than their counterparts . All were 3 @.@ 15 metres ( 10 ft 4 in ) abeam and had a draft of 3 @.@ 03 metres ( 9 ft 11 in ) . The boats all displaced 127 tonnes ( 125 long tons ) while surfaced , but differed slightly in displacement submerged . The slightly longer Germaniawerft boats displaced 142 tonnes ( 140 long tons ) while submerged , as they weighed 1 tonne ( 0 @.@ 98 long tons ) more than the Weser boats . \n",
+      "text_sha256": "13add62390dc863d052b33048dd57676b2f903f1f77387df7531c3c7bb64aaa4"
+    }
+  ],
+  "eligible_rows": 1137,
+  "selected_eligible_positions": [
+    71,
+    213,
+    355,
+    497,
+    639,
+    781,
+    923,
+    1065
+  ]
+}

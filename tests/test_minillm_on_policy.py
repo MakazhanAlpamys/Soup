@@ -544,7 +544,8 @@ def test_rollout_positions_and_cache_stay_aligned(architecture):
 
     def recorder(name):
         def capture(module, args, kwargs):
-            past = kwargs.get("past_key_values")
+            # Transformers 5.40+ renamed the explicit forward kwarg (#3381).
+            past = kwargs.get("past_key_values", kwargs.get("cache"))
             records[name].append({
                 "positions": kwargs["position_ids"].detach().clone(),
                 "mask": kwargs["attention_mask"].detach().clone(),
