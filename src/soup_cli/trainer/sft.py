@@ -2633,6 +2633,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """Run training and return results summary."""
         start = time.time()
         layer_select = getattr(self, "_layer_select_callback", None)
+        if resume_from_checkpoint is not None:
+            from soup_cli.utils.layer_select import validate_resume_selection
+
+            validate_resume_selection(resume_from_checkpoint, enabled=layer_select is not None)
         if layer_select is not None:
             layer_select.resume_checkpoint = resume_from_checkpoint
 

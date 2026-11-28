@@ -834,14 +834,17 @@ training:
 - `random` draws `k` adapted layers once, using an optional `seed` (default 0).
 - `grad` and `angular` select the top `k` by mean squared adapter gradient or by the
   angular distance between a block's input and output. They use the first
-  `probe_rows` prepared training rows (default 64).
+  `probe_rows` prepared training rows (default 64) and preserve the training RNG
+  on CPU, CUDA, and MPS.
 - `lisa` draws `k` adapted layers every `interval_steps` optimizer steps (default 20),
   using an optional `seed` (default 0). It clears optimizer state for adapters that freeze.
 
 The policy needs `lora.r > 0`. Use one of `lora_layers`, `freeze_layers`,
 `freeze_ratio`, `unfrozen_parameters`, or full-fine-tuning `lisa_enabled` at a time.
 Selections, probe scores, and sampling history are written to `lora_layers.json` in
-the output directory and in each Trainer checkpoint. Resume with the same policy.
+the output directory and in each Trainer checkpoint. Resume with the policy recorded
+in the source checkpoint. For checkpoints without selection metadata, leave
+`training.lora_layers` unset.
 
 Backward stops at the lowest trainable decoder layer when the input embedding is
 frozen. Resident reentrant checkpointing keeps input gradients. L2L also skips
