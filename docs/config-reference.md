@@ -40,6 +40,7 @@ Sections:
 - [`data`](#data)
 - [`training`](#training)
 - [`training.lora`](#traininglora)
+- [`training.lora_layers`](#traininglora_layers)
 - [`training.packed_lora`](#trainingpacked_lora)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
@@ -119,6 +120,7 @@ Sections:
 | `training.weight_decay` | `float` | `0.01` | `>= 0.0` | Weight decay factor (decoupled, AdamW-style) applied to weights during optimization; 0 disables it. |
 | `training.max_grad_norm` | `float` | `1.0` | `> 0` | Maximum gradient norm for gradient clipping. |
 | `training.lora` | `section` | section defaults |  | LoRA (Low-Rank Adaptation) adapter architecture and target modules. See [`training.lora`](#traininglora). |
+| `training.lora_layers` | `section \| null` | `null` |  | Select trainable decoder LoRA adapters in Transformers text SFT. See [`training.lora_layers`](#traininglora_layers). |
 | `training.quantization` | `str` | `"4bit"` | one of `"4bit"`, `"8bit"`, `"none"`, `"gptq"`, `"awq"`, `"hqq:1bit"`, `"hqq:2bit"`, `"hqq:3bit"`, `"hqq:4bit"`, `"hqq:5bit"`, `"hqq:6bit"`, `"hqq:8bit"`, `"aqlm"`, `"eetq"`, `"mxfp4"`, `"fp8"`, `"bitnet_1.58"` | Quantization (v0.38.0 — Quant Menu): 4bit (BNB QLoRA), 8bit (BNB), none, gptq / awq (load pre-quantized checkpoint, train LoRA on top), hqq:Nbit (HQQ 1-8 bit, N in {1..6, 8}), aqlm (extreme 2-bit), eetq (8-bit fast), mxfp4 (MXFP4 pre-quantized base, dequantized on load), fp8 (load FP8 checkpoint with dequantize-on-load), bitnet_1.58 (reserved until BitNet trainer routing is available). A task whose trainer never quantises the base (distill, classifier, reranker, cross_encoder, prm, moe_lora_routing, unlearn, asr) resolves an unset value to none, and an explicit value other than none, 4bit and 8bit included, is refused at load (#795). |
 | `training.gptq_disable_exllama` | `bool` | `true` |  | v0.38.0 — disable exllama backend for GPTQ. PEFT requires triton backend; exllama silently breaks adapter training. |
 | `training.bnb_4bit_quant_storage` | `str \| null` | `null` | one of `"uint8"`, `"float16"`, `"bfloat16"`, `"float32"` | v0.38.0 — BNB 4-bit storage dtype. FSDP+QLoRA resolves this automatically to the effective floating compute dtype; outside FSDP, None keeps BNB's legacy uint8 default. |
@@ -322,6 +324,10 @@ Sections:
 | `training.lisa_reset_optimizer` | `bool` | `true` |  | Clear optimizer state for decoder layers that LISA re-freezes on each interval (avoids stale Adam moments). Mirrors relora_reset_optimizer. |
 | `training.lisa_train_embeddings` | `bool` | `true` |  | Keep the always-on group (input embeddings + LM head + final norm) trainable every LISA interval. Default true is LISA as published (#267). Set false to freeze that group so only the sampled lisa_num_layers decoder layers train — the always-on set is the majority of LISA's memory, so this is the knob that buys the memory saving (#377). It is a real trade: the always-on set may be load-bearing for quality, so measure both ways. |
 | `training.stream_layers` | `bool` | `false` |  | BETA — stream the frozen base layer-by-layer from CPU RAM so a model larger than VRAM can be fine-tuned. Supports sft, dpo, orpo, simpo, kto, bco and ipo, including task='preference' with a single preference_loss of dpo, orpo, simpo, bco or ipo. Requires transformers + text + quantization='none' or '4bit', LoRA and a concrete batch_size. Weighted preference_loss_weights do not stream yet. |
+| `training.l2l` | `bool` | `false` |  | BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each streamed decoder layer is loaded once per optimizer step and runs all k micro-batches, then the optimizer takes one step on the adapters. k is gradient_accumulation_steps. Needs stream_layers=true and a Llama or Mistral model on a single GPU; MoE models are refused. k=1 behaves like plain streaming. A bool only: 1 or 'yes' is refused. |
+| `training.l2l_spill_dir` | `str \| null` | `null` |  | BETA — where training.l2l spills activations that do not fit the host-RAM budget. Default: a '\_l2l_spill' folder in the run's output directory. It must resolve under \$HOME, the working directory or the temp directory (realpath, so symlinks and Windows short names cannot step outside), and is refused at launch on RAM-backed, overlay and network filesystems and on a drive without room. Only valid with training.l2l=true. |
+| `training.l2l_activation_codec` | `str` | `"none"` | one of `"none"`, `"fp8_e4m3"` | BETA — how training.l2l stores the activations between layers. 'none' keeps them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the launch refuses it until it is shown to be safe for training: it is lossy and its gradients are not yet checked against the accumulation baseline. The value is recorded in the run's l2l_recipe.json, and a resume with another codec is refused. Only valid with training.l2l=true. |
+| `training.l2l_auto_k` | `bool` | `false` |  | BETA — let the memory planner pick the largest k that fits host RAM, up to gradient_accumulation_steps. Plans the window of a MoE model, which L2L does not run yet, so the launch refuses it for now. Off: k = gradient_accumulation_steps. Only valid with training.l2l=true. A bool only: 1 or 'yes' is refused. |
 | `training.stream_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where the streamed base lives. 'ram' (the only tier implemented in v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the store fits free-RAM headroom and the store plus resident extras fits the physical RAM ceiling. |
 | `training.stream_ngram_source` | `str` | `"auto"` | one of `"auto"`, `"ram"`, `"disk"` | Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer streaming. 'disk' gathers only requested rows from the original safetensors through a read-only mmap; 'ram' keeps the table in CPU RAM; 'auto' uses RAM only when the table and selected base tier plus resident extras fit within free-RAM headroom and the physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' (or 'auto') so only selected rows are dequantized. A non-default value warns when the checkpoint has no external PLE table. |
 | `training.stream_buffers` | `int` | `2` | `>= 2`, `<= 8` | Pre-allocated VRAM layer buffers. 2 = double buffering, which is what lets the next layer load while the current one computes. A single buffer cannot overlap load with compute. |
@@ -383,6 +389,26 @@ Sections:
 | `training.lora.init_strategy` | `str` | `"random"` | one of `"random"`, `"pissa"`, `"olora"`, `"loftq"` | LoRA init strategy. 'random' (default) is standard Kaiming init. 'pissa' (PiSSA) initializes A/B from the SVD of the base weight — faster early convergence but adds an SVD pass on the first epoch. 'olora' is equivalent to use_olora=True (orthogonal QR init). 'loftq' (v0.41.0) initialises A/B + a low-bit base together, useful with QLoRA. Cannot be combined with use_dora or use_vera. |
 | `training.lora.loftq_iter` | `int` | `1` | `>= 1`, `<= 10` | LoftQ iteration count (1-10). Higher = better quant-aware init at the cost of one-time setup latency. Used only when init_strategy='loftq'. |
 | `training.lora.loftq_bits` | `int` | `4` | one of `2`, `4`, `8` | LoftQ target bitwidth — must be one of {2, 4, 8}. Used only when init_strategy='loftq'. |
+
+## `training.lora_layers`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.lora_layers.method` | `str` | **required** | one of `"fixed"`, `"random"`, `"grad"`, `"angular"`, `"lisa"`, `"progressive"` |  |
+| `training.lora_layers.layers` | `list[int] \| null` | `null` |  |  |
+| `training.lora_layers.k` | `int \| null` | `null` | `>= 1` |  |
+| `training.lora_layers.probe_rows` | `int \| null` | `null` | `>= 1` |  |
+| `training.lora_layers.interval_steps` | `int \| null` | `null` | `>= 1` |  |
+| `training.lora_layers.seed` | `int \| null` | `null` | `>= 0` |  |
+| `training.lora_layers.freeze_step` | `int \| null` | `null` | `>= 1` | Scheduled optimizer step after which the bottom freezes. |
+| `training.lora_layers.freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Freeze adapted layer indices below this cutoff. |
+| `training.lora_layers.freeze_threshold` | `float \| null` | `null` | `> 0.0`, `< 1.0` | Relative norm change allowed by the rule (0.10). |
+| `training.lora_layers.max_freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Exclusive layer cutoff cap for the rule. |
+| `training.lora_layers.freeze_deadline` | `int \| null` | `null` | `>= 1` | Optimizer step by which the minimum cutoff takes effect. |
+| `training.lora_layers.min_freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Minimum cutoff enforced at freeze_deadline. |
+| `training.lora_layers.freeze_smoothing` | `float \| null` | `null` | `>= 0.0`, `< 1.0` | EMA decay for the rule (0 disables smoothing). |
+| `training.lora_layers.feature_step` | `int \| null` | `null` | `>= 1` | Optimizer step at which to record progressive LoRA diagnostics. |
+| `training.lora_layers.feature_rows` | `int \| null` | `null` | `>= 1`, `<= 1024` | Number of initial training rows for the activation probe (16 by default). |
 
 ## `training.packed_lora`
 
