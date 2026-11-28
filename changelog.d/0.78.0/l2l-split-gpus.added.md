@@ -1,1 +1,0 @@
-- Add `training.l2l_split_gpus` to share a dense SFT layer-to-layer window across visible CUDA devices in one process. (#PENDING by @nurseit14)
