@@ -84,6 +84,14 @@ class Policy:
             on_unsupported=block.on_unsupported,
         )
 
+    @classmethod
+    def from_config(cls, config: Any) -> "Policy":
+        """From a ``SoupConfig``. Refuses a config that did not switch the kernels on."""
+        block = config.training.packed_lora
+        if block is None or not block.enabled:
+            raise ValueError("training.packed_lora.enabled is not true; nothing to run")
+        return cls.from_block(block)
+
     def rounding(self) -> "Rounding":
         """A fresh rounding state for the quantisers of one run."""
         return Rounding(self.int8_rounding)

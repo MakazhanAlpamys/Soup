@@ -310,36 +310,97 @@ def test_tables_in_pinned_host_memory_give_the_same_step(tied):
     assert run.pool.locked_bytes() == 0
 
 
+def test_prepare_without_parking_leaves_the_tables_until_park_tables():
+    """The trainer is built after the preparation: a parameter on the host must not be there for
+    it to see. ``park=False`` makes the plan and the stash but moves no table; ``park_tables``
+    does, at the first step, and again after an evaluation put them back."""
+    from soup_cli.kernels.packed_lora import budget
+    from soup_cli.kernels.packed_lora.policy import Policy
+    from soup_cli.kernels.packed_lora.runtime import PackedRun
+    from soup_cli.kernels.packed_lora.support import PORTED_ARCHITECTURES
+
+    dt = torch.bfloat16
+    model = build(dt, hidden=896, inter=4864, heads=14, kv=2, layers=6, vocab=32000)
+    ids, mask, labels = batch(rows=4, width=128, vocab=32000)
+    lines = []
+    # the smallest budget the planner accepts keeps both tables off the GPU
+    shape = budget.Shape.of_model(model.get_base_model())
+    floor_mib = budget.minimum_budget_mib(shape, ids.numel())
+    run = PackedRun(Policy(gpu_budget_bytes=floor_mib << 20, int8_backward="on",
+                           int8_rounding="nearest"), log=lines.append)
+    run.prepare(model, dt, ids.numel(), architectures=tuple(PORTED_ARCHITECTURES.values()),
+                park=False)
+    try:
+        assert run.dtype is dt
+        assert run.plan is not None and not run.plan.embed_gpu and not run.plan.head_gpu
+        table = model.get_input_embeddings().weight
+        head = model.get_output_embeddings().weight
+        assert table.is_cuda and head.is_cuda and run.tables is None and run.park_pending
+        run.park_tables()
+        assert not run.park_pending and run.tables.any_active()
+        assert not table.is_cuda and not head.is_cuda
+        packed(model, run, ids, mask, labels)  # a step reads the parked table
+        run.restore_tables()
+        assert table.is_cuda and head.is_cuda and not run.tables.any_active()
+        run.park_tables()  # the first step after an evaluation
+        assert not table.is_cuda and not head.is_cuda
+    finally:
+        run.close()
+    assert table.is_cuda and head.is_cuda
+
+
 # --- the stock forward keeps working ------------------------------------------------------
 
 
-def test_the_stock_forward_after_prepare_equals_the_stock_forward_before():
+@pytest.mark.parametrize("stock_bf16", [False, True], ids=["stock-fp32", "stock-bf16"])
+def test_the_stock_forward_after_prepare_equals_the_stock_forward_before(stock_bf16):
     """prepare() keeps the tables in the compute dtype; the stock forward then needs the
-    embedding as fp32 (embed_for_stock_forward) to keep its fp32 residual stream."""
+    same embedding dtype to keep its original residual stream."""
     from soup_cli.kernels.packed_lora import model as packed_model
 
     dt = torch.bfloat16
     model = build(dt)
+    causal = packed_model.unwrap(model)
+    norm_weights = [
+        norm.weight
+        for layer in causal.model.layers
+        for norm in (layer.input_layernorm, layer.post_attention_layernorm)
+    ] + [causal.model.norm.weight]
+    if stock_bf16:
+        embedding = model.get_input_embeddings().weight
+        embedding.data = embedding.data.to(dt)
+        assert model.get_output_embeddings().weight.dtype is torch.float32
+        for weight in norm_weights:
+            weight.data = weight.data.to(dt)
     ids, mask, labels = batch()
     with torch.no_grad(), torch.autocast("cuda", dtype=dt):
         before = model(input_ids=ids, attention_mask=mask, labels=labels, use_cache=False).loss
     run = make_run(model, dt, ids)
     try:
-        causal = packed_model.unwrap(model)
-        assert getattr(causal, "_packed_lora_fp32_embeds", False)
+        packed_norms = [
+            norm for layer in run.packed.layers for norm in (layer.ln1, layer.ln2)
+        ] + [run.packed.norm]
+        for live_norm, packed_norm in zip(norm_weights, packed_norms, strict=True):
+            assert live_norm.dtype is (dt if stock_bf16 else torch.float32)
+            assert packed_norm.dtype is torch.float32
+            assert torch.equal(live_norm.float(), packed_norm)
+        assert getattr(causal, "_packed_lora_fp32_embeds", False) is not stock_bf16
+        inputs = {"input_ids": ids} if stock_bf16 else {
+            "inputs_embeds": packed_model.embed_for_stock_forward(causal, ids),
+        }
         with torch.no_grad(), torch.autocast("cuda", dtype=dt):
-            after = model(inputs_embeds=packed_model.embed_for_stock_forward(causal, ids),
-                          attention_mask=mask, labels=labels, use_cache=False).loss
+            after = model(**inputs, attention_mask=mask, labels=labels, use_cache=False).loss
         assert abs(before.item() - after.item()) / abs(before.item()) < 1e-6
     finally:
         run.close()
 
 
-def test_keep_tables_in_compute_dtype_leaves_the_tables_unconverted():
-    from peft import prepare_model_for_kbit_training
+@pytest.mark.parametrize("stock_bf16", [False, True], ids=["stock-fp32", "stock-bf16"])
+def test_keep_tables_in_compute_dtype_leaves_the_tables_unconverted(stock_bf16):
     from transformers import AutoModelForCausalLM, BitsAndBytesConfig, Qwen2Config, Qwen2ForCausalLM
 
     from soup_cli.kernels.packed_lora import model as packed_model
+    from soup_cli.utils.kbit_prepare import prepare_kbit_model
 
     dt = torch.bfloat16
     config = Qwen2Config(vocab_size=1024, hidden_size=256, intermediate_size=512,
@@ -350,13 +411,15 @@ def test_keep_tables_in_compute_dtype_leaves_the_tables_unconverted():
         Qwen2ForCausalLM(config).to(dt).save_pretrained(tmp)
         model = AutoModelForCausalLM.from_pretrained(tmp, quantization_config=quant,
                                                      device_map={"": 0}, dtype=dt)
-    with packed_model.keep_tables_in_compute_dtype(model):
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+    compute_dtype = dt if stock_bf16 else torch.float16
+    with packed_model.keep_tables_in_compute_dtype(model, stock_compute_dtype=compute_dtype):
+        model = prepare_kbit_model(
+            model, use_gradient_checkpointing=False, compute_dtype=compute_dtype,
+        )
     assert model.get_input_embeddings().weight.dtype == dt
     assert model.get_input_embeddings().weight.is_cuda
-    assert model._packed_lora_fp32_embeds is True
-    # the norms are upcast as before
-    assert model.model.norm.weight.dtype == torch.float32
+    assert getattr(model, "_packed_lora_fp32_embeds", False) is not stock_bf16
+    assert model.model.norm.weight.dtype == (dt if stock_bf16 else torch.float32)
 
 
 # --- the run object -----------------------------------------------------------------------

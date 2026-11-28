@@ -1187,6 +1187,75 @@ class TestWatchPackCans:
         assert result.exit_code == 1
         assert "can" in result.output.lower()
 
+    # #3274: --extract without an iteration ID used to list, exit 0 and write nothing.
+    @staticmethod
+    def _plain(result):
+        from tests.conftest import strip_ansi
+
+        return " ".join(strip_ansi(result.output).split())
+
+    @staticmethod
+    def _snapshot():
+        found = {}
+        for root, _dirs, files in os.walk(".soup-loops"):
+            for name in files:
+                path = os.path.join(root, name)
+                with open(path, "rb") as handle:
+                    found[path] = handle.read()
+        return found
+
+    def test_replay_extract_without_id_is_refused(self, loop_env, tmp_path):
+        from soup_cli.utils.loop_iteration import pack_iteration_as_can
+
+        _write_iteration("iter-ext")
+        pack_iteration_as_can("iter-ext", served_model="mymodel")
+        before = self._snapshot()
+        from soup_cli.commands.loop import app
+
+        result = runner.invoke(app, ["replay", "--extract", "extracted"])
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        text = self._plain(result)
+        assert "--extract needs an iteration ID" in text, text
+        assert "soup loop replay <iteration-id> --extract <dir>" in text, text
+        assert "Run 'soup loop replay' to list the recorded IDs." in text, text
+        assert "iter-ext" not in text, text
+        assert not os.path.exists("extracted")
+        assert self._snapshot() == before
+
+    def test_replay_extract_without_id_and_no_iterations_is_refused(self, loop_env, tmp_path):
+        from soup_cli.commands.loop import app
+
+        result = runner.invoke(app, ["replay", "--extract", "extracted"])
+
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        text = self._plain(result)
+        assert "--extract needs an iteration ID" in text, text
+        assert "soup loop replay <iteration-id> --extract <dir>" in text, text
+        assert "no iterations recorded yet" not in text, text
+        assert "to list the recorded IDs" not in text, text
+        assert not os.path.exists("extracted")
+
+    def test_replay_without_id_still_lists(self, loop_env, tmp_path):
+        from soup_cli.utils.loop_iteration import pack_iteration_as_can
+
+        _write_iteration("iter-ext")
+        pack_iteration_as_can("iter-ext", served_model="mymodel")
+        from soup_cli.commands.loop import app
+
+        result = runner.invoke(app, ["replay"])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert self._plain(result) == "iter-ext"
+
+    def test_replay_without_id_and_no_iterations_still_says_so(self, loop_env, tmp_path):
+        from soup_cli.commands.loop import app
+
+        result = runner.invoke(app, ["replay"])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert self._plain(result) == "no iterations recorded yet"
+
 
 # ===========================================================================
 # #223 — soup adapters pr --push (GitHub PR publisher)

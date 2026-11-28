@@ -1,0 +1,407 @@
+{
+  "$defs": {
+    "ResultDetails": {
+      "description": "Typed details for data validation and training preflight.",
+      "properties": {
+        "actual": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual"
+        },
+        "available_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available Gb"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "enum": [
+                "unreadable",
+                "yaml_parse",
+                "yaml_limit",
+                "wrong_root",
+                "validation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "errors": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/_ConfigError"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Errors"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "required_gb": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Gb"
+        },
+        "skipped": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        }
+      },
+      "title": "ResultDetails",
+      "type": "object"
+    },
+    "ResultReason": {
+      "properties": {
+        "code": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResultDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fix": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Fix",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "fix"
+      ],
+      "title": "ResultReason",
+      "type": "object"
+    },
+    "_ConfigError": {
+      "properties": {
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "maxLength": 96,
+                "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*|<key>)$",
+                "type": "string"
+              },
+              {
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
+          },
+          "maxItems": 16,
+          "title": "Loc",
+          "type": "array"
+        },
+        "type": {
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "type"
+      ],
+      "title": "_ConfigError",
+      "type": "object"
+    }
+  },
+  "description": "Frozen producer snapshot. The reader schema allows optional additions.",
+  "properties": {
+    "command": {
+      "default": null,
+      "enum": [
+        "train",
+        null
+      ],
+      "title": "Command",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "eta_s": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Eta S"
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Code"
+    },
+    "finished_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$",
+      "title": "Finished At"
+    },
+    "heartbeat_interval_s": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Heartbeat Interval S"
+    },
+    "last_loss": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Loss"
+    },
+    "log_relative_path": {
+      "anyOf": [
+        {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Canonical slash-separated log path relative to the run root.",
+      "title": "Log Relative Path"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema": {
+      "const": "soup.run_status",
+      "title": "Schema",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "soup_version": {
+      "maxLength": 96,
+      "minLength": 1,
+      "title": "Soup Version",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$",
+      "title": "Started At",
+      "type": "string"
+    },
+    "started_by": {
+      "enum": [
+        "cli",
+        "mcp"
+      ],
+      "title": "Started By",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "launching",
+        "running",
+        "finalizing",
+        "done",
+        "failed",
+        "cancelled",
+        "orphaned"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "step": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Step"
+    },
+    "terminal_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResultReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "total_steps": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Total Steps"
+    },
+    "truncated": {
+      "additionalProperties": {
+        "exclusiveMinimum": 0,
+        "type": "integer"
+      },
+      "maxProperties": 0,
+      "title": "Truncated",
+      "type": "object"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "soup_version",
+    "run_id",
+    "started_by",
+    "state",
+    "started_at",
+    "updated_at"
+  ],
+  "title": "RunStatus",
+  "type": "object"
+}

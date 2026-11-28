@@ -7,6 +7,8 @@ import dataclasses
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 runner = CliRunner()
 
 
@@ -306,8 +308,10 @@ def test_cli_license_advisor_check_llama_block():
             "800000000",
         ],
     )
-    # Either exits non-zero on block, OR prints a block message
-    assert result.exit_code != 0 or "block" in result.output.lower()
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    # ANSI-stripped and whitespace-collapsed: Rich wraps, and colour escapes land inside tokens
+    # on Linux/macOS CI.
+    assert "severity: block" in " ".join(strip_ansi(result.output).split()).lower()
 
 
 # ---------------------------------------------------------------------------

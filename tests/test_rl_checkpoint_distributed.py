@@ -37,7 +37,20 @@ def _same(first, second):
     return first == second
 
 
-def _fixture(rank, task="grpo", sharding=None, mock_trainer=False, **training):
+def _callback_path_snapshot(output_dir):
+    cwd = os.getcwd()
+    return {
+        "cwd": cwd,
+        "cwd_realpath": os.path.realpath(cwd),
+        "parent_exists": os.path.exists(output_dir),
+        "parent_realpath": os.path.realpath(output_dir),
+        "leaf_realpath": os.path.realpath(os.path.join(output_dir, "mitigation_log.jsonl")),
+    }
+
+
+def _fixture(
+    rank, task="grpo", sharding=None, mock_trainer=False, *, expect_callback_pair=False, **training
+):
     from types import SimpleNamespace
 
     import torch
@@ -80,8 +93,16 @@ def _fixture(rank, task="grpo", sharding=None, mock_trainer=False, **training):
                   reward_hack_rollback=True, reward_hack_rollback_patience=1,
                   reward_hack_max_recovery_attempts=1, rl_checkpoint_save_every_steps=1)
     config = TrainingConfig(**(fields | training))
+    output_dir = "run"
+    before = _callback_path_snapshot(output_dir) if expect_callback_pair else None
     attach_rl_callbacks(trainer, config, buffer=SimpleNamespace(snapshot=lambda: {}),
-                        output_dir="run", task=task)
+                        output_dir=output_dir, task=task)
+    if expect_callback_pair:
+        assert len(callbacks) == 2, (
+            f"rank={rank} expected checkpoint and mitigation callbacks, got "
+            f"{[type(callback).__name__ for callback in callbacks]!r}; "
+            f"before_attach={before!r}; after_attach={_callback_path_snapshot(output_dir)!r}"
+        )
     return model, optimizer, trainer, callbacks
 
 
@@ -115,7 +136,9 @@ def _worker(rank, directory, case):
             options["sharding"] = f"is_{case}_enabled"
         options["mock_trainer"] = case == "mock_flags"
         task = "ppo" if case == "unequal_ppo" else "grpo"
-        model, optimizer, trainer, callbacks = _fixture(rank, task=task, **options)
+        model, optimizer, trainer, callbacks = _fixture(
+            rank, task=task, expect_callback_pair=True, **options
+        )
         checkpoint, controller = callbacks
         handler = CallbackHandler(callbacks, trainer.model, None, optimizer, None)
         state = SimpleNamespace(global_step=1)

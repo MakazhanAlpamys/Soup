@@ -24,10 +24,11 @@ from soup_cli.utils.command_result import (
     ResultReason,
     encode_command_result,
 )
+from soup_cli.utils.run_status import RunStatus, encode_run_status
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCHEMA = "command-result-v1.json"
-_WHEEL_SCHEMA = f"soup_cli/schemas/{_SCHEMA}"
+_RUN_STATUS_SCHEMA = "run-status-v1.json"
 _NOW = datetime(2026, 11, 24, 9, 0, tzinfo=UTC)
 _IDENTITY = {"schema": "soup.command_result", "schema_version": 1, "soup_version": __version__}
 
@@ -96,6 +97,23 @@ def test_command_result_schema_snapshot() -> None:
     truncated = properties["truncated"]
     assert "pattern" in truncated["propertyNames"] and "maxProperties" not in truncated
     assert truncated["additionalProperties"] == {"exclusiveMinimum": 0, "type": "integer"}
+
+
+def test_run_status_schema_snapshot() -> None:
+    resource = resources.files("soup_cli.schemas").joinpath(_RUN_STATUS_SCHEMA)
+    schema = json.loads(resource.read_text("utf-8"))
+    assert schema == RunStatus.model_json_schema(by_alias=True)
+    properties = schema["properties"]
+    assert properties["schema"]["const"] == "soup.run_status"
+    assert properties["schema"]["type"] == "string"
+    assert properties["schema_version"]["const"] == 1
+    assert properties["schema_version"]["type"] == "integer"
+    assert properties["soup_version"]["maxLength"] == 96
+    assert set(_IDENTITY) <= set(schema["required"])
+    assert "schema_id" not in properties
+    assert "additionalProperties" not in schema
+    assert "additionalProperties" not in schema["$defs"]["ResultReason"]
+    assert properties["truncated"]["maxProperties"] == 0
 
 
 def test_reader_schema_accepts_additive_fields_and_checks_truncation() -> None:
@@ -361,8 +379,8 @@ def test_installed_wheel_command_result_schema(tmp_path: Path) -> None:
     assert build.returncode == 0, build.stderr
     (wheel,) = wheel_dir.glob("soup_cli-*.whl")
     with zipfile.ZipFile(wheel) as bundle:
-        assert bundle.namelist().count(_WHEEL_SCHEMA) == 1
-        assert "soup_cli/schemas/run-status-v1.json" not in bundle.namelist()
+        for name in (_SCHEMA, _RUN_STATUS_SCHEMA):
+            assert bundle.namelist().count(f"soup_cli/schemas/{name}") == 1
 
     install_dir = tmp_path / "installed"
     install = subprocess.run(
@@ -375,23 +393,49 @@ def test_installed_wheel_command_result_schema(tmp_path: Path) -> None:
     assert install.returncode == 0, install.stderr
     sample_path = tmp_path / "sample.json"
     sample_path.write_bytes(encode_command_result(_blocked()))
+    status_path = tmp_path / "status.json"
+    status_path.write_bytes(encode_run_status(RunStatus(
+        schema="soup.run_status",
+        schema_version=1,
+        soup_version=__version__,
+        command="train",
+        run_id="run_wheel",
+        started_by="cli",
+        state="done",
+        started_at=_NOW,
+        updated_at=_NOW,
+        finished_at=_NOW,
+        step=1,
+        total_steps=1,
+        exit_code=0,
+    )))
     check = subprocess.run(
         [
             sys.executable, "-I", "-c",
             "import json, pathlib, sys\n"
             "from importlib.resources import files\n"
+            "from jsonschema import Draft202012Validator\n"
             "sys.path.insert(0, sys.argv[1])\n"
             "import soup_cli\n"
             "from soup_cli.utils.command_result import CommandResult\n"
+            "from soup_cli.utils.run_status import RunStatus, decode_run_status\n"
             "package = pathlib.Path(sys.argv[1]) / 'soup_cli'\n"
             "assert pathlib.Path(soup_cli.__file__).parent == package\n"
             f"resource = files('soup_cli.schemas').joinpath({_SCHEMA!r})\n"
             "schema = json.loads(resource.read_text('utf-8'))\n"
             "assert schema == CommandResult.model_json_schema(by_alias=True)\n"
             "sample = pathlib.Path(sys.argv[2]).read_bytes()\n"
+            "Draft202012Validator(schema).validate(json.loads(sample))\n"
             "result = CommandResult.model_validate_json(sample)\n"
-            "assert result.exit_code == 2 and result.data.total == 4\n",
-            str(install_dir), str(sample_path),
+            "assert result.exit_code == 2 and result.data.total == 4\n"
+            f"resource = files('soup_cli.schemas').joinpath({_RUN_STATUS_SCHEMA!r})\n"
+            "schema = json.loads(resource.read_text('utf-8'))\n"
+            "assert schema == RunStatus.model_json_schema(by_alias=True)\n"
+            "status_sample = pathlib.Path(sys.argv[3]).read_bytes()\n"
+            "Draft202012Validator(schema).validate(json.loads(status_sample))\n"
+            "status = decode_run_status(status_sample)\n"
+            "assert (status.state, status.step, status.exit_code) == ('done', 1, 0)\n",
+            str(install_dir), str(sample_path), str(status_path),
         ],
         cwd=tmp_path, capture_output=True, text=True, timeout=30, check=False,
     )
