@@ -1,1 +1,0 @@
-- Add reproducible layer-streaming benchmark controls for exact training comparisons, I/O accounting, and archived evidence replay. (#PENDING by @nurseit14, @M1kado0, @kok-o)
