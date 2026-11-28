@@ -1784,3 +1784,8 @@ _register_v07110(app, console)
 from soup_cli.commands._eval_retention import register as _register_retention  # noqa: E402
 
 _register_retention(app, console)
+
+# Register v0.78.x subcommand (eval export-check — #2048)
+from soup_cli.commands._eval_export_check import register as _register_export_check  # noqa: E402
+
+_register_export_check(app, console)

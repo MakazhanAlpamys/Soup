@@ -1921,6 +1921,21 @@ speed. Performance remains informational: **quality alone determines exit 2**.
 The table, JSON and markdown all include this additional result only when
 `--performance` is enabled.
 
+### Export Behavior Check
+
+After merging a LoRA adapter, verify that the merged Hugging Face model still preserves the
+adapter's behavioral delta rather than reverting toward the base model:
+
+```bash
+soup eval export-check \
+  --adapter ./output/adapter \
+  --exported ./output/merged \
+  --prompts ./evals/adapter-probes.jsonl
+```
+
+See [Export Behavior Verification (`soup eval export-check`)](#export-behavior-verification-soup-eval-export-check)
+below for the full comparison methodology, NLL rule, supported prompt/artifact formats, and exit-code table.
+
 ### Custom Eval Format
 
 `scoring` must be a supported string label; omitted values default to `exact`.
@@ -2151,3 +2166,61 @@ soup eval irt-subset per_item_correctness.jsonl --size small --model 2pl
 ```
 
 `--model` picks the item-response model (default `1pl`). `1pl` is the closed-form Rasch fit (`β̂_i = -log(p̂_i / (1 - p̂_i))`); `2pl` adds a per-item discrimination parameter and `3pl` a guessing floor, both via joint coordinate-ascent MLE (v0.71.6). Items rank by Fisher information at θ=0 (`p̂ · (1-p̂)` in 1PL — maximised at 50/50 items, since extremes carry no new ranking information). `full` keeps 100%, `small` keeps 30%, `tiny` keeps 10%.
+
+---
+
+## Export Behavior Verification (`soup eval export-check`)
+
+*(Quick example in [Export Behavior Check](#export-behavior-check) above.)* Verifies that an exported model artifact (such as a merged safetensors directory produced by `soup merge`) still preserves the behavioral delta of the LoRA adapter it was created from.
+
+```bash
+soup eval export-check \
+    --adapter ./my-lora-adapter \
+    --exported ./merged-model \
+    --prompts ./eval-prompts.jsonl \
+    --min-agreement 0.80 \
+    --format table
+```
+
+### The Core Problem: Did the LoRA Delta Survive Export?
+
+When fine-tuned adapters are merged into base weights or converted for deployment, subtle numerical loss, incorrect merge weights, or format corruption can cause the exported model to quietly revert to the unmodified base model.
+
+`soup eval export-check` loads and evaluates three models sequentially (one in memory at a time) under deterministic greedy decoding on the same prompt set:
+1. **Base model**: The unmodified base foundation model (`--base` or auto-detected from `adapter_config.json`).
+2. **Reference model**: Base + LoRA adapter loaded dynamically via PEFT.
+3. **Exported model**: The merged safetensors directory under test (`--exported`).
+
+### Comparison Methodology
+
+- **Active Prompts**: Prompts where the adapter produces a different output or token stream from the base model ($Y_{\text{base}} \neq Y_{\text{ref}}$). Inactive prompts (where the adapter produced no behavioral shift) are reported as `INACTIVE` and excluded from fidelity scoring.
+- **Fidelity Agreement**: Average character bigram overlap between the exported artifact and the reference model across all active prompts. `--min-agreement` defaults to `0.80`: it tolerates minor wording drift from merging while the independent closer-to-base checks still catch a reverted adapter delta.
+- **Delta Loss Detection**: The check fails with `DELTA_LOST` if **either** (a) on any active prompt, the exported generation is closer to the base output than to the adapter reference (`agree_export_base > agree_export_ref`), **or** (b) the exported NLL is strictly closer to the base NLL than to the adapter reference NLL (`|exported_nll - base_nll| < |exported_nll - ref_nll|`).
+- **Token Divergence**: Reports the 0-based index of the first divergent generated token ID between the exported model and adapter reference.
+- **NLL over the `--prompts` texts**: Computes masked causal next-token negative log-likelihood over the prompt texts supplied via `--prompts` (not completions or a training eval split, so pass prompts the adapter was not trained on):
+  $$\text{shift\_logits} = \text{logits}[:, :-1, :], \quad \text{shift\_labels} = \text{input\_ids}[:, 1:]$$
+  Padding tokens are masked out so mean NLL is weighted by real tokens across the base, reference, and exported models.
+
+  The NLL closer-to-base check (`|exported_nll - base_nll| < |exported_nll - ref_nll|`) applies only when `|base_nll - ref_nll| > 1e-4`. Requiring an adapter NLL shift above `1e-4` prevents floating-point rounding noise on near-identical NLLs from causing false `DELTA_LOST` failures when the adapter had no measurable effect on prompt likelihood. `--allow-stub` permits a fallback to deterministic stubs when live model loading is unavailable (stubs exercise CLI rendering only and do not verify real model fidelity). A live check still computes NLL when `--allow-stub` is present, and a non-finite live NLL still exits `1`; an actual stub fallback skips NLL computation and exits `2`.
+
+### Prompts File Format
+
+`--prompts` is required (omitting it exits `3` with `give --prompts`). All input paths (`--adapter`, `--exported`, `--prompts`) must reside under the current working directory. Supported formats:
+- Plain text: One prompt per non-empty line.
+- JSONL with `"prompt"` key: `{"prompt": "Summarize this article..."}`
+- Alpaca format: `{"instruction": "...", "input": "..."}`
+- ChatML format: `{"messages": [{"role": "user", "content": "..."}]}`
+- JSON strings: `"What is 7 * 8?"`
+
+### Supported Formats & Refusals
+
+Only Hugging Face safetensors (`.safetensors` or `.bin`) directories are supported for direct live inference. Standalone GGUF files, ONNX files, and MLX-fused directories are cleanly refused with exit code `3` and diagnostic instructions pointing to `soup llama cli` or `mlx_lm.generate`. Passing an adapter directory (with `adapter_config.json`) to `--exported` is also rejected with exit code `3`.
+
+### Exit Codes
+
+| Code | Status | Meaning |
+|---|---|---|
+| `0` | `PASS` | Adapter delta is preserved across active prompts and NLL (when `|base_nll - ref_nll| > 1e-4`), and agreement meets `--min-agreement`. |
+| `1` | Runtime error | Model loading failed (unless `--allow-stub` triggers a stub fallback), or live evaluation or NLL computation failed (including non-finite `NaN`/`Inf` NLL, even with `--allow-stub`). |
+| `2` | Gate failed | `DELTA_LOST` (generation or NLL reverted closer to base), `LOW_AGREEMENT` (agreement fell below `--min-agreement`), `NO_EVIDENCE` (no active adapter prompts found), or an actual `--allow-stub` stub fallback. |
+| `3` | Usage error | Missing `--prompts`, path outside current working directory, unsupported artifact format, malformed prompt row, or invalid arguments. |
