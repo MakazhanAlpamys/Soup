@@ -11,14 +11,15 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.delinearize_llama4 import (
     is_llama4_model,
     plan_delinearize,
     run_delinearize,
 )
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -61,20 +62,26 @@ def delinearize_llama4(
     a loadable checkpoint.
     """
     if model_id is not None and not is_llama4_model(model_id):
+        # A Text is not parsed as markup and has no emoji codes, so the value is shown as typed.
         console.print(
-            f"[yellow]model id {escape(model_id)} doesn't match the Llama 4 "
-            "naming pattern - proceed only if you're sure.[/]"
+            Text(
+                f"model id {strip_control(model_id)} doesn't match the Llama 4 "
+                "naming pattern - proceed only if you're sure.",
+                style="yellow",
+            )
         )
     try:
         plan = plan_delinearize(source_dir, target_dir)
     except (ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(code=2) from exc
     console.print(
         Panel(
-            f"Weight files:    {len(plan.weight_files)}\n"
-            f"Source dir:      {escape(plan.source_dir)}\n"
-            f"Target dir:      {escape(plan.target_dir)}",
+            Text(
+                f"Weight files:    {len(plan.weight_files)}\n"
+                f"Source dir:      {strip_control(plan.source_dir)}\n"
+                f"Target dir:      {strip_control(plan.target_dir)}"
+            ),
             title="Llama 4 Delinearization Plan",
             border_style="cyan",
         )
@@ -85,20 +92,22 @@ def delinearize_llama4(
     try:
         result = run_delinearize(plan, num_experts=num_experts)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(code=2) from exc
     except ImportError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(Text(strip_control(exc), style="red"))
         raise typer.Exit(code=1) from exc
 
     console.print(
         Panel(
-            f"Files written:     {len(result.files_written)}\n"
-            f"Reshaped keys:     {result.reshaped_keys}\n"
-            f"Already 3-D:       {result.already_3d_keys}\n"
-            f"Passthrough keys:  {result.passthrough_keys}\n"
-            f"Sidecars copied:   {result.sidecars_copied}\n"
-            f"Target dir:        {escape(result.target_dir)}",
+            Text(
+                f"Files written:     {len(result.files_written)}\n"
+                f"Reshaped keys:     {result.reshaped_keys}\n"
+                f"Already 3-D:       {result.already_3d_keys}\n"
+                f"Passthrough keys:  {result.passthrough_keys}\n"
+                f"Sidecars copied:   {result.sidecars_copied}\n"
+                f"Target dir:        {strip_control(result.target_dir)}"
+            ),
             title="Llama 4 Delinearization — done",
             border_style="green",
         )
