@@ -1231,7 +1231,6 @@ class StreamingSetupMixin:
         #
         # It runs BEFORE the weights are resolved: it needs only the config, and
         # the disk pre-flight below sizes the shard cache by these same suffixes.
-        quant_suffixes = ()
         # The attention targets (``auto`` resolved, or the user's list), first:
         # they need only the config, and the moe_lora helper below must EXTEND a
         # list target, as it does on the resident trainers since #1590 (a string
@@ -1239,28 +1238,69 @@ class StreamingSetupMixin:
         # routers, on both paths). Handing it ``None`` and replacing the list with its answer
         # dropped every name the MoE list does not repeat -- MLA's q_a/q_b/kv_a/kv_b
         # projections, Qwen3.5's in_proj_qkv / out_proj -- and an explicit list.
-        target_modules = resolve_lora_target_modules(
-            model_config, tcfg.lora.target_modules, console
-        )
-        # #798: the ONE helper that turns moe_lora into targets, and refuses a
-        # dropout peft cannot honour on fused experts. This path kept its own
-        # copy of the block, which is why it was the one path with no refusal.
-        # The probe is a meta skeleton and is the only model available here, so
-        # the call happens while it is alive rather than at the attach below.
-        # With moe_lora off it returns ``target_modules`` unchanged.
-        if quant == QUANT_NF4:
-            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
-            target_modules = resolve_moe_lora_targets(
-                probe, tcfg, target_modules, console=console
+        adapter_plan = None
+        if on_cuda:
+            import torch
+
+            from soup_cli.utils.layer_stream import resolve_available_vram_bytes
+            from soup_cli.utils.stream_adapter_preflight import (
+                check_stream_adapter_budget,
+                recommend_stream_adapter_targets,
+                try_build_stream_adapter_plan,
             )
-            quant_suffixes = quantised_layer_suffixes(probe)
-            del probe
-        elif tcfg.moe_lora:
-            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
-            target_modules = resolve_moe_lora_targets(
-                probe, tcfg, target_modules, console=console
+
+            optimizer_backend = None
+            if getattr(self, "deepspeed_config", None):
+                optimizer_backend = "DeepSpeed"
+            elif getattr(self, "fsdp_config", None):
+                optimizer_backend = "FSDP"
+            probe_options = dict(
+                dtype=dtype,
+                quant=quant,
+                double_quant=double_quant,
+                trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
+                on_cuda=on_cuda,
+                optimizer_backend=optimizer_backend,
             )
-            del probe
+            adapter_plan = try_build_stream_adapter_plan(
+                cfg.base, model_config, tcfg, console=console, **probe_options
+            )
+        if on_cuda and adapter_plan is not None:
+            # Driver free memory excludes PyTorch's reserve. Some of that reserve can be
+            # reused, so include it in the upper bound for this early refusal.
+            free_bytes = int(torch.cuda.mem_get_info(self.device)[0])
+            unused_reserved_bytes = max(
+                0,
+                torch.cuda.memory_reserved(self.device) - torch.cuda.memory_allocated(self.device),
+            )
+            available = resolve_available_vram_bytes(
+                measured_bytes=free_bytes + unused_reserved_bytes,
+                override_bytes=tcfg.stream_vram_override,
+            )
+            check_stream_adapter_budget(
+                adapter_plan,
+                available_cuda_bytes=available,
+                console=console,
+                recommendations=lambda: recommend_stream_adapter_targets(
+                    adapter_plan, cfg.base, model_config, tcfg,
+                    available_cuda_bytes=available, **probe_options,
+                ),
+            )
+            target_modules = adapter_plan.target_modules
+            quant_suffixes = adapter_plan.quant_suffixes
+        else:
+            target_modules = resolve_lora_target_modules(
+                model_config, tcfg.lora.target_modules, console
+            )
+            quant_suffixes = ()
+            if quant == QUANT_NF4 or tcfg.moe_lora:
+                probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
+                target_modules = resolve_moe_lora_targets(
+                    probe, tcfg, target_modules, console=console
+                )
+                if quant == QUANT_NF4:
+                    quant_suffixes = quantised_layer_suffixes(probe)
+                del probe
 
         # One set of arguments for every header estimate of this run's cache.
         estimate_kwargs = dict(
@@ -1663,15 +1703,16 @@ class StreamingSetupMixin:
             if not enabled:
                 console.print(f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]")
 
-        from soup_cli.utils.peft_wiring import build_lora_config
+        if adapter_plan is None:
+            from soup_cli.utils.peft_wiring import build_lora_config
 
-        # ``target_modules`` was settled before the probe was deleted, moe_lora's
-        # additions included (already announced by resolve_moe_lora_targets).
-        lora_config = build_lora_config(
-            tcfg.lora,
-            target_modules=target_modules,
-            task_type=TaskType.CAUSAL_LM,
-        )
+            lora_config = build_lora_config(
+                tcfg.lora,
+                target_modules=target_modules,
+                task_type=TaskType.CAUSAL_LM,
+            )
+        else:
+            lora_config = adapter_plan.lora_config
 
         # #366 / #434 — CUDA host pinning is inapplicable on every non-CUDA
         # target. An explicit stream_pin=true is honoured by saying so, not by
