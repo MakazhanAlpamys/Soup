@@ -1,0 +1,1 @@
+- Preserve the streaming residency benchmark harness, CPU parity fixtures, and byte-exact evidence replay controls. (#PENDING by @kok-o)

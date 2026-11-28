@@ -730,6 +730,14 @@ optimizer dtype mismatch.
 
 The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the only apples-to-apples comparison available on the reference box, because 1.5B and above cannot run resident there at all.
 
+### Streaming residency benchmark controls
+
+The [benchmark harness](../benchmarks/harness/streaming_residency_controls/) compares
+the standard rotating layer pool with resident weights, retained activations, and
+resident-layer compilation. Small CPU fixtures check training trajectories and replay
+saved tensors against the original comparator. Archive tests check that interrupted
+receives recover the original bytes. The live timing arms require CUDA.
+
 ### NF4 streaming (`quantization: 4bit`)
 
 Quantising the streamed base to NF4 makes the RAM store ~4× smaller. That matters for two reasons, and the second is the bigger one:
