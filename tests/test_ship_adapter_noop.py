@@ -47,7 +47,7 @@ def _lora(b_value: float) -> dict:
 def _run(monkeypatch, weights: dict, *extra: str, write=_write_adapter):
     loads = []
 
-    def _fake_resolve(base, tuned, adapter, device, quantization=None):
+    def _fake_resolve(base, tuned, adapter, device, quantization=None, **kwargs):
         loads.append(adapter)
         return (lambda p: "hi", lambda p: "hi")
 

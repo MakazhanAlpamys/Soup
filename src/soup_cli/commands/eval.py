@@ -1138,13 +1138,21 @@ def _run_lm_eval(
     num_fewshot: Optional[int],
     batch_size: int,
     device: str,
+    *,
+    loaded: Optional[tuple] = None,
 ) -> dict:
     """Run lm-evaluation-harness and return results dict."""
     import lm_eval
 
+    model: object = "hf"
+    if loaded is not None:
+        from lm_eval.models.huggingface import HFLM
+
+        # Use Soup's loader: legacy harness quantization flags lose NF4 settings.
+        model = HFLM(pretrained=loaded[0], tokenizer=loaded[1], batch_size=batch_size)
     results = lm_eval.simple_evaluate(
-        model="hf",
-        model_args=model_arg,
+        model=model,
+        model_args=model_arg if loaded is None else None,
         tasks=tasks,
         num_fewshot=num_fewshot,
         batch_size=batch_size,

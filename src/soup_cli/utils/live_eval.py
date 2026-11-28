@@ -176,7 +176,7 @@ def resolve_device(device: Optional[str] = None) -> str:
         return "cpu"
 
 
-def _build_quantization_config(quantization: Optional[str]):
+def _build_quantization_config(quantization: Optional[str], *, device: Optional[str] = None):
     """``BitsAndBytesConfig`` for the two quant-menu formats live_eval needs,
     or ``None`` to load the base at full precision (unchanged behavior).
 
@@ -191,12 +191,20 @@ def _build_quantization_config(quantization: Optional[str]):
     if quantization == "8bit":
         return BitsAndBytesConfig(load_in_8bit=True)
     if quantization == "4bit":
-        from soup_cli.utils.gpu import get_compute_dtype
+        from soup_cli.utils.gpu import bf16_fp16_flags, get_compute_dtype
+
+        if device is None:
+            compute_dtype = get_compute_dtype()
+        else:
+            import torch
+
+            bf16, fp16 = bf16_fp16_flags(device)
+            compute_dtype = torch.bfloat16 if bf16 else torch.float16 if fp16 else torch.float32
 
         return BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=get_compute_dtype(),
+            bnb_4bit_compute_dtype=compute_dtype,
             bnb_4bit_use_double_quant=True,
         )
     raise ValueError(
@@ -291,6 +299,7 @@ def load_model_and_tokenizer(
     trust_remote_code: bool = False,
     dtype: Optional[str] = None,
     quantization: Optional[str] = None,
+    quantization_config: Any = None,
 ):
     """Load an ``AutoModelForCausalLM`` + tokenizer, optionally with a LoRA adapter.
 
@@ -302,11 +311,23 @@ def load_model_and_tokenizer(
     ``quantization`` (``"4bit"`` / ``"8bit"`` / ``None``) judges the base the
     way it was trained instead of always upcasting to full precision; see
     :func:`_build_quantization_config`.
+    ``quantization_config`` can reuse a preflighted BitsAndBytesConfig; its
+    load family must match ``quantization``.
     """
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
     import torch  # noqa: F401 — ensures torch present
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    if quantization_config is not None:
+        from transformers import BitsAndBytesConfig
+
+        if not isinstance(quantization_config, BitsAndBytesConfig) or (
+            quantization_config.load_in_4bit != (quantization == "4bit")
+            or quantization_config.load_in_8bit != (quantization == "8bit")
+            or quantization not in ("4bit", "8bit")
+        ):
+            raise ValueError("quantization_config must match the requested quantization")
 
     dev = resolve_device(device)
     from soup_cli.utils.run_provenance import (
@@ -330,7 +351,7 @@ def load_model_and_tokenizer(
     model_kwargs = {"trust_remote_code": trust_remote_code, **revision_kwargs}
     if dtype is not None:
         model_kwargs["dtype"] = dtype
-    quant_config = _build_quantization_config(quantization)
+    quant_config = quantization_config or _build_quantization_config(quantization)
     if quant_config is not None:
         # A quantized load is pinned to a device at from_pretrained time
         # (BNB rejects a later .to() on an already-dispatched model), so
@@ -366,6 +387,7 @@ def make_generator(
     loaded: Optional[tuple] = None,
     chat_template_kwargs: Optional[dict] = None,
     batch_size: int = 8,
+    quantization_config: Any = None,
 ) -> GeneratorFn:
     """Build a deterministic ``GeneratorFn`` closure (greedy decode).
 
@@ -389,6 +411,7 @@ def make_generator(
         trust_remote_code=trust_remote_code,
         dtype=dtype,
         quantization=quantization,
+        **({"quantization_config": quantization_config} if quantization_config is not None else {}),
     )
     pad_id = (
         tokenizer.pad_token_id

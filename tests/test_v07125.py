@@ -818,6 +818,19 @@ class TestShipCliLive:
 
 
 class TestShipCliLmEvalRouting:
+    @pytest.fixture(autouse=True)
+    def external_loader(self, monkeypatch):
+        from soup_cli.commands import ship as ship_cmd
+        from soup_cli.utils import live_eval
+
+        # These routing tests replace the evaluator; load behavior has its own boundary tests.
+        original = ship_cmd._validate_external_load
+        monkeypatch.setattr(ship_cmd, "_validate_external_load", lambda load, *args: load)
+        monkeypatch.setattr(
+            live_eval, "load_model_and_tokenizer", lambda *args, **kw: (None, None, "cpu")
+        )
+        return original
+
     def test_non_mini_suite_routes_through_lm_eval(self, monkeypatch):
         """A --general-suite of non-mini names uses _run_lm_eval (override)."""
         from soup_cli.commands import eval as eval_cmd
@@ -833,7 +846,7 @@ class TestShipCliLmEvalRouting:
 
         calls = {"n": 0}
 
-        def fake_lm_eval(model_arg, tasks, num_fewshot, batch_size, device):
+        def fake_lm_eval(model_arg, tasks, num_fewshot, batch_size, device, **kwargs):
             calls["n"] += 1
             # Tuned (adapter in model_arg) scores higher than base.
             score = 0.9 if "peft" in model_arg or "adapter" in model_arg else 0.85
@@ -854,11 +867,12 @@ class TestShipCliLmEvalRouting:
             assert res.exit_code == 0, (res.output, repr(res.exception))
             assert calls["n"] >= 1  # the lm-eval override actually ran
 
-    def test_lm_eval_adapter_injection_rejected(self, monkeypatch):
+    def test_lm_eval_adapter_injection_rejected(self, monkeypatch, external_loader):
         """An --adapter with ',' / '=' must not smuggle lm-eval model_args."""
         from soup_cli.commands import ship as ship_cmd
         from soup_cli.utils import live_eval
 
+        monkeypatch.setattr(ship_cmd, "_validate_external_load", external_loader)
         monkeypatch.setattr(
             live_eval,
             "make_generator",
@@ -876,7 +890,7 @@ class TestShipCliLmEvalRouting:
                     "--general-suite", "hellaswag",
                 ],
             )
-            assert res.exit_code == 1, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "must not contain" in res.output.lower()
 
     def test_unscored_lm_eval_benchmark_refuses(self, monkeypatch):
@@ -892,7 +906,7 @@ class TestShipCliLmEvalRouting:
                                {"task_ok": True, "bench_ok": True}),
         )
 
-        def empty_lm_eval(model_arg, tasks, num_fewshot, batch_size, device):
+        def empty_lm_eval(model_arg, tasks, num_fewshot, batch_size, device, **kwargs):
             return {"results": {}}  # no score for the requested benchmark
 
         monkeypatch.setattr(eval_cmd, "_run_lm_eval", empty_lm_eval)

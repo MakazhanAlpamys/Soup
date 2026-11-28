@@ -240,10 +240,15 @@ def test_external_lm_eval_unknown_totals_and_skipped_baseline(monkeypatch) -> No
 
     calls = []
 
-    def external(model, names, *args):
+    def external(model, names, *args, **kwargs):
         calls.append((model, names))
         return {"results": {name: {"acc,none": 0.5} for name in names}}
 
+    from soup_cli.utils import live_eval
+
+    monkeypatch.setattr(
+        live_eval, "load_model_and_tokenizer", lambda *args, **kw: (None, None, "cpu")
+    )
     monkeypatch.setattr(eval_command, "_run_lm_eval", external)
     stream = io.StringIO()
     with session(stream):
