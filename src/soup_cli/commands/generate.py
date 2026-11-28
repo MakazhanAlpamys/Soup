@@ -9,8 +9,10 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.text import Text
+
+from soup_cli.utils.terminal import terminal_text
 
 logger = logging.getLogger(__name__)
 
@@ -210,8 +212,11 @@ def generate(
 
     if api_key_env is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", api_key_env):
         console.print(
-            "[red]Invalid --api-key-env: "
-            f"{escape(api_key_env)} is not a valid environment variable name.[/]"
+            Text.assemble(
+                ("Invalid --api-key-env: ", "red"),
+                terminal_text(api_key_env),
+                (" is not a valid environment variable name.", "red"),
+            )
         )
         raise typer.Exit(1)
 

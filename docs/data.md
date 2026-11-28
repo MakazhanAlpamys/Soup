@@ -516,7 +516,8 @@ loopback-only. A private, link-local or reserved IP literal is refused on either
 address a server on your network by its hostname. A host written only as numbers that is not a
 valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well. When `--api-base` points
 at a second endpoint, `--api-key-env NAME` reads the API key from that environment variable
-instead of `OPENAI_API_KEY`; a name that is not a valid environment variable name is refused.
+instead of `OPENAI_API_KEY`; `OPENAI_API_KEY` is used only when no variable was named.
+A name that is not a valid environment variable name is refused.
 
 ### Multi-Provider Support
 

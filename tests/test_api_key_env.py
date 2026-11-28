@@ -132,7 +132,9 @@ def test_without_option_still_reads_openai_key(tmp_path, monkeypatch):
 def test_missing_named_variable_names_it(tmp_path, monkeypatch):
     """A missing named variable gives the same kind of message as today's key."""
     monkeypatch.delenv(CUSTOM_VAR, raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # OPENAI_API_KEY stays set: it must not be consulted when a variable
+    # was named, so falling back to it would pass this test by succeeding.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
 
     result, _ = _run_generate(tmp_path, monkeypatch, "--api-key-env", CUSTOM_VAR)
 
@@ -169,7 +171,9 @@ def test_api_key_env_refused_for_non_openai_provider(
 def test_empty_named_variable_treated_as_missing(tmp_path, monkeypatch):
     """A named variable that is set but empty is treated as missing."""
     monkeypatch.setenv(CUSTOM_VAR, "")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # OPENAI_API_KEY stays set: it must not be consulted when a variable
+    # was named, so falling back to it would pass this test by succeeding.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
 
     result, _ = _run_generate(tmp_path, monkeypatch, "--api-key-env", CUSTOM_VAR)
 
@@ -200,3 +204,28 @@ def test_invalid_name_is_refused(tmp_path, monkeypatch, bad_name):
     output = strip_ansi(result.output)
     assert "--api-key-env" in output
     assert "not a valid environment variable name" in output
+
+
+def test_invalid_name_with_emoji_alias_prints_literally(tmp_path, monkeypatch):
+    """An invalid name containing a Rich emoji alias appears as supplied."""
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "generate",
+            "--prompt",
+            "Test prompt",
+            "--count",
+            "1",
+            "--api-key-env",
+            ":smile:",
+        ],
+    )
+
+    assert result.exit_code == 1
+    output = strip_ansi(result.output)
+    assert "--api-key-env" in output
+    assert "not a valid environment variable name" in output
+    assert ":smile:" in output
+    assert "😄" not in output
