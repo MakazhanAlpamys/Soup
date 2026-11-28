@@ -1368,6 +1368,10 @@ Every arm builds the trainer `soup train` builds for the config's `task` and
 `backend`, so an arm on a `task: distill` config distills, and an arm on
 `backend: mlx` uses the MLX wrapper.
 
+Use only one spelling per parameter in `--param` or a standalone sweep file.
+For example, supplying both `lr` and `training.lr` is refused before the grid
+is shown or training starts. Use either spelling on its own.
+
 
 ## Model Comparison
 
