@@ -261,9 +261,21 @@ def test_a_lora_run_asks_once_for_both_dtypes(card, picked_lines, picks):
     assert len(picked_lines) == 1
 
 
-def test_cpu_keeps_the_checkpoint_dtype(card):
+def test_cpu_keeps_the_checkpoint_dtype_with_native_bf16(card, monkeypatch):
+    """A CPU whose bf16 units are native keeps the checkpoint dtype (#3164)."""
     card((12, 0))
+    monkeypatch.setattr("soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: True)
     assert _wrapper(device="cpu")._resolve_load_dtype(_training()) == "auto"
+
+
+def test_cpu_without_native_bf16_resolves_float32(card, monkeypatch):
+    """The other arm of the same capability check: no AVX512-BF16/AMX means
+    bf16 matmuls would be emulated, so the frozen base resolves explicit
+    float32 instead (#3164). Capability mocked, not read from the host."""
+    card((12, 0))
+    torch = pytest.importorskip("torch", reason="torch is only in the [train] extra")
+    monkeypatch.setattr("soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: False)
+    assert _wrapper(device="cpu")._resolve_load_dtype(_training()) is torch.float32
 
 
 def test_an_unreadable_card_keeps_the_checkpoint_dtype(monkeypatch, card):

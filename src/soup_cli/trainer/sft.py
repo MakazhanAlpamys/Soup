@@ -1587,7 +1587,11 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
           correctly stays fp16 (``bf16_fp16_flags`` — the same helper
           ``_resolve_mixed_precision`` above calls for the SAME card
           question), the exact class of bug v0.73.1 (#385/#387) removed from
-          fourteen other places. One resolver instead of two duplicated
+          fourteen other places, and on a CPU without native bf16 units
+          (``cpu_supports_native_bf16`` — no AVX512-BF16/AMX), where ``"auto"``
+          would emulate every base matmul in bf16, measured 11.5x slower
+          end-to-end (#3164); a CPU whose bf16 units are native keeps
+          ``"auto"``. One resolver instead of two duplicated
           implementations (#492 review) — this was itself the finding that
           produced #492's helper.
         - ``auto_mixed_precision`` picking fp16 on a card that has bf16 (the

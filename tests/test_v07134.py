@@ -1190,12 +1190,17 @@ class TestPretrainLisaWiring:
 
         The plain-LoRA control must keep the checkpoint-native dtype; otherwise
         a repair that simply hardcodes fp32 for every pretrain run survives.
+        The CPU capability is pinned by mock (native bf16 -> "auto") so the
+        control asserts the contract, not this host's silicon (#3164).
         """
         _requires_train_extra()
         import torch
         from transformers import AutoModelForCausalLM
 
         _captured_console(monkeypatch)
+        monkeypatch.setattr(
+            "soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: True
+        )
         captured_dtypes = []
         real_from_pretrained = AutoModelForCausalLM.from_pretrained
 

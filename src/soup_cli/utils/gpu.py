@@ -679,6 +679,49 @@ def bf16_fp16_flags(
     return (supported, not supported)
 
 
+def cpu_supports_native_bf16() -> bool:
+    """Does this CPU have native bf16 units (AVX512-BF16 or AMX-BF16)?
+
+    PyTorch's own probes answer first (``torch.cpu._is_avx512_bf16_supported`` /
+    ``_is_amx_tile_supported`` — the same pair CI prints in its host report);
+    a torch too old to expose them falls back to the kernel's flag list in
+    ``/proc/cpuinfo``. When neither source can be read the answer is False:
+    the failure this guards against is silent and costs 11.5x throughput,
+    while the cost of a wrong False is visible up front — double the frozen
+    base's resident bytes (#3164).
+
+    The scope is x86-only, both by declaration and by construction: the two
+    torch probes and the ``avx512_bf16`` / ``amx_bf16`` flag tokens this
+    function searches for are x86-specific, so an aarch64 CPU carrying the
+    ``bf16`` extension in its ``Features`` list is treated as having none.
+    Whether torch would actually use its bf16 kernels natively there is not
+    verified on any aarch64 host here, so ARM is declared out of scope in
+    the fragment and the PR description rather than guessed at (#3164
+    review). The whole-token ``bf16`` an aarch64 kernel lists is therefore
+    deliberately NOT matched.
+    """
+    try:
+        import torch
+
+        probes = (
+            getattr(getattr(torch, "cpu", None), "_is_avx512_bf16_supported", None),
+            getattr(getattr(torch, "cpu", None), "_is_amx_tile_supported", None),
+        )
+        if any(probe is not None for probe in probes):
+            return any(probe() for probe in probes if probe is not None)
+    except (ImportError, RuntimeError, AssertionError, OSError):
+        pass
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith(("flags", "Features")):
+                    if "avx512_bf16" in line or "amx_bf16" in line:
+                        return True
+    except OSError:
+        pass
+    return False
+
+
 def resolve_frozen_base_load_dtype(device: str):
     """``dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
 
@@ -691,16 +734,34 @@ def resolve_frozen_base_load_dtype(device: str):
     resident weights in bf16 storage while every other tensor on the card is
     float16, the same storage/compute split v0.73.1 (#385/#387) removed from
     the other bf16-hardcoded call sites. Returning ``torch.float16`` there
-    keeps storage and compute in the same dtype. On CPU this still returns
-    ``"auto"``: the VRAM-saving reason for keeping the checkpoint's own dtype
-    does not apply there, but CPU use in this codebase is smoke tests only,
-    so a bf16-saved checkpoint loading bf16 on CPU is harmless in practice.
+    keeps storage and compute in the same dtype.
+
+    On CPU the answer now turns on the silicon (``cpu_supports_native_bf16``):
+    where the CPU has no native bf16 units (AVX512-BF16 / AMX — a Ryzen, a
+    pre-Ice Lake Xeon, EPYC Zen 1-3), a frozen bf16-saved base must load
+    float32, because every base forward/backward matmul would otherwise fall
+    back to dtype emulation — measured 11.5x slower end-to-end (1005 s/it to
+    87 s/it, ~1.0 to ~11.7 tok/s; TinyLlama-1.1B LoRA, Ryzen 2600, 12
+    threads) with val loss unchanged (1.5947 vs 1.6003). Where the units are
+    native the checkpoint's own dtype is kept as before: those CPUs are not
+    emulating, and float32 would double the frozen base's resident bytes for
+    no throughput gain — that doubling is the memory cost to weigh on a
+    memory-constrained box. The old docstring called CPU "smoke tests only";
+    with CPU LoRA training of small models as a supported path, throughput is
+    the correct tie-break and fp32 the correct default on hardware without
+    the units (#3164).
     """
     _, fp16_only = bf16_fp16_flags(device)
     if fp16_only:
         import torch
 
         return torch.float16
+    if str(device).lower().startswith("cpu"):
+        if cpu_supports_native_bf16():
+            return "auto"
+        import torch
+
+        return torch.float32
     return "auto"
 
 

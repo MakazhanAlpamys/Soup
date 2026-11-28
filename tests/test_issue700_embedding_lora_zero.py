@@ -154,8 +154,15 @@ class TestEmbeddingLoraZero:
             assert wrapper.model is real_model
             assert not hasattr(wrapper.model, "peft_config")
 
-    def test_setup_transformers_loads_fp32_for_full_finetune_and_frozen_for_lora(self):
-        """Full fine-tuning (r=0) pins torch.float32; LoRA (r>0) keeps frozen base dtype."""
+    def test_setup_transformers_loads_fp32_for_full_finetune_and_frozen_for_lora(self, monkeypatch):
+        """Full fine-tuning (r=0) pins torch.float32; LoRA (r>0) resolves the frozen
+        base dtype from cpu_supports_native_bf16, pinned in both directions here.
+
+        The probe must be monkeypatched, not read from the runner: on a CPU
+        without native bf16 units (the macOS test cell, a Ryzen, a pre-Ice Lake
+        Xeon) resolve_frozen_base_load_dtype returns torch.float32, so an
+        unpinned assertion would depend on the hardware the cell happens to be
+        (#3164). Each arm states its expected dtype."""
         real_model = DummyEmbeddingModel()
         real_tok = DummyTokenizer()
 
@@ -174,25 +181,40 @@ class TestEmbeddingLoraZero:
             wrapper0._setup_transformers(cfg_r0, cfg_r0.training)
             assert mock_load.call_args[1]["dtype"] == torch.float32
 
-        # 2. LoRA (lora.r = 4) -> 'auto' (frozen base load dtype on CPU)
+        # 2. LoRA (lora.r = 4): both arms of the capability probe, pinned
         cfg_r4 = SoupConfig(
             base="BAAI/bge-base-en-v1.5",
             task="embedding",
             data={"train": "./data.jsonl", "format": "embedding"},
             training={"lora": {"r": 4}, "quantization": "none"},
         )
-        with (
-            patch("transformers.AutoModel.from_pretrained", return_value=real_model) as mock_load,
-            patch("transformers.AutoTokenizer.from_pretrained", return_value=real_tok),
-            patch("peft.get_peft_model", return_value=real_model),
-            patch(
-                "soup_cli.utils.peft_wiring.resolve_lora_target_modules",
-                return_value=["encoder"],
-            ),
-        ):
-            wrapper4 = EmbeddingTrainerWrapper(cfg_r4, device="cpu")
-            wrapper4._setup_transformers(cfg_r4, cfg_r4.training)
-            assert mock_load.call_args[1]["dtype"] == "auto"
+
+        def frozen_base_load_dtype_with_native_bf16(value: bool):
+            """Build the wrapper with cpu_supports_native_bf16 forced to `value`."""
+            monkeypatch.setattr("soup_cli.utils.gpu.cpu_supports_native_bf16", lambda: value)
+            with (
+                patch(
+                    "transformers.AutoModel.from_pretrained", return_value=real_model
+                ) as mock_load,
+                patch("transformers.AutoTokenizer.from_pretrained", return_value=real_tok),
+                patch("peft.get_peft_model", return_value=real_model),
+                patch(
+                    "soup_cli.utils.peft_wiring.resolve_lora_target_modules",
+                    return_value=["encoder"],
+                ),
+            ):
+                wrapper = EmbeddingTrainerWrapper(cfg_r4, device="cpu")
+                wrapper._setup_transformers(cfg_r4, cfg_r4.training)
+                return mock_load.call_args[1]["dtype"], wrapper
+
+        # Native bf16 units -> the frozen base keeps the checkpoint dtype ("auto")
+        dtype_native, wrapper4 = frozen_base_load_dtype_with_native_bf16(True)
+        assert dtype_native == "auto"
+        assert wrapper4.model is real_model
+
+        # No native bf16 units -> explicit torch.float32, never the checkpoint dtype
+        dtype_emulated, _ = frozen_base_load_dtype_with_native_bf16(False)
+        assert dtype_emulated is torch.float32
 
     def test_setup_computes_trainable_params_on_real_module_without_peft_helper(self, capsys):
         """Full fine-tuning prints 'Full fine-tuning' and computes params without PeftModel."""
