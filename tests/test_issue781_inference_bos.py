@@ -581,7 +581,7 @@ _ALLOWLIST = {
         "passes add_special_tokens through **processor_kwargs, decided per processor "
         "by _processor_adds_leading_bos (#302)"
     ),
-    "commands/data.py::preprocess_dataset": (
+    "commands/data.py::preprocess_dataset._tokenize_split": (
         "renders a template, then tokenizes with the tokenizer's default "
         "add_special_tokens=True on purpose so the cache stays byte-identical to "
         "main (truncation reservation and post-processor EOS preserved), and strips "
