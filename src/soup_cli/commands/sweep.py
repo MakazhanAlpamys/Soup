@@ -4,7 +4,7 @@ import itertools
 import math
 import random
 from pathlib import Path
-from typing import Optional, get_args
+from typing import TYPE_CHECKING, Optional, get_args
 
 import typer
 import yaml
@@ -18,6 +18,9 @@ from soup_cli.config.loader import load_config
 from soup_cli.trainer.loss_summary import stored_loss_summary_kind, stored_run_losses
 from soup_cli.utils.sweep_config import load_sweep_yaml
 from soup_cli.utils.terminal import for_terminal, strip_control
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from soup_cli.experiment.tracker import ExperimentTracker
 
 console = Console()
 
@@ -39,12 +42,48 @@ def _is_diverged_loss(value: object) -> bool:
         return False
 
 
-def _loss_sort_key(result: dict) -> tuple[int, float]:
-    """Rank finite completed runs first and keep divergent/failed runs visible last."""
+def _loss_sort_key(result: dict, metric: str = "final_loss") -> tuple[int, float]:
+    """Rank finite completed runs first and keep divergent/failed runs visible last.
+
+    A run with no finite training loss (diverged, #944, or none observed) is never ranked,
+    on either metric, even when its validation loss is finite.
+    """
     if result.get("status") != "completed":
         return (2, float("inf"))
-    loss = _finite_loss(result.get("final_loss"))
+    if _finite_loss(result.get("final_loss")) is None:
+        return (1, float("inf"))
+    loss = _finite_loss(result.get(metric))
     return (0, loss) if loss is not None else (1, float("inf"))
+
+
+def _ranking_metric(results: list[dict]) -> str:
+    """``val_loss`` when every ranked run recorded a finite one, else ``final_loss``.
+
+    The final training loss keeps falling while a run memorizes its data, so a run trained
+    past its best epoch ranks first on it. The last validation loss is measured on rows the
+    run did not train on. Mixing the two in one ranking would compare unlike numbers, so a
+    single ranked run without a validation loss puts the whole sweep back on training loss.
+    Runs that are never ranked (failed, diverged, no training loss) do not count.
+    """
+    ranked = [res for res in results if _loss_sort_key(res)[0] == 0]
+    if ranked and all(_finite_loss(res.get("val_loss")) is not None for res in ranked):
+        return "val_loss"
+    return "final_loss"
+
+
+def _last_val_loss(tracker: "ExperimentTracker", run_id: str) -> Optional[float]:
+    """The run's last recorded ``val_loss`` in the tracker, or ``None``.
+
+    Soup evaluates the validation split at the end of every epoch (#1223); the last of
+    those evaluations is the number the summary ranks by when every arm has one. A last
+    evaluation that is not finite gives ``None``, so the sweep falls back to training loss
+    instead of ranking the arm by an earlier evaluation.
+    """
+    val_losses = [
+        row["val_loss"] for row in tracker.get_metrics(run_id)
+        if row.get("val_loss") is not None
+    ]
+    return _finite_loss(val_losses[-1]) if val_losses else None
 
 
 def _exceeds_early_stop(final_loss: object, best_loss: float, factor: float) -> bool:
@@ -250,6 +289,7 @@ def sweep(
                 "params": combo,
                 "run_id": result.get("run_id", ""),
                 "final_loss": final_loss,
+                "val_loss": result.get("val_loss"),
                 "duration": result.get("duration", ""),
                 "status": "completed",
             })
@@ -687,6 +727,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         # The sweep ranks on what the run stored: an arm that observed no loss has
         # none, and cannot win with the trainer's 0.0 placeholder.
         result["initial_loss"], result["final_loss"] = initial_loss, final_loss
+        result["val_loss"] = _last_val_loss(tracker, run_id)
         result["run_id"] = run_id
         return result
     except Exception as exc:
@@ -702,12 +743,26 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     table.add_column("Run", style="bold")
     for key in sweep_params:
         table.add_column(Text(strip_control(key)))
+    # A swept data setting (val_split, train, max_length, ...) can change which rows each
+    # arm holds out or how they are tokenized, so the arms' validation losses would not
+    # come from the same rows and cannot be ranked against each other. The replay keys
+    # are the exception: replay rows are mixed into the training split only, after the
+    # split (loader._finalize), so every arm still holds out the same validation rows.
+    data_keys = [
+        _PARAM_SHORTCUTS.get(key, key) for key in sweep_params
+        if _PARAM_SHORTCUTS.get(key, key).startswith("data.")
+        and not _PARAM_SHORTCUTS.get(key, key).startswith("data.replay")
+    ]
+    metric = "final_loss" if data_keys else _ranking_metric(results)
+    show_val = any(_finite_loss(res.get("val_loss")) is not None for res in results)
     table.add_column("Final Loss", justify="right", style="green")
+    if show_val:
+        table.add_column("Val Loss", justify="right", style="green")
     table.add_column("Duration", justify="right")
     table.add_column("Status")
 
     # Sort finite completed losses first; divergent and failed rows remain visible last.
-    sorted_results = sorted(results, key=_loss_sort_key)
+    sorted_results = sorted(results, key=lambda res: _loss_sort_key(res, metric))
 
     for idx, res in enumerate(sorted_results):
         diverged = res["status"] == "completed" and _is_diverged_loss(res.get("final_loss"))
@@ -721,33 +776,53 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
             loss_str = f"{finite_loss:.4f}"
         else:
             loss_str = "-"
-        # The star marks a ranked arm; a completed run with no loss has no rank.
-        best_marker = (
-            " [bold yellow]*[/]"
-            if idx == 0 and display_status == "completed" and finite_loss is not None
-            else ""
+        val_loss = _finite_loss(res.get("val_loss"))
+        val_str = (
+            f"{val_loss:.4f}" if res["status"] == "completed" and val_loss is not None else "-"
         )
+        # The star marks a ranked arm, on the column it was ranked by; a completed run
+        # with no loss has no rank.
+        ranked_first = idx == 0 and _loss_sort_key(res, metric)[0] == 0
+        best_marker = " [bold yellow]*[/]" if ranked_first else ""
+        if metric == "val_loss":
+            loss_cells = [loss_str, f"{val_str}{best_marker}"]
+        else:
+            loss_cells = [f"{loss_str}{best_marker}"] + ([val_str] if show_val else [])
         table.add_row(
             Text(strip_control(res["name"])),
             *param_vals,
-            f"{loss_str}{best_marker}",
+            *loss_cells,
             res.get("duration", "-"),
             f"[{status_style}]{display_status}[/]",
         )
 
     console.print(table)
+    if any(res["status"] == "completed" for res in results):
+        if metric == "val_loss":
+            reason = "last validation loss (lower is better)."
+        elif data_keys and show_val:
+            changed = for_terminal(", ".join(data_keys))
+            reason = (
+                f"final training loss. The sweep changes {changed}, so the runs measured "
+                "validation loss on different rows."
+            )
+        elif show_val:
+            reason = (
+                "final training loss. Not every ranked run ended with a finite "
+                "validation loss."
+            )
+        else:
+            reason = "final training loss (no run recorded a validation loss)."
+        console.print(f"Ranked by: {reason}")
 
     # Best run
-    completed = [
-        r
-        for r in sorted_results
-        if r["status"] == "completed" and _finite_loss(r.get("final_loss")) is not None
-    ]
+    completed = [r for r in sorted_results if _loss_sort_key(r, metric)[0] == 0]
     if completed:
         best = completed[0]
+        label = "val loss" if metric == "val_loss" else "loss"
         console.print(
             f"\n[bold green]Best run:[/] {for_terminal(best['name'])} "
-            f"(loss: {best['final_loss']:.4f})",
+            f"({label}: {best[metric]:.4f})",
             emoji=False,
         )
         for key, val in best["params"].items():

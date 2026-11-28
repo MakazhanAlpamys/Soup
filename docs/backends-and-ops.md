@@ -1368,6 +1368,21 @@ Every arm builds the trainer `soup train` builds for the config's `task` and
 `backend`, so an arm on a `task: distill` config distills, and an arm on
 `backend: mlx` uses the MLX wrapper.
 
+The summary ranks the arms by their last validation loss when every ranked arm
+recorded one (`data.val_split` above 0, the default 0.1). It ranks by final training
+loss, as before, in two cases. One is when any ranked arm has no validation loss, or its
+last one is not a finite number. The other is when the sweep changes a `data.` setting
+such as `data.val_split` or `data.max_length`, because then each arm measures
+validation loss on different rows.
+The `data.replay` settings are the exception: replay rows go into the training split
+only, so every arm keeps the same validation rows and the ranking stays on validation
+loss.
+Failed arms and arms with no finite training loss are listed last and never ranked, as
+before. A line under the table names the metric it ranked by, and the `Best run` line
+names the table's first row. The training loss keeps falling while a run memorizes its
+data, so on training loss the arm with the most epochs tends to rank first.
+`--early-stop` still compares final training losses.
+
 
 ## Model Comparison
 
@@ -1965,7 +1980,12 @@ soup why run_2026_abc    # specific run id (or prefix)
 
 Detects: NaN/Inf loss, plateau (≥30 steps with <0.5% change), divergence
 (loss > 3× initial), persistent high gradient norm, learning rate outside the
-typical `[1e-6, 5e-3]` band. Pure rule-based — no model calls.
+typical `[1e-6, 5e-3]` band, and a validation loss that ended at least 5% above
+its lowest value when the lowest came at an earlier evaluation (`val_loss_rose`).
+That finding names the epoch with the lowest validation loss, the minutes the run
+spent after it, and the `training.epochs` value to try next. It does not change the
+run: the saved adapter is still the one from the end of training. Pure rule-based —
+no model calls.
 
 ### `soup tui`
 

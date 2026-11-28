@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List, Optional
 
 
@@ -29,6 +30,7 @@ _NAN_PATTERNS = ("nan", "inf")
 _OVERFIT_GAP = 0.5         # train < 0.3, val > train + 0.5 → overfit
 _LR_TOO_LOW = 1e-6
 _LR_TOO_HIGH = 5e-3
+_VAL_RISE_FACTOR = 1.05    # last val_loss >= 1.05 × an earlier minimum → rose
 
 
 def _is_finite(value: Optional[float]) -> bool:
@@ -214,6 +216,69 @@ def _check_no_training_signal(metrics: List[dict]) -> Optional[Finding]:
     )
 
 
+def _epoch_label(epoch: Optional[float]) -> str:
+    if not _is_finite(epoch):
+        return "an earlier evaluation"
+    if float(epoch).is_integer():
+        return f"epoch {int(epoch)}"
+    return f"epoch {epoch:.2f}"
+
+
+def _minutes_between(start: object, end: object) -> Optional[float]:
+    try:
+        elapsed = datetime.fromisoformat(str(end)) - datetime.fromisoformat(str(start))
+    except (TypeError, ValueError):  # unparsable, or naive mixed with timezone-aware
+        return None
+    return elapsed.total_seconds() / 60
+
+
+def _check_val_loss_rose(metrics: List[dict], config: Optional[dict]) -> Optional[Finding]:
+    """The validation loss ended well above a minimum reached at an earlier evaluation.
+
+    Soup evaluates the ``data.val_split`` rows at the end of every epoch and records each
+    result as ``val_loss``. When the last of them is ``_VAL_RISE_FACTOR`` times or more the
+    lowest, and the lowest came first, the epochs after it raised the held-out loss while
+    still costing GPU time. Output only: the run and its saved adapter are unchanged.
+    """
+    evals = [row for row in metrics if _is_finite(row.get("val_loss"))]
+    if len(evals) < 2:
+        return None
+    best_index = min(range(len(evals)), key=lambda index: evals[index]["val_loss"])
+    best, last = evals[best_index], evals[-1]
+    if best_index == len(evals) - 1 or best["val_loss"] <= 0:
+        return None
+    if last["val_loss"] < best["val_loss"] * _VAL_RISE_FACTOR:
+        return None
+
+    rise = (last["val_loss"] / best["val_loss"] - 1) * 100
+    where = _epoch_label(best.get("epoch"))
+    message = (
+        f"Validation loss was lowest at {where} ({best['val_loss']:.4f}) and ended "
+        f"{rise:.0f}% higher ({last['val_loss']:.4f})."
+    )
+    minutes = _minutes_between(best.get("timestamp"), last.get("timestamp"))
+    if minutes is not None and minutes >= 0:
+        message += f" The training after {where} took {minutes:.0f} min."
+
+    training = config.get("training") if isinstance(config, dict) else None
+    configured = training.get("epochs") if isinstance(training, dict) else None
+    best_epoch = best.get("epoch")
+    suggested = math.ceil(best_epoch) if _is_finite(best_epoch) and best_epoch > 0 else None
+    if suggested is not None and isinstance(configured, int) and suggested < configured:
+        suggestion = (
+            f"Next time set training.epochs: {suggested}. The saved adapter is from the "
+            f"end of training, not from {where}."
+        )
+    else:
+        suggestion = (
+            f"The saved adapter is from the end of training, not from {where}. "
+            "Fewer steps or a lower lr may give a lower validation loss."
+        )
+    return Finding(
+        category="val_loss_rose", severity="warning", message=message, suggestion=suggestion,
+    )
+
+
 _CHECKS_LOSS = (_check_nan, _check_explosion, _check_plateau, _check_grad_norm)
 
 
@@ -231,6 +296,10 @@ def diagnose(metrics: List[dict], config: Optional[dict] = None) -> List[Finding
         result = check(metrics)
         if result is not None:
             findings.append(result)
+
+    val_rose = _check_val_loss_rose(metrics, config)
+    if val_rose is not None:
+        findings.append(val_rose)
 
     if isinstance(config, dict):
         lr_finding = _check_lr_bounds(config)
