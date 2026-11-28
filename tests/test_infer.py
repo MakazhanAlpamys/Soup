@@ -267,7 +267,8 @@ class TestReadPrompts:
         ])
 
         assert result.exit_code == 2, (result.output, repr(result.exception))
-        assert "same file" in result.output
+        assert "same file" in strip_ansi(result.output)
+        assert "--output" in strip_ansi(result.output)
         assert input_path.read_bytes() == original
 
 

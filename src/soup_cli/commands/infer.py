@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -35,17 +34,6 @@ def _is_path_like(value: str) -> bool:
     if len(value) >= 2 and value[1] == ":":
         return True
     return False
-
-
-def _paths_identify_same_file(left: Path, right: Path) -> bool:
-    """True when *left* and *right* name the same file (path or hard link)."""
-    if left.resolve() == right.resolve():
-        return True
-    try:
-        return os.path.samefile(left, right)
-    except OSError:
-        # different (or missing) file — not a conflict
-        return False
 
 
 def _resolve_model_source(model: str) -> tuple[str, str]:
@@ -353,13 +341,16 @@ def infer(
     # the first byte of the output is written; an independent --output keeps
     # working.
     output_path = Path(output_file)
-    if _paths_identify_same_file(input_path, output_path):
-        console.print(
-            f"[red]--output identifies the same file as --input "
-            f"({output_file} and {input_file}); refusing to overwrite the "
-            f"input manifest.[/]"
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths(
+            inputs=[("--input", input_file)],
+            outputs=[("--output", output_file)],
         )
-        raise typer.Exit(2)
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(2) from exc
 
     if cuda_graphs is True:
         _warm_cuda_graphs(model_obj, tokenizer, prompts, max_tokens)
