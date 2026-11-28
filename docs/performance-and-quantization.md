@@ -730,6 +730,25 @@ optimizer dtype mismatch.
 
 The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the only apples-to-apples comparison available on the reference box, because 1.5B and above cannot run resident there at all.
 
+### Benchmark research controls
+
+From the repository root, run the synthetic CPU comparison or replay the
+archived numerical and I/O checks.
+
+```bash
+python -m benchmarks.harness.streaming_controls.compare --output ./streaming-control
+python -m benchmarks.harness.streaming_controls.replay_evidence \
+  tests/fixtures/streaming_benchmark_evidence/numerical_match.zip --summary
+python -m benchmarks.harness.streaming_controls.replay_evidence \
+  tests/fixtures/streaming_benchmark_evidence/foreign_reads.zip --summary
+```
+
+The comparison requires the training extra and uses generated weights. It checks
+losses, gradients, adapter updates and shard-range bytes with a harness-local RAM
+cache. The replay verifies archived receipts on CPU. Both leave a performance
+verdict open. Fresh hardware measurements require Linux, one idle CUDA GPU, and
+a physical NVMe filesystem that supports direct I/O.
+
 ### NF4 streaming (`quantization: 4bit`)
 
 Quantising the streamed base to NF4 makes the RAM store ~4× smaller. That matters for two reasons, and the second is the bigger one:

@@ -1,3 +1,4 @@
 tests/fixtures/recipe_config_snapshots.json text eol=lf
 benchmarks/evidence/flash-liger-378-h200/*.json text eol=lf
 benchmarks/evidence/flash-liger-378-preflight/*.json text eol=lf
+benchmarks/harness/streaming_controls/*.lock text eol=lf
