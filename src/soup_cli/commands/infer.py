@@ -334,11 +334,28 @@ def infer(
         )
         raise typer.Exit(1)
 
+    # #3394 — refuse to overwrite the prompt manifest itself: when --output
+    # resolves to the same file as --input (identical path or a hard link),
+    # streaming the result schema would replace the input rows and drop
+    # fields such as prompt_id. Detect the conflict and exit nonzero before
+    # the first byte of the output is written; an independent --output keeps
+    # working.
+    output_path = Path(output_file)
+    from soup_cli.utils.paths import ensure_distinct_paths
+
+    try:
+        ensure_distinct_paths(
+            inputs=[("--input", input_file)],
+            outputs=[("--output", output_file)],
+        )
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
     if cuda_graphs is True:
         _warm_cuda_graphs(model_obj, tokenizer, prompts, max_tokens)
 
     # Run inference — stream results to disk as they are generated
-    output_path = Path(output_file)
     total_tokens = 0
     num_results = 0
     start_time = time.time()
