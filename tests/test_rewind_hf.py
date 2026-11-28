@@ -506,3 +506,75 @@ def test_summary_reports_dropped_micro_batches():
     assert state.summary() is None
     state.on_micro_batch(step=1, row_loss=[1.0], row_tokens=[3])  # FIFO empty -> drop
     assert state.summary() == "rewind: 1 micro-batch dropped (FIFO underflow)"
+
+
+# --------------------------------------------------------------------------
+# 10. the seeded shuffle survives the recording wrapper
+# --------------------------------------------------------------------------
+
+
+def _epoch_order(trainer):
+    return [tuple(batch["input_ids"][0].tolist()) for batch in trainer.get_train_dataloader()]
+
+
+def test_recording_keeps_the_seeded_data_order(tmp_path):
+    """Accelerate swaps a plain ``RandomSampler`` for its ``SeedableRandomSampler`` (seeded by
+    ``args.seed`` / ``data_seed``); the recording wrapper hid the RandomSampler from it, so a
+    recorded run shuffled from the global RNG and saw rows in another order than the same
+    config without the recorder (or under training.l2l)."""
+    import torch
+
+    plain = _trainer(tmp_path / "plain", wrap=False, per_device_train_batch_size=1)
+    torch.manual_seed(plain.args.seed)
+    expected = _epoch_order(plain)
+
+    recorded = _trainer(tmp_path / "recorded", per_device_train_batch_size=1)
+    rewind_hf.attach_rewind_state(recorded, FakeSink())
+    torch.manual_seed(plain.args.seed)
+    torch.rand(7)  # the global RNG moved on (a probe, an init): the order must not
+    assert _epoch_order(recorded) == expected
+
+
+def test_recording_wrapper_keeps_epoch_reseeding(tmp_path):
+    """The seedable sampler moves to ``initial_seed + epoch`` each epoch; through the
+    wrapper the second epoch is reshuffled like the plain trainer's."""
+    plain = _trainer(tmp_path / "plain", wrap=False, per_device_train_batch_size=1)
+    loader = plain.get_train_dataloader()
+    plain_epochs = [[tuple(b["input_ids"][0].tolist()) for b in loader] for _ in range(2)]
+
+    recorded = _trainer(tmp_path / "recorded", per_device_train_batch_size=1)
+    rewind_hf.attach_rewind_state(recorded, FakeSink())
+    loader = recorded.get_train_dataloader()
+    recorded_epochs = [[tuple(b["input_ids"][0].tolist()) for b in loader] for _ in range(2)]
+    assert recorded_epochs == plain_epochs
+
+
+def test_seedable_swap_follows_accelerates_own_conditions(tmp_path, monkeypatch):
+    """The sampler hook makes the swap Accelerator.prepare would make: only for a RandomSampler,
+    only while ``use_seedable_sampler`` is on, seeded by ``data_seed``. Anything else reaches
+    the recorder as the same object."""
+    from accelerate.data_loader import SeedableRandomSampler
+    from torch.utils.data import RandomSampler, SequentialSampler
+    from trl import SFTTrainer
+
+    trainer = _trainer(tmp_path, per_device_train_batch_size=1)
+    rewind_hf.attach_rewind_state(trainer, FakeSink())
+    config = trainer.accelerator.dataloader_config
+    config.data_seed = 1234
+
+    def recorded_inner():
+        # The recorder wraps whatever the base trainer returned; ``_inner`` is that object.
+        return trainer._get_train_sampler(trainer.train_dataset)._inner
+
+    config.use_seedable_sampler = True
+    swapped = recorded_inner()
+    assert isinstance(swapped, SeedableRandomSampler)
+    assert swapped.initial_seed == 1234
+
+    config.use_seedable_sampler = False
+    assert type(recorded_inner()) is RandomSampler
+
+    config.use_seedable_sampler = True
+    sequential = SequentialSampler(trainer.train_dataset)
+    monkeypatch.setattr(SFTTrainer, "_get_train_sampler", lambda self, *args, **kwargs: sequential)
+    assert recorded_inner() is sequential
