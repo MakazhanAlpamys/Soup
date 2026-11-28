@@ -38,8 +38,10 @@ No top-level torch or transformers: the trainer imports this on its setup path.
 
 from __future__ import annotations
 
+import base64
 import copy
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -1166,6 +1168,259 @@ def _fuse_per_expert_state(state: dict, config: Any) -> None:
         state[prefix + ".mlp.experts.down_proj"] = down
 
 
+# Moonshot's split pattern from Kimi-K2-Instruct's tokenization_kimi.py.
+_K2_SPLIT_PATTERN = "|".join(
+    [
+        r"[\p{Han}]+",
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*"
+        r"[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+"
+        r"[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+        r"\p{N}{1,3}",
+        r" ?[^\s\p{L}\p{N}]+[\r\n]*",
+        r"\s*[\r\n]+",
+        r"\s+(?!\S)",
+        r"\s+",
+    ]
+)
+_K2_RESERVED_TOKENS = 256
+_K2_VOCAB_MAX_BYTES = 64 * 1024**2
+_K2_VOCAB_MAX_LINES = 1_000_000
+_K2_TOKENIZER_CONFIG_MAX_BYTES = 16 * 1024**2
+_K2_CHAT_TEMPLATE_MAX_BYTES = 16 * 1024**2
+
+
+def _check_tokenizer_file_containment(directory_real: str, path: Path) -> None:
+    file_real = os.path.realpath(path)
+    try:
+        contained = os.path.commonpath([directory_real, file_real]) == directory_real
+    except ValueError:  # Different drives on Windows.
+        contained = False
+    if not contained:
+        raise ValueError(f"{path}: resolves outside the model folder")
+
+
+def _open_contained(directory_real: str, path: Path) -> Any:
+    """Open ``path`` for binary reading and prove the handle is the contained file.
+
+    The containment check before the open does not bind the open to that resolved file if the
+    folder changes in between, so the opened handle is compared with the file the path
+    resolves to now, and that file is checked for containment again.
+    """
+    handle = path.open("rb")
+    try:
+        _check_tokenizer_file_containment(directory_real, path)
+        if not os.path.samestat(os.fstat(handle.fileno()), os.stat(os.path.realpath(path))):
+            raise ValueError(f"{path}: changed while it was being opened")
+    except (ValueError, OSError):
+        handle.close()
+        raise
+    return handle
+
+
+def _read_tiktoken_ranks(path: Path, directory_real: str) -> dict[bytes, int]:
+    """Read the base64 token and rank pairs from ``tiktoken.model``."""
+    if os.path.getsize(path) > _K2_VOCAB_MAX_BYTES:
+        raise ValueError(f"{path}:1: file exceeds the 64 MiB size limit")
+    ranks: dict[bytes, int] = {}
+    rank_lines: dict[int, int] = {}
+    with _open_contained(directory_real, path) as handle:
+        for number, line in enumerate(handle, start=1):
+            if number > _K2_VOCAB_MAX_LINES:
+                raise ValueError(f"{path}:{number}: file exceeds the 1000000-line limit")
+            if not line.strip():
+                continue
+            try:
+                token_text, rank_text = line.split()
+                token = base64.b64decode(token_text, validate=True)
+                if not rank_text.removeprefix(b"-").isdigit():
+                    raise ValueError
+                rank = int(rank_text)
+            except ValueError as exc:
+                raise ValueError(f"{path}:{number}: not a 'base64-token rank' line") from exc
+            if rank < 0:
+                raise ValueError(f"{path}:{number}: negative rank {rank}")
+            if token in ranks:
+                earlier = rank_lines[ranks[token]]
+                raise ValueError(f"{path}:{number}: duplicate token (first seen on line {earlier})")
+            if rank in rank_lines:
+                earlier = rank_lines[rank]
+                raise ValueError(
+                    f"{path}:{number}: duplicate rank {rank} (first seen on line {earlier})"
+                )
+            ranks[token] = rank
+            rank_lines[rank] = number
+    if not ranks:
+        raise ValueError(f"{path}:1: no token ranks found")
+    for rank, number in rank_lines.items():
+        if rank >= len(ranks):
+            raise ValueError(
+                f"{path}:{number}: rank {rank} is outside the contiguous range 0..{len(ranks) - 1}"
+            )
+    return ranks
+
+
+def _read_chat_template(path: Path, directory_real: str) -> str:
+    """Read ``chat_template.jinja`` with a size limit and a diagnostic that names the file."""
+    size_error = f"{path}: file exceeds the 16 MiB size limit"
+    if os.path.getsize(path) > _K2_CHAT_TEMPLATE_MAX_BYTES:
+        raise ValueError(size_error)
+    with _open_contained(directory_real, path) as handle:
+        raw = handle.read(_K2_CHAT_TEMPLATE_MAX_BYTES + 1)
+    if len(raw) > _K2_CHAT_TEMPLATE_MAX_BYTES:
+        raise ValueError(size_error)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path}: not valid UTF-8") from exc
+
+
+def _read_kimi_k2_tokenizer_config(
+    path: Path, first: int, directory_real: str
+) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+    size_error = f"{path}: file exceeds the 16 MiB size limit"
+    if not path.is_file():
+        raise FileNotFoundError(f"{path}: file not found")
+    if os.path.getsize(path) > _K2_TOKENIZER_CONFIG_MAX_BYTES:
+        raise ValueError(size_error)
+    with _open_contained(directory_real, path) as handle:
+        raw = handle.read(_K2_TOKENIZER_CONFIG_MAX_BYTES + 1)
+    if len(raw) > _K2_TOKENIZER_CONFIG_MAX_BYTES:
+        raise ValueError(size_error)
+    try:
+        config = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        raise ValueError(f"{path}: invalid JSON") from exc
+    if not isinstance(config, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    decoder = config.get("added_tokens_decoder", {})
+    if not isinstance(decoder, dict):
+        raise ValueError(f"{path}: added_tokens_decoder must be an object")
+
+    end = first + _K2_RESERVED_TOKENS
+    declared: dict[int, dict[str, Any]] = {}
+    declared_keys: dict[int, str] = {}
+    for key, entry in decoder.items():
+        if not key.isascii() or not key.isdecimal():
+            raise ValueError(f"{path}: special-token id {key!r} is not a decimal integer")
+        digits = key.lstrip("0") or "0"
+        # Keep the integer conversion bounded even for keys with thousands of digits.
+        index = int(digits) if len(digits) <= len(str(end)) else end
+        if not first <= index < end:
+            raise ValueError(
+                f"{path}: special-token id {key} is outside the reserved range [{first}, {end})"
+            )
+        if not isinstance(entry, dict):
+            raise ValueError(f"{path}: special-token entry {index} must be an object")
+        if not isinstance(entry.get("content"), str):
+            raise ValueError(f"{path}: special-token entry {index} must have string content")
+        if not isinstance(entry.get("special", True), bool):
+            raise ValueError(f"{path}: special-token entry {index} special must be a boolean")
+        if index in declared:
+            raise ValueError(
+                f"{path}: duplicate special-token id {index} "
+                f"(keys {declared_keys[index]!r} and {key!r})"
+            )
+        declared[index] = entry
+        declared_keys[index] = key
+    return config, declared
+
+
+def has_native_kimi_k2_tokenizer(model_id: str) -> bool:
+    """Whether a local Kimi K2 checkpoint has the native tokenizer's vocabulary."""
+    expanded = os.path.expanduser(model_id)
+    return (Path(expanded) / "tiktoken.model").is_file() and _local_kimi_k2_dir(expanded)
+
+
+def load_kimi_k2_tokenizer(model_dir: str, *, trust_remote_code: bool = False) -> Any:
+    """Build the Kimi K2 fast tokenizer from local ranks, special tokens and chat template.
+
+    The split pattern and 256 reserved IDs match Moonshot's reference tokenizer.
+    Reading the ranks directly avoids importing either repository code or ``tiktoken``.
+    This loader requires ``trust_remote_code=False``.
+    """
+    if trust_remote_code:
+        raise ValueError(
+            "the native Kimi K2 tokenizer replaces Moonshot's tokenizer code, so "
+            "--trust-remote-code has no use here. Run again without --trust-remote-code."
+        )
+
+    directory = Path(os.path.expanduser(model_dir))
+    directory_real = os.path.realpath(directory)
+    vocab_file = directory / "tiktoken.model"
+    _check_tokenizer_file_containment(directory_real, vocab_file)
+    if not vocab_file.is_file():
+        raise FileNotFoundError(f"tiktoken.model not found in {model_dir}")
+    ranks = _read_tiktoken_ranks(vocab_file, directory_real)
+    first = len(ranks)
+
+    config_file = directory / "tokenizer_config.json"
+    _check_tokenizer_file_containment(directory_real, config_file)
+    config, declared = _read_kimi_k2_tokenizer_config(config_file, first, directory_real)
+    template_path = directory / "chat_template.jinja"
+    chat_template = config.get("chat_template")
+    if template_path.is_file():
+        _check_tokenizer_file_containment(directory_real, template_path)
+        chat_template = _read_chat_template(template_path, directory_real)
+
+    try:
+        from tokenizers import AddedToken
+    except ImportError as exc:
+        raise ImportError(
+            "The native Kimi K2 tokenizer requires tokenizers. Run pip install tokenizers."
+        ) from exc
+    try:
+        from transformers import PreTrainedTokenizerFast
+        from transformers.convert_slow_tokenizer import TikTokenConverter
+    except ImportError as exc:
+        raise ImportError(
+            "The native Kimi K2 tokenizer requires transformers. Run pip install transformers."
+        ) from exc
+
+    class _Converter(TikTokenConverter):
+        @staticmethod
+        def load_tiktoken_bpe(tiktoken_url: str) -> dict[bytes, int]:
+            return ranks
+
+    tokenizer = _Converter(vocab_file=str(vocab_file), pattern=_K2_SPLIT_PATTERN).converted()
+    reserved = []
+    expected_ids: dict[str, int] = {}
+    for index in range(first, first + _K2_RESERVED_TOKENS):
+        entry = declared.get(index)
+        content = entry["content"] if entry else f"<|reserved_token_{index}|>"
+        if content in expected_ids:
+            raise ValueError(
+                f"{config_file}: token content {content!r} is declared for both ids "
+                f"{expected_ids[content]} and {index}"
+            )
+        expected_ids[content] = index
+        reserved.append(
+            AddedToken(
+                content,
+                normalized=False,
+                special=entry.get("special", True) if entry else True,
+            )
+        )
+    tokenizer.add_tokens(reserved)
+    for content, index in expected_ids.items():
+        actual = tokenizer.token_to_id(content)
+        if actual != index:
+            raise ValueError(
+                f"{config_file}: special token {content!r} received id {actual}, "
+                f"declared id {index}"
+            )
+    return PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer,
+        bos_token=config.get("bos_token"),
+        eos_token=config.get("eos_token"),
+        unk_token=config.get("unk_token"),
+        pad_token=config.get("pad_token"),
+        additional_special_tokens=config.get("additional_special_tokens") or None,
+        chat_template=chat_template,
+        clean_up_tokenization_spaces=False,
+    )
+
+
 def _tiktoken_available() -> bool:
     return importlib.util.find_spec("tiktoken") is not None
 
@@ -1176,17 +1431,18 @@ def kimi_k2_tokenizer_hint(model_id: str, **kwargs: Any) -> Optional[str]:
     Called only on that failure path. ``None`` unless the base's ``config.json`` declares
     ``model_type: kimi_k2``.
     """
-    read = _raw_config_dict(model_id, kwargs)
+    read = _raw_config_dict(os.path.expanduser(model_id), kwargs)
     if read is None or read[0].get("model_type") != KIMI_K2_MODEL_TYPE:
         return None
     hint = (
-        "Kimi K2's tokenizer exists only as code in its repository (tokenization_kimi.py), so "
-        "it needs --trust-remote-code. That flag reaches the tokenizer only: the config and "
-        "the model are transformers' own DeepseekV3 classes, never the repository's code."
+        "Layer streaming can load the native tokenizer from a local Kimi K2 folder with "
+        "tiktoken.model without --trust-remote-code. Other Kimi K2 tokenizer loads need "
+        "--trust-remote-code for tokenization_kimi.py. That flag reaches the tokenizer only: "
+        "the config and the model are transformers' own DeepseekV3 classes."
     )
     if not _tiktoken_available():
         hint += (
-            " That tokenizer also imports the tiktoken package, which Soup does not install: "
+            " The repository tokenizer also imports tiktoken, which Soup does not install: "
             "pip install tiktoken."
         )
     return hint

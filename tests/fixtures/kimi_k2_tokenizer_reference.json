@@ -1,0 +1,1143 @@
+{
+ "model": "moonshotai/Kimi-K2-Instruct",
+ "revision": "fd1984e2b7a3350dbf7305fe73a4ede25c14de50",
+ "vocab_size": 163840,
+ "special_ids": {
+  "[BOS]": 163584,
+  "[EOS]": 163585,
+  "<|im_end|>": 163586,
+  "<|im_user|>": 163587,
+  "<|im_assistant|>": 163588,
+  "<|start_header_id|>": 163590,
+  "<|end_header_id|>": 163591,
+  "[EOT]": 163593,
+  "<|im_system|>": 163594,
+  "<|im_middle|>": 163601,
+  "[UNK]": 163838,
+  "[PAD]": 163839,
+  "<|tool_calls_section_begin|>": 163595,
+  "<|tool_calls_section_end|>": 163596,
+  "<|tool_call_begin|>": 163597,
+  "<|tool_call_argument_begin|>": 163598,
+  "<|tool_call_end|>": 163599
+ },
+ "texts": [
+  {
+   "text": "",
+   "ids": []
+  },
+  {
+   "text": "Hello, world!",
+   "ids": [
+    19180,
+    11,
+    2695,
+    0
+   ]
+  },
+  {
+   "text": "The quick brown fox jumps over the lazy dog.",
+   "ids": [
+    1008,
+    5072,
+    16331,
+    69275,
+    60062,
+    1312,
+    276,
+    29292,
+    7751,
+    13
+   ]
+  },
+  {
+   "text": "It's what they're saying: I'll go, you'd stay, we've left, I'm here.",
+   "ids": [
+    15881,
+    1573,
+    19564,
+    11610,
+    25,
+    17916,
+    970,
+    11,
+    33736,
+    5899,
+    11,
+    22205,
+    3550,
+    11,
+    6806,
+    2397,
+    13
+   ]
+  },
+  {
+   "text": "UPPER lower MixedCase camelCaseWord snake_case_word",
+   "ids": [
+    4492,
+    29530,
+    6798,
+    78639,
+    8081,
+    73974,
+    8081,
+    16390,
+    58108,
+    39188,
+    33632
+   ]
+  },
+  {
+   "text": "1234567890 12 123 1234 3.14159 1,000,000",
+   "ids": [
+    6694,
+    12972,
+    16242,
+    15,
+    220,
+    1042,
+    220,
+    6694,
+    220,
+    6694,
+    19,
+    220,
+    18,
+    13,
+    18702,
+    6276,
+    220,
+    16,
+    11,
+    1476,
+    11,
+    1476
+   ]
+  },
+  {
+   "text": "  leading and trailing spaces  ",
+   "ids": [
+    220,
+    8134,
+    316,
+    42711,
+    14803,
+    256
+   ]
+  },
+  {
+   "text": "tabs\tand\nnewlines\r\nand\n\n\nblank lines\n",
+   "ids": [
+    58308,
+    58443,
+    198,
+    3514,
+    11541,
+    462,
+    516,
+    3898,
+    13455,
+    8298,
+    198
+   ]
+  },
+  {
+   "text": "      six spaces then text",
+   "ids": [
+    535,
+    7364,
+    14803,
+    1780,
+    2913
+   ]
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ids": [
+    33845,
+    378,
+    2243,
+    856,
+    3108,
+    8597,
+    6523,
+    292
+   ]
+  },
+  {
+   "text": "月之暗面 Kimi 是一个由 Moonshot AI 开发的助手。",
+   "ids": [
+    892,
+    685,
+    5519,
+    696,
+    24980,
+    72,
+    220,
+    4279,
+    1337,
+    30218,
+    10065,
+    22572,
+    220,
+    40851,
+    42544,
+    292
+   ]
+  },
+  {
+   "text": "日本語のテキストとカタカナ、ひらがな。",
+   "ids": [
+    4546,
+    63011,
+    4663,
+    25875,
+    32045,
+    33360,
+    9219,
+    26121,
+    21449,
+    26121,
+    42125,
+    343,
+    127935,
+    16800,
+    10389,
+    11839,
+    292
+   ]
+  },
+  {
+   "text": "한국어 텍스트 예시입니다.",
+   "ids": [
+    17079,
+    54078,
+    28763,
+    83194,
+    235,
+    67178,
+    89678,
+    26343,
+    87637,
+    13
+   ]
+  },
+  {
+   "text": "Привет, мир! Это тест.",
+   "ids": [
+    159025,
+    63694,
+    11,
+    5993,
+    17898,
+    0,
+    41449,
+    20788,
+    5599,
+    18299,
+    13
+   ]
+  },
+  {
+   "text": "مرحبا بالعالم",
+   "ids": [
+    40011,
+    7570,
+    4265,
+    1063,
+    47116,
+    5042,
+    52137
+   ]
+  },
+  {
+   "text": "def f(x: int) -> int:\n    return x ** 2  # square\n",
+   "ids": [
+    1166,
+    285,
+    3940,
+    25,
+    754,
+    8,
+    2949,
+    754,
+    777,
+    274,
+    745,
+    1288,
+    3465,
+    220,
+    17,
+    220,
+    1214,
+    12156,
+    198
+   ]
+  },
+  {
+   "text": "for (int i = 0; i < n; ++i) { sum += a[i]; }",
+   "ids": [
+    2444,
+    347,
+    590,
+    1032,
+    327,
+    220,
+    15,
+    26,
+    1032,
+    555,
+    326,
+    26,
+    7208,
+    72,
+    8,
+    384,
+    5547,
+    3484,
+    261,
+    2578,
+    11340,
+    457
+   ]
+  },
+  {
+   "text": "SELECT * FROM users WHERE id = 42 AND name LIKE \"%a%\";",
+   "ids": [
+    12319,
+    397,
+    10861,
+    5945,
+    14294,
+    1965,
+    327,
+    220,
+    5512,
+    6870,
+    1530,
+    62562,
+    10232,
+    64,
+    4,
+    14179
+   ]
+  },
+  {
+   "text": "{\"key\": \"value\", \"list\": [1, 2, 3], \"nested\": {\"a\": null}}",
+   "ids": [
+    8264,
+    1319,
+    1289,
+    414,
+    2035,
+    665,
+    414,
+    3274,
+    1289,
+    793,
+    16,
+    11,
+    220,
+    17,
+    11,
+    220,
+    18,
+    2287,
+    414,
+    82046,
+    1289,
+    9392,
+    64,
+    1289,
+    1704,
+    5375
+   ]
+  },
+  {
+   "text": "https://example.com/path?query=1&b=2#frag",
+   "ids": [
+    1927,
+    1316,
+    17480,
+    1304,
+    73505,
+    30,
+    4964,
+    28,
+    16,
+    5,
+    65,
+    28,
+    17,
+    2,
+    53846
+   ]
+  },
+  {
+   "text": "emoji 😀🎉👍🏽 and flags 🇯🇵 and ZWJ 👨‍👩‍👧",
+   "ids": [
+    33120,
+    70005,
+    222,
+    5885,
+    236,
+    231,
+    64390,
+    235,
+    92949,
+    121,
+    316,
+    10141,
+    67496,
+    107,
+    32166,
+    113,
+    316,
+    2970,
+    122337,
+    130732,
+    101,
+    67963,
+    64390,
+    102,
+    67963,
+    64390,
+    100
+   ]
+  },
+  {
+   "text": "é combining and ﬁ ligature and ① and ½",
+   "ids": [
+    68,
+    37484,
+    38001,
+    316,
+    74792,
+    102746,
+    45443,
+    1684,
+    316,
+    220,
+    16395,
+    316,
+    220,
+    45953
+   ]
+  },
+  {
+   "text": "Mixed 中文 and English and 123 and code `x = 1`.",
+   "ids": [
+    90190,
+    220,
+    16717,
+    316,
+    9159,
+    316,
+    220,
+    6694,
+    316,
+    3253,
+    1268,
+    87,
+    327,
+    220,
+    16,
+    11369
+   ]
+  },
+  {
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ids": [
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    101908,
+    36324
+   ]
+  },
+  {
+   "text": "                                        x",
+   "ids": [
+    11618,
+    1288
+   ]
+  },
+  {
+   "text": "before [BOS] after",
+   "ids": [
+    14435,
+    220,
+    163584,
+    2171
+   ]
+  },
+  {
+   "text": "before [EOS] after",
+   "ids": [
+    14435,
+    220,
+    163585,
+    2171
+   ]
+  },
+  {
+   "text": "before <|im_end|> after",
+   "ids": [
+    14435,
+    220,
+    163586,
+    2171
+   ]
+  },
+  {
+   "text": "before <|im_user|> after",
+   "ids": [
+    14435,
+    220,
+    163587,
+    2171
+   ]
+  },
+  {
+   "text": "before <|im_assistant|> after",
+   "ids": [
+    14435,
+    220,
+    163588,
+    2171
+   ]
+  },
+  {
+   "text": "before <|start_header_id|> after",
+   "ids": [
+    14435,
+    220,
+    163590,
+    2171
+   ]
+  },
+  {
+   "text": "before <|end_header_id|> after",
+   "ids": [
+    14435,
+    220,
+    163591,
+    2171
+   ]
+  },
+  {
+   "text": "before [EOT] after",
+   "ids": [
+    14435,
+    220,
+    163593,
+    2171
+   ]
+  },
+  {
+   "text": "before <|im_system|> after",
+   "ids": [
+    14435,
+    220,
+    163594,
+    2171
+   ]
+  },
+  {
+   "text": "before <|im_middle|> after",
+   "ids": [
+    14435,
+    220,
+    163601,
+    2171
+   ]
+  },
+  {
+   "text": "before [UNK] after",
+   "ids": [
+    14435,
+    220,
+    163838,
+    2171
+   ]
+  },
+  {
+   "text": "before [PAD] after",
+   "ids": [
+    14435,
+    220,
+    163839,
+    2171
+   ]
+  },
+  {
+   "text": "before <|tool_calls_section_begin|> after",
+   "ids": [
+    14435,
+    220,
+    163595,
+    2171
+   ]
+  },
+  {
+   "text": "before <|tool_calls_section_end|> after",
+   "ids": [
+    14435,
+    220,
+    163596,
+    2171
+   ]
+  },
+  {
+   "text": "before <|tool_call_begin|> after",
+   "ids": [
+    14435,
+    220,
+    163597,
+    2171
+   ]
+  },
+  {
+   "text": "before <|tool_call_argument_begin|> after",
+   "ids": [
+    14435,
+    220,
+    163598,
+    2171
+   ]
+  },
+  {
+   "text": "before <|tool_call_end|> after",
+   "ids": [
+    14435,
+    220,
+    163599,
+    2171
+   ]
+  },
+  {
+   "text": "[BOS]",
+   "ids": [
+    163584
+   ]
+  },
+  {
+   "text": "[EOS]",
+   "ids": [
+    163585
+   ]
+  },
+  {
+   "text": "<|im_end|>",
+   "ids": [
+    163586
+   ]
+  },
+  {
+   "text": "<|im_user|>",
+   "ids": [
+    163587
+   ]
+  },
+  {
+   "text": "<|im_assistant|>",
+   "ids": [
+    163588
+   ]
+  },
+  {
+   "text": "<|start_header_id|>",
+   "ids": [
+    163590
+   ]
+  },
+  {
+   "text": "<|end_header_id|>",
+   "ids": [
+    163591
+   ]
+  },
+  {
+   "text": "[EOT]",
+   "ids": [
+    163593
+   ]
+  },
+  {
+   "text": "<|im_system|>",
+   "ids": [
+    163594
+   ]
+  },
+  {
+   "text": "<|im_middle|>",
+   "ids": [
+    163601
+   ]
+  },
+  {
+   "text": "[UNK]",
+   "ids": [
+    163838
+   ]
+  },
+  {
+   "text": "[PAD]",
+   "ids": [
+    163839
+   ]
+  },
+  {
+   "text": "<|tool_calls_section_begin|>",
+   "ids": [
+    163595
+   ]
+  },
+  {
+   "text": "<|tool_calls_section_end|>",
+   "ids": [
+    163596
+   ]
+  },
+  {
+   "text": "<|tool_call_begin|>",
+   "ids": [
+    163597
+   ]
+  },
+  {
+   "text": "<|tool_call_argument_begin|>",
+   "ids": [
+    163598
+   ]
+  },
+  {
+   "text": "<|tool_call_end|>",
+   "ids": [
+    163599
+   ]
+  }
+ ],
+ "chats": [
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "Hi"
+    }
+   ],
+   "add_generation_prompt": true,
+   "text": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>Hi<|im_end|><|im_assistant|>assistant<|im_middle|>",
+   "ids": [
+    163594,
+    14062,
+    163601,
+    3900,
+    554,
+    24980,
+    72,
+    11,
+    519,
+    22572,
+    26626,
+    5232,
+    673,
+    30218,
+    10065,
+    22572,
+    13,
+    163586,
+    198,
+    163587,
+    2482,
+    163601,
+    18699,
+    163586,
+    163588,
+    69702,
+    163601
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "Hi"
+    }
+   ],
+   "add_generation_prompt": false,
+   "text": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>Hi<|im_end|>",
+   "ids": [
+    163594,
+    14062,
+    163601,
+    3900,
+    554,
+    24980,
+    72,
+    11,
+    519,
+    22572,
+    26626,
+    5232,
+    673,
+    30218,
+    10065,
+    22572,
+    13,
+    163586,
+    198,
+    163587,
+    2482,
+    163601,
+    18699,
+    163586
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    },
+    {
+     "role": "user",
+     "content": "你好"
+    },
+    {
+     "role": "assistant",
+     "content": "您好！"
+    },
+    {
+     "role": "user",
+     "content": "2+2?"
+    }
+   ],
+   "add_generation_prompt": true,
+   "text": "<|im_system|>system<|im_middle|>Be brief.<|im_end|><|im_user|>user<|im_middle|>你好<|im_end|><|im_assistant|>assistant<|im_middle|>您好！<|im_end|><|im_user|>user<|im_middle|>2+2?<|im_end|><|im_assistant|>assistant<|im_middle|>",
+   "ids": [
+    163594,
+    14062,
+    163601,
+    4396,
+    15533,
+    13,
+    163586,
+    163587,
+    2482,
+    163601,
+    33845,
+    163586,
+    163588,
+    69702,
+    163601,
+    48408,
+    856,
+    163586,
+    163587,
+    2482,
+    163601,
+    17,
+    10,
+    17,
+    30,
+    163586,
+    163588,
+    69702,
+    163601
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "system",
+     "content": "Be brief."
+    },
+    {
+     "role": "user",
+     "content": "你好"
+    },
+    {
+     "role": "assistant",
+     "content": "您好！"
+    },
+    {
+     "role": "user",
+     "content": "2+2?"
+    }
+   ],
+   "add_generation_prompt": false,
+   "text": "<|im_system|>system<|im_middle|>Be brief.<|im_end|><|im_user|>user<|im_middle|>你好<|im_end|><|im_assistant|>assistant<|im_middle|>您好！<|im_end|><|im_user|>user<|im_middle|>2+2?<|im_end|>",
+   "ids": [
+    163594,
+    14062,
+    163601,
+    4396,
+    15533,
+    13,
+    163586,
+    163587,
+    2482,
+    163601,
+    33845,
+    163586,
+    163588,
+    69702,
+    163601,
+    48408,
+    856,
+    163586,
+    163587,
+    2482,
+    163601,
+    17,
+    10,
+    17,
+    30,
+    163586
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "Weather in Paris?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "functions.get_weather:0",
+       "type": "function",
+       "function": {
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Paris\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "functions.get_weather:0",
+     "content": "18 C, rain"
+    }
+   ],
+   "add_generation_prompt": true,
+   "text": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>Weather in Paris?<|im_end|><|im_assistant|>assistant<|im_middle|><|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>tool<|im_middle|>## Return of functions.get_weather:0\n18 C, rain<|im_end|><|im_assistant|>assistant<|im_middle|>",
+   "ids": [
+    163594,
+    14062,
+    163601,
+    3900,
+    554,
+    24980,
+    72,
+    11,
+    519,
+    22572,
+    26626,
+    5232,
+    673,
+    30218,
+    10065,
+    22572,
+    13,
+    163586,
+    198,
+    163587,
+    2482,
+    163601,
+    65512,
+    306,
+    17374,
+    30,
+    163586,
+    163588,
+    69702,
+    163601,
+    163595,
+    163597,
+    41937,
+    1150,
+    21055,
+    2800,
+    25,
+    15,
+    163598,
+    8264,
+    37666,
+    1289,
+    414,
+    113476,
+    16934,
+    163599,
+    163596,
+    163586,
+    163594,
+    20960,
+    163601,
+    798,
+    6014,
+    318,
+    8271,
+    1150,
+    21055,
+    2800,
+    25,
+    15,
+    198,
+    1428,
+    396,
+    11,
+    12981,
+    163586,
+    163588,
+    69702,
+    163601
+   ]
+  },
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "Weather in Paris?"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "functions.get_weather:0",
+       "type": "function",
+       "function": {
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Paris\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "functions.get_weather:0",
+     "content": "18 C, rain"
+    }
+   ],
+   "add_generation_prompt": false,
+   "text": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>Weather in Paris?<|im_end|><|im_assistant|>assistant<|im_middle|><|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>tool<|im_middle|>## Return of functions.get_weather:0\n18 C, rain<|im_end|>",
+   "ids": [
+    163594,
+    14062,
+    163601,
+    3900,
+    554,
+    24980,
+    72,
+    11,
+    519,
+    22572,
+    26626,
+    5232,
+    673,
+    30218,
+    10065,
+    22572,
+    13,
+    163586,
+    198,
+    163587,
+    2482,
+    163601,
+    65512,
+    306,
+    17374,
+    30,
+    163586,
+    163588,
+    69702,
+    163601,
+    163595,
+    163597,
+    41937,
+    1150,
+    21055,
+    2800,
+    25,
+    15,
+    163598,
+    8264,
+    37666,
+    1289,
+    414,
+    113476,
+    16934,
+    163599,
+    163596,
+    163586,
+    163594,
+    20960,
+    163601,
+    798,
+    6014,
+    318,
+    8271,
+    1150,
+    21055,
+    2800,
+    25,
+    15,
+    198,
+    1428,
+    396,
+    11,
+    12981,
+    163586
+   ]
+  }
+ ],
+ "provenance": {
+  "how": "Moonshot's own tokenization_kimi.py (TikTokenTokenizer) run once via AutoTokenizer(trust_remote_code=True) in a throwaway venv (transformers 4.55.4, tiktoken 0.14.0), downloaded files in their own empty dir, python -I, scripts elsewhere. No weights.",
+  "files_sha256": {
+   "tiktoken.model": "b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103",
+   "chat_template.jinja": "39e8c195b474c1a4148046f41fedd177b2ff8f420fa376e52fcdddb829e8f0c5",
+   "tokenizer_config.json": "5ba77d5822137ac3cb9337d2b84561d10425562cf8b8f2c74c91a832516a778d",
+   "tokenization_kimi.py": "b52cbff687ee5b32c8c0551da9974c678d39be0f3c890d53727888557b850c1f"
+  },
+  "date": "2026-10-15",
+  "split_pattern_sha256": "de5781783b193d5ccf5b1b28edfa70fa816ce78d54603fdc422cfd8d4ea4411f"
+ }
+}
