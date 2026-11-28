@@ -26,6 +26,7 @@ them. LISA (per-step layer sampling) is split to #267.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -907,7 +908,22 @@ def _materialize_cached_snapshot(plan: ModelWeightsPlan) -> str:
             shutil.rmtree(target)
         elif os.path.lexists(target):
             raise ValueError("materialized weights path must be a directory")
-        os.replace(staging, target)
+        try:
+            os.replace(staging, target)
+        except OSError as exc:
+            # Another process may have published the copy first. Windows reports
+            # ERROR_ACCESS_DENIED when replacing an existing directory.
+            winerror = getattr(exc, "winerror", None)
+            if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST) and winerror != 5:
+                raise
+            _reject_materialized_target_link(target)
+            if os.path.normcase(os.path.realpath(target)) != os.path.normcase(target):
+                raise ValueError("materialized weights path changed during snapshot publish")
+            if _materialized_matches_hf_snapshot(
+                plan.source_dir, target, plan.source_files, source_revision=plan.source_revision
+            ) is None:
+                raise
+            return target
         staging = ""
         return target
     finally:
