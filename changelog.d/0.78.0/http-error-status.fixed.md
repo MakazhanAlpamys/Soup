@@ -1,0 +1,1 @@
+- Keep friendly HTTP error messages available when reading optional status metadata fails. (#PENDING by @kok-o)

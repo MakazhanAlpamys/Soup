@@ -1476,6 +1476,9 @@ and bidi marks are removed from the display only; measurement inputs and JSON re
 keep their original values.
 Backend parsing and its diagnostic messages retain their existing behavior.
 
+If an HTTP client fails to provide status metadata, Soup can still recognize explicit
+HTTP 401 or 403 wording in the error message and show an authentication or permissions hint.
+
 Soup shows friendly error messages by default (2-3 lines with a fix suggestion). For full tracebacks:
 
 ```bash

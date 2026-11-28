@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 from soup_cli.utils.errors import format_friendly_error
+from tests.conftest import strip_ansi
 
 
 def _render(exc: Exception) -> str:
@@ -15,7 +16,7 @@ def _render(exc: Exception) -> str:
     console = Console(file=buf, stderr=False)
     with patch("soup_cli.utils.errors.console", console):
         format_friendly_error(exc, verbose=False)
-    return buf.getvalue()
+    return strip_ansi(buf.getvalue())
 
 
 class _FakeResponse:
@@ -154,6 +155,51 @@ def test_urllib_http_error_401_gets_the_authentication_hint():
     )
     out = _render(exc)
     assert "Authentication failed." in out
+
+
+def test_broken_response_proxy_still_uses_code():
+    class BrokenResponseError(Exception):
+        code = 401
+
+        @property
+        def response(self):
+            raise KeyError("file")
+
+    out = _render(BrokenResponseError("request failed"))
+    assert "Error: Authentication failed." in out.splitlines()
+
+
+def test_broken_response_status_still_uses_direct_status_code():
+    class BrokenResponse:
+        @property
+        def status_code(self):
+            raise RuntimeError("response already closed")
+
+    exc = Exception("request failed")
+    exc.response = BrokenResponse()
+    exc.status_code = 403
+
+    assert "Error: Access denied." in _render(exc).splitlines()
+
+
+def test_broken_code_property_preserves_the_original_error():
+    class BrokenCodeError(Exception):
+        @property
+        def code(self):
+            raise OSError("status unavailable")
+
+    out = _render(BrokenCodeError("train row 401: invalid sample"))
+    assert "Error: BrokenCodeError: train row 401: invalid sample" in out.splitlines()
+
+
+def test_broken_direct_status_code_still_uses_explicit_http_text():
+    class BrokenStatusError(Exception):
+        @property
+        def status_code(self):
+            raise RuntimeError("status unavailable")
+
+    out = _render(BrokenStatusError("request failed: HTTP 403"))
+    assert "Error: Access denied." in out.splitlines()
 
 
 def test_http_phrasing_without_a_response_object_is_accepted():
