@@ -461,7 +461,7 @@ The VRAM estimate (`soup train`'s pre-flight, `soup profile`, `soup plan` and th
 
 ## Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)
 
-Stream frozen base-model decoder layers ONE at a time from CPU RAM into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
+Stream frozen base-model decoder layers ONE at a time from CPU RAM, or from an NVMe disk tier when the base does not fit in RAM, into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
 
 ```yaml
 training:
@@ -991,7 +991,7 @@ on: the measurement stays the authority there and the dense arm is left to it (a
 then points at this arm). The choice is made by the pre-flight every streamed trainer shares (SFT,
 DPO, KTO, ORPO, SimPO, BCO and IPO); only `stream_vram_probe` is SFT-only.
 
-**Refused.** At config load, as listed under "Rejected at config load" below: without
+**Refused.** At config load, as listed under "Refused at config load" below: without
 `stream_layers`, for a task other than `sft`, with `data.format: raft`, and beside
 `use_cut_ce`. When the model is built, with the reason: a trainable output head, a model
 without one, and a model that changes its logits after the head: Gemma 2's
@@ -1089,7 +1089,10 @@ uses a model-scoped injection bridge that restores streaming wrappers even if PE
 Loading weights into an arbitrary new named adapter remains unsupported. These checks
 establish CPU correctness, not CUDA performance or memory measurements.
 
-**Rejected at config load (each names the release that lifts it):**
+**Refused at config load:**
+- `modality` other than text → streaming supports text models only
+- `lora.r: 0` → LoRA is required for layer streaming
+- `lora.target_parameters` → streaming does not support adapters on `target_parameters`
 - `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes allowed (v0.72.3)
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
@@ -1097,29 +1100,32 @@ establish CPU correctness, not CUDA performance or memory measurements.
 - `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
+- `quantization_aware` / `fp8_attention` / `nvfp4` → mutually exclusive with layer streaming
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
+- `relora_steps` → layer streaming loads weights ephemerally and cannot accept in-place base merges (schema.py:8671-8675)
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_recompute` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` / `stream_loss_chunk` set while `stream_layers: false` → a footgun, refused
 - `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
+- `stream_nf4_scale_cache` without `quantization: 4bit` and double quantization → refused: there are no nested NF4 scales to cache
+- a non-default `stream_read_ahead` beside `stream_source: ram` → refused. The read-ahead reader belongs to the NVMe disk tier and `ram` never falls back to it, so the setting would validate, be documented, and reach nothing. The default is accepted, because a default is not a decision
+- `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
+- `stream_loss_chunk` on any task other than `sft`, or with `data.format: raft` → the chunked step rebuilds the causal-LM cross-entropy and returns no logits. A preference loss reduces the logits to per-token log-probs instead, and RAFT's weighted loss reads all of them (#1693)
+- `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed. Refused before the `use_cut_ce` refusal above, with a message that names both fields (#1693)
+
+**Refused at setup, before the first training step:**
 - an FP8 checkpoint in any format other than DeepSeek-V3's block FP8, or an FP8 base that is not `model_type: deepseek_v3` → refused naming the supported format: at setup when `config.json` gives it away, otherwise before the cache is written. The block format itself is dequantised at shard time (see "FP8 block-quantised bases" above)
-- a pre-quantised bitsandbytes NF4 base (`unsloth/*-bnb-4bit`: `quant_method: bitsandbytes`, `load_in_4bit`, `bnb_4bit_quant_type: nf4`, `bnb_4bit_use_double_quant: true`, `bnb_4bit_compute_dtype: bfloat16`, `uint8` storage) is the one quantised source that streams, and only under `training.quantization: 4bit` on a dense decoder architecture (not `deepseek_v3` or `qwen4_exp`): it is imported into the layer cache byte for byte, with no dequantisation and no requantisation, and the cache is the same on every run device. The run needs a bfloat16 card (a float16 GPU and the CPU are refused), double quantisation left on and an unstriped cache, each refused by name before the weights are resolved. An import killed half way leaves a `.soup-nf4-import.<pid>.*` staging folder in the cache folder; the next run removes it before the disk pre-flight (a folder whose process is still running, another run of the same base, is left alone). The same base under `quantization: none`, and bitsandbytes 8-bit, FP4 or a base that is not double-quantised, stay refused like the other quantised sources
+- a pre-quantised bitsandbytes NF4 base (`quantization_config.quant_method == "bitsandbytes"` with `bnb_4bit_quant_type == "nf4"` and `load_in_4bit == true`, no `llm_int8_enable_fp32_cpu_offload`) → **the one quantised source that streams** (loaded directly into pooled NF4 buffers without re-quantising)
 - any other quantised checkpoint → refused by name, before a byte of the cache is written, and in the same words by the sharder, the disk pre-flight and the setup. The sharder checks the source first, from its `config.json` and headers, so a refusal creates no cache folder, leaves an existing cache and its `index.json` untouched, and never reuses a cache an older Soup sharded from such a source. Layer streaming reads plain floating-point weights, DeepSeek-V3's block FP8 and, on qwen4_exp only, oMLX/oQ affine bundles; the message says which format it found, that layer streaming cannot dequantise it, and to point `base` at a bf16 or FP8-block copy. Refused:
   - a `config.json` `quantization_config` whose `quant_method` is not `fp8`: `compressed-tensors` in any format (Kimi-K2-Thinking's `pack-quantized` INT4 among them), `gptq`, `awq`, `bitsandbytes` (or `load_in_4bit` / `load_in_8bit` with no method; the NF4 base above excepted), `hqq`, `aqlm`, `eetq`, `torchao`, `quanto`, `fbgemm_fp8`, `mxfp4`, `mxfp8`, `nvfp4`, `gguf` and every other quantiser transformers registers, or a name it does not. Also read from `text_config` when the top level has none, and a value that is not a mapping (a string, a list, a number) is refused as malformed. `quant_method` is matched exactly, as transformers matches it: `FP8` is not `fp8`. Refused at setup, before any weight is resolved or downloaded. A config with no `quant_method` (the oMLX/oQ spelling, `bits` and `group_size` only) is decided by its tensors;
   - a tensor stored as an integer or packed type (I8, I16, I32, I64, U8, U16, U32, U64, BOOL, F4), which a plain read would cast to floats and train on: GPTQ/AWQ `qweight`, compressed-tensors `weight_packed`, bitsandbytes uint8 and int8 weights, oMLX/oQ uint32 words on an architecture other than qwen4_exp;
   - a floating-point tensor named like a quantiser's companion: `weight_scale` (compressed-tensors; DeepSeek-V3's block FP8 spells its scale `weight_scale_inv`), `weight_global_scale`, `weight_zero_point`, `input_scale`, `qzeros`, `g_idx`, `SCB`, `absmax`, `quant_map`, `W_q`, `codebooks` and the like.
 
   Not refused: the integer buffers a supported model really carries, which are qwen4_exp's PLE n-gram hashing tables (`layer_multipliers`, `ngram_heads_vocab_sizes`, `ngram_heads_offsets`, int64; the runtime keeps the skeleton's own values) and `position_ids`. The supported families' own checkpoints carry no other integer tensor (pinned by a tiny checkpoint of each in `tests/test_stream_refuses_packed_quant.py`). Dequantise any other source to bf16 first
-- `stream_nf4_scale_cache` without `quantization: 4bit` and double quantization → refused: there are no nested NF4 scales to cache
-- a non-default `stream_read_ahead` beside `stream_source: ram` → refused. The read-ahead reader belongs to the NVMe disk tier and `ram` never falls back to it, so the setting would validate, be documented, and reach nothing. The default is accepted, because a default is not a decision
 - a disk-tier run whose host staging (`stream_read_ahead` layers, plus one slot each for the embedding and an untied `lm_head`) plus the resident extras will not fit the free-RAM headroom → refused by name, naming the depth to lower. Refused rather than clamped: a depth you set is a decision, and silently lowering it would hand back a slower run than the one you configured
 - more than 8 distinct layer shapes in one shard index → refused. Staging is allocated per shape and a shape with one member takes a full slot at any depth, so an index whose every layer differed would hold most of the model in staging at once — page-locked when the box allows it and `stream_pin` is not false, a loud pageable fallback otherwise, and a refusal only under `stream_pin: true` on a CUDA target — which is what the disk tier exists to avoid. A real model has one to three
-- `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
-- `stream_loss_chunk` on any task other than `sft`, or with `data.format: raft` → the chunked step rebuilds the causal-LM cross-entropy and returns no logits. A preference loss reduces the logits to per-token log-probs instead, and RAFT's weighted loss reads all of them (#1693)
-- `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed. Refused before the `use_cut_ce` refusal above, with a message that names both fields (#1693)
 - an architecture outside the supported list (llama / qwen2 / qwen3, including qwen3_5_moe text aliases / qwen4_exp text / mistral / gemma / gemma2 / gemma3_text / phi / phi3 / deepseek_v3) → named explicitly. `deepseek_v3` is the DeepSeek-V3 family (MLA attention, routed experts plus a shared expert); a Kimi K2 checkpoint uses the same decoder under `model_type: kimi_k2` and is admitted through the guard in "Kimi K2" above. Under `quantization: 4bit` its attention, shared-expert and dense-MLP projections are NF4 while the routed experts stay at the stream dtype: they are 3-D parameters, not `nn.Linear` modules, so a DeepSeek-V3 layer streams most of its bytes unquantised
 - a Kimi K2 config (`model_type: kimi_k2`) that transformers' DeepSeek-V3 class would compute differently from K2's own code → refused before any weight is resolved, naming every such field and its value (Kimi-K2-Thinking: `quantization_config.quant_method='compressed-tensors'`). The fields, and why each matters, are under "Kimi K2" above
-
 **Config example:**
 
 ```yaml
