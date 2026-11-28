@@ -140,9 +140,41 @@ def test_sample_neither_n_nor_pct_refused(sample_jsonl: Path):
     assert "Specify either --n (count) or --pct (percentage)." in _clean(res.output)
 
 
-def test_sample_both_n_and_pct_given(sample_jsonl: Path, tmp_path: Path):
-    """When both valid --n and --pct are passed, --pct takes precedence as documented."""
+BOTH_REFUSAL = "Cannot use --n (count) and --pct (percentage) together. Pick one."
+
+
+@pytest.mark.parametrize("strategy", ["random", "diverse", "hard"])
+@pytest.mark.parametrize(
+    "sizes",
+    [["-n", "2", "--pct", "50"], ["--pct", "50", "--n", "2"]],
+    ids=["n-then-pct", "pct-then-n"],
+)
+def test_sample_both_n_and_pct_refused(
+    sample_jsonl: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    strategy: str, sizes: list[str],
+):
+    """#3436: --n with --pct exits 1 before the input is read, in either order."""
+
+    def _must_not_load(*_args, **_kwargs):
+        raise AssertionError("the input was read before the refusal")
+
+    monkeypatch.setattr("soup_cli.commands.data.load_raw_data", _must_not_load)
+    res = runner.invoke(
+        app,
+        ["data", "sample", str(sample_jsonl), *sizes, "--strategy", strategy, "--seed", "42"],
+    )
+    assert res.exit_code == 1, res.output
+    assert BOTH_REFUSAL in _clean(res.output)
+    assert not (tmp_path / f"sample_input_sampled_{strategy}.jsonl").exists()
+
+
+def test_sample_both_n_and_pct_leaves_existing_output_unchanged(
+    sample_jsonl: Path, tmp_path: Path,
+):
+    """#3436: the refusal does not touch a file already at the --output path."""
     out_file = tmp_path / "out_both.jsonl"
+    out_file.write_text('{"kept": "from an earlier run"}\n', encoding="utf-8")
+    before = out_file.read_bytes()
     res = runner.invoke(
         app,
         [
@@ -153,10 +185,21 @@ def test_sample_both_n_and_pct_given(sample_jsonl: Path, tmp_path: Path):
             "--seed", "42",
         ],
     )
-    assert res.exit_code == 0
-    assert out_file.exists()
-    lines = [json.loads(line) for line in out_file.read_text(encoding="utf-8").splitlines()]
-    assert len(lines) == 5
+    assert res.exit_code == 1, res.output
+    assert BOTH_REFUSAL in _clean(res.output)
+    assert out_file.read_bytes() == before
+
+
+def test_sample_out_of_range_pct_with_n_reports_the_range_first(sample_jsonl: Path):
+    """The bounds checks still run first: a bad --pct beside --n names the range."""
+    res = runner.invoke(
+        app,
+        ["data", "sample", str(sample_jsonl), "-n", "2", "--pct", "150"],
+    )
+    assert res.exit_code == 1
+    output = _clean(res.output)
+    assert "--pct must be a finite number in (0, 100]." in output
+    assert BOTH_REFUSAL not in output
 
 
 def test_sample_invalid_n_with_valid_pct_refused(sample_jsonl: Path):
