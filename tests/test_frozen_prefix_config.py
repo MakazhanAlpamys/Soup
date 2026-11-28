@@ -2,6 +2,7 @@
 
 import pytest
 
+from soup_cli.config.loader import config_from_mapping
 from soup_cli.config.schema import SoupConfig
 
 
@@ -175,5 +176,5 @@ def test_unsupported_paths_are_refused_by_the_freeze_check_first(top, training, 
 
 
 def test_unknown_key_still_refuses_the_load():
-    with pytest.raises(ValueError, match="frozen_prefix_cash"):
-        SoupConfig.model_validate(make_config(frozen_prefix_cash=True))
+    with pytest.raises(ValueError, match="unknown config key 'training.frozen_prefix_cash'"):
+        config_from_mapping(make_config(frozen_prefix_cash=True))

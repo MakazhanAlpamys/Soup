@@ -2721,7 +2721,8 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # training.packed_lora: the hook comes off and the pinned memory goes back.
             train_ctx.callback(self._close_packed_lora)
-            if tcfg.frozen_prefix_cache:
+            use_frozen_prefix_cache = getattr(tcfg, "frozen_prefix_cache", False)
+            if use_frozen_prefix_cache:
                 from soup_cli.utils.frozen_prefix_forward import frozen_prefix_session
 
                 # The cache is keyed per batch: with a larger batch the data order
@@ -2793,7 +2794,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                 keep_trainable_dtype_on_resume(self.trainer)
             with manual_save_context(self.trainer):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-            if tcfg.frozen_prefix_cache:
+            if use_frozen_prefix_cache:
                 lookups = prefix_runner.hits + prefix_runner.misses
                 console.print(
                     "[green]Frozen-prefix cache:[/] "

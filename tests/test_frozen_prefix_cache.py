@@ -259,16 +259,14 @@ def test_resolve_cache_directory_lives_inside_the_output_directory(tmp_path):
     )
 
 
+@pytest.mark.requires_symlink
 def test_resolve_cache_directory_refuses_a_link_that_leaves_the_output_directory(tmp_path):
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     output = tmp_path / "output"
     output.mkdir()
     link = output / CACHE_DIRNAME
-    try:
-        os.symlink(outside, link, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks are not available here")
+    os.symlink(outside, link, target_is_directory=True)
 
     with pytest.raises(ValueError, match="must stay inside the training output directory"):
         resolve_cache_directory(output)
