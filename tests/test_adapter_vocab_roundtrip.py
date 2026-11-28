@@ -246,6 +246,89 @@ def test_legacy_adapter_without_tokenizer_keeps_base_ids(artifacts, tmp_path, mo
         torch.testing.assert_close(model(**saved.inputs).logits, saved.logits)
 
 
+def test_standard_merge_ordinary_adapter_with_model_only_base(artifacts, tmp_path, monkeypatch):
+    import torch
+    from safetensors import safe_open
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from soup_cli.cli import app
+
+    saved = artifacts["plain-untied"]
+    base = tmp_path / "model-only-base"
+    shutil.copytree(saved.base, base, ignore=shutil.ignore_patterns("*token*"))
+    assert not list(base.glob("*token*"))
+    with safe_open(saved.adapter / "adapter_model.safetensors", framework="pt") as weights:
+        assert weights.keys() and all("lora_" in name for name in weights.keys())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: pytest.fail(
+        "local standard merge must not resolve DNS",
+    ))
+    result = CliRunner().invoke(app, [
+        "merge", "--adapter", str(saved.adapter), "--base", str(base),
+        "--output", "merged", "--dtype", "float32",
+    ])
+    assert result.exit_code == 0, result.output
+    model = AutoModelForCausalLM.from_pretrained("merged").eval()
+    tokenizer = AutoTokenizer.from_pretrained("merged")
+    assert tokenizer.get_vocab() == saved.tokenizer.get_vocab()
+    assert tokenizer.all_special_tokens == saved.tokenizer.all_special_tokens
+    assert torch.equal(model.get_input_embeddings().weight, saved.embedding)
+    assert torch.equal(model.get_output_embeddings().weight, saved.head)
+    with torch.no_grad():
+        torch.testing.assert_close(model(**saved.inputs).logits, saved.logits)
+
+
+@pytest.mark.parametrize("state", ["full-rows", "padded-full-rows", "no-rows", "sparse-id"])
+def test_standard_merge_model_only_base_rejects_expanded_state(
+    artifacts, tmp_path, monkeypatch, state,
+):
+    from unittest.mock import Mock
+
+    from peft import PeftModel
+    from safetensors.torch import load_file, save_file
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from soup_cli.cli import app
+
+    saved = artifacts["plain-untied" if state == "sparse-id" else "regular-untied"]
+    base = tmp_path / "model-only-base"
+    adapter = tmp_path / "adapter"
+    shutil.copytree(saved.base, base, ignore=shutil.ignore_patterns("*token*"))
+    shutil.copytree(saved.adapter, adapter)
+    if state == "padded-full-rows":
+        model = AutoModelForCausalLM.from_pretrained(base)
+        model.resize_token_embeddings(len(saved.tokenizer))
+        model.save_pretrained(base)
+    elif state == "no-rows":
+        path = adapter / "adapter_model.safetensors"
+        save_file({name: value for name, value in load_file(str(path)).items()
+                   if "lora_" in name}, str(path))
+    elif state == "sparse-id":
+        path = adapter / "tokenizer.json"
+        data = json.loads(path.read_text())
+        token = next(token for token in data["model"]["vocab"] if token != "<eos>")
+        data["model"]["vocab"][token] = len(saved.tokenizer)
+        path.write_text(json.dumps(data))
+        tokenizer = AutoTokenizer.from_pretrained(adapter)
+        assert len(tokenizer) == len(saved.tokenizer)
+        assert max(tokenizer.get_vocab().values()) >= len(saved.tokenizer)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+    attach = Mock(side_effect=AssertionError("invalid expansion reached PEFT attachment"))
+    monkeypatch.setattr(PeftModel, "from_pretrained", attach)
+    result = CliRunner().invoke(app, [
+        "merge", "--adapter", str(adapter), "--base", str(base),
+        "--output", "merged", "--dtype", "float32",
+    ])
+    assert result.exit_code == 1, result.output
+    assert "Merge failed" in _plain(result.output)
+    attach.assert_not_called()
+    assert not Path("merged").exists()
+
+
 @pytest.mark.parametrize("consumer", ["evaluation", "merge"])
 def test_legacy_bin_serialization_uses_restricted_loading(artifact, monkeypatch, consumer):
     import torch
