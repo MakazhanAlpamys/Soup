@@ -285,6 +285,11 @@ class TestSFTSetupQuantizationAwareIntegration:
             "soup_cli.utils.advanced_precision.apply_fp8_attention",
             return_value=2,
         ), patch(
+            # #3249: an NVFP4 refusal stops the run too, and this host has no
+            # SM 10.0/10.3 card, so the NVFP4 converter is stubbed for the same reason.
+            "soup_cli.utils.advanced_precision.apply_nvfp4",
+            return_value=2,
+        ), patch(
             "soup_cli.utils.v028_features.apply_v028_speed_memory",
             wraps=apply_v028_speed_memory,
         ) as mock_v028:

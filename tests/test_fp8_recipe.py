@@ -436,6 +436,7 @@ class TestFP8RecipeViaV028Features:
         # accident; harmless while that path degraded, but it now refuses on a
         # card that cannot run the recipe (#1044 review).
         tcfg.fp8_attention = False
+        tcfg.nvfp4 = False  # truthy as a MagicMock; it now stops the run off Blackwell (#3249)
 
         with patch("soup_cli.utils.fp8.apply_fp8_training", return_value=True) as m:
             from soup_cli.utils.v028_features import apply_v028_speed_memory
@@ -473,6 +474,7 @@ class TestFP8RecipeViaV028Features:
         tcfg.use_cut_ce = False
         tcfg.kernel_auto_compose = False
         tcfg.fp8_attention = False  # a MagicMock attribute is truthy (#1044 review)
+        tcfg.nvfp4 = False  # truthy as a MagicMock; it now stops the run off Blackwell (#3249)
 
         with patch("soup_cli.utils.fp8.apply_fp8_training") as m:
             from soup_cli.utils.v028_features import apply_v028_speed_memory
