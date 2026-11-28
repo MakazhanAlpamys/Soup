@@ -1495,9 +1495,9 @@ class _FakeCkptCb:
         self._saved = list(saved)
         self.restore_calls = []
 
-    def restore_checkpoint(self, *, step, model, optimizer):
+    def _restore_components(self, *, step, model, optimizer):
         self.restore_calls.append(step)
-        return True
+        return {"adapter": True, "optimizer": True, "required": True}
 
 
 def _pid_callback(tmp_path, buffer, *, rollback=False, rollback_patience=2,

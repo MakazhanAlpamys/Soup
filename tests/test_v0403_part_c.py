@@ -449,17 +449,22 @@ class TestTraceLogWriter:
         assert outside.read_text(encoding="utf-8") == "decoy"
 
     def test_unserialisable_entry_dropped_silently(self, tmp_path, monkeypatch):
+        class BrokenString:
+            def __str__(self):
+                raise TypeError("cannot serialize this value")
+
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "log.jsonl"
         writer = TraceLogWriter(str(path))
-        # default=str fallback handles most types; force the JSON encoder to
-        # raise by injecting a "bad" extra value that breaks even repr.
-        # Simpler: just verify the call doesn't raise on weird shapes.
+        writer.record(prompt="before", response="r", latency_ms=1.0, tokens=1)
         writer.record(
-            prompt="p", response="r", latency_ms=float("nan"), tokens=1,
+            prompt="bad", response="r", latency_ms=1.0, tokens=1,
+            extra={"value": BrokenString()},
         )
-        # The file may or may not contain a line — important: no raise.
-        assert path.exists()
+        writer.record(prompt="after", response="r", latency_ms=1.0, tokens=1)
+
+        entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        assert [entry["prompt"] for entry in entries] == ["before", "after"]
 
     def test_path_property(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

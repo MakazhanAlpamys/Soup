@@ -2813,7 +2813,7 @@ Usage: `soup loop prune [OPTIONS]`
 |---|---|---|---|---|
 | `--yes` | flag | off |  | Delete the listed files; otherwise only show the plan. |
 | `--keep-runs` | integer, at least 1 | `20` |  | Keep at least this many recent loop runs (default: 20). |
-| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000). |
+| `--keep-log-lines` | integer, at least 1 | `10000` |  | Keep this many newest lines in each loop JSONL log (default: 10000); `versions.jsonl` always retains at least 20 rollback transitions. |
 
 ### `soup loop replay`
 
@@ -2824,7 +2824,7 @@ Usage: `soup loop replay [OPTIONS] [ITERATION_ID]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `ITERATION_ID` | text |  |  | Iteration id (omit to list all). |
-| `--extract` | text |  |  | Extract the iteration's .can to this directory for a what-if re-run (v0.71.4). |
+| `--extract` | text |  |  | Extract the given iteration's .can to this directory for a what-if re-run (needs the iteration ID; v0.71.4). |
 
 ### `soup loop resume`
 
@@ -2911,7 +2911,7 @@ Usage: `soup mcp runs reconcile [OPTIONS]`
 
 ### `soup mcp serve`
 
-Start the MCP server (read-only tools by default).
+Start the MCP server (ungated tools available by default).
 
 Usage: `soup mcp serve [OPTIONS]`
 
@@ -3604,7 +3604,7 @@ Usage: `soup serve [OPTIONS]`
 | `--bank` | text |  |  | Path to a VeRA / VB-LoRA vector bank (JSON). Multi-tenant LoRA serving at MB-per-user: the per-token delta is v_u ⊙ Px, routed by the X-User-Id request header. Requires --backend transformers. (v0.71.12 #221) |
 | `--bank-strength` | float | `1.0` |  | Vector-bank delta strength multiplier. Ignored when --bank is unset. |
 | `--mole` | text |  |  | Path to a MoLE training output dir (mole_gate.pt + mole_manifest.json). Serves the base + N frozen task LoRAs with per-token gate blending at decode time. Requires --backend transformers; not combinable with --bank / --steer / --adapters. (v0.71.17 #259) |
-| `--kv-cache-type` | text |  |  | KV-cache type for decoding: q8_0 (8-bit quantized, needs hqq) / bf16 / f16 (cache dtype) / fp8 (vLLM+Hopper only). Transformers backend only — vLLM / SGLang routing is in the blocked tail. v0.71.14 (#140). |
+| `--kv-cache-type` | text |  |  | KV-cache type for decoding, on --backend transformers only: q8_0 (8-bit quantized cache, needs hqq), bf16 or f16 (cache dtype). fp8 is refused on every backend, Hopper GPUs included, and every other backend refuses this option. v0.71.14 (#140). |
 | `--tool-auth-token` | text |  |  | Require 'Authorization: Bearer &lt;token>' on the tool endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search), and on /v1/thumbs, /v1/feedback and the adapter routes (/v1/adapters, /v1/adapters/activate/&lt;name>, /v1/adapters/deactivate). Without it, /v1/tools/python and /v1/tools/bash answer 401 on every bind and a non-loopback --host is refused. 16-128 characters of A-Z, a-z, 0-9, '\_' and '-', as secrets.token_urlsafe(32) makes. Env: `SOUP_TOOL_AUTH_TOKEN`. |
 
 ## `soup ship`
@@ -3789,7 +3789,7 @@ Usage: `soup train [OPTIONS]`
 |---|---|---|---|---|
 | `--config`, `-c` | text | `soup.yaml` |  | Path to soup.yaml config file |
 | `--name`, `-n` | text |  |  | Experiment name (auto-generated if not set) |
-| `--dry-run` | flag | off |  | Validate config and data without training |
+| `--dry-run` | flag | off |  | Validate config and data without training. Cannot be combined with --find-lr. |
 | `--resume`, `-r` | text |  |  | Resume from checkpoint: path to checkpoint dir ('auto' for latest); on the MLX backend, a path to a .safetensors adapter file instead. Not supported when training.relora_steps is configured, for task: unlearn or task: ppo, and on backend: mlx for a full fine-tune (lora.r: 0) or task: grpo |
 | `--wandb` | flag | off |  | Enable Weights &amp; Biases logging |
 | `--tensorboard` | flag | off |  | Enable TensorBoard logging (logs to output_dir/runs/) |
@@ -3835,6 +3835,7 @@ Usage: `soup train [OPTIONS]`
 | `--cloud` | text |  |  | Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: modal, lambda, runpod. Renders a cloud app stub from the config (plan-only); use --cloud-submit to submit live. |
 | `--gpu` | text | `a100` |  | Cloud GPU type for --cloud. modal: t4, l4, a10g, a100, a100-80gb, l40s, h100. lambda: a10, a100, a6000, h100. runpod: a100, a40, h100, rtx3090, rtx4090. Default a100. A type another provider lists is refused with exit 2. |
 | `--cloud-submit` | flag | off |  | With --cloud, submit the rendered run live via the cloud's SDK or API (gated on respective provider token/API key). Default is plan-only (render + print the command). Lambda requires a registered SSH key. |
+| `--result-json` | flag | off |  | Emit a machine-readable dry-run result (preview). |
 
 ## `soup tui`
 

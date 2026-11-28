@@ -12,6 +12,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.monitoring.manual_save import manual_save_context
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.packed_lora_setup import PackedLoraSetupMixin
 from soup_cli.trainer.save_args import save_kwargs
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
 from soup_cli.utils.eval_schedule import training_eval_kwargs
@@ -559,7 +560,7 @@ def is_full_finetune(tcfg) -> bool:
     return bool(tcfg.unfrozen_parameters or tcfg.lisa_enabled or tcfg.lora.r == 0)
 
 
-class SFTTrainerWrapper(StreamingSetupMixin):
+class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
     """High-level wrapper that sets up model + tokenizer + trainer from SoupConfig."""
 
     def __init__(
@@ -580,6 +581,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self.model = None
         self.tokenizer = None
         self.trainer = None
+        # Layers below this index are frozen by the freeze plan; read by the
+        # frozen-prefix cache. None until a plan resolves.
+        self._frozen_prefix_cutoff: Optional[int] = None
         self._is_raft = False  # set in setup() when data.format == 'raft'
         self._quest_metadata: Optional[dict[str, Any]] = None
         self._quest_base_identity_before: Optional[str] = None
@@ -733,6 +737,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     "[yellow]Could not release the layer-streaming runtime: "
                     f"{for_terminal(str(close_error))}[/]"
                 )
+            self._close_packed_lora()
             raise
 
     def _finish_setup(self, dataset: dict, cfg, tcfg, *, use_vision: bool, use_audio: bool):
@@ -1017,6 +1022,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     f"{ckpt_plan.description}"
                 )
 
+        if tcfg.lisa_enabled and training_kwargs.get("gradient_checkpointing"):
+            # LISA freezes decoder parameters after DDP registers them.
+            training_kwargs["ddp_find_unused_parameters"] = True
+
         # NEFTune — noisy embeddings for better fine-tuning quality
         if tcfg.neftune_alpha is not None:
             training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
@@ -1102,7 +1111,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # TRL's `compute_loss` reads for its metrics. The schema keeps the
         # option to the two branches below that build `sft_cls`.
         sft_cls = SFTTrainer
-        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        # ... and so does training.packed_lora (the packed step returns the loss and no logits).
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None) or getattr(
+            self, "_packed_lora_hook", None
+        )
         if chunk_hook is not None:
             from soup_cli.utils.stream_loss_chunk import (
                 HOOK_ATTR,
@@ -1796,6 +1808,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             validate_cuda_hardware()
             self._quest_base_identity_before = resolve_base_model_identity(cfg.base)
 
+        # training.packed_lora -- the machine and the model's config, before anything is loaded.
+        self._begin_packed_lora(cfg, tcfg)
+
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
             from soup_cli.utils.liger import apply_liger_kernel
@@ -1953,13 +1968,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.kbit_prepare import prepare_kbit_model
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-            self.model = prepare_kbit_model(
-                self.model,
-                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
-                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
-                ),
-                compute_dtype=self._kbit_compute_dtype(tcfg, cfg.base),
-            )
+            compute_dtype = self._kbit_compute_dtype(tcfg, cfg.base)
+            with self._packed_lora_kbit_context(compute_dtype):
+                self.model = prepare_kbit_model(
+                    self.model,
+                    use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                        tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                    ),
+                    compute_dtype=compute_dtype,
+                )
 
         # Freeze training — freeze bottom layers before LoRA
         # #1432: cutoff re-read below to scope the LoRA adapter to it too.
@@ -1984,6 +2001,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if plan is not None:
                 cutoff, total_layers = plan
                 lora_freeze_plan = plan
+                self._frozen_prefix_cutoff = cutoff
                 # #1432: a zero cutoff freezes nothing, but peft still reads
                 # any layers_to_transform list as "restrict to these numbered
                 # layers only", which silently drops a target outside a
@@ -2234,6 +2252,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             apply_router_only_freeze_if_configured(self.model, tcfg, console)
 
         self._apply_quantization_aware(tcfg)
+        # training.packed_lora -- on the final LoRA model, last, so the kernels see what trains.
+        self._install_packed_lora(cfg, tcfg)
 
     def _apply_quantization_aware(self, tcfg) -> None:
         """Apply quantization-aware training post-LoRA (shared text/vision).
@@ -2747,6 +2767,50 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         ) as train_ctx:
             # #1693: also when training raises.
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
+            # training.packed_lora: the hook comes off and the pinned memory goes back.
+            train_ctx.callback(self._close_packed_lora)
+            if tcfg.frozen_prefix_cache:
+                from soup_cli.utils.frozen_prefix_forward import frozen_prefix_session
+
+                # The cache is keyed per batch: with a larger batch the data order
+                # must be fixed, or no batch ever repeats and the cache only writes.
+                # Config load covers a sorted curriculum; pre-tokenised data and
+                # other paths can still hand the Trainer a random sampler.
+                if (
+                    self.trainer.args.per_device_train_batch_size > 1
+                    and getattr(self.trainer.args, "train_sampling_strategy", None)
+                    != "sequential"
+                ):
+                    raise ValueError(
+                        "training.frozen_prefix_cache with a batch size above 1 needs a "
+                        "fixed data order, but this run reads its rows in random order "
+                        "(a pre-tokenized dataset does this even with a curriculum), so "
+                        "no batch would repeat. Set training.batch_size: 1."
+                    )
+                try:
+                    train_rows = len(self.trainer.train_dataset)
+                except TypeError:
+                    train_rows = None
+                prefix_runner = train_ctx.enter_context(
+                    frozen_prefix_session(
+                        self.trainer.model,
+                        cutoff=self._frozen_prefix_cutoff or 0,
+                        output_dir=self._output_dir,
+                        rows=train_rows,
+                        max_length=self.config.data.max_length,
+                        console=console,
+                        model_revision=str(self.config.base),
+                        n_gpu=self.trainer.args.n_gpu,
+                        quantized=bool(
+                            getattr(self.trainer.model, "is_loaded_in_8bit", False)
+                            or getattr(self.trainer.model, "is_loaded_in_4bit", False)
+                        ),
+                    )
+                )
+                console.print(
+                    "[green]Frozen-prefix cache enabled:[/] "
+                    f"{self._frozen_prefix_cutoff} frozen layers"
+                )
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped
@@ -2777,6 +2841,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 keep_trainable_dtype_on_resume(self.trainer)
             with manual_save_context(self.trainer):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            if tcfg.frozen_prefix_cache:
+                lookups = prefix_runner.hits + prefix_runner.misses
+                console.print(
+                    "[green]Frozen-prefix cache:[/] "
+                    f"hits={prefix_runner.hits}, misses={prefix_runner.misses}, "
+                    f"hit_rate={100 * prefix_runner.hits / lookups if lookups else 0:.1f}%"
+                )
+                if prefix_runner.cache.stop_reason is not None:
+                    console.print(
+                        "[yellow]The cache stopped writing during this run: "
+                        f"{for_terminal(prefix_runner.cache.stop_reason)}.[/]"
+                    )
         duration = time.time() - start
         self._report_rewind()
 

@@ -81,6 +81,15 @@ against your own data, and check what got dropped.
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
 
+Semantic dedup compares with an absolute `1e-6` tolerance for float32 rounding.
+At a positive `--threshold`, a row must have strictly positive cosine and meet
+`cosine >= threshold - 1e-6`; the tolerance never makes an exact zero match.
+At `--threshold 0.0`, the comparison remains inclusive (`cosine >= 0.0`). This
+lets identical nonzero embeddings match at `--threshold 1.0`; audit pairs keep
+the raw measured cosine, rather than rounding it to 1.0. True zero vectors have
+a dot product of zero and stay distinct at every positive threshold. Empty text
+that produces a nonzero embedding follows the same comparison as any other text.
+
 With either backend, a nonempty `--field` must occur in at least one loaded
 row. A field absent from every row is refused before backend work or output
 writes, preserving any existing output. Present-but-empty values and fields
@@ -1529,8 +1538,30 @@ soup data preprocess soup.yaml --output ./tokenized_cache
 
 SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
-the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
-up from the last completed shard.
+the per-epoch tokenization tax. Cache keys reject incompatible configured inputs.
+
+The writer completes Arrow and `metadata.json` in a unique sibling staging directory,
+then reopens them for validation before changing the target. Rebuilding with `--yes`
+moves the previous cache to a unique sibling backup, installs the complete new cache,
+and removes the backup. A failed install restores the previous cache. Concurrent
+writers stage separately and serialize commit/rollback using a per-key OS lock;
+a writer that waits 30 seconds for the lock fails and can be retried. The hidden
+`.lock_<key>` file remains for reuse; do not remove it while writers are running.
+
+If restoring the backup also fails, the error names the retained `.backup_<key>.*`
+directory. Stop writers and readers, resolve the reported filesystem error, then
+rename that directory back to `<key>` when the target is absent. A backup-cleanup
+warning means the new target is complete and usable; the named backup can be removed
+after confirming that no reader needs it. Cleanup only removes the current writer's
+temporary files. Abandoned `.tmp_<key>.*` directories can be removed once their
+writers have stopped.
+
+This protects against handled publication errors. The two directory renames leave a
+brief interval when the target path is absent, and readers do not pin a cache
+generation. Stop training/readers before rebuilding a cache they use. SIGKILL and
+power loss do not trigger automatic recovery or resume from an intermediate shard;
+inspect any retained backup and rebuild if necessary. The direct-Arrow layout, cache
+key and advisory for external datasets without metadata are unchanged.
 
 **Native MLX text SFT** also consumes this cache with both
 `data.format: pre_tokenized` and `data.tokenized_path` set. Install its optional

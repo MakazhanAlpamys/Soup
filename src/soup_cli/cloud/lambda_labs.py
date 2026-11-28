@@ -132,6 +132,7 @@ def render_lambda_stub(
     gpu: str,
     output_dir: str,
     soup_version: str,
+    local_train_inputs=(),
 ) -> str:
     """Render a local Lambda lifecycle controller with secret-free user data."""
     if not isinstance(config_yaml, str):
@@ -152,15 +153,41 @@ def render_lambda_stub(
             f"soup_version must match {_VERSION_RE.pattern} "
             f"and be <= {_MAX_VERSION_LEN} chars"
         )
+    input_manifest = [
+        {
+            "local_path": item.local_path,
+            "remote_path": item.remote_path,
+            "size_bytes": item.size_bytes,
+            "mtime_ns": item.mtime_ns,
+            "device": item.device,
+            "inode": item.inode,
+        }
+        for item in local_train_inputs
+    ]
 
     from soup_cli.utils.tool_paths import controller_source
 
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     pip_spec = f"soup-cli[train]=={soup_version}"
+    input_wait = ""
+    if local_train_inputs:
+        input_wait = (
+            "input_deadline=$((SECONDS + 1200))\n"
+            "while [ ! -f /home/ubuntu/soup/inputs-ready ]; do\n"
+            "  if [ \"$SECONDS\" -ge \"$input_deadline\" ]; then\n"
+            "    echo 'Timed out waiting for local training inputs' "
+"| tee -a /home/ubuntu/soup/train.log >&2\n"
+            "    exit 1\n"
+            "  fi\n"
+            "  sleep 2\n"
+            "done\n"
+        )
+
     user_data = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "mkdir -p /home/ubuntu/soup\n"
+        "chown ubuntu:ubuntu /home/ubuntu/soup\n"
         # #2234 - the log exists before the first step that can fail, so a failed
         # install is visible in the tail the controller fetches on a non-zero exit.
         ": > /home/ubuntu/soup/train.log\n"
@@ -177,6 +204,7 @@ def render_lambda_stub(
         f"python3 -m pip install {pip_spec!r} 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
         "cd /home/ubuntu/soup\n"
         f"printf '%s' {cfg_b64!r} | base64 -d > soup.yaml\n"
+        f"{input_wait}"
         "soup train --config soup.yaml --yes 2>&1 | tee -a /home/ubuntu/soup/train.log\n"
     )
 
@@ -190,6 +218,7 @@ def render_lambda_stub(
         "import signal",
         "import subprocess",
         "import sys",
+        "import stat",
         "import time",
         "import urllib.error",
         "import urllib.request",
@@ -224,6 +253,7 @@ def render_lambda_stub(
         f"_INSTANCE_TYPE = {lambda_gpu!r}",
         f"_USER_DATA = {user_data!r}",
         f"_LOCAL_OUTPUT = {output_dir!r}",
+        f"_LOCAL_TRAIN_INPUTS = {input_manifest!r}",
         f"_REMOTE_OUTPUT = {remote_output!r}",
         '_API_BASE = "https://cloud.lambdalabs.com/api/v1"',
         '_REGION_RE = re.compile(r"^[a-z0-9-]{1,64}$")',
@@ -252,6 +282,26 @@ def render_lambda_stub(
         "            f'Lambda API {method} {path} failed with HTTP {exc.code}: {detail}',",
         "            exc.code, method,",
         "        ) from exc",
+        "",
+        "def _validate_local_train_inputs():",
+        "    for item in _LOCAL_TRAIN_INPUTS:",
+        "        source = item['local_path']",
+        "        try:",
+        "            info = os.lstat(source)",
+        "        except OSError as exc:",
+        "            raise RuntimeError(",
+        "                f'local training input is unavailable: {source}: {exc}'",
+        "            ) from exc",
+        "        if (",
+        "            not stat.S_ISREG(info.st_mode)",
+        "            or info.st_size != item['size_bytes']",
+        "            or info.st_mtime_ns != item['mtime_ns']",
+        "            or info.st_dev != item['device']",
+        "            or info.st_ino != item['inode']",
+        "        ):",
+        "            raise RuntimeError(",
+        "                f'local training input changed after planning: {source}'",
+        "            )",
         "",
         "def _launch_payload(region, ssh_key_name, name):",
         "    return {",
@@ -367,6 +417,62 @@ def render_lambda_stub(
         "        clean_exc = _strip_control(str(exc))[:200]",
         "        print(f'Could not fetch remote log tail: {clean_exc}')",
         "",
+        "def _upload_local_train_inputs(ip, common, ssh, scp, env):",
+        "    if not _LOCAL_TRAIN_INPUTS:",
+        "        return",
+        "    def run_with_retry(command, label, timeout=60):",
+        "        deadline = time.monotonic() + _SCP_RETRY_WINDOW",
+        "        backoff = 1",
+        "        while True:",
+        "            try:",
+        "                result = subprocess.run(",
+        "                    command, check=False, capture_output=True,",
+        "                    text=True, timeout=timeout, env=env,",
+        "                )",
+        "            except (OSError, subprocess.TimeoutExpired) as exc:",
+        "                detail = str(exc)",
+        "            else:",
+        "                detail = result.stderr.strip()",
+        "                if result.returncode == 0:",
+        "                    return",
+        "            if time.monotonic() >= deadline:",
+        "                raise RuntimeError(f'{label} failed: {detail}')",
+        "            time.sleep(min(backoff, 15))",
+        "            backoff = min(backoff * 2, 15)",
+        "    run_with_retry(",
+        "        [ssh, *common, f'ubuntu@{ip}',",
+        "         'mkdir -p /home/ubuntu/soup/inputs && rm -f /home/ubuntu/soup/inputs-ready'],",
+        "        'preparing remote input directory',",
+        "    )",
+        "    for item in _LOCAL_TRAIN_INPUTS:",
+        "        source = item['local_path']",
+        "        try:",
+        "            info = os.lstat(source)",
+        "        except OSError as exc:",
+        "            raise RuntimeError(",
+        "                f'local training input is unavailable: {source}: {exc}'",
+        "            ) from exc",
+        "        if (",
+        "            not stat.S_ISREG(info.st_mode)",
+        "            or info.st_size != item['size_bytes']",
+        "            or info.st_mtime_ns != item['mtime_ns']",
+        "            or info.st_dev != item['device']",
+        "            or info.st_ino != item['inode']",
+        "        ):",
+        "            raise RuntimeError(f'local training input changed after planning: {source}')",
+        "        remote = item['remote_path']",
+        "        if not re.fullmatch(r'inputs/train-\\d+(?:\\.[a-z0-9]+)?', remote):",
+        "            raise RuntimeError(f'invalid generated remote input path: {remote!r}')",
+        "        run_with_retry(",
+        "            [scp, *common, source, f'ubuntu@{ip}:/home/ubuntu/soup/{remote}'],",
+        "            f'uploading local training input {remote}',",
+        "            timeout=60 + item['size_bytes'] // 1_000_000,",
+        "        )",
+        "    run_with_retry(",
+        "        [ssh, *common, f'ubuntu@{ip}', 'touch /home/ubuntu/soup/inputs-ready'],",
+        "        'marking local training inputs ready',",
+        "    )",
+        "",
         "def _train_and_copy(ip, private_key):",
         "    common = [",
         "        '-i', private_key, '-o', 'BatchMode=yes',",
@@ -374,6 +480,9 @@ def render_lambda_stub(
         "        '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15',",
         "        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=6',",
         "    ]",
+        "    ssh, scp = _tool('ssh'), _tool('scp')",
+        "    env = _tool_environment()",
+        "    _upload_local_train_inputs(ip, common, ssh, scp, env)",
         "    poll_cmd = (",
         '        \'case "$(cloud-init status 2>/dev/null)" in \'',
         '        \'*running*|*"not started"*|*"not run"*) echo RUNNING ;; \'',
@@ -381,8 +490,6 @@ def render_lambda_stub(
         '        \'else echo MISSING; fi ;; \'',
         '        \'esac\'',
         "    )",
-        "    ssh, scp = _tool('ssh'), _tool('scp')",
-        "    env = _tool_environment()",
         "    overall_deadline = time.monotonic() + 90000",
         "    outage_start = None",
         "    backoff = 1",
@@ -481,6 +588,7 @@ def render_lambda_stub(
         "    name = 'soup-' + uuid.uuid4().hex",
         "    launched = False",
         "    try:",
+        "        _validate_local_train_inputs()",
         "        launched = True",
         "        response = _request_json(",
         "            api_key, '/instance-operations/launch', method='POST',",
@@ -562,6 +670,7 @@ def plan_lambda_run(
     soup_version: str,
     stub_path: str = "soup_lambda_app.py",
     config_yaml: str | None = None,
+    local_train_inputs=(),
 ) -> CloudPlan:
     """Build a Lambda controller plan from a cwd-contained config.
 
@@ -591,6 +700,7 @@ def plan_lambda_run(
         gpu=gpu_key,
         output_dir=output_dir,
         soup_version=soup_version,
+        local_train_inputs=local_train_inputs,
     )
     return CloudPlan(
         cloud="lambda",
@@ -599,6 +709,7 @@ def plan_lambda_run(
         stub_path=stub_path,
         stub_text=stub_text,
         run_command=f"python -I {shlex.quote(stub_path)}",
+        local_train_inputs=tuple(local_train_inputs),
     )
 
 

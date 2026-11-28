@@ -41,6 +41,7 @@ Sections:
 - [`training`](#training)
 - [`training.lora`](#traininglora)
 - [`training.lora_layers`](#traininglora_layers)
+- [`training.packed_lora`](#trainingpacked_lora)
 - [`training.eval_gate`](#trainingeval_gate)
 - [`eval`](#eval)
 - [`eval.ship`](#evalship)
@@ -271,8 +272,9 @@ Sections:
 | `training.moe_aux_loss_coeff` | `float` | `0.01` | `>= 0` | Auxiliary load-balancing loss coefficient for MoE models |
 | `training.use_liger` | `bool` | `false` |  | Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup) |
 | `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
+| `training.packed_lora` | `section \| null` | `null` |  | Triton kernels for the Qwen2 QLoRA SFT step (NF4 decode, RMSNorm, RoPE, SwiGLU, a logit-free head and loss, an int8 MLP input gradient with a start-up check, saved activations in GPU or pinned host memory instead of gradient checkpointing). Off by default; yaml only. task='sft' on the transformers backend with text, quantization 4bit and lora.dropout 0; refused with the reason beside the other kernel switches. See [`training.packed_lora`](#trainingpacked_lora). |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
-| `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |
+| `training.use_ring_attention` | `bool` | `false` |  | Refused at config load (#2044): no trainer sets up Ring FlashAttention or sequence parallelism, so a run that asked for it would train with ordinary attention. Use rope_scaling_type with plain LoRA to extend the context. |
 | `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); on backend: mlx, task sft text supports rope_scaling_type: linear with quantization: none (#1995); refused at config load anywhere else (#1697). |
 | `training.yarn_factor` | `float \| null` | `null` | `> 1.0`, `<= 1024.0` | YaRN scaling factor (s). Optional — when omitted, the runtime falls back to ``target_length / original_length`` (HF default behaviour). |
 | `training.yarn_attn_factor` | `float \| null` | `null` | `>= 0.0`, `<= 10.0` | YaRN attention temperature multiplier (default 1.0 in HF). |
@@ -315,6 +317,7 @@ Sections:
 | `training.grad_accum_pressure_threshold` | `float` | `0.92` | `> 0.05`, `< 0.99` | VRAM utilisation fraction that triggers a recommendation |
 | `training.freeze_layers` | `int \| null` | `null` | `>= 1`, `<= 1000` | Freeze first N layers (from bottom). Train only remaining layers. Applied by tasks sft and tts on the text path with backend transformers and no layer streaming, or native MLX text SFT with lora.r=0. |
 | `training.freeze_ratio` | `float \| null` | `null` | `> 0.0`, `< 1.0` | Freeze this fraction of layers (0.75 = freeze 75% from bottom). Applied by tasks sft and tts on the text path with backend transformers and no layer streaming, or native MLX text SFT with lora.r=0. |
+| `training.frozen_prefix_cache` | `bool` | `false` |  | Cache the output of the frozen bottom layers on disk and reuse it in later epochs instead of running those layers again. Needs training.freeze_layers or training.freeze_ratio with LoRA on the layers above them, and task sft + backend transformers on a resident text model (no layer streaming); Mistral and OLMoE decoders only. The entries are written under the output directory and take disk space in proportion to the training set. |
 | `training.unfrozen_parameters` | `list[str] \| null` | `null` |  | Spectrum (#266) targeted training: regex patterns of parameter names to keep trainable — every other parameter is frozen. Full fine-tuning, LoRA off. Generate with `soup spectrum scan`. Mutually exclusive with LoRA features / freeze_layers / freeze_ratio / train_router_only; sft + transformers backend only. |
 | `training.lisa_enabled` | `bool` | `false` |  | Enable LISA layerwise importance sampling (#267): every lisa_interval_steps, freeze all decoder layers except a random lisa_num_layers set (embeddings + head always trainable). Full fine-tuning, LoRA off. sft or pretrain + transformers + text + quantization=none only; mutually exclusive with LoRA features / freeze_layers / freeze_ratio / unfrozen_parameters. |
 | `training.lisa_num_layers` | `int` | `2` | `>= 1`, `<= 64` | LISA: number of decoder layers kept trainable per interval (clamped to the model's layer count). Small = LoRA-like memory. |
@@ -405,6 +408,17 @@ Sections:
 | `training.lora_layers.freeze_deadline` | `int \| null` | `null` | `>= 1` | Optimizer step by which the minimum cutoff takes effect. |
 | `training.lora_layers.min_freeze_below` | `int \| null` | `null` | `>= 1`, `<= 1024` | Minimum cutoff enforced at freeze_deadline. |
 | `training.lora_layers.freeze_smoothing` | `float \| null` | `null` | `>= 0.0`, `< 1.0` | EMA decay for the rule (0 disables smoothing). |
+
+## `training.packed_lora`
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `training.packed_lora.enabled` | `bool` | `false` |  | Turn the packed-LoRA kernels on for this run |
+| `training.packed_lora.gpu_budget_mib` | `int \| null` | `null` | `>= 512`, `<= 1048576` | Target for torch's peak allocated GPU memory in MiB, planned from a fit to measurements (an estimate with a margin, not a guarantee): the planner decides how many layers keep their saved activations on the GPU and which tables live in pinned host memory. Unset keeps whatever fits resident. A budget under what the model needs is refused with the minimum. |
+| `training.packed_lora.activations` | `str` | `"auto"` | one of `"auto"`, `"resident"`, `"offload"` | Where each layer's saved activations live between its forward and backward: 'resident' (GPU), 'offload' (pinned host memory) or 'auto' (the last layers that fit stay on the GPU). |
+| `training.packed_lora.int8_backward` | `str` | `"auto"` | one of `"auto"`, `"on"`, `"stash"`, `"off"` | The MLP input-gradient GEMMs of the backward in int8. 'auto' keeps them on when a start-up gradient check passes, 'on' always, 'stash' only stores the gate/up activations as int8, 'off' is the exact mode (no int8 anywhere, about 21-24% slower). |
+| `training.packed_lora.int8_rounding` | `str` | `"grad"` | one of `"nearest"`, `"grad"`, `"stochastic"` | Rounding of the int8 gradient quantisers: 'grad' rounds the gradients stochastically (unbiased in expectation, the default), 'stochastic' also dithers the int8 weights, 'nearest' rounds to nearest (biased: the training loss drifts above plain Soup's). |
+| `training.packed_lora.on_unsupported` | `str` | `"error"` | one of `"error"`, `"stock"` | What to do when a run turns out not to be supported at setup ('error' stops with the reason, 'stock' prints it and trains with the stock step). |
 
 ## `training.eval_gate`
 

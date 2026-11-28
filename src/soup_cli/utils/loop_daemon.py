@@ -523,12 +523,13 @@ def run_once(
     # The batch is consumed only by a DECIDED verdict: SHIP deployed, DON'T SHIP, or the terminal
     # deploy hold. A refused deploy retains the trained candidate and its data cursor while waiting.
     verdict_decided = str(gate_out.get("gate_verdict", "SKIPPED")) in ("OK", "MAJOR")
+    deploy_deferred = pending is not None and not shipped and bool(deploy_out.get("deferred"))
     deploy_refused = deploying and not shipped and bool(deploy_out.get("failed"))
     attempts_used = resumed_attempts + 1 if deploy_refused else 0
     retry_deploy = False
-    consumed = trained_run and verdict_decided
+    consumed = trained_run and verdict_decided and not deploy_deferred
     failure_note = None
-    failed_deploy = state.failed_deploy
+    failed_deploy = None
     if deploy_refused:
         reason = str(deploy_out.get("notes") or "deploy failed")
         failed_deploy = deploy_failure_after(
@@ -550,8 +551,6 @@ def run_once(
                 f"deploy held after {attempts_used} attempts: {reason}; run "
                 "soup loop resume to retry the saved candidate"
             )
-    elif shipped and pending is not None:
-        failed_deploy = None
     elif train_out.get("failed") and train_out.get("notes"):
         # The failure itself (exit code or signal name, log tail), not the notes that came before
         # it (quantization, max_length, paraphrases): last_failure keeps its first 500 characters.
@@ -606,6 +605,18 @@ def run_once(
         verify_log=_log_ref(gate_out.get("verify_log")),
         **_evidence(gate_out),
     )
+    if deploy_deferred:
+        # A missing endpoint is not a refused server call or a completed iteration. Preserve the
+        # saved candidate, its cursor and its retry schedule across polls and restarts.
+        reason = _idle_reason(str(deploy_out.get("notes") or "deploy waiting"))
+        state = _state_with(state, last_idle={"at": _utc_iso(), "reason": reason})
+        if pending_cost_error is not None:
+            state = _state_with(
+                state,
+                failed_stage=_failed_stage_after(state, pending_cost_error, None, train_out),
+                last_failure=pending_cost_error.text[:500],
+            )
+        return state, _noted(record, log), replace(decision, proceed=False, reason=reason)
     if stage_error is None and _is_idle_poll(
         pending, trained_run, train_out, deploying, deploy_refused, gate_out, rolled_back,
         canary_notes,
@@ -1130,8 +1141,10 @@ def _failed_stage_after(
 def _prior_deploy_failure(
     failed: Optional[Mapping[str, object]], pending: Optional[Mapping[str, object]], now: datetime
 ) -> Optional[Mapping[str, object]]:
-    """Seed retry history from pre-backoff pending state written by an older Soup version."""
-    if failed is not None or pending is None:
+    """Use retry history only for a saved candidate, including pre-backoff state."""
+    if pending is None:
+        return None
+    if failed is not None:
         return failed
     attempts = pending.get("attempts", 0)
     if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:

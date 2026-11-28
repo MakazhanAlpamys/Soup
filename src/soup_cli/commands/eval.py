@@ -574,6 +574,7 @@ def judge(
         JudgeDownError,
         JudgeEvaluator,
         JudgeUnavailableError,
+        judge_model_label,
         load_rubric,
         rubric_file_label,
         validate_judge_api_base,
@@ -583,7 +584,7 @@ def judge(
     try:
         validate_judge_api_base(api_base)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     # Load target data
@@ -630,8 +631,9 @@ def judge(
             console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(1)
 
+    judge_label = judge_model_label(judge_model)
     console.print(
-        f"[dim]Judging {len(items)} responses with {judge_model} "
+        f"[dim]Judging {len(items)} responses with {for_terminal(judge_label, single_line=True)} "
         f"(provider: {provider})...[/]"
     )
 
@@ -722,7 +724,7 @@ def judge(
         tracker = ExperimentTracker()
         tracker.save_eval_result(
             model_path=target,
-            benchmark=f"judge:{judge_model}",
+            benchmark=f"judge:{judge_label}",
             score=results.overall_score,
             details={
                 "criteria_averages": results.criteria_averages,
