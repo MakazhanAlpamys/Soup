@@ -153,6 +153,7 @@ def rewind_skip_reason(
     vision: bool,
     audio: bool,
     prefix_tree: bool = False,
+    l2l: bool = False,
 ) -> str:
     """Why this run takes no rewind recorder, in words a user can act on.
 
@@ -173,6 +174,8 @@ def rewind_skip_reason(
         return "vision runs a custom collator"
     if audio:
         return "audio runs a custom collator"
+    if l2l:
+        return "L2L runs the layers outside the loss path the recorder wraps"
     if task != "sft":
         return f"the recorder is SFT-only and this is task {task!r}"
     return "this run does not take the recording trainer path"
@@ -675,6 +678,18 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
         apply_training_seed(tcfg)
 
+        # Refuse unsupported L2L options before any model load: a closed codec, an
+        # auto-k this version cannot plan.
+        self._l2l_recipe = None
+        if tcfg.l2l:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+            from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
+
+            refuse_distributed_l2l(
+                _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
+            )
+            self._l2l_recipe = resolve_l2l_recipe(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
         use_vision = cfg.modality == "vision"
 
@@ -928,6 +943,8 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             # the default val_split was withheld and never evaluated.
             **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
+        if getattr(tcfg, "stream_experts", None) is not None and str(self.device) == "cpu":
+            training_kwargs["use_cpu"] = True
 
         # Curriculum: the length sort above reaches the model only if the
         # sampler keeps it. The Trainer's default sampler is random, which
@@ -1199,6 +1216,8 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                 processor=self.processor,
                 max_length=cfg.data.max_length,
             )
+        elif tcfg.l2l:
+            self.trainer = self._build_l2l_trainer(sft_cls, trainer_kwargs, training_args)
         elif (
             tcfg.rewind_log
             and cfg.task == "sft"
@@ -1237,6 +1256,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                         vision=use_vision,
                         audio=use_audio,
                         prefix_tree=use_prefix_tree,
+                        l2l=tcfg.l2l,
                     )
                 )
 
@@ -2719,6 +2739,22 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # training.packed_lora: the hook comes off and the pinned memory goes back.
             train_ctx.callback(self._close_packed_lora)
+            l2l_recipe = getattr(self, "_l2l_recipe", None)
+            if resume_from_checkpoint is not None:
+                from soup_cli.utils.l2l_recipe import validate_resume_source
+
+                l2l_recipe = validate_resume_source(resume_from_checkpoint, l2l_recipe)
+            if l2l_recipe is not None:
+                from soup_cli.utils.l2l_recipe import write_recipe
+
+                write_recipe(self._output_dir, l2l_recipe)
+            from soup_cli.utils.l2l_recipe import RECIPE_NAME, build_l2l_recipe_callback
+
+            # In an output with L2L history, ordinary saves also need checkpoint metadata.
+            if l2l_recipe is not None or (Path(self._output_dir) / RECIPE_NAME).is_file():
+                recipe_callback = build_l2l_recipe_callback(self._output_dir, l2l_recipe)
+                self.trainer.add_callback(recipe_callback)
+                train_ctx.callback(self.trainer.remove_callback, recipe_callback)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

@@ -159,8 +159,11 @@ def _write(directory, state, *, quant=None, model_type="deepseek_v3"):
 def _shard(weights, out, *, arch="deepseek_v3"):
     from soup_cli.utils.layer_shard import shard_checkpoint
 
-    kwargs = {"num_hidden_layers": LAYERS} if arch == "deepseek_v3" else {}
-    return shard_checkpoint(weights, str(out), dtype="bfloat16", arch=arch, **kwargs)
+    return shard_checkpoint(
+        weights, str(out), dtype="bfloat16", arch=arch,
+        num_hidden_layers=LAYERS if arch == "deepseek_v3" else None,
+        expert_layout="per_expert" if arch == "olmoe" else "",
+    )
 
 
 def _estimate(weights, *, arch="deepseek_v3"):
@@ -171,6 +174,7 @@ def _estimate(weights, *, arch="deepseek_v3"):
         _discover_safetensors(weights), dtype="bfloat16", arch=arch,
         num_hidden_layers=LAYERS if arch == "deepseek_v3" else None,
         quantization_config=read_checkpoint_quantization_config(weights),
+        expert_layout="per_expert" if arch == "olmoe" else "",
     )
 
 
@@ -859,6 +863,7 @@ _TINY_FAMILIES = {
         num_experts_per_tok=2, kv_lora_rank=16, q_lora_rank=24, qk_nope_head_dim=16,
         qk_rope_head_dim=8, v_head_dim=16, head_dim=None,
     )),
+    "olmoe": ("olmoe", dict(intermediate_size=8, num_experts=2, num_experts_per_tok=1)),
     "qwen3_5_text": ("qwen3", _TINY_LINEAR),
     "qwen3_5_moe_text": ("qwen3", dict(
         _TINY_LINEAR, num_experts=2, num_experts_per_tok=1, moe_intermediate_size=8,
@@ -895,8 +900,8 @@ def test_every_supported_family_shards_its_own_checkpoint(tmp_path, model_type):
     torch.manual_seed(0)
     model = transformers.AutoModelForCausalLM.from_config(config, dtype=torch.float32)
     weights = str(tmp_path / "model")
-    model.save_pretrained(weights, safe_serialization=True)
-    del model
+    # Keep OLMoE's fused expert tensors instead of exporting separate projections.
+    model.save_pretrained(weights, safe_serialization=True, save_original_format=family != "olmoe")
 
     tensors = _read_source_tensors(_discover_safetensors(weights))
     integers = sorted(
@@ -913,6 +918,17 @@ def test_every_supported_family_shards_its_own_checkpoint(tmp_path, model_type):
     assert index.n_layers == 2
     if family != "qwen4_exp":  # qwen4_exp has its own estimator
         assert _estimate(weights, arch=family).total_bytes > 0
+
+    if family == "olmoe":
+        assert index.expert_layers == (0, 1)
+        key = "model.layers.0.mlp.experts.gate_up_proj"
+        state = model.state_dict()
+        state[key] = torch.zeros_like(state[key], dtype=torch.int32)
+        packed = _write(tmp_path / "packed", state, model_type=model_type)
+        sharder, estimator = _refusals(tmp_path, packed, arch=family)
+        assert f"checkpoint tensor {key!r} is stored as 'I32'" in sharder
+        assert _TAIL in sharder and _POINTER in sharder
+        assert estimator == sharder
 
 
 # ==========================================================================

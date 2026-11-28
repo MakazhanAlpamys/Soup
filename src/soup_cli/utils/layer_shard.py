@@ -48,6 +48,7 @@ from typing import (
 
 from soup_cli import __version__
 from soup_cli.utils.deepseek_v3 import ROUTER_WEIGHT_KEY, router_weight_uses_fp32
+from soup_cli.utils.expert_shard import _MAX_EXPERTS, EXPERT_LAYOUT_VERSION
 from soup_cli.utils.expert_stream import (
     EXPERT_LAYOUT_PER_EXPERT,
     expert_shard_name,
@@ -144,6 +145,7 @@ _PER_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp\.experts)\."
     r"(?P<expert>\d+)\.(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
 )
+_FUSED_EXPERT_KEYS = ("mlp.experts.gate_up_proj", "mlp.experts.down_proj")
 #: Architectures whose transformers module holds the routed experts as fused
 #: 3-D ``gate_up_proj`` [E, 2I, H] / ``down_proj`` [E, H, I] parameters while
 #: the checkpoint stores one 2-D tensor per expert and projection (the
@@ -182,7 +184,7 @@ def _fp32_layer_storage_keys(arch: str, *, fp32_router_weights: bool) -> Tuple[s
 
 #: Architectures admitted to ``expert_layout="per_expert"``: each one passed
 #: the resident-vs-streamed parity tests in ``tests/test_expert_stream.py``.
-_PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3",)
+_PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3", "olmoe")
 #: Public name for the trainer's early refusal (``training.stream_expert_layout``).
 PER_EXPERT_LAYOUT_ARCHS = _PER_EXPERT_LAYOUT_ARCHS
 _QWEN4_OQ_EXPERT_RE = re.compile(
@@ -603,6 +605,9 @@ def large_shard_path(out_dir: str, key: str) -> str:
 STRIPE_MARKER_NAME = "stripe.json"
 #: A marker Soup writes is ~250 bytes; anything past this is not one, and is not parsed.
 _MAX_STRIPE_MARKER_BYTES = 4096
+#: A shard index lists every layer key and quant spec; a 1T-class store stays well
+#: under a few MB, so this bounds a hostile file without limiting a real one.
+_MAX_INDEX_BYTES = 64 * 2**20
 
 
 def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
@@ -618,14 +623,54 @@ def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
     return [shard_dir] + [os.path.join(root, name) for root in stripe_roots]
 
 
+# A bare shard file name: no separator, drive colon, control character, leading dot or space.
+_BARE_SHARD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+
+
+def contained_leaf(root: str, name: str) -> str:
+    """``root``/``name``, refused unless the file itself resolves inside ``root``.
+
+    ``name`` must be a bare file name. The check is on the RESOLVED leaf (``realpath`` of the
+    file, then ``commonpath`` against the resolved root), not on its directory, so a shard
+    that is a symlink to a file outside the store is refused too.
+    """
+    if (
+        not isinstance(name, str)
+        or _BARE_SHARD_NAME.fullmatch(name) is None
+        or name.split(".")[0].upper() in _WINDOWS_DEVICE_NAMES
+    ):
+        raise ValueError(f"shard file name {name!r} is not a bare file name")
+    path = os.path.join(root, name)
+    real_root = os.path.realpath(root)
+    real_leaf = os.path.realpath(path)
+    try:
+        inside = os.path.commonpath([real_root, real_leaf]) == real_root
+    except ValueError:  # different drives on Windows
+        inside = False
+    if not inside or real_leaf == real_root:
+        raise ValueError(f"shard file {name!r} resolves outside the store root {root!r}")
+    return path
+
+
 def layer_paths(shard_dir: str, index: "ShardIndex") -> List[str]:
     """Where each decoder layer's file lives. Every caller that used to build a layer path
     from ``shard_dir`` alone goes through this, so a striped cache is never half-understood."""
     placement = tuple(getattr(index, "layer_roots", ()) or ())
     if not placement:
-        return [layer_shard_path(shard_dir, idx) for idx in range(index.n_layers)]
+        return [
+            contained_leaf(shard_dir, os.path.basename(layer_shard_path(shard_dir, idx)))
+            for idx in range(index.n_layers)
+        ]
     dirs = stripe_dirs(shard_dir, tuple(index.stripe_roots))
-    return [layer_shard_path(dirs[root], idx) for idx, root in enumerate(placement)]
+    return [
+        contained_leaf(dirs[root], os.path.basename(layer_shard_path(dirs[root], idx)))
+        for idx, root in enumerate(placement)
+    ]
 
 
 def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
@@ -634,7 +679,7 @@ def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
         return {}
     paths = layer_paths(shard_dir, index)
     return {
-        layer: os.path.join(os.path.dirname(paths[layer]), expert_shard_name(layer))
+        layer: contained_leaf(os.path.dirname(paths[layer]), expert_shard_name(layer))
         for layer in index.expert_layers
     }
 
@@ -712,9 +757,26 @@ def _stripe_marker_problem(
 
 def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardIndex:
     """Read a shard index. Raises on a missing or malformed index."""
+    from soup_cli.utils.safetensors_reader import reject_duplicate_keys
+
     path = os.path.join(out_dir, index_name)
-    with open(path, encoding="utf-8") as handle:
-        payload = json.load(handle)
+    with open(path, "rb") as handle:
+        raw = handle.read(_MAX_INDEX_BYTES + 1)
+    if len(raw) > _MAX_INDEX_BYTES:
+        raise ValueError(
+            f"shard index {path} is larger than {_MAX_INDEX_BYTES} bytes; "
+            f"refusing to parse it"
+        )
+    try:
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"shard index {path} is not valid UTF-8 ({exc})") from exc
+    except ValueError as exc:
+        if isinstance(exc, json.JSONDecodeError):
+            raise ValueError(f"shard index {path} is not valid JSON ({exc})") from exc
+        raise ValueError(f"shard index {path} is not valid ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"shard index {path} is not a JSON object")
     # `quant` defaults to "none" so a v0.72.0/.1 bf16 cache stays valid for a
     # bf16 request rather than forcing every existing user to re-shard.
     specs = payload.get("quant_specs") or {}
@@ -733,6 +795,12 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
     expert_layout = str(payload.get("expert_layout", ""))
     if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
         raise ValueError(f"unknown expert_layout {expert_layout!r}")
+    # An index written by the other expert runtime stamps ``expert_layout_version``
+    # (and ``fp32_keys`` / ``stacked_experts``, which this reader does not need).
+    # This writer never emits it, so absence is the version this reader knows.
+    layout_version = payload.get("expert_layout_version", EXPERT_LAYOUT_VERSION)
+    if type(layout_version) is not int or layout_version != EXPERT_LAYOUT_VERSION:
+        raise ValueError(f"unsupported expert layout version {layout_version!r}")
     expert_layers = tuple(int(layer) for layer in (payload.get("expert_layers") or ()))
     if list(expert_layers) != sorted(set(expert_layers)) or any(
         not 0 <= layer < n_layers for layer in expert_layers
@@ -1225,7 +1293,7 @@ def estimate_shard_cache_bytes(
     consumed = _fp8_consumed_keys(fp8_plan)
 
     itemsize = _ITEMSIZE[dtype]
-    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    stack_experts = arch in _STACKED_EXPERT_ARCHS or (arch == "olmoe" and bool(expert_layout))
     fp32_buffers = layer_buffer_keys(arch)
     drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
@@ -1261,6 +1329,7 @@ def estimate_shard_cache_bytes(
             layer_bytes[idx] += numel * _ITEMSIZE[stored]
             header_bytes += _charge_names((short,))
 
+    fused_routed: Dict[int, Dict[str, Tuple[int, ...]]] = {}
     for key, (_source_dtype, shape) in tensors.items():
         if key in consumed:
             continue
@@ -1281,10 +1350,23 @@ def estimate_shard_cache_bytes(
             projections[expert_match.group("projection")] = numel
             continue
         short = match.group(2)
+        if expert_layout and arch == "olmoe" and short in _FUSED_EXPERT_KEYS:
+            fused_routed.setdefault(idx, {})[short] = tuple(shape)
+            continue
         if arch == "deepseek_v3" and short == ROUTER_WEIGHT_KEY:
             router_numels[idx] = numel
         else:
             _charge_layer_tensor(idx, short, numel, fp32_buffers)
+
+    for idx, shapes in fused_routed.items():
+        if idx in routed:
+            raise ValueError(f"layer {idx} contains both fused and separate expert weights")
+        gate, down = _validate_fused_expert_shapes(shapes)
+        routed[idx] = {
+            expert: {"gate_proj": math.prod(gate[1:]), "up_proj": 0,
+                     "down_proj": math.prod(down[1:])}
+            for expert in range(gate[0])
+        }
 
     for idx, experts in routed.items():
         for expert, projections in experts.items():
@@ -2182,7 +2264,7 @@ def shard_checkpoint(
     # index stores that so the cache check below stays stable across ordinals.
     device_kind = str(device).split(":", 1)[0] if quantise else ""
     external_mode = "qwen4_ple" if arch == "qwen4_exp" else ""
-    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    stack_experts = arch in _STACKED_EXPERT_ARCHS or (arch == "olmoe" and bool(expert_layout))
     expert_label = _STACKED_EXPERT_ARCHS.get(arch, arch)
     # Fused routed experts are stacked at the stream dtype below and never quantised;
     # per_expert ones are NF4 under quant='nf4'. The disk pre-flight sizes by this too.
@@ -2374,7 +2456,13 @@ def shard_checkpoint(
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
             _notify_orphaned_stripes(resolved_out, stripe, notify)
 
-    if expert_layout and not any(_PER_EXPERT_RE.match(key) for key in where):
+    if expert_layout and not any(
+        _PER_EXPERT_RE.match(key) or (
+            arch == "olmoe" and key.startswith("model.layers.")
+            and key.endswith("." + _FUSED_EXPERT_KEYS[0])
+        )
+        for key in where
+    ):
         raise ValueError(
             f"expert_layout={expert_layout!r} found no per-expert routed weights "
             f"(model.layers.N.mlp.experts.E.*) in {weights_dir} to split"
@@ -2547,6 +2635,7 @@ def shard_checkpoint(
             prefix = f"model.layers.{idx}."
             blob = {}
             stacked_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            fused_experts: Dict[str, str] = {}
             per_expert_ids: List[int] = []
             oq_experts: Dict[str, str] = {}
             for key in where:
@@ -2569,6 +2658,9 @@ def shard_checkpoint(
                     stacked_experts.setdefault(projection, {})[expert] = key
                     continue
                 short = key[len(prefix):]
+                if expert_layout and arch == "olmoe" and short in _FUSED_EXPERT_KEYS:
+                    fused_experts[short] = key
+                    continue
                 # The same rule estimate_shard_cache_bytes sizes the disk pre-flight by.
                 stored, as_nf4 = _layer_tensor_storage(
                     short,
@@ -2609,6 +2701,8 @@ def shard_checkpoint(
                 if logical_key.startswith(prefix):
                     total_params += math.prod(spec.shape)
             if stacked_experts:
+                if fused_experts:
+                    raise ValueError(f"layer {idx} contains both fused and separate expert weights")
                 import torch
 
                 expected_projections = {"gate_proj", "up_proj", "down_proj"}
@@ -2735,18 +2829,22 @@ def shard_checkpoint(
                     f"Free space on that drive, or name another folder in {STRIPE_DIRS_ENV} "
                     f"(unset it to shard to one root).",
                 ) from exc
-            if per_expert_ids:
-                import torch
+            if per_expert_ids or fused_experts:
+                if fused_experts:
+                    pairs = _fused_expert_pairs(fused_experts, where, handles, dtype)
+                else:
+                    import torch
 
-                def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
-                    for expert in ids:
-                        gate = read("gate_proj", expert)
-                        gate_up_one = torch.cat((gate, read("up_proj", expert)))
-                        yield gate_up_one, read("down_proj", expert)
+                    def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
+                        for expert in ids:
+                            gate = read("gate_proj", expert)
+                            gate_up_one = torch.cat((gate, read("up_proj", expert)))
+                            yield gate_up_one, read("down_proj", expert)
 
+                    pairs = _expert_pairs()
                 info = write_expert_shard(
                     os.path.join(shard_dirs[root], expert_shard_name(idx)),
-                    _expert_pairs(),
+                    pairs,
                     quantise=experts_nf4,
                     double_quant=double_quant,
                     device=device,
@@ -2779,7 +2877,7 @@ def shard_checkpoint(
             # An experts file the new index will not name (an earlier per_expert
             # layout, or one now written to a stripe root) goes the same way.
             stale_experts = os.path.join(resolved_out, expert_shard_name(idx))
-            if (not per_expert_ids or root) and os.path.exists(stale_experts):
+            if (not (per_expert_ids or fused_experts) or root) and os.path.exists(stale_experts):
                 stale_root0_copies.append(stale_experts)
             del blob
 
@@ -3248,6 +3346,38 @@ def _read_raw_tensor(handle: Any, key: str) -> "Any":
         )
     view = handle.get_tensor(key)
     return _own(view, view.contiguous())
+
+
+def _validate_fused_expert_shapes(shapes: Mapping[str, tuple]) -> tuple[tuple, tuple]:
+    if set(shapes) != set(_FUSED_EXPERT_KEYS):
+        raise ValueError("fused expert source needs gate_up_proj and down_proj")
+    gate, down = (shapes[key] for key in _FUSED_EXPERT_KEYS)
+    if (
+        len(gate) != 3 or len(down) != 3 or gate[0] != down[0]
+        or not 1 <= gate[0] <= _MAX_EXPERTS or gate[1] != 2 * down[2] or gate[2] != down[1]
+        or min(*gate, *down) < 1
+    ):
+        raise ValueError("incompatible fused expert source shapes")
+    return gate, down
+
+
+def _fused_expert_pairs(
+    keys: Mapping[str, str], where: Mapping[str, tuple], handles: Mapping, dtype: str,
+) -> Iterator[tuple]:
+    """Slice the two checkpoint tensors one expert at a time."""
+    import torch
+
+    slices = {}
+    for part, key in keys.items():
+        path, source_key = where[key]
+        slices[part] = handles[path].get_slice(source_key)
+        _refuse_fp8(key, slices[part].get_dtype())
+    gate, _ = _validate_fused_expert_shapes({
+        part: tuple(view.get_shape()) for part, view in slices.items()
+    })
+    target = getattr(torch, dtype)
+    for expert in range(gate[0]):
+        yield tuple(slices[part][expert].to(dtype=target, copy=True) for part in _FUSED_EXPERT_KEYS)
 
 
 def _read_oq_tensor(
