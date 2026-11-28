@@ -106,6 +106,10 @@ _MAX_LORA_PATTERN_KEY_LEN = 512
 # which key it was, not enough to paste kilobytes into a terminal or a log.
 _MAX_LORA_PATTERN_KEY_SHOWN = 80
 
+# Tasks that training.l2l accepts. A task joins the tuple when its L2L window loss
+# (trainer/l2l_trainer.py WindowLoss) ships; the refusal below reads the tuple.
+L2L_SUPPORTED_TASKS = ("sft",)
+
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
 _MAX_UNFROZEN_PATTERN_LEN = 512
@@ -4063,6 +4067,113 @@ class TrainingConfig(BaseModel):
             "Weighted preference_loss_weights do not stream yet."
         ),
     )
+    l2l: bool = Field(
+        default=False,
+        description=(
+            "BETA. Layer-to-layer (L2L) execution for sft with stream_layers: each "
+            "streamed decoder layer is loaded once per optimizer step and runs all "
+            "k micro-batches, then the optimizer takes one step on the adapters. k is "
+            "gradient_accumulation_steps. Needs stream_layers=true and a Llama, "
+            "Mistral or (with stream_expert_layout='per_expert') DeepSeek-V3-family "
+            "model on a single GPU; a MoE model with the fused expert layout is "
+            "refused. k=1 behaves like plain streaming. A bool only: 1 or 'yes' is "
+            "refused."
+        ),
+    )
+    l2l_spill_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "BETA — where training.l2l spills activations that do not fit the host-RAM "
+            "budget. Default: a '_l2l_spill' folder in the run's output directory. It "
+            "must resolve under $HOME, the working directory or the temp directory "
+            "(realpath, so symlinks and Windows short names cannot step outside), and "
+            "is refused at launch on RAM-backed, overlay and network filesystems and on "
+            "a drive without room. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_activation_codec: Literal["none", "fp8_e4m3"] = Field(
+        default="none",
+        description=(
+            "BETA — how training.l2l stores the activations between layers. 'none' keeps "
+            "them in the compute dtype. 'fp8_e4m3' is accepted by the schema, but the "
+            "launch refuses it until it is shown to be safe for training: it is lossy "
+            "and its gradients are not yet checked against the accumulation baseline. "
+            "The value is recorded in the run's l2l_recipe.json, and a resume with "
+            "another codec is refused. Only valid with training.l2l=true."
+        ),
+    )
+    l2l_auto_k: bool = Field(
+        default=False,
+        description=(
+            "BETA — let the memory planner pick the largest k that fits host RAM, up to "
+            "gradient_accumulation_steps. Plans the window of a MoE model, whose host "
+            "budget the launch does not resolve yet, so it refuses this for now. Off: k = "
+            "gradient_accumulation_steps. Only valid with training.l2l=true. A bool "
+            "only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_two_read_experts: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under training.l2l with a per_expert MoE cache, replay each "
+            "layer's routing decisions in the checkpoint recompute so a routed expert is "
+            "read in the forward and in its own backward, not a third time in the "
+            "recompute. Needs training.l2l=true and stream_expert_layout='per_expert'. "
+            "Off by default. A bool only: 1 or 'yes' is refused."
+        ),
+    )
+    l2l_grouped_expert_routes: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under training.l2l with a per_expert MoE cache, find each "
+            "streamed MoE layer's hit experts and their token rows with one nonzero "
+            "instead of one per expert. Needs training.l2l=true and "
+            "stream_expert_layout='per_expert'. Off by default. A bool only: 1 or 'yes' "
+            "is refused."
+        ),
+    )
+    l2l_route_preserving_mbr: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — group streamed DeepSeek-V3 routed experts across L2L micro-batches. "
+            "Attention and routing still run per micro-batch. Requires training.l2l=true, "
+            "stream_expert_layout='per_expert', l2l_two_read_experts=true and "
+            "l2l_grouped_expert_routes=true. Off by default."
+        ),
+    )
+    l2l_mbr_group_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Number of micro-batches per routed-expert group. Requires "
+            "l2l_route_preserving_mbr=true and cannot exceed gradient_accumulation_steps. "
+            "Null uses the full L2L window."
+        ),
+    )
+    l2l_mbr_split_backward: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under l2l_route_preserving_mbr, differentiate grouped experts "
+            "first, then backpropagate through the rest of the layer per micro-batch in L2L "
+            "order. Excludes l2l_mbr_ordered_backward and deferred decoder forward hooks."
+        ),
+    )
+    l2l_mbr_ordered_backward: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — under l2l_route_preserving_mbr, build the recompute graph in "
+            "reverse micro-batch order so a single backward per MoE layer visits the "
+            "micro-batches in L2L order. Excludes l2l_mbr_split_backward."
+        ),
+    )
+    stream_expert_gemm: Literal["native", "batch_invariant"] = Field(
+        default="native",
+        description=(
+            "EXPERIMENTAL — use a fixed-order CUDA Triton GEMM for routed experts with "
+            "'batch_invariant'. Requires training.l2l=true, stream_expert_layout='per_expert' "
+            "and l2l_route_preserving_mbr=true. The default keeps the native expert matmul."
+        ),
+    )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
@@ -4647,6 +4758,52 @@ class TrainingConfig(BaseModel):
             f"training.{info.field_name} must be true or false, got "
             f"{type(v).__name__} {v!r}"
         )
+
+    @field_validator(
+        "l2l", "l2l_auto_k", "l2l_two_read_experts", "l2l_grouped_expert_routes",
+        "l2l_route_preserving_mbr", "l2l_mbr_split_backward", "l2l_mbr_ordered_backward",
+        mode="before",
+    )
+    @classmethod
+    @_type_error_as_value_error
+    def _validate_l2l_switch_is_bool(cls, v, info: ValidationInfo):
+        """``l2l: 1`` or ``yes`` is refused instead of being coerced to ``true``: the
+        switch replaces the training step, so it is turned on by a bool only."""
+        if isinstance(v, bool):
+            return v
+        raise TypeError(
+            f"training.{info.field_name} must be true or false, got "
+            f"{type(v).__name__} {v!r}"
+        )
+
+    @field_validator("l2l_mbr_group_size", mode="before")
+    @classmethod
+    def _validate_l2l_mbr_group_size(cls, value: Any) -> Any:
+        if value is None or type(value) is int:
+            return value
+        if isinstance(value, bool):
+            # The wording every numeric training field uses for a bool.
+            raise ValueError("training.l2l_mbr_group_size must be an int, not a bool")
+        raise ValueError(
+            "training.l2l_mbr_group_size must be an integer or null, got "
+            f"{type(value).__name__} {value!r}"
+        )
+
+    @field_validator("l2l_spill_dir")
+    @classmethod
+    def _validate_l2l_spill_dir(cls, value: Optional[str]) -> Optional[str]:
+        # Shape only. Where the directory may live (realpath + commonpath against
+        # $HOME, $CWD and $TMPDIR) is checked at launch by utils/l2l_spill.py, which
+        # also needs the filesystem.
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("training.l2l_spill_dir must be a non-empty path")
+        if "\x00" in value:
+            raise ValueError("training.l2l_spill_dir must not contain null bytes")
+        if len(value) > 4096:
+            raise ValueError("training.l2l_spill_dir must be <= 4096 chars")
+        return value
 
     @model_validator(mode="after")
     def _validate_prefix_tree_exclusive(self) -> "TrainingConfig":
@@ -8009,6 +8166,7 @@ class SoupConfig(BaseModel):
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
+                    ("stream_expert_gemm", tcfg.stream_expert_gemm != "native"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
                     ("stream_loss_chunk", tcfg.stream_loss_chunk is not None),
@@ -8328,6 +8486,110 @@ class SoupConfig(BaseModel):
                     f"{'it' if len(dropped) == 1 else 'them'}."
                 )
             raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_l2l_compat(self) -> "SoupConfig":
+        """``training.l2l`` and its options: each refusal names the field and the gate.
+
+        ``l2l`` reuses the streamed layer loads, so it needs ``stream_layers`` and a task
+        whose L2L window loss ships. The options only change how L2L runs, so each is
+        refused while ``l2l`` is off. The codec gate itself (``fp8_e4m3``) is closed at
+        launch by ``utils/l2l_recipe.AVAILABLE_CODECS``, not here.
+        """
+        tcfg = self.training
+        if tcfg.stream_expert_gemm == "batch_invariant" and not (
+            tcfg.l2l and tcfg.stream_expert_layout == "per_expert" and tcfg.l2l_route_preserving_mbr
+        ):
+            raise ValueError(
+                "training.stream_expert_gemm='batch_invariant' requires training.l2l=true, "
+                "training.stream_expert_layout='per_expert' and "
+                "training.l2l_route_preserving_mbr=true"
+            )
+        mbr_options = {
+            "l2l_route_preserving_mbr": tcfg.l2l_route_preserving_mbr,
+            "l2l_mbr_group_size": tcfg.l2l_mbr_group_size is not None,
+            "l2l_mbr_split_backward": tcfg.l2l_mbr_split_backward,
+            "l2l_mbr_ordered_backward": tcfg.l2l_mbr_ordered_backward,
+        }
+        options = {
+            "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
+            "l2l_activation_codec": tcfg.l2l_activation_codec != "none",
+            "l2l_auto_k": tcfg.l2l_auto_k,
+            "l2l_two_read_experts": tcfg.l2l_two_read_experts,
+            "l2l_grouped_expert_routes": tcfg.l2l_grouped_expert_routes,
+            **mbr_options,
+        }
+        if not tcfg.l2l:
+            for name, is_set in options.items():
+                if is_set:
+                    raise ValueError(
+                        f"training.{name} is set but training.l2l is false: it changes how "
+                        f"L2L runs and nothing else reads it. Set l2l=true or drop {name}."
+                    )
+            return self
+        if not tcfg.stream_layers:
+            raise ValueError(
+                "training.l2l requires training.stream_layers=true: L2L reuses the "
+                "streamed layer loads, and a resident model has none to reuse."
+            )
+        for name in (*mbr_options, "l2l_two_read_experts", "l2l_grouped_expert_routes"):
+            if options[name] and tcfg.stream_expert_layout != "per_expert":
+                raise ValueError(
+                    f"training.{name} acts on the routed experts of a per_expert cache and "
+                    "a fused layout has none to read: set "
+                    f"training.stream_expert_layout='per_expert' or drop {name}."
+                )
+        if tcfg.l2l_route_preserving_mbr:
+            if not (tcfg.l2l_two_read_experts and tcfg.l2l_grouped_expert_routes):
+                raise ValueError(
+                    "training.l2l_route_preserving_mbr requires both "
+                    "l2l_two_read_experts=true and l2l_grouped_expert_routes=true"
+                )
+            if (
+                tcfg.l2l_mbr_group_size is not None
+                and tcfg.l2l_mbr_group_size > tcfg.gradient_accumulation_steps
+            ):
+                raise ValueError(
+                    "training.l2l_mbr_group_size cannot exceed training.gradient_accumulation_steps"
+                )
+            if tcfg.l2l_mbr_ordered_backward and tcfg.l2l_mbr_split_backward:
+                raise ValueError(
+                    "training.l2l_mbr_ordered_backward and training.l2l_mbr_split_backward "
+                    "exclude each other"
+                )
+        else:
+            for name, enabled in mbr_options.items():
+                if enabled:
+                    raise ValueError(
+                        f"training.{name} requires training.l2l_route_preserving_mbr=true"
+                    )
+        if self.task not in L2L_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "
+                f"got task={self.task!r}."
+            )
+        if self.backend != "transformers" or self.modality != "text":
+            raise ValueError(
+                "training.l2l requires backend='transformers' and modality='text'; "
+                f"got backend={self.backend!r}, modality={self.modality!r}."
+            )
+        own_trainer = [
+            name
+            for name, is_set in (
+                ("data.format='raft'", self.data.format == "raft"),
+                ("training.prefix_tree", bool(tcfg.prefix_tree)),
+                ("training.stream_loss_chunk", tcfg.stream_loss_chunk is not None),
+            )
+            if is_set
+        ]
+        if own_trainer:
+            raise ValueError(
+                f"training.l2l cannot be combined with {' / '.join(own_trainer)}: each "
+                "builds its own trainer or replaces how the loss is computed (the L2L loss "
+                "bypasses the chunked-loss hook), so L2L would skip it. "
+                "Remove one of the two."
+            )
         return self
 
     @model_validator(mode="after")

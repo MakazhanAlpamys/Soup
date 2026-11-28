@@ -1198,6 +1198,70 @@ output: ./output
 - **The pre-flight reports the whole card on a capped or shared GPU** — `torch.cuda.mem_get_info()` is a device-level driver query and cannot see `set_per_process_memory_fraction`, a MIG slice, or another process on the same card. Set `training.stream_vram_override` to what your process may actually use; the check then refuses configurations that would exceed *that*, which is also how you rehearse a 4 GB card on a 16 GB one.
 - **Slower than you expected** — layer streaming trades time for memory. If the model already fits resident on your card, do not enable it.
 
+### Layer-to-layer execution (`training.l2l`, BETA)
+
+A streamed run with `gradient_accumulation_steps: k` reads every layer once per micro-batch, so k times per optimizer step. `training.l2l: true` runs the step layer-major instead: each streamed layer is loaded once and runs all k micro-batches, the micro-batch activations wait in host memory between layers, and the backward walks the layers in reverse. The loss, the gradients and the random stream are those of gradient accumulation; only the number of weight reads changes. `l2l: false` (the default) leaves a `stream_layers` run exactly as it was.
+
+```yaml
+training:
+  stream_layers: true
+  l2l: true
+  batch_size: 1
+  gradient_accumulation_steps: 8      # k micro-batches per layer load
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `l2l` | `false` | Layer-major step. Needs `stream_layers: true` and `task: sft` on the transformers text path. A bool only (`1` and `yes` are refused). |
+| `l2l_spill_dir` | `null` | Where activations that do not fit the host-RAM budget are spilled. Default: `_l2l_spill` in the run's output directory. |
+| `l2l_activation_codec` | `none` | How activations are stored between layers. Only `none` launches. |
+| `l2l_auto_k` | `false` | Let a memory planner choose k. Refused for now: it plans the window of a MoE model. |
+| `l2l_two_read_experts` | `false` | Experimental. Replay routing during recompute. |
+| `l2l_grouped_expert_routes` | `false` | Experimental. Gather expert routes in one `nonzero`. |
+| `l2l_route_preserving_mbr` | `false` | Experimental micro-batch routing (MBR) for DeepSeek-V3 MoE. Requires `per_expert` streaming and both expert switches above. |
+| `l2l_mbr_group_size` | `null` | Micro-batches per expert group. `null` uses the full accumulation window. An explicit size must be between 1 and `gradient_accumulation_steps`. |
+| `l2l_mbr_split_backward` | `false` | Backpropagate through the grouped experts, then through each micro-batch's attention, router and shared experts in L2L order. Refuses deferred decoder forward hooks. |
+| `l2l_mbr_ordered_backward` | `false` | Recompute in reverse micro-batch order so one backward per MoE layer accumulates adapter gradients in L2L order. Excludes split backward. |
+| `stream_expert_gemm` | `native` | Set to `batch_invariant` to use fixed-order Triton matmuls for routed experts. Requires L2L, per-expert streaming and MBR. CUDA only, with compute capability 8.0+ for BF16. |
+
+Both settings require `stream_expert_layout: per_expert` with L2L. Routing replay reads a routed
+expert in the forward pass and again in its backward pass. Grouped routing gathers the hit
+experts and their token rows together. The tiny DeepSeek-V3 CPU tests found bit-equal losses and
+LoRA gradients with FP32 and BF16 autocast for the tested settings. CUDA parity is unverified.
+
+MBR leaves attention, routing and the shared experts per micro-batch. Each group dispatches its
+routed rows together, so each hit expert shares one pool lease per group in the forward and one
+in the backward. A supported deferred decoder hook also needs a lease during recompute.
+The group size and the backward switches require MBR to be enabled. With the native GEMM,
+split and ordered backward preserve the per-micro-batch expert operation shapes and the order of
+LoRA gradient accumulation. With both switches off, native grouping can change floating-point
+results.
+
+With `stream_expert_gemm: batch_invariant`, each expert computes its joined rows in one call
+using a fixed reduction order. The same order applies to input and routing-weight gradients.
+MBR uses split backward by default with this GEMM, and honors an explicit ordered backward
+setting. Split backward excludes deferred decoder forward hooks.
+
+With deterministic PyTorch kernels, MBR losses and LoRA gradients match per-micro-batch
+L2L using the same GEMM on the same GPU and software stack. Set
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` before starting the process and enable
+`torch.use_deterministic_algorithms(True)` for the rest of the model.
+
+- **Scope.** Llama and Mistral models, and DeepSeek-V3-family MoE models streamed with `stream_expert_layout: per_expert`, on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model with the fused expert layout is refused at launch, before any weight is sharded, naming `stream_expert_layout`. On a MoE model every routed expert is read through one bounded buffer pool (the pre-flight charges its arena in place of the single in-flight expert), the backward leases each hit expert again, and a routing guard stops a step whose recompute routed tokens differently from its forward. Only the stateless SiLU activation can be recomputed. `l2l_auto_k` stays refused on a MoE model: its host-RAM window planner is not wired into the launch. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
+- **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.
+- **Spill directory.** The directory must resolve under `$HOME`, the working directory or the temp directory. The check uses `realpath` and `commonpath`, so a symlink or a Windows short name such as `RUNNER~1` is judged by where it really points. It is also refused at launch on RAM-backed, overlay and network filesystems, on a drive without the file size plus `max(1 GiB, 10%)` free, and where unbuffered I/O fails. When the weights stream from disk, the default directory is refused on the weights' disk; one you set there is allowed with a warning. Leftover spill files of dead runs are removed when training starts.
+- **`fp8_e4m3` is closed.** The activation store has an FP8 codec, but it is lossy and its gradients are not yet checked against the accumulation baseline, so `soup train` refuses it before the model loads: `training.l2l_activation_codec='fp8_e4m3' is not available yet: the launch supports 'none'. Set it to 'none'.`
+- **Recipe and resume.** SFT writes `l2l_recipe.json` (requested and effective k, activation
+  codec, expert GEMM, expert and MBR settings) to the run directory and each L2L checkpoint. Ordinary checkpoints
+  saved in a run directory with L2L history record their training mode too. Resume checks the
+  source checkpoint's metadata first, then its source run's recipe for older checkpoints. A
+  recorded L2L checkpoint requires `l2l: true` and matching effective k, codec, expert
+  and MBR settings. A legacy checkpoint without a covering recipe can resume with either mode. A
+  run-root recipe covers checkpoints after the step at which that recipe took effect.
+- **Host RAM.** The expert pool's persistent staging counts against the RAM budget in both
+  tiers. With `stream_source: auto`, staging can push the run to the NVMe disk tier.
+- **k = 1** behaves like plain streaming.
+
 ### Preference losses over streaming (v0.72.4)
 
 `dpo`, `orpo`, `simpo`, `kto`, `bco` and `ipo` use the shared streaming setup.

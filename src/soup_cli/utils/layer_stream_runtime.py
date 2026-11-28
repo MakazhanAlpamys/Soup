@@ -3778,6 +3778,8 @@ class StreamRuntime:
     scale_cache: Any = None
     #: Per MoE layer, the reader of its experts file (expert_layout "per_expert").
     expert_readers: Tuple[Any, ...] = ()
+    #: The bounded expert buffer pool (``install_streaming(expert_pool=True)``), or None.
+    expert_pool: Any = None
 
     def close(self) -> None:
         """Release the weight source and detach the prefetch hook.
@@ -3799,8 +3801,12 @@ class StreamRuntime:
                     external_close()
         finally:
             # One open handle per MoE layer's experts file (expert_layout "per_expert").
-            for reader in self.expert_readers:
-                reader.close()
+            try:
+                if self.expert_pool is not None:
+                    self.expert_pool.close()
+            finally:
+                for reader in self.expert_readers:
+                    reader.close()
         if self.hook is not None:
             self.hook.remove()
             self.hook = None
@@ -3838,8 +3844,21 @@ class StreamRuntime:
             "device": self.device,
             "total_params": self.total_params,
             "nf4_scale_cache_bytes": getattr(self.scale_cache, "nbytes", 0),
-            "expert_fetches": sum(reader.fetches for reader in self.expert_readers),
-            "expert_bytes_read": sum(reader.bytes_read for reader in self.expert_readers),
+            # With a pool, one fetch is one expert read into the arena (a host-cache hit reads
+            # nothing); without one, the readers count every fetch.
+            "expert_fetches": (
+                self.expert_pool.fetches
+                if self.expert_pool is not None
+                else sum(reader.fetches for reader in self.expert_readers)
+            ),
+            "expert_bytes_read": (
+                self.expert_pool.logical_bytes_read
+                if self.expert_pool is not None
+                else sum(reader.bytes_read for reader in self.expert_readers)
+            ),
+            "expert_buffer_bytes": (
+                self.expert_pool.plan.weight_bytes if self.expert_pool is not None else 0
+            ),
         }
 
 
@@ -3928,30 +3947,61 @@ def _install_expert_streaming(
     device: str,
     codes: Optional[Mapping[str, Any]],
     two_reads: bool = False,
-) -> Tuple[Any, ...]:
+    grouped_expert_routes: bool = False,
+    expert_pool: bool = False,
+    expert_transfer: str = "sync",
+    expert_host_cache_bytes: int = 0,
+    expert_prefetch: bool = False,
+    expert_gemm: str = "native",
+) -> Tuple[Any, Tuple[Any, ...]]:
     """Swap each MoE layer's experts module for a ``StreamedExperts``.
 
-    Only for a cache sharded with ``expert_layout="per_expert"``; returns the
-    experts-file readers (closed by ``StreamRuntime.close``). ``two_reads`` on
-    any other cache is refused: accepted, it would read three times while the
-    caller believes two.
+    Only for a cache sharded with ``expert_layout="per_expert"``; returns ``(pool, readers)``:
+    the bounded :class:`ExpertBufferPool` (None unless ``expert_pool``) and the experts-file
+    readers, both closed by ``StreamRuntime.close``. A lever (``two_reads``,
+    ``grouped_expert_routes``, ``expert_pool``) on any other cache is refused: accepted, it
+    would be ignored while the caller believes it is on. The pool's ``expert_transfer``,
+    ``expert_host_cache_bytes`` and ``expert_prefetch`` need ``expert_pool``. On any failure
+    the pool and the readers opened so far are closed.
     """
     from soup_cli.utils.expert_stream import (
         EXPERT_LAYOUT_PER_EXPERT,
+        ExpertBufferPool,
         ExpertFetcher,
         ExpertShardReader,
+        expert_allocation_budget,
         install_expert_streaming,
+        plan_expert_buffer,
     )
     from soup_cli.utils.layer_shard import expert_paths
 
+    for name, value in (("expert_pool", expert_pool), ("expert_prefetch", expert_prefetch)):
+        if type(value) is not bool:
+            raise ValueError(f"{name} must be a bool")
+    pool_options = (
+        ("expert_transfer", expert_transfer != "sync"),
+        ("expert_host_cache_bytes", bool(expert_host_cache_bytes)),
+        ("expert_prefetch", expert_prefetch),
+    )
+    if not expert_pool:
+        for name, set_ in pool_options:
+            if set_:
+                raise ValueError(f"{name} needs expert_pool=True")
     if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
-        if two_reads:
-            raise ValueError(
-                "two_read_experts needs a cache sharded with expert_layout='per_expert'; "
-                f"this one is {getattr(index, 'expert_layout', '') or 'fused'!r}"
-            )
-        return ()
+        for name, set_ in (
+            ("training.stream_expert_gemm", expert_gemm != "native"),
+            ("two_read_experts", two_reads),
+            ("grouped_expert_routes", grouped_expert_routes),
+            ("expert_pool", expert_pool),
+        ):
+            if set_:
+                raise ValueError(
+                    f"{name} needs a cache sharded with expert_layout='per_expert'; "
+                    f"this one is {getattr(index, 'expert_layout', '') or 'fused'!r}"
+                )
+        return None, ()
     readers: Dict[int, Any] = {}
+    pool = None
     try:
         for layer, path in expert_paths(shard_dir, index).items():
             readers[layer] = ExpertShardReader(
@@ -3961,13 +4011,42 @@ def _install_expert_streaming(
                 quant_specs=index.expert_quant_specs,
                 dtype=index.dtype,
             )
-        fetcher = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
-        install_expert_streaming(layers, readers, fetcher, two_reads=two_reads)
+        if expert_pool:
+            if not readers:
+                raise ValueError("per-expert cache has no expert layers — reshard the checkpoint")
+            # A shard's alignment can make its largest read span differ by layer: size the
+            # staging for the largest one, not whichever reader happens to be first.
+            first = max(readers.values(), key=lambda reader: reader.max_span)
+            plan = plan_expert_buffer(first, dtype=index.dtype, transfer=expert_transfer)
+            pool = ExpertBufferPool(
+                first, device=device, dtype=index.dtype,
+                weight_budget_bytes=expert_allocation_budget(plan, device=device), codes=codes,
+                **({"transfer": expert_transfer} if expert_transfer != "sync" else {}),
+                **(
+                    {"host_cache_bytes": expert_host_cache_bytes}
+                    if expert_host_cache_bytes
+                    else {}
+                ),
+                **({"prefetch": True} if expert_prefetch else {}),
+            )
+            source: Any = pool
+        else:
+            source = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
+        install_expert_streaming(
+            layers, readers, source,
+            two_reads=two_reads, grouped_expert_routes=grouped_expert_routes,
+            expert_gemm=expert_gemm,
+        )
     except BaseException:
-        for reader in readers.values():
-            reader.close()
+        for close in ([pool.close] if pool is not None else []) + [
+            reader.close for reader in readers.values()
+        ]:
+            try:
+                close()
+            except BaseException:  # noqa: BLE001 - the original failure is the one to report
+                logger.exception("failed to clean up expert preparation")
         raise
-    return tuple(readers.values())
+    return pool, tuple(readers.values())
 
 
 def install_streaming(
@@ -3987,6 +4066,12 @@ def install_streaming(
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
+    grouped_expert_routes: bool = False,
+    expert_pool: bool = False,
+    expert_transfer: str = "sync",
+    expert_host_cache_bytes: int = 0,
+    expert_prefetch: bool = False,
+    expert_gemm: str = "native",
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
@@ -4005,6 +4090,12 @@ def install_streaming(
     layer's checkpoint recompute replays its routers' top-k decisions and reads no
     expert, so a step reads every routed-to expert twice instead of three times
     (``expert_stream.two_read_checkpoint_contexts``).
+
+    ``grouped_expert_routes`` (same caches): each MoE layer finds its hit experts and their
+    rows with one ``nonzero``. ``expert_pool`` (same caches) reads every routed expert through
+    one bounded :class:`ExpertBufferPool` instead of a fresh fetch per use; ``expert_transfer``
+    (``"packed"``, CUDA NF4), ``expert_host_cache_bytes`` and ``expert_prefetch`` tune that
+    pool and need ``expert_pool``. All are off by default and change no numbers.
     """
     import torch
 
@@ -4067,8 +4158,12 @@ def install_streaming(
     _require_stripe_folders(shard_dir, index)
     # Before the name maps: the fused expert parameters leave the layer here,
     # so the layer pool never allocates them.
-    expert_readers = _install_expert_streaming(
-        layers, shard_dir, index, device=str(device), codes=codes, two_reads=two_read_experts
+    expert_pool_obj, expert_readers = _install_expert_streaming(
+        layers, shard_dir, index, device=str(device), codes=codes, two_reads=two_read_experts,
+        grouped_expert_routes=grouped_expert_routes, expert_pool=expert_pool,
+        expert_transfer=expert_transfer, expert_host_cache_bytes=expert_host_cache_bytes,
+        expert_prefetch=expert_prefetch,
+        expert_gemm=expert_gemm,
     )
     context_fns = [None] * n_layers
     if two_read_experts:
@@ -4285,6 +4380,7 @@ def install_streaming(
         hook=handle,
         total_params=int(getattr(index, "total_params", 0) or 0),
         expert_readers=expert_readers,
+        expert_pool=expert_pool_obj,
         tier=tier,
         scale_cache=scale_cache,
     )
@@ -4693,6 +4789,12 @@ def build_streamed_model(
     read_ahead_decision: Any = None,
     nf4_scale_cache: bool = False,
     two_read_experts: bool = False,
+    grouped_expert_routes: bool = False,
+    expert_pool: bool = False,
+    expert_transfer: str = "sync",
+    expert_host_cache_bytes: int = 0,
+    expert_prefetch: bool = False,
+    expert_gemm: str = "native",
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
 
@@ -4705,8 +4807,10 @@ def build_streamed_model(
     the supported entry point.
 
     ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
-    handed to ``install_streaming`` for its page-lock advice. ``two_read_experts`` is
-    ``install_streaming``'s: an API switch, no config field.
+    handed to ``install_streaming`` for its page-lock advice. ``two_read_experts``,
+    ``grouped_expert_routes``, ``expert_pool``, ``expert_transfer``,
+    ``expert_host_cache_bytes``, ``expert_prefetch`` and ``expert_gemm``
+    are forwarded to ``install_streaming``.
     """
     if lora_config is not None:
         from peft import get_peft_model
@@ -4759,6 +4863,12 @@ def build_streamed_model(
             read_ahead_decision=read_ahead_decision,
             nf4_scale_cache=nf4_scale_cache,
             two_read_experts=two_read_experts,
+            grouped_expert_routes=grouped_expert_routes,
+            expert_pool=expert_pool,
+            expert_transfer=expert_transfer,
+            expert_host_cache_bytes=expert_host_cache_bytes,
+            expert_prefetch=expert_prefetch,
+            expert_gemm=expert_gemm,
         )
         if lora_config is None:
             try:
