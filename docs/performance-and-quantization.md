@@ -605,6 +605,14 @@ Not measured:
 - Known numeric differences from K2's own code that remain: the MoE combine (K2 sums the weighted expert outputs in fp32 and rounds once; transformers rounds each weighted output to the model dtype before accumulating, which is bf16 rounding noise), eager versus sdpa attention, and the router bias kept as a float32 buffer rather than a Parameter (float32 in the checkpoint either way).
 - The checkpoint carries 61 stale `self_attn.rotary_emb.inv_freq` tensors. The sharder writes them into the layer files as stored, and nothing streams or reads them: K2's code keeps that buffer non-persistent, and transformers computes the rope from the config.
 
+**Compiled host reader.** Set `training.stream_expert_loader: cpp_async_2slot` with
+`training.stream_layers: true` and `training.stream_expert_layout: per_expert` to
+read experts through the compiled two-slot host ring. The default is `async_lease`.
+The compiled reader requires a CUDA training device and an importable extension at
+setup. Follow the [native reader build instructions](../src/soup_cli/utils/native_expert_reader/README.md)
+for a C++-only build. Soup uses the existing NF4 restore path and reserves the
+reader's host buffers and the expert pool's device arena during preflight.
+
 **Experimental two-read replay (API only, off by default).**
 `build_streamed_model(..., two_read_experts=True)` keeps the decoder checkpoint but
 does not fetch routed experts during its replay. The original forward and the expert's
@@ -635,6 +643,19 @@ gradients and every LoRA gradient are bit-identical with exactly two reads per e
 including gradient accumulation, two forwards before one backward, `retain_graph`, a
 no-grad forward and an exception mid-step. Hardware measurements are not part of this
 change and are discussed with its design (#2170).
+
+**Optional native expert reader.** Soup ships the C++ reader and CUDA NF4 decoder
+sources for explicit builds. With PyTorch, setuptools and a C++17 compiler installed,
+run the build command below and add `/tmp/soup-native` to `PYTHONPATH`.
+
+```bash
+python -m soup_cli.utils.native_expert_reader.build_ext build_ext \
+    --build-lib /tmp/soup-native --build-temp /tmp/soup-native/obj
+```
+
+Add `--with-cuda-nf4` on Linux to build the decoder with a matching CUDA toolkit
+and `nvcc`. The compiled module is available for direct use. The trainer uses
+the Python expert pool.
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,

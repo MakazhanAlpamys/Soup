@@ -4292,6 +4292,15 @@ class TrainingConfig(BaseModel):
         ),
     )
 
+    stream_expert_loader: Literal["async_lease", "cpp_async_2slot"] = Field(
+        default="async_lease",
+        description=(
+            "Reader for streamed routed experts. 'async_lease' uses the existing Python "
+            "reader. 'cpp_async_2slot' selects the compiled host reader for per-expert "
+            "streaming on CUDA and requires a built extension at setup."
+        ),
+    )
+
     stream_loss_chunk: Optional[int] = Field(
         default=None,
         ge=MIN_STREAM_LOSS_CHUNK,
@@ -8009,6 +8018,7 @@ class SoupConfig(BaseModel):
                     ("stream_nf4_scale_cache", bool(tcfg.stream_nf4_scale_cache)),
                     ("stream_recompute", tcfg.stream_recompute != "on"),
                     ("stream_expert_layout", tcfg.stream_expert_layout != "fused"),
+                    ("stream_expert_loader", tcfg.stream_expert_loader != "async_lease"),
                     ("stream_disk_kind", tcfg.stream_disk_kind is not None),
                     ("stream_pin", tcfg.stream_pin is not None),
                     ("stream_loss_chunk", tcfg.stream_loss_chunk is not None),
@@ -8022,6 +8032,14 @@ class SoupConfig(BaseModel):
                     "stream_layers=true to stream the base layer-by-layer."
                 )
             return self
+        if (
+            tcfg.stream_expert_loader == "cpp_async_2slot"
+            and tcfg.stream_expert_layout != "per_expert"
+        ):
+            raise ValueError(
+                "training.stream_expert_loader='cpp_async_2slot' requires "
+                "training.stream_expert_layout='per_expert'"
+            )
         if tcfg.stream_nf4_scale_cache and (
             tcfg.quantization != "4bit" or not tcfg.double_quant_on
         ):
