@@ -1451,9 +1451,18 @@ input/standalone loader paths keep their previous tolerant behavior.
 All six quality commands (`score`, `pii`, `toxicity`, `langdetect`, `educational`
 and `decontaminate`) warn with a count when some input rows have no extractable
 text. They fail before reporting metrics or writing output when no row has text.
-Inputs with no rows, including empty files or files containing only blank or
-non-object/non-JSON lines, are refused too.
-Standalone decontamination applies the same rule to its benchmark file; the
+Inputs with no rows, including empty files or files containing only blank lines,
+are refused too. A line that is not valid JSON, or not a JSON object, is skipped
+with the warning `soup data clean` gives (the first three of each kind, then one
+summary line for the rest), and the panel counts it, as in
+`Input: 2 (2 lines skipped)`; the scorecard adds a `Skipped lines` row. When every
+line is skipped, the command refuses with
+`no object rows remain: N row(s) skipped (listed above)`. A file of more than
+1,000,000 records is refused with exit 1 (`file exceeds 1000000 rows`) before any
+output is written; it is never scored or filtered in part.
+Standalone decontamination applies the same rules to its benchmark file (the
+refusals start `--benchmark-file:`, and the `Loaded N operator-supplied benchmark
+texts` line counts its skipped lines); the
 scorecard benchmark file retains the stricter per-row 8-gram validation above.
 The PII and abuse-keyword detectors themselves are unchanged.
 
