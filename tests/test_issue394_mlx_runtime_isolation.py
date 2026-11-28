@@ -50,6 +50,7 @@ def test_mlx_cli_route_does_not_touch_transformers_training_stack(
         data_format = "chatml"
     data_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
     config_path = tmp_path / "soup.yaml"
+    teacher_config = "  teacher_model: mlx-community/tiny-teacher\n" if task == "distill" else ""
     config_path.write_text(
         "base: mlx-community/tiny\n"
         f"task: {task}\n"
@@ -59,6 +60,7 @@ def test_mlx_cli_route_does_not_touch_transformers_training_stack(
         f"  format: {data_format}\n"
         "  val_split: 0\n"
         "training:\n"
+        f"{teacher_config}"
         "  epochs: 1\n"
         "  lr: 0.0002\n"
         f"  batch_size: {2 if task == 'kto' else 1}\n"

@@ -19,10 +19,11 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Reviewed combinations include SFT on MLX and Unsloth (#1124), DPO, ORPO, SimPO,
-KTO and GRPO on MLX, and SFT on Transformers for text, vision and audio
-(#1156, #1815). :func:`is_reviewed` tells doctor whether a combination has a
-reviewed table, including tables with no ignored settings. The shipped-recipe
-test tracks the combinations still waiting for a review.
+KTO and GRPO on MLX, native token distillation on MLX (#1979), and SFT on
+Transformers for text, vision and audio (#1156, #1815). :func:`is_reviewed` tells
+doctor whether a combination has a reviewed table, including tables with no
+ignored settings. The shipped-recipe test tracks the combinations still waiting
+for a review.
 """
 
 from __future__ import annotations
@@ -272,6 +273,7 @@ REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("simpo", "mlx", "text"): _MLX_SIMPO,
     ("kto", "mlx", "text"): _MLX_KTO,
     ("grpo", "mlx", "text"): _MLX_GRPO,
+    ("distill", "mlx", "text"): (),
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "text"): _TRANSFORMERS_TEXT_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
@@ -297,6 +299,17 @@ _TRANSFORMERS_SFT_MODULES = (
 #: leave ``warmup_ratio=`` and ``weight_decay=`` visible at the call site. A
 #: field wired entirely inside a helper would have passed.
 TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
+    ("distill", "mlx", "text"): (
+        "soup_cli/trainer/mlx_distill.py",
+        "soup_cli/trainer/mlx_distill_data.py",
+        "soup_cli/trainer/mlx_distill_loss.py",
+        "soup_cli/trainer/mlx_sft.py",
+        "soup_cli/trainer/mlx_optim.py",
+        "soup_cli/trainer/loss_summary.py",
+        "soup_cli/utils/mlx.py",
+        "soup_cli/utils/mlx_distill.py",
+        "soup_cli/utils/distill.py",
+    ),
     ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_full.py",

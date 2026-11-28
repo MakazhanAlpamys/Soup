@@ -58,6 +58,12 @@ EXEMPT: dict[str, str] = {
         "max-grad-norm file, listing it would turn the job red when mlx-lm changes, and that "
         "test does not exercise Soup code."
     ),
+    "test_mlx_distill_reference_native.py": (
+        "This parity oracle needs both MLX and PyTorch, while mlx-smoke deliberately installs "
+        "no Torch and the other hosted test cells install no MLX. It is run as a local native "
+        "qualification in the retained dual-backend reference environment; no hosted job "
+        "currently executes it."
+    ),
 }
 
 
