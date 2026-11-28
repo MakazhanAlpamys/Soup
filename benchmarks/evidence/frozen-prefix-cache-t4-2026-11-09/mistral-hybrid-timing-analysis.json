@@ -1,0 +1,500 @@
+{
+  "schema": "e2-hybrid-cache-analysis-v1",
+  "protocol": "benchmarks/e2/hybrid_cache/PROTOCOL.txt",
+  "runs": {
+    "A_c1_1": {
+      "arm": "A_c1_1",
+      "problems": [],
+      "ce": 0.8966562151908875,
+      "fingerprint": "80b9ee6893a900d42cedf4d53b3aa7e43977c9d7fb9481e72dab7f6f2cb36325",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        553.8304644779998,
+        554.492624554,
+        551.2709741550002
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1711.1487674713135,
+      "gpu_state_before": "0, 64, 1470 MHz, 5000 MHz, 43.33 W, 0x0000000000000000, 100 %\n1, 74, 1500 MHz, 5000 MHz, 42.83 W, 0x0000000000000000, 100 %",
+      "gpu_state_after": "0, 70, 585 MHz, 5000 MHz, 35.01 W, 0x0000000000000000, 16 %\n1, 75, 585 MHz, 5000 MHz, 32.84 W, 0x0000000000000000, 0 %",
+      "cache": null
+    },
+    "A_c1_2": {
+      "arm": "A_c1_2",
+      "problems": [],
+      "ce": 0.8966562151908875,
+      "fingerprint": "80b9ee6893a900d42cedf4d53b3aa7e43977c9d7fb9481e72dab7f6f2cb36325",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        534.0544299929998,
+        533.5900780749998,
+        535.695358684
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1653.6138701438904,
+      "gpu_state_before": "0, 55, 1545 MHz, 5000 MHz, 36.29 W, 0x0000000000000000, 20 %\n1, 75, 1590 MHz, 5000 MHz, 40.66 W, 0x0000000000000000, 88 %",
+      "gpu_state_after": "0, 70, 585 MHz, 5000 MHz, 35.01 W, 0x0000000000000000, 16 %\n1, 75, 795 MHz, 5000 MHz, 32.93 W, 0x0000000000000000, 53 %",
+      "cache": null
+    },
+    "A_c2_1": {
+      "arm": "A_c2_1",
+      "problems": [],
+      "ce": 0.8966562151908875,
+      "fingerprint": "80b9ee6893a900d42cedf4d53b3aa7e43977c9d7fb9481e72dab7f6f2cb36325",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        557.3646827119992,
+        547.7325599750011,
+        540.3129291369987
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1696.1202759742737,
+      "gpu_state_before": "0, 70, 1470 MHz, 5000 MHz, 35.30 W, 0x0000000000000000, 100 %\n1, 75, 1590 MHz, 5000 MHz, 33.03 W, 0x0000000000000000, 100 %",
+      "gpu_state_after": "0, 70, 585 MHz, 5000 MHz, 32.36 W, 0x0000000000000000, 14 %\n1, 75, 585 MHz, 5000 MHz, 32.72 W, 0x0000000000000000, 60 %",
+      "cache": null
+    },
+    "A_c2_2": {
+      "arm": "A_c2_2",
+      "problems": [],
+      "ce": 0.8966562151908875,
+      "fingerprint": "80b9ee6893a900d42cedf4d53b3aa7e43977c9d7fb9481e72dab7f6f2cb36325",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        548.1198481709998,
+        538.0680328279996,
+        538.1122750300001
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1674.6827433109283,
+      "gpu_state_before": "0, 55, 1470 MHz, 5000 MHz, 34.61 W, 0x0000000000000000, 27 %\n1, 75, 1500 MHz, 5000 MHz, 38.30 W, 0x0000000000000000, 32 %",
+      "gpu_state_after": "0, 70, 675 MHz, 5000 MHz, 35.50 W, 0x0000000000000000, 0 %\n1, 75, 615 MHz, 5000 MHz, 32.74 W, 0x0000000000000000, 0 %",
+      "cache": null
+    },
+    "A_c3_1": {
+      "arm": "A_c3_1",
+      "problems": [],
+      "ce": 0.8966562151908875,
+      "fingerprint": "80b9ee6893a900d42cedf4d53b3aa7e43977c9d7fb9481e72dab7f6f2cb36325",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        543.9337340170005,
+        562.3764563610002,
+        542.8099568899997
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1700.4184701442719,
+      "gpu_state_before": "0, 70, 1320 MHz, 5000 MHz, 39.23 W, 0x0000000000000000, 74 %\n1, 75, 1560 MHz, 5000 MHz, 39.60 W, 0x0000000000000000, 98 %",
+      "gpu_state_after": "0, 70, 585 MHz, 5000 MHz, 34.51 W, 0x0000000000000000, 17 %\n1, 75, 585 MHz, 5000 MHz, 32.84 W, 0x0000000000000000, 62 %",
+      "cache": null
+    },
+    "A_c3_2": {
+      "arm": "A_c3_2",
+      "problems": [],
+      "ce": 0.8966562151908875,
+      "fingerprint": "80b9ee6893a900d42cedf4d53b3aa7e43977c9d7fb9481e72dab7f6f2cb36325",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        532.9313176930009,
+        534.4807564750008,
+        532.8364107950001
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1651.3816335201263,
+      "gpu_state_before": "0, 54, 1470 MHz, 5000 MHz, 34.02 W, 0x0000000000000000, 27 %\n1, 75, 1590 MHz, 5000 MHz, 40.25 W, 0x0000000000000000, 65 %",
+      "gpu_state_after": "0, 70, 585 MHz, 5000 MHz, 32.46 W, 0x0000000000000000, 6 %\n1, 75, 585 MHz, 5000 MHz, 32.84 W, 0x0000000000000000, 72 %",
+      "cache": null
+    },
+    "B_c1_1": {
+      "arm": "B_c1_1",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        569.4854201599996,
+        382.0042948390005,
+        170.81114015999992
+      ],
+      "epoch_cache": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          0
+        ]
+      ],
+      "process_wall_seconds": 1174.8688337802887,
+      "gpu_state_before": "0, 70, 1470 MHz, 5000 MHz, 38.03 W, 0x0000000000000000, 100 %\n1, 75, 1125 MHz, 5000 MHz, 35.58 W, 0x0000000000000000, 74 %",
+      "gpu_state_after": "0, 55, 585 MHz, 5000 MHz, 28.82 W, 0x0000000000000000, 1 %\n1, 74, 585 MHz, 5000 MHz, 32.64 W, 0x0000000000000000, 11 %",
+      "cache": {
+        "installed_at_step": 2000,
+        "cutoff": 24,
+        "install_seconds": 34.002887845999794,
+        "hits": 2000,
+        "misses": 2000,
+        "files": 2000,
+        "bytes": 1583007056
+      }
+    },
+    "B_c1_2": {
+      "arm": "B_c1_2",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        556.6824935259992,
+        384.03764987200066,
+        169.12781218799955
+      ],
+      "epoch_cache": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          0
+        ]
+      ],
+      "process_wall_seconds": 1160.799859046936,
+      "gpu_state_before": "0, 55, 1470 MHz, 5000 MHz, 34.42 W, 0x0000000000000000, 40 %\n1, 74, 1500 MHz, 5000 MHz, 37.85 W, 0x0000000000000000, 34 %",
+      "gpu_state_after": "0, 55, 615 MHz, 5000 MHz, 30.99 W, 0x0000000000000000, 34 %\n1, 75, 990 MHz, 5000 MHz, 32.64 W, 0x0000000000000000, 65 %",
+      "cache": {
+        "installed_at_step": 2000,
+        "cutoff": 24,
+        "install_seconds": 34.053023710999696,
+        "hits": 2000,
+        "misses": 2000,
+        "files": 2000,
+        "bytes": 1583007056
+      }
+    },
+    "B_c2_1": {
+      "arm": "B_c2_1",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        551.4071955250001,
+        365.84085964299993,
+        163.00422591999995
+      ],
+      "epoch_cache": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          0
+        ]
+      ],
+      "process_wall_seconds": 1130.328864812851,
+      "gpu_state_before": "0, 70, 1470 MHz, 5000 MHz, 44.95 W, 0x0000000000000000, 100 %\n1, 75, 1590 MHz, 5000 MHz, 33.49 W, 0x0000000000000000, 100 %",
+      "gpu_state_after": "0, 55, 585 MHz, 5000 MHz, 31.49 W, 0x0000000000000000, 33 %\n1, 74, 585 MHz, 5000 MHz, 32.76 W, 0x0000000000000000, 28 %",
+      "cache": {
+        "installed_at_step": 2000,
+        "cutoff": 24,
+        "install_seconds": 33.476283598998634,
+        "hits": 2000,
+        "misses": 2000,
+        "files": 2000,
+        "bytes": 1583007056
+      }
+    },
+    "B_c2_2": {
+      "arm": "B_c2_2",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        533.5182210309995,
+        364.70770337700014,
+        166.48786204499993
+      ],
+      "epoch_cache": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          0
+        ]
+      ],
+      "process_wall_seconds": 1115.6150124073029,
+      "gpu_state_before": "0, 55, 1470 MHz, 5000 MHz, 34.42 W, 0x0000000000000000, 21 %\n1, 75, 1500 MHz, 5000 MHz, 38.32 W, 0x0000000000000000, 23 %",
+      "gpu_state_after": "0, 55, 585 MHz, 5000 MHz, 31.37 W, 0x0000000000000000, 23 %\n1, 75, 585 MHz, 5000 MHz, 32.72 W, 0x0000000000000000, 12 %",
+      "cache": {
+        "installed_at_step": 2000,
+        "cutoff": 24,
+        "install_seconds": 33.459273684000436,
+        "hits": 2000,
+        "misses": 2000,
+        "files": 2000,
+        "bytes": 1583007056
+      }
+    },
+    "B_c3_1": {
+      "arm": "B_c3_1",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        554.228855669,
+        386.7278824360001,
+        172.2481326349989
+      ],
+      "epoch_cache": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          0
+        ]
+      ],
+      "process_wall_seconds": 1165.2791306972504,
+      "gpu_state_before": "0, 70, 1470 MHz, 5000 MHz, 35.21 W, 0x0000000000000000, 100 %\n1, 75, 1590 MHz, 5000 MHz, 34.00 W, 0x0000000000000000, 95 %",
+      "gpu_state_after": "0, 55, 585 MHz, 5000 MHz, 31.87 W, 0x0000000000000000, 0 %\n1, 75, 585 MHz, 5000 MHz, 32.93 W, 0x0000000000000000, 59 %",
+      "cache": {
+        "installed_at_step": 2000,
+        "cutoff": 24,
+        "install_seconds": 34.75857564500075,
+        "hits": 2000,
+        "misses": 2000,
+        "files": 2000,
+        "bytes": 1583007056
+      }
+    },
+    "B_c3_2": {
+      "arm": "B_c3_2",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        552.6647048659979,
+        389.0721362880031,
+        175.58114365499932
+      ],
+      "epoch_cache": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          2000
+        ],
+        [
+          2000,
+          0
+        ]
+      ],
+      "process_wall_seconds": 1169.713484287262,
+      "gpu_state_before": "0, 55, 1590 MHz, 5000 MHz, 36.76 W, 0x0000000000000000, 100 %\n1, 75, 1590 MHz, 5000 MHz, 40.74 W, 0x0000000000000000, 100 %",
+      "gpu_state_after": "0, 54, 585 MHz, 5000 MHz, 28.70 W, 0x0000000000000000, 25 %\n1, 74, 585 MHz, 5000 MHz, 32.64 W, 0x0000000000000000, 0 %",
+      "cache": {
+        "installed_at_step": 2000,
+        "cutoff": 24,
+        "install_seconds": 34.42784049200054,
+        "hits": 2000,
+        "misses": 2000,
+        "files": 2000,
+        "bytes": 1583007056
+      }
+    },
+    "C": {
+      "arm": "C",
+      "problems": [],
+      "ce": 0.8775755167007446,
+      "fingerprint": "3280292f2692916c17feac2fb34be5940507c189b06100b7f18f5ffc2fabd55b",
+      "batches": "d046a5bd85b84bc413222d57c3df47d3a274c969eafa1d3b7071842f9e5cefc9",
+      "epoch_seconds": [
+        553.731833053,
+        327.80805015500005,
+        325.655492269
+      ],
+      "epoch_cache": [
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ],
+        [
+          null,
+          null
+        ]
+      ],
+      "process_wall_seconds": 1298.0197970867157,
+      "gpu_state_before": "0, 49, 300 MHz, 405 MHz, 10.45 W, 0x0000000000000001, 0 %\n1, 48, 300 MHz, 405 MHz, 10.16 W, 0x0000000000000001, 0 %",
+      "gpu_state_after": "0, 63, 585 MHz, 5000 MHz, 30.80 W, 0x0000000000000000, 26 %\n1, 74, 585 MHz, 5000 MHz, 32.56 W, 0x0000000000000000, 11 %",
+      "cache": null
+    }
+  },
+  "not_claimed": [
+    "other GPUs, models, K, data or epochs",
+    "quality"
+  ],
+  "cycles": [
+    {
+      "cycle": 1,
+      "warm_epoch3": 3.1975339258157742,
+      "whole_training": 1.4617905017049317,
+      "epoch2": 1.4203957239436706,
+      "process_wall": 1.440599280175437
+    },
+    {
+      "cycle": 2,
+      "warm_epoch3": 3.272992716843489,
+      "whole_training": 1.524364593609358,
+      "epoch2": 1.4862811971245709,
+      "process_wall": 1.5008402718670366
+    },
+    {
+      "cycle": 3,
+      "warm_epoch3": 3.0924549513428348,
+      "whole_training": 1.4567744168804915,
+      "epoch2": 1.41384014741332,
+      "process_wall": 1.435464969848151
+    }
+  ],
+  "warm_median": 3.1975339258157742,
+  "whole_training_median": 1.4617905017049317,
+  "label": "WARM_SPEEDUP",
+  "secondary_label": "TRAINING_SPEEDUP",
+  "descriptive": {
+    "epoch2_median": 1.4203957239436706,
+    "process_wall_median": 1.440599280175437,
+    "install_seconds": [
+      34.002887845999794,
+      34.053023710999696,
+      33.476283598998634,
+      33.459273684000436,
+      34.75857564500075,
+      34.42784049200054
+    ],
+    "cache_bytes": [
+      1583007056,
+      1583007056,
+      1583007056,
+      1583007056,
+      1583007056,
+      1583007056
+    ],
+    "c_epoch_seconds": [
+      553.731833053,
+      327.80805015500005,
+      325.655492269
+    ]
+  }
+}

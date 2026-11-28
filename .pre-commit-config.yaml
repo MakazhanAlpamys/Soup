@@ -48,7 +48,11 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
+        # Copied benchmark evidence stays byte-identical to the measured source.
+        exclude: ^benchmarks/evidence/(?!.*SOURCES\.md$)
       - id: trailing-whitespace
+        # Copied benchmark evidence stays byte-identical to the measured source.
+        exclude: ^benchmarks/evidence/(?!.*SOURCES\.md$)
       - id: check-yaml
       - id: check-toml
       - id: check-merge-conflict
