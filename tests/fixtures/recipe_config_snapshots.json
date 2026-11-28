@@ -275,6 +275,7 @@
     "training.stream_buffers": 2,
     "training.stream_disk_kind": null,
     "training.stream_expert_layout": "fused",
+    "training.stream_expert_loader": "async_lease",
     "training.stream_layers": false,
     "training.stream_loss_chunk": null,
     "training.stream_nf4_scale_cache": false,
