@@ -1,0 +1,50 @@
+{
+  "base": "/data/h2/model_snapshot",
+  "task": "sft",
+  "backend": "transformers",
+  "modality": "text",
+  "data": {
+    "train": "benchmarks/h2/perf_workload.jsonl",
+    "format": "alpaca",
+    "max_length": 1024,
+    "chat_template": "llama3",
+    "val_split": 0.0
+  },
+  "training": {
+    "epochs": 1,
+    "lr": 0.0002,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "seed": 42,
+    "data_seed": 42,
+    "quantization": "4bit",
+    "bnb_4bit_quant_storage": "uint8",
+    "optimizer": "adamw_torch",
+    "scheduler": "constant",
+    "warmup_ratio": 0.0,
+    "weight_decay": 0.0,
+    "gradient_checkpointing": true,
+    "auto_mixed_precision": true,
+    "packing": false,
+    "use_liger": true,
+    "use_flash_attn": false,
+    "use_cut_ce": false,
+    "logging_steps": 1,
+    "save_steps": 1000000,
+    "lora": {
+      "r": 16,
+      "alpha": 32,
+      "dropout": 0.0,
+      "target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ]
+    }
+  },
+  "output": "/data/h2/output/perf_liger_ce"
+}

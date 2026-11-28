@@ -1,0 +1,64 @@
+smartctl 7.5 2025-04-30 r5714 [x86_64-w64-mingw32-w11-b26200] (AppVeyor)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF INFORMATION SECTION ===
+Model Number:                       Micron MTFDKCD512QFM-1BD1AABLA
+Firmware Version:                   1002V3LN
+PCI Vendor/Subsystem ID:            0x1344
+IEEE OUI Identifier:                0x00a075
+Controller ID:                      0
+NVMe Version:                       1.4
+Number of Namespaces:               1
+Namespace 1 Size/Capacity:          512,110,190,592 [512 GB]
+Namespace 1 Formatted LBA Size:     512
+Local Time is:                      Thu Oct 15 11:26:13 2026 QST
+Firmware Updates (0x14):            2 Slots, no Reset required
+Optional Admin Commands (0x0017):   Security Format Frmw_DL Self_Test
+Optional NVM Commands (0x005f):     Comp Wr_Unc DS_Mngmt Wr_Zero Sav/Sel_Feat Timestmp
+Log Page Attributes (0x1a):         Cmd_Eff_Lg Telmtry_Lg Pers_Ev_Lg
+Maximum Data Transfer Size:         32 Pages
+Warning  Comp. Temp. Threshold:     87 Celsius
+Critical Comp. Temp. Threshold:     90 Celsius
+
+Supported Power States
+St Op     Max   Active     Idle   RL RT WL WT  Ent_Lat  Ex_Lat
+ 0 +     9.00W       -        -    0  0  0  0        0       0
+ 1 +     4.60W       -        -    1  1  1  1        0       0
+ 2 +     3.80W       -        -    2  2  2  2        0       0
+ 3 -   0.0250W       -        -    3  3  3  3     5000    3000
+ 4 -   0.0040W       -        -    3  3  3  3     8000   35000
+
+Supported LBA Sizes (NSID 0x1)
+Id Fmt  Data  Metadt  Rel_Perf
+ 0 +     512       0         0
+
+=== START OF SMART DATA SECTION ===
+SMART overall-health self-assessment test result: PASSED
+
+SMART/Health Information (NVMe Log 0x02, NSID 0xffffffff)
+Critical Warning:                   0x00
+Temperature:                        38 Celsius
+Available Spare:                    100%
+Available Spare Threshold:          5%
+Percentage Used:                    11%
+Data Units Read:                    36,827,898 [18.8 TB]
+Data Units Written:                 39,123,549 [20.0 TB]
+Host Read Commands:                 491,898,964
+Host Write Commands:                603,670,490
+Controller Busy Time:               19,465
+Power Cycles:                       1,191
+Power On Hours:                     13,654
+Unsafe Shutdowns:                   238
+Media and Data Integrity Errors:    0
+Error Information Log Entries:      0
+Warning  Comp. Temperature Time:    0
+Critical Comp. Temperature Time:    0
+Temperature Sensor 1:               38 Celsius
+
+Error Information (NVMe Log 0x01, 16 of 64 entries)
+No Errors Logged
+
+Self-test Log (NVMe Log 0x06, NSID 0xffffffff)
+Self-test status: No self-test in progress
+No Self-tests Logged
+

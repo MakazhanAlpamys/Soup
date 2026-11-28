@@ -1,0 +1,59 @@
+{
+  "schema": "h2-close-u2-reaudit-v1",
+  "rule": "H2_CLOSE_PROTOCOL.txt U2: every declared trainable tensor changed its bytes",
+  "arms": {
+    "A": {
+      "outcome": "U2_REAUDIT_PASS",
+      "declared_adapter_tensors": 448,
+      "changed_adapter_tensors": 448,
+      "unchanged": [],
+      "training_files_sha256": {
+        "initial.safetensors": "74a4459da645b09f7ca4f7cc4dd97b4d2ccd49788285c5ede0b609fd4acce6a5",
+        "gradient_01.safetensors": "d8b5e97ae4560a6f2611786b3a17214efd38af1b487f7b56d7ad02edfba13a40",
+        "adapter_01.safetensors": "cda2490d67661aac2c8888c1fcea2bd614a9ca2a5d60726b1a501ce6bb6624bf",
+        "gradient_02.safetensors": "c3b48ecd015e8db64dd001d743398da85efa88065b02dd2b7400f28ef1668240",
+        "adapter_02.safetensors": "e1685898daef8a4edcba698c8e06b96fcac32e7155d75ac5d6b2475b065824ca",
+        "gradient_03.safetensors": "50cca2d74e8e2357cda84e7e6443c38fbf4214dda24335767128dd2cc32c40a9",
+        "adapter_03.safetensors": "bafbec50f438b27eeddf2e9448da29fbdc276e61d85de588ec23d451729db042",
+        "gradient_04.safetensors": "b3d887df6fe9b6832f683423c02f6541308e3141844ee2f7108b59947fd0c97b",
+        "adapter_04.safetensors": "5bf109655a1709ba853ae01a56df4ea914ecc2bfbde520a9843b074321748cf7",
+        "optimizer_final.safetensors": "e02ef67f9dd66fa95ede9926879adc2c346c3518443015e1acacf058275ee9b3",
+        "training.json": "239a6b6bda969259cc47198162f41bc94a37bef8cd8d59b3e8e6c6af6db83138"
+      }
+    },
+    "L": {
+      "outcome": "U2_REAUDIT_PASS",
+      "declared_adapter_tensors": 448,
+      "changed_adapter_tensors": 448,
+      "unchanged": [],
+      "training_files_sha256": {
+        "initial.safetensors": "74a4459da645b09f7ca4f7cc4dd97b4d2ccd49788285c5ede0b609fd4acce6a5",
+        "gradient_01.safetensors": "9b2b20e8e48c63b8eeccee4c27d200da395484431f61f72b0b7d09e125f559cb",
+        "adapter_01.safetensors": "9ff03cd1881d7bd2a32724229971e0337904799e6618716d2a2936a3522994d5",
+        "gradient_02.safetensors": "75a6572378468f4935879bf9dcb93be9b6041150e9a08313dc17df1b9af1a41f",
+        "adapter_02.safetensors": "8609ec3f2453073cbe37af12fb51ff650254867e311e0a198cc136aba00f3929",
+        "gradient_03.safetensors": "cf87459be540ca85d3d4bba412e5213fd0569476ebc8c79794ef795157a6ca6f",
+        "adapter_03.safetensors": "110cee7d8122b08f201a3bbd2740167b1a400c5034f441b27cd8c85201297272",
+        "gradient_04.safetensors": "3e67e07e3e78a5ab52f85b0c0c49b2bcd941ce70eea34e388f49f9dfc2dd265d",
+        "adapter_04.safetensors": "526aa8faa092ad222ab5aafc0fd9dde1a8611f9be312458ab8d0912b44c97dc1",
+        "optimizer_final.safetensors": "56a007de69b6601fa517461062799cfcc413fdd63bf883c76c55db61e332e2ec",
+        "training.json": "c6e8b0809f9d54a80ad1435c19399ead74f67dcc4650dcdc50473d7596b90b8e"
+      }
+    }
+  },
+  "measured_source_commit": "fc2880f914d0007f72c234b5b53d39f148d90526",
+  "measured_artifacts_sha256": {
+    "benchmarks/harness/h2_ce_training.py": "8c65d0c8aba94240c5244957beae2bae8afd248a5ad1158dd704ff62ba8e733a",
+    "benchmarks/harness/h2_close_updates.py": "b954d04a42b32deb398c14ad4985331c2611a4095dd155ee691bdce808cb5215"
+  },
+  "reviewer_sha256": {
+    "benchmarks/harness/h2_close_updates.py": "7404d50cf785fa16527c20774117026bf7d734f8480c4f5f3e49c68279f3f78b",
+    "benchmarks/harness/h2_ce_training.py": "8c65d0c8aba94240c5244957beae2bae8afd248a5ad1158dd704ff62ba8e733a",
+    "benchmarks/harness/h2_close_reaudit.py": "6e6eb5c2f433a829af8edc0679d050ed50c8e8b0d0388f54d1541f910eac522e"
+  },
+  "not_rechecked": [
+    "F1 and GPU-exclusivity controls",
+    "kernel attribution (U5)",
+    "measured-source check (reviewer code is newer by design)"
+  ]
+}

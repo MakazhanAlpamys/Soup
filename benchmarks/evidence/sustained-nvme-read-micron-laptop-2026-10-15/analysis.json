@@ -1,0 +1,339 @@
+{
+  "scope": "Exploratory single-host disk primitive; not formal C4 acceptance",
+  "formal_acceptance_claimed": false,
+  "deviation": "Additional interrupted/incomplete attempts beyond the one-replacement declaration; all retained. No retrospective protocol repair.",
+  "selected_run": "run-run-7eab09a633",
+  "protocol_commit": "c8e7dd35c3ed793bdd61c47ae9af3e897751136f",
+  "integrity_checks": "passed for selected run; original fixture full rehash and live hardware identity were not repeated during analysis",
+  "duration_s": 3600.0,
+  "read_bytes": 5375101239296,
+  "sample_count": 3600,
+  "thermal_samples": 713,
+  "max_sample_interval_s": 1.0160000000032596,
+  "temperature_start_c": 29,
+  "temperature_max_c": 65,
+  "temperature_end_c": 65,
+  "max_temperature_query_s": 0.06300000000192085,
+  "whole_run_GB_s": 1.4930836775822223,
+  "warmup_0_600_GB_s": 1.4936244818193058,
+  "postwarmup_600_3600_GB_s": 1.4929755167348053,
+  "last_600_GB_s": 1.4927929890133333,
+  "postwarmup_window_min_GB_s": 1.4900473277098665,
+  "postwarmup_window_p10_GB_s": 1.4916292514065068,
+  "planner_heuristic_GB_s": 1.3424663262658563,
+  "planner_use": "Provisional estimate for this host/read pattern only; no production default or generalization",
+  "physical_read_delta_bytes": 5375201545216,
+  "physical_minus_reader_bytes": 100305920,
+  "physical_write_delta_bytes": 156771328,
+  "foreign_read_check": "no other process read 1000000000 bytes or more; 0 processes could not be inspected",
+  "minimum_available_ram_bytes": 6174875648,
+  "postwarmup_windows": [
+    {
+      "start_s": 600,
+      "end_s": 660,
+      "GB_s": 1.4940438003712
+    },
+    {
+      "start_s": 660,
+      "end_s": 720,
+      "GB_s": 1.4900473277098665
+    },
+    {
+      "start_s": 720,
+      "end_s": 780,
+      "GB_s": 1.4902362112
+    },
+    {
+      "start_s": 780,
+      "end_s": 840,
+      "GB_s": 1.4925430784
+    },
+    {
+      "start_s": 840,
+      "end_s": 900,
+      "GB_s": 1.4931350345045333
+    },
+    {
+      "start_s": 900,
+      "end_s": 960,
+      "GB_s": 1.4957795431765333
+    },
+    {
+      "start_s": 960,
+      "end_s": 1020,
+      "GB_s": 1.492123648
+    },
+    {
+      "start_s": 1020,
+      "end_s": 1080,
+      "GB_s": 1.4944468729856
+    },
+    {
+      "start_s": 1080,
+      "end_s": 1140,
+      "GB_s": 1.4923616048469337
+    },
+    {
+      "start_s": 1140,
+      "end_s": 1200,
+      "GB_s": 1.4939129380863998
+    },
+    {
+      "start_s": 1200,
+      "end_s": 1260,
+      "GB_s": 1.4938340851712
+    },
+    {
+      "start_s": 1260,
+      "end_s": 1320,
+      "GB_s": 1.4931558662144
+    },
+    {
+      "start_s": 1320,
+      "end_s": 1380,
+      "GB_s": 1.4945376097621335
+    },
+    {
+      "start_s": 1380,
+      "end_s": 1440,
+      "GB_s": 1.4926293412522667
+    },
+    {
+      "start_s": 1440,
+      "end_s": 1500,
+      "GB_s": 1.491583701265067
+    },
+    {
+      "start_s": 1500,
+      "end_s": 1560,
+      "GB_s": 1.4949704619349329
+    },
+    {
+      "start_s": 1560,
+      "end_s": 1620,
+      "GB_s": 1.4919511222954667
+    },
+    {
+      "start_s": 1620,
+      "end_s": 1680,
+      "GB_s": 1.4932168234325336
+    },
+    {
+      "start_s": 1680,
+      "end_s": 1740,
+      "GB_s": 1.4936660333909333
+    },
+    {
+      "start_s": 1740,
+      "end_s": 1800,
+      "GB_s": 1.4927810352469335
+    },
+    {
+      "start_s": 1800,
+      "end_s": 1860,
+      "GB_s": 1.4943160107007998
+    },
+    {
+      "start_s": 1860,
+      "end_s": 1920,
+      "GB_s": 1.4924032682666666
+    },
+    {
+      "start_s": 1920,
+      "end_s": 1980,
+      "GB_s": 1.4935916544
+    },
+    {
+      "start_s": 1980,
+      "end_s": 2040,
+      "GB_s": 1.4938177273856001
+    },
+    {
+      "start_s": 2040,
+      "end_s": 2100,
+      "GB_s": 1.4933655814143998
+    },
+    {
+      "start_s": 2100,
+      "end_s": 2160,
+      "GB_s": 1.4935871804757335
+    },
+    {
+      "start_s": 2160,
+      "end_s": 2220,
+      "GB_s": 1.4902362112
+    },
+    {
+      "start_s": 2220,
+      "end_s": 2280,
+      "GB_s": 1.4933283919189333
+    },
+    {
+      "start_s": 2280,
+      "end_s": 2340,
+      "GB_s": 1.4923705526954665
+    },
+    {
+      "start_s": 2340,
+      "end_s": 2400,
+      "GB_s": 1.4923214793386665
+    },
+    {
+      "start_s": 2400,
+      "end_s": 2460,
+      "GB_s": 1.4937805378901334
+    },
+    {
+      "start_s": 2460,
+      "end_s": 2520,
+      "GB_s": 1.4916715020288
+    },
+    {
+      "start_s": 2520,
+      "end_s": 2580,
+      "GB_s": 1.4940110847999999
+    },
+    {
+      "start_s": 2580,
+      "end_s": 2640,
+      "GB_s": 1.4931023189333334
+    },
+    {
+      "start_s": 2640,
+      "end_s": 2700,
+      "GB_s": 1.4922634581333334
+    },
+    {
+      "start_s": 2700,
+      "end_s": 2760,
+      "GB_s": 1.4936198960469333
+    },
+    {
+      "start_s": 2760,
+      "end_s": 2820,
+      "GB_s": 1.4926873624575998
+    },
+    {
+      "start_s": 2820,
+      "end_s": 2880,
+      "GB_s": 1.4934682020522665
+    },
+    {
+      "start_s": 2880,
+      "end_s": 2940,
+      "GB_s": 1.4928970776575998
+    },
+    {
+      "start_s": 2940,
+      "end_s": 3000,
+      "GB_s": 1.4930503095637429
+    },
+    {
+      "start_s": 3000,
+      "end_s": 3060,
+      "GB_s": 1.4937664170666667
+    },
+    {
+      "start_s": 3060,
+      "end_s": 3120,
+      "GB_s": 1.4921687367680145
+    },
+    {
+      "start_s": 3120,
+      "end_s": 3180,
+      "GB_s": 1.4916343125333333
+    },
+    {
+      "start_s": 3180,
+      "end_s": 3240,
+      "GB_s": 1.4948504349353853
+    },
+    {
+      "start_s": 3240,
+      "end_s": 3300,
+      "GB_s": 1.4934708584448095
+    },
+    {
+      "start_s": 3300,
+      "end_s": 3360,
+      "GB_s": 1.4938101776384156
+    },
+    {
+      "start_s": 3360,
+      "end_s": 3420,
+      "GB_s": 1.4922942163626662
+    },
+    {
+      "start_s": 3420,
+      "end_s": 3480,
+      "GB_s": 1.4903055570261425
+    },
+    {
+      "start_s": 3480,
+      "end_s": 3540,
+      "GB_s": 1.4926582819498762
+    },
+    {
+      "start_s": 3540,
+      "end_s": 3600,
+      "GB_s": 1.4929708974080238
+    }
+  ],
+  "attempts": [
+    {
+      "run": "run-run-2589873dea",
+      "status": "invalid",
+      "error": "RuntimeError(\"Temperature guard: RuntimeError('Temperature missing, invalid or at operational stop: 65')\")",
+      "last_sample_s": 225.07900000000154,
+      "start_unix": 1792044539.1173718,
+      "F1": "ok",
+      "protocol_commit": "a90268259d56503be13100b9ed2857370a2a02ad"
+    },
+    {
+      "run": "run-run-2a67b99be3",
+      "status": "invalid",
+      "error": "RuntimeError('Temperature guard: stale or absent sensor')",
+      "last_sample_s": 30.01600000000326,
+      "start_unix": 1792045781.2077944,
+      "F1": "ok",
+      "protocol_commit": "3ac9dae09ae8f995ae94d6bfd1d410f623dea076"
+    },
+    {
+      "run": "run-run-87143d8f23",
+      "status": "invalid",
+      "error": null,
+      "last_sample_s": 3600.0,
+      "start_unix": 1792046129.6287954,
+      "F1": "void",
+      "protocol_commit": "e1ae7d05c065f89d8596e4ca9441abc15fc9e171"
+    },
+    {
+      "run": "run-run-6f95ecf5f9",
+      "status": "invalid",
+      "error": "KeyboardInterrupt()",
+      "last_sample_s": 8.0,
+      "start_unix": 1792062571.9915705,
+      "F1": "ok",
+      "protocol_commit": "c8e7dd35c3ed793bdd61c47ae9af3e897751136f"
+    },
+    {
+      "run": "run-run-b6e7a8f84d",
+      "status": "incomplete_no_summary",
+      "error": null,
+      "last_sample_s": 322.0619999999999,
+      "start_unix": 1792062794.2782445,
+      "F1": null,
+      "protocol_commit": null
+    },
+    {
+      "run": "run-run-7eab09a633",
+      "status": "candidate",
+      "error": null,
+      "last_sample_s": 3600.0,
+      "start_unix": 1792076947.4597206,
+      "F1": "ok",
+      "protocol_commit": "c8e7dd35c3ed793bdd61c47ae9af3e897751136f"
+    }
+  ],
+  "attribution": "Temperature association is descriptive. Logical per-process reads and aggregate physical counters cannot prove thermal causation or full physical-I/O isolation."
+}

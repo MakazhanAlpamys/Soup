@@ -1,3 +1,9 @@
 tests/fixtures/recipe_config_snapshots.json text eol=lf
 benchmarks/evidence/flash-liger-378-h200/*.json text eol=lf
 benchmarks/evidence/flash-liger-378-preflight/*.json text eol=lf
+
+# Source snapshots are verified byte-for-byte against their published SHA-256.
+benchmarks/evidence/direct-storage-read-rtx4090-2026-10-23/** -text
+benchmarks/evidence/liger-kernel-comparison-rtx4090-2026-11-02/** -text
+benchmarks/evidence/response-format-policy-linux-gpu-2026-10-22/** -text
+benchmarks/evidence/sustained-nvme-read-micron-laptop-2026-10-15/** -text

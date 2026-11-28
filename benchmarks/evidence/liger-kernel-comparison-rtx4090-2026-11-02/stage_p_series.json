@@ -1,0 +1,2406 @@
+{
+  "status": "COMPLETE",
+  "reason": "",
+  "protocol": "H2_CLOSE_PROTOCOL.txt section 4",
+  "steps": 20,
+  "warmup": 4,
+  "block_cap": 12,
+  "order": [
+    "A",
+    "L",
+    "L",
+    "A"
+  ],
+  "runs": [
+    {
+      "block": 0,
+      "position": 0,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 1,
+        "run": 1,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793634841.541507,
+          "ram_available_bytes": 64476618752,
+          "commit_charge": {
+            "used_bytes": 1570107392,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793634910.1750414,
+          "ram_available_bytes": 64466554880,
+          "commit_charge": {
+            "used_bytes": 1578614784,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2670 MHz over 35 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 35,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670,
+            "max": 2670
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.0789372026920319e-06,
+              "sleep_offset_end_s": -7.613562047481537e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 36 power samples, so on mains",
+            "evidence": {
+              "samples": 36,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 4096 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003681334272,
+              "disk_read_bytes_end": 14003685856256,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 4517888,
+              "foreign_read_bytes": 4096,
+              "foreign_read_bytes_min": 4096,
+              "foreign_read_bytes_max": 4096,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 4096
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 925.9616249673098,
+      "median_step_seconds": 2.147757376777008,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 0,
+      "position": 1,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 1,
+        "run": 2,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793634910.3224428,
+          "ram_available_bytes": 64468918272,
+          "commit_charge": {
+            "used_bytes": 1578631168,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793634977.4312606,
+          "ram_available_bytes": 64517136384,
+          "commit_charge": {
+            "used_bytes": 1578614784,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2670 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2670
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.948792487382889e-06,
+              "sleep_offset_end_s": -3.4598633646965027e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 4096 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685856256,
+              "disk_read_bytes_end": 14003685860352,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 4096,
+              "foreign_read_bytes_min": 4096,
+              "foreign_read_bytes_max": 4096,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 4096
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 951.2016359678495,
+      "median_step_seconds": 2.0948984895367175,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 0,
+      "position": 2,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 2,
+        "run": 3,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793634977.5690923,
+          "ram_available_bytes": 64516874240,
+          "commit_charge": {
+            "used_bytes": 1578631168,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635043.2007945,
+          "ram_available_bytes": 64505733120,
+          "commit_charge": {
+            "used_bytes": 1578614784,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 6
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.0239891707897186e-06,
+              "sleep_offset_end_s": -1.1352822184562683e-06,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 34 power samples, so on mains",
+            "evidence": {
+              "samples": 34,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685860352,
+              "disk_read_bytes_end": 14003685860352,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 959.3911481965389,
+      "median_step_seconds": 2.073840942699462,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 0,
+      "position": 3,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 2,
+        "run": 4,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635043.3228257,
+          "ram_available_bytes": 64508792832,
+          "commit_charge": {
+            "used_bytes": 1578631168,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635110.5584042,
+          "ram_available_bytes": 64491167744,
+          "commit_charge": {
+            "used_bytes": 1578614784,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 2
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.2307427823543549e-06,
+              "sleep_offset_end_s": -4.172325134277344e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685860352,
+              "disk_read_bytes_end": 14003685860352,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 929.1912055809623,
+      "median_step_seconds": 2.142371580004692,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 1,
+      "position": 0,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 3,
+        "run": 5,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635110.6668131,
+          "ram_available_bytes": 64493092864,
+          "commit_charge": {
+            "used_bytes": 1578631168,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635177.2502482,
+          "ram_available_bytes": 64516108288,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 1
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -9.969808161258698e-07,
+              "sleep_offset_end_s": -2.835877239704132e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685860352,
+              "disk_read_bytes_end": 14003685860352,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 941.7011858082118,
+      "median_step_seconds": 2.1120502087287605,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 1,
+      "position": 1,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 3,
+        "run": 6,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635177.3863282,
+          "ram_available_bytes": 64501977088,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635243.6755435,
+          "ram_available_bytes": 64490065920,
+          "commit_charge": {
+            "used_bytes": 1739829248,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 7,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -3.390014171600342e-07,
+              "sleep_offset_end_s": -3.0314549803733826e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 45056 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685860352,
+              "disk_read_bytes_end": 14003685905408,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 45056,
+              "foreign_read_bytes_min": 45056,
+              "foreign_read_bytes_max": 45056,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 45056
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 948.0022817733358,
+      "median_step_seconds": 2.0936285874340683,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 1,
+      "position": 2,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 4,
+        "run": 7,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635243.865009,
+          "ram_available_bytes": 64508391424,
+          "commit_charge": {
+            "used_bytes": 1580826624,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635310.474693,
+          "ram_available_bytes": 64493907968,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 1
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -2.612359821796417e-07,
+              "sleep_offset_end_s": -2.6402994990348816e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685905408,
+              "disk_read_bytes_end": 14003685905408,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 939.984658494209,
+      "median_step_seconds": 2.1065755027811974,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 1,
+      "position": 3,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 4,
+        "run": 8,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635310.5972276,
+          "ram_available_bytes": 64493752320,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635377.2317927,
+          "ram_available_bytes": 64522121216,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.0156072676181793e-06,
+              "sleep_offset_end_s": -8.288770914077759e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685905408,
+              "disk_read_bytes_end": 14003685905408,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 938.0127613550096,
+      "median_step_seconds": 2.1102535964455456,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 2,
+      "position": 0,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 5,
+        "run": 9,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635377.350171,
+          "ram_available_bytes": 64531079168,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635444.2553947,
+          "ram_available_bytes": 64507080704,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 5
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.0398216545581818e-06,
+              "sleep_offset_end_s": -2.868473529815674e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685905408,
+              "disk_read_bytes_end": 14003685905408,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 932.4588254336326,
+      "median_step_seconds": 2.137427802430466,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 2,
+      "position": 1,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 5,
+        "run": 10,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635444.4182606,
+          "ram_available_bytes": 64501583872,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635511.6853375,
+          "ram_available_bytes": 64486977536,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 1
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -8.749775588512421e-07,
+              "sleep_offset_end_s": -7.580965757369995e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685905408,
+              "disk_read_bytes_end": 14003685905408,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 926.2975245725024,
+      "median_step_seconds": 2.1460174850653857,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 2,
+      "position": 2,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 6,
+        "run": 11,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635511.839128,
+          "ram_available_bytes": 64505155584,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635577.89913,
+          "ram_available_bytes": 64476381184,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -4.0885061025619507e-07,
+              "sleep_offset_end_s": -2.50060111284256e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 16384 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685905408,
+              "disk_read_bytes_end": 14003685921792,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 16384,
+              "foreign_read_bytes_min": 16384,
+              "foreign_read_bytes_max": 16384,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 16384
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 948.854325772893,
+      "median_step_seconds": 2.0936890011653304,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 2,
+      "position": 3,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 6,
+        "run": 12,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635578.015873,
+          "ram_available_bytes": 64493203456,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635644.4507716,
+          "ram_available_bytes": 64515997696,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 7
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -9.802170097827911e-07,
+              "sleep_offset_end_s": -9.490177035331726e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685921792,
+              "disk_read_bytes_end": 14003685921792,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 942.5959709064779,
+      "median_step_seconds": 2.119077055482194,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 3,
+      "position": 0,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 7,
+        "run": 13,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635644.5710626,
+          "ram_available_bytes": 64525291520,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635711.2242522,
+          "ram_available_bytes": 64498700288,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 4
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -8.302740752696991e-07,
+              "sleep_offset_end_s": -9.229406714439392e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685921792,
+              "disk_read_bytes_end": 14003685921792,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 937.2448252799937,
+      "median_step_seconds": 2.1210352031048387,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 3,
+      "position": 1,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 7,
+        "run": 14,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635711.3494387,
+          "ram_available_bytes": 64513548288,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635777.9547207,
+          "ram_available_bytes": 64448598016,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 7,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -7.497146725654602e-07,
+              "sleep_offset_end_s": -2.60770320892334e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685921792,
+              "disk_read_bytes_end": 14003685921792,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 940.2853165076724,
+      "median_step_seconds": 2.109601429896429,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 3,
+      "position": 2,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 8,
+        "run": 15,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635778.1055195,
+          "ram_available_bytes": 64462667776,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635844.0649145,
+          "ram_available_bytes": 64485408768,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -7.422640919685364e-07,
+              "sleep_offset_end_s": -3.105960786342621e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 34 power samples, so on mains",
+            "evidence": {
+              "samples": 34,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685921792,
+              "disk_read_bytes_end": 14003685921792,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 953.4397758592467,
+      "median_step_seconds": 2.0802218415774405,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 3,
+      "position": 3,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 8,
+        "run": 16,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635844.1410222,
+          "ram_available_bytes": 64485507072,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635910.8422165,
+          "ram_available_bytes": 64516628480,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -4.2188912630081177e-07,
+              "sleep_offset_end_s": -2.738088369369507e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685921792,
+              "disk_read_bytes_end": 14003685921792,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 938.9254909551701,
+      "median_step_seconds": 2.113780772779137,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 4,
+      "position": 0,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 9,
+        "run": 17,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635910.9645627,
+          "ram_available_bytes": 64514048000,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793635978.095507,
+          "ram_available_bytes": 64462135296,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 7,
+            "sw_power_cap": 4
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -3.0687078833580017e-07,
+              "sleep_offset_end_s": -8.00006091594696e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 294912 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003685921792,
+              "disk_read_bytes_end": 14003686216704,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 294912,
+              "foreign_read_bytes_min": 294912,
+              "foreign_read_bytes_max": 294912,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 294912
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 931.3203411654177,
+      "median_step_seconds": 2.134774167323485,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 4,
+      "position": 1,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 9,
+        "run": 18,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793635978.2581184,
+          "ram_available_bytes": 64480247808,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793636044.3077025,
+          "ram_available_bytes": 64478519296,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -4.186294972896576e-07,
+              "sleep_offset_end_s": -7.743947207927704e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003686216704,
+              "disk_read_bytes_end": 14003686216704,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 953.1736662917141,
+      "median_step_seconds": 2.0861522895283997,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 4,
+      "position": 2,
+      "arm": "L",
+      "exit": 0,
+      "watch": {
+        "arm": "L",
+        "round": 10,
+        "run": 19,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793636044.432982,
+          "ram_available_bytes": 64485715968,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793636110.5727596,
+          "ram_available_bytes": 64513916928,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 8,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -1.3499520719051361e-06,
+              "sleep_offset_end_s": -7.69738107919693e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003686216704,
+              "disk_read_bytes_end": 14003686216704,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 946.7904674700272,
+      "median_step_seconds": 2.102389792446047,
+      "memory": {
+        "max_memory_allocated_bytes": 10956698112,
+        "max_memory_reserved_bytes": 11226054656
+      },
+      "outcome": "ok"
+    },
+    {
+      "block": 4,
+      "position": 3,
+      "arm": "A",
+      "exit": 0,
+      "watch": {
+        "arm": "A",
+        "round": 10,
+        "run": 20,
+        "label": "H2-close P, RTX 4090 GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5, instance 58843853",
+        "gpu": {
+          "id": "GPU-b03f015b-bc6a-9a0c-9b30-32ae39f25af5",
+          "source": "CUDA_VISIBLE_DEVICES"
+        },
+        "required": [
+          "suspend",
+          "power",
+          "foreign_reads"
+        ],
+        "outcome": "ok",
+        "box_stamp_before": {
+          "unix_s": 1793636110.754024,
+          "ram_available_bytes": 64504152064,
+          "commit_charge": {
+            "used_bytes": 1578893312,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "box_stamp_after": {
+          "unix_s": 1793636177.8704128,
+          "ram_available_bytes": 64514633728,
+          "commit_charge": {
+            "used_bytes": 1578876928,
+            "limit_bytes": 42237992960
+          },
+          "power_source": "mains",
+          "gpu_processes": [],
+          "gpu_memory_used_mib": 1,
+          "unknown": {}
+        },
+        "gpu_clock": {
+          "outcome": "ok",
+          "reason": "SM clock 210 to 2685 MHz over 34 samples; clock event reasons seen: gpu_idle, sw_power_cap",
+          "samples": 34,
+          "unknown_samples": 0,
+          "sm_clock_mhz": {
+            "min": 210,
+            "median": 2670.0,
+            "max": 2685
+          },
+          "reasons_seen": {
+            "gpu_idle": 6,
+            "sw_power_cap": 3
+          }
+        },
+        "checks": {
+          "suspend": {
+            "outcome": "ok",
+            "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+            "evidence": {
+              "sleep_offset_start_s": -7.515773177146912e-07,
+              "sleep_offset_end_s": -3.1990930438041687e-07,
+              "suspend_count_start": 0,
+              "suspend_count_end": 0
+            }
+          },
+          "power": {
+            "outcome": "ok",
+            "reason": "no battery in any of 35 power samples, so on mains",
+            "evidence": {
+              "samples": 35,
+              "off_mains_samples": [],
+              "battery_present": false,
+              "unknown_samples": 0,
+              "last_reading": {
+                "battery": false,
+                "online": {}
+              }
+            }
+          },
+          "foreign_reads": {
+            "outcome": "ok",
+            "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+            "evidence": {
+              "model_path": "/data/h2/model_snapshot",
+              "device": "nvme0n1",
+              "disk_read_bytes_start": 14003686216704,
+              "disk_read_bytes_end": 14003686216704,
+              "other_disk_read_bytes_start": 0,
+              "other_disk_read_bytes_end": 0,
+              "own_read_bytes": 0,
+              "foreign_read_bytes": 0,
+              "foreign_read_bytes_min": 0,
+              "foreign_read_bytes_max": 0,
+              "uninspectable_processes": 0
+            },
+            "readers": [],
+            "unattributed_bytes": 0
+          }
+        }
+      },
+      "gpu_processes_before": [],
+      "gpu_processes_after": [],
+      "problems": [],
+      "useful_tokens_per_second": 927.0689558527982,
+      "median_step_seconds": 2.148591508856043,
+      "memory": {
+        "max_memory_allocated_bytes": 11203267584,
+        "max_memory_reserved_bytes": 16819159040
+      },
+      "outcome": "ok"
+    }
+  ],
+  "analysis": {
+    "order": [
+      "A",
+      "L",
+      "L",
+      "A"
+    ],
+    "pairs": {
+      "L": {
+        "pair": "A-L",
+        "valid_blocks": 5,
+        "void_blocks": 0,
+        "blocks_needed": 5,
+        "blocks_used": 5,
+        "label": "NO_DETECTABLE_DIFFERENCE",
+        "mean_a_useful_tok_s": 934.4481187304984,
+        "mean_x_useful_tok_s": 946.742080090599,
+        "mean_difference": 12.293961360100548,
+        "difference_95": [
+          -2.1189974334504633,
+          26.70692015365156
+        ],
+        "ratio": 1.0131563872982083,
+        "ratio_95": [
+          0.9977323541125759,
+          1.0285804204838407
+        ],
+        "p_value": 0.07696742343738142,
+        "block_differences": [
+          27.719976808058163,
+          4.136496552161816,
+          0.04852700264245868,
+          8.77738806587763,
+          20.78741837176267
+        ]
+      }
+    },
+    "memory": {
+      "A": {
+        "max_memory_allocated_bytes": {
+          "median": 11203267584.0,
+          "min": 11203267584,
+          "max": 11203267584,
+          "runs": 10
+        },
+        "max_memory_reserved_bytes": {
+          "median": 16819159040.0,
+          "min": 16819159040,
+          "max": 16819159040,
+          "runs": 10
+        }
+      },
+      "L": {
+        "max_memory_allocated_bytes": {
+          "median": 10956698112.0,
+          "min": 10956698112,
+          "max": 10956698112,
+          "runs": 10
+        },
+        "max_memory_reserved_bytes": {
+          "median": 11226054656.0,
+          "min": 11226054656,
+          "max": 11226054656,
+          "runs": 10
+        }
+      }
+    },
+    "performance_scope": "This box, this workload and these configs only (protocol P9)"
+  },
+  "performance_verdict_scope": "pair labels in analysis.pairs only"
+}
