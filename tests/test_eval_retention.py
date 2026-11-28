@@ -1959,21 +1959,41 @@ class TestPathContainment:
 
 
 class TestRuntimeErrors:
+    @pytest.mark.parametrize("error_type", [OSError, AttributeError, IndexError, KeyError])
     def test_a_model_that_fails_to_load_exits_1_and_records_nothing(
-        self, fake_model, monkeypatch
+        self, fake_model, monkeypatch, error_type
     ):
         from soup_cli.utils import live_eval
 
+        error = error_type("bad model configuration")
+
         def boom(*_args, **_kwargs):
-            raise OSError("no such model")
+            raise error
 
         monkeypatch.setattr(live_eval, "make_generator", boom)
         _write_task_file("alpha")
         result = _run(
-            fake_model, {}, "v1", "--add-task", "alpha=alpha.jsonl", "--record"
+            fake_model, {}, "v1", "--add-task", "alpha=alpha.jsonl", "--record",
+            "--output", "report.json",
         )
-        output = _check(result, 1)
-        assert "retention run failed: OSError: no such model" in output
+        output = " ".join(_check(result, 1).split())
+        assert f"retention run failed: {error_type.__name__}: {error}" in output
+        assert not Path("retention.json").exists()
+        assert not Path("report.json").exists()
+
+    def test_a_scoring_key_error_is_not_reported_as_a_load_failure(
+        self, fake_model, monkeypatch,
+    ):
+        from soup_cli.eval import custom
+
+        def fail_scoring(*_args, **_kwargs):
+            raise KeyError("missing score field")
+
+        monkeypatch.setattr(custom, "run_eval", fail_scoring)
+        _write_task_file("alpha")
+        result = _run(fake_model, {}, "v1", "--add-task", "alpha=alpha.jsonl", "--record")
+        assert isinstance(result.exception, KeyError)
+        assert "retention run failed" not in result.output
         assert not Path("retention.json").exists()
 
     def test_a_ledger_that_cannot_be_written_exits_1_after_the_report(
