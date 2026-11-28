@@ -313,3 +313,166 @@ class TestFilterCommand:
         assert [row["text"] for row in scored] == [row["text"] for row in rows]
         assert [row["_perplexity_score"] for row in scored] == [10.0, 20.0]
         assert all("_coherence_score" in row for row in scored)
+
+
+# ─── --field missing from rows (#3437) ───────────────────────────────────
+
+FIELD_ROWS = [
+    {
+        "instruction": "Describe the weather.",
+        "output": "The weather is warm and bright today. We walked to the park after lunch.",
+    },
+    # No `output`: scored on the whole row it would pass any threshold here.
+    {"instruction": "Explain clearly how green plants turn sunlight into food for themselves."},
+    {"instruction": "Say a word.", "output": "x"},
+]
+
+
+class TestFilterMissingField:
+    """soup data filter --field does not score a row on fields it was not asked for."""
+
+    @staticmethod
+    def _run(tmp_path, monkeypatch, rows, *args):
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        with open(tmp_path / "d.jsonl", "w", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(json.dumps(row) + "\n")
+        result = CliRunner().invoke(app, ["data", "filter", "d.jsonl", *args])
+        return result, " ".join(strip_ansi(result.output).split())
+
+    @staticmethod
+    def _read(path):
+        import json
+
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    @staticmethod
+    def _patch_perplexity(monkeypatch, seen=None):
+        def fake(texts, **_kwargs):
+            if seen is not None:
+                seen.append(list(texts))
+            return [10.0 + index for index in range(len(texts))]
+
+        monkeypatch.setattr("soup_cli.utils.quality.compute_perplexity_scores", fake)
+
+    @staticmethod
+    def _no_perplexity(monkeypatch):
+        def fail(*_args, **_kwargs):
+            raise AssertionError("perplexity scoring ran")
+
+        monkeypatch.setattr("soup_cli.utils.quality.compute_perplexity_scores", fail)
+
+    def test_field_absent_from_every_row_is_refused(self, tmp_path, monkeypatch):
+        self._no_perplexity(monkeypatch)
+        result, output = self._run(
+            tmp_path, monkeypatch, FIELD_ROWS,
+            "--coherence", "0.5", "--perplexity", "100", "--field", "outptu",
+            "-o", "f.jsonl",
+        )
+        assert result.exit_code == 1, output
+        assert (
+            "--field 'outptu' is absent from every row; choose a field present in the dataset."
+            in output
+        )
+        assert "Scoring" not in output
+        assert not (tmp_path / "f.jsonl").exists()
+
+    def test_field_absent_from_every_row_is_refused_under_score_only(
+        self, tmp_path, monkeypatch,
+    ):
+        self._no_perplexity(monkeypatch)
+        result, output = self._run(
+            tmp_path, monkeypatch, FIELD_ROWS, "--score-only", "--field", "outptu",
+        )
+        assert result.exit_code == 1, output
+        assert "is absent from every row" in output
+        assert not (tmp_path / "d_scored.jsonl").exists()
+
+    def test_row_without_the_field_is_removed_and_counted(self, tmp_path, monkeypatch):
+        from soup_cli.utils.quality import compute_coherence_score
+
+        result, output = self._run(
+            tmp_path, monkeypatch, FIELD_ROWS,
+            "--coherence", "0.5", "--field", "output", "-o", "f.jsonl",
+        )
+        assert result.exit_code == 0, output
+        assert (
+            "1 of 3 rows have no 'output' and were not scored; they are not in the output."
+            in output
+        )
+        assert "3 -> 1 rows (-2 removed; 1 has no 'output')" in output
+        kept = self._read(tmp_path / "f.jsonl")
+        assert kept == [FIELD_ROWS[0]]
+        # The average is over the two scored rows, not over three.
+        scored = compute_coherence_score([FIELD_ROWS[0]["output"], FIELD_ROWS[2]["output"]])
+        assert f"Avg coherence: {sum(scored) / 2:.3f} (threshold: 0.5)" in output
+
+    def test_null_value_counts_as_missing(self, tmp_path, monkeypatch):
+        rows = [FIELD_ROWS[0], {**FIELD_ROWS[1], "output": None}, FIELD_ROWS[2]]
+        result, output = self._run(
+            tmp_path, monkeypatch, rows,
+            "--coherence", "0.5", "--field", "output", "-o", "f.jsonl",
+        )
+        assert result.exit_code == 0, output
+        assert "1 of 3 rows have no 'output'" in output
+        assert "3 -> 1 rows (-2 removed; 1 has no 'output')" in output
+        assert self._read(tmp_path / "f.jsonl") == [FIELD_ROWS[0]]
+
+    def test_perplexity_skips_the_row_without_the_field(self, tmp_path, monkeypatch):
+        seen = []
+        self._patch_perplexity(monkeypatch, seen)
+        result, output = self._run(
+            tmp_path, monkeypatch, FIELD_ROWS,
+            "--perplexity", "100", "--field", "output", "-o", "f.jsonl",
+        )
+        assert result.exit_code == 0, output
+        assert seen == [[FIELD_ROWS[0]["output"], FIELD_ROWS[2]["output"]]]
+        assert "3 -> 2 rows (-1 removed; 1 has no 'output')" in output
+        assert "Avg perplexity: 10.5 (threshold: 100.0)" in output
+        assert self._read(tmp_path / "f.jsonl") == [FIELD_ROWS[0], FIELD_ROWS[2]]
+
+    def test_score_only_writes_null_scores_for_the_row(self, tmp_path, monkeypatch):
+        self._patch_perplexity(monkeypatch)
+        result, output = self._run(
+            tmp_path, monkeypatch, FIELD_ROWS,
+            "--score-only", "--field", "output", "-o", "s.jsonl",
+        )
+        assert result.exit_code == 0, output
+        assert (
+            "1 of 3 rows have no 'output' and were not scored; their scores are null."
+            in output
+        )
+        scored = self._read(tmp_path / "s.jsonl")
+        assert [row["instruction"] for row in scored] == [r["instruction"] for r in FIELD_ROWS]
+        assert scored[1]["_coherence_score"] is None
+        assert scored[1]["_perplexity_score"] is None
+        assert [scored[0]["_perplexity_score"], scored[2]["_perplexity_score"]] == [10.0, 11.0]
+        assert isinstance(scored[0]["_coherence_score"], float)
+
+    def test_field_every_row_has_is_unchanged(self, tmp_path, monkeypatch):
+        rows = [FIELD_ROWS[0], FIELD_ROWS[2]]
+        result, output = self._run(
+            tmp_path, monkeypatch, rows,
+            "--coherence", "0.5", "--field", "output", "-o", "f.jsonl",
+        )
+        assert result.exit_code == 0, output
+        assert "2 -> 1 rows (-1 removed)" in output
+        assert "were not scored" not in output and "has no" not in output
+        assert self._read(tmp_path / "f.jsonl") == [FIELD_ROWS[0]]
+
+    def test_no_field_scores_whole_rows_as_before(self, tmp_path, monkeypatch):
+        result, output = self._run(
+            tmp_path, monkeypatch, FIELD_ROWS, "--coherence", "0.5", "-o", "f.jsonl",
+        )
+        assert result.exit_code == 0, output
+        assert "3 -> 3 rows (-0 removed)" in output
+        assert "were not scored" not in output
+        assert self._read(tmp_path / "f.jsonl") == FIELD_ROWS
