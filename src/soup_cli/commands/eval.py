@@ -574,6 +574,7 @@ def judge(
         JudgeDownError,
         JudgeEvaluator,
         JudgeUnavailableError,
+        judge_model_label,
         load_rubric,
         rubric_file_label,
         validate_judge_api_base,
@@ -583,7 +584,7 @@ def judge(
     try:
         validate_judge_api_base(api_base)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     # Load target data
@@ -630,8 +631,9 @@ def judge(
             console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(1)
 
+    judge_label = judge_model_label(judge_model)
     console.print(
-        f"[dim]Judging {len(items)} responses with {judge_model} "
+        f"[dim]Judging {len(items)} responses with {for_terminal(judge_label, single_line=True)} "
         f"(provider: {provider})...[/]"
     )
 
@@ -722,7 +724,7 @@ def judge(
         tracker = ExperimentTracker()
         tracker.save_eval_result(
             model_path=target,
-            benchmark=f"judge:{judge_model}",
+            benchmark=f"judge:{judge_label}",
             score=results.overall_score,
             details={
                 "criteria_averages": results.criteria_averages,
@@ -1381,6 +1383,7 @@ def gate_cmd(
 
     from soup_cli.eval.gate import (
         load_suite,
+        lost_baseline_coverage,
         resolve_baseline,
         run_gate,
         write_baseline_file,
@@ -1463,6 +1466,27 @@ def gate_cmd(
             for row in result.task_results
             if row.score is not None
         }
+        # #2951 — a run that could not score a task must not replace, or be
+        # written beside, a baseline that already covered it: the next run would
+        # have nothing to compare that task with. An empty map is left to the
+        # writer, which refuses it.
+        lost = lost_baseline_coverage(
+            scores,
+            required={task.name for task in eval_suite.tasks},
+            reference=baseline_scores,
+            output=write_baseline,
+        )
+        if lost:
+            if Path(write_baseline).exists():
+                outcome = f"keeping {quote_path(write_baseline)} as it was"
+            else:
+                outcome = f"not writing {quote_path(write_baseline)}"
+            console.print(
+                "[red]Cannot write --write-baseline:[/] "
+                f"{for_terminal(', '.join(lost))} not scored this run; "
+                f"{outcome}"
+            )
+            raise typer.Exit(EXIT_GATE_FAILED)
         try:
             written = write_baseline_file(write_baseline, scores)
         except (OSError, ValueError, TypeError) as exc:

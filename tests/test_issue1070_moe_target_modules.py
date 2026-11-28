@@ -539,14 +539,15 @@ class TestTheRatchet:
         the dense Qwen/Qwen3.5-2B-Base for qwen3.5-2b-pretrain: 114 bases.
         Qwen/Qwen3.5-35B-A3B-Base adds one flagged qwen3_5_moe base:
         115 bases, 24 MoE. Qwen/Qwen3.5-0.8B-Base adds one dense base,
-        making 116 bases; the flagless and model-type counts stay the same."""
+        making 116 bases. glm-5-grpo sets a MoE knob for zai-org/GLM-5,
+        bringing the flagless count back to 8. The model-type count stays the same."""
         moe = _moe_bases()
         flagged = _flagged_bases()
         flagless = [b for b in moe if b not in flagged]
 
         assert len(_record()) == 116
         assert len(moe) == 24
-        assert len(flagless) == 9, sorted(flagless)
+        assert len(flagless) == 8, sorted(flagless)
         assert len({info["model_type"] for info in moe.values()}) == 13
 
 

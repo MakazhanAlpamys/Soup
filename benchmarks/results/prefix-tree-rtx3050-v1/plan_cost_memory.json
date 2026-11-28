@@ -1,0 +1,19 @@
+{
+  "examples": 10000,
+  "max_length": 512,
+  "tokens": 4000000,
+  "rows": 5014,
+  "ratio": 1.5973,
+  "trace": true,
+  "read_s": 24.068,
+  "plan_s": 33.329,
+  "python": "3.11.5",
+  "torch": "2.15.0+cpu",
+  "machine": "Windows-10-10.0.19045-SP0",
+  "processor": "Intel64 Family 6 Model 141 Stepping 1, GenuineIntel",
+  "held_mb": 34.2,
+  "held_bytes_per_token": 8.6,
+  "plan_peak_mb": 65.7,
+  "plan_peak_bytes_per_token": 16.4,
+  "after_mb": 34.9
+}

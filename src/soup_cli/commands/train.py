@@ -739,6 +739,74 @@ def _auto_fp16_pick_keeps_fp32(cfg) -> bool:
         return False
 
 
+def _packed_lora_preflight(
+    cfg,
+    *,
+    allow_oom_attempt: bool,
+    trust_remote_code: bool = False,
+    sharding: str | None = None,
+) -> bool:
+    """``training.packed_lora``: refuse, before anything is loaded, a run the kernels cannot take.
+
+    Checks the machine, the model's config and the settings (``kernels/packed_lora/preflight.py``)
+    and prints the plan. A run the kernels cannot take stops here with the reasons, or, under
+    ``on_unsupported: stock``, says so and trains with the stock step. Memory that is not free
+    right now (pinned host RAM, GPU memory) is refused unless ``--allow-oom-attempt``.
+
+    Returns whether the kernels will run the step. The generic hardware-fit estimate prices a run
+    that checkpoints its activations and builds its logits, which the kernels do neither of, so
+    for a run they take the planner's estimate is the one checked against the card and the caller
+    skips the generic one.
+    """
+    block = cfg.training.packed_lora
+    if block is None or not block.enabled:
+        return False
+    from soup_cli.kernels.packed_lora import preflight as checks
+    from soup_cli.utils.terminal import for_terminal
+
+    result = checks.preflight(
+        cfg,
+        checks.read_model_config(cfg.base, trust_remote_code),
+        checks.read_machine(),
+        sharding=sharding,
+    )
+    if result.problems:
+        if block.on_unsupported == "stock":
+            for problem in result.problems:
+                console.print(f"[yellow]Packed LoRA kernels not used:[/] {for_terminal(problem)}")
+            console.print(
+                "[yellow]training.packed_lora.on_unsupported is stock: training with the "
+                "stock step.[/]"
+            )
+            return False
+        for problem in result.problems:
+            console.print(f"[red]Packed LoRA error:[/] {for_terminal(problem)}")
+        console.print(
+            "[dim]Set training.packed_lora.on_unsupported: stock to train with the stock step "
+            "instead, or remove training.packed_lora.[/]"
+        )
+        raise typer.Exit(1)
+    for problem in result.fit_problems:
+        colour = "yellow" if allow_oom_attempt else "red"
+        console.print(f"[{colour}]Packed LoRA error:[/] {for_terminal(problem)}")
+    if result.fit_problems:
+        if not allow_oom_attempt:
+            console.print(
+                "[dim]Free the memory, lower training.packed_lora.gpu_budget_mib or the batch "
+                "size, or pass --allow-oom-attempt to try anyway.[/]"
+            )
+            raise typer.Exit(1)
+        console.print("[yellow]--allow-oom-attempt set: launching anyway.[/]")
+    if result.plan is not None:
+        console.print(f"[green]Packed LoRA kernels:[/] {for_terminal(result.plan.describe())}")
+    elif result.estimate_bytes:
+        console.print(
+            "[green]Packed LoRA kernels:[/] no GPU budget, so what fits stays resident; the "
+            f"floor is about {result.estimate_bytes >> 20} MiB at {result.tokens} tokens per step"
+        )
+    return True
+
+
 def _hardware_fit_preflight(
     cfg,
     gpu_info,
@@ -1276,7 +1344,7 @@ def train(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Validate config and data without training",
+        help="Validate config and data without training. Cannot be combined with --find-lr.",
     ),
     resume: str = typer.Option(
         None,
@@ -1660,6 +1728,14 @@ def train(
 
     # --- LR range finder fast path ---
     if find_lr:
+        if dry_run:
+            # #3270: the sweep below trains the model, which a dry run promises not to do.
+            console.print(
+                "[red]--dry-run cannot be combined with --find-lr:[/] "
+                "--find-lr runs a live learning-rate sweep. Drop --find-lr to validate "
+                "the config and data, or drop --dry-run to run the sweep."
+            )
+            raise typer.Exit(2)
         if cloud:
             _refuse_cloud_flags(["--find-lr"])
 
@@ -1927,15 +2003,27 @@ def train(
             # this is still free: a paid boot cannot fix a missing data file.
             import yaml
 
+            from soup_cli.cloud._local_inputs import prepare_local_train_inputs
             from soup_cli.cloud._shipped import refuse_unshipped_inputs
             from soup_cli.config.loader import load_config_from_string
 
             if name and not cfg.experiment_name:
                 cfg.experiment_name = name
+
+            local_train_inputs = prepare_local_train_inputs(cfg)
+
+            if cloud == "runpod" and local_train_inputs:
+                raise ValueError(
+                    "--cloud runpod does not ship local data.train files; "
+                    "use a Hub dataset id or --cloud lambda|modal"
+                )
+
             refuse_unshipped_inputs(cfg)
+
             effective_yaml = yaml.safe_dump(
                 cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,
             )
+
             # The overrides above are assigned after the load and the models do not
             # validate on assignment, so no validator has seen this config. The
             # remote `soup train` loads the text through all of them: do it here,
@@ -1947,16 +2035,26 @@ def train(
                     "the effective config (the file with the command-line overrides "
                     f"applied) would be refused on the remote machine: {exc}"
                 ) from exc
+
+
             # We call the generic-shaped plan function dynamically
             plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
             if plan_func is None:
                 raise ValueError(f"cloud backend {cloud!r} has no plan function")
+
+            plan_kwargs = {
+                "gpu": gpu,
+                "output_dir": cfg.output,
+                "soup_version": _soup_version,
+                "config_yaml": effective_yaml,
+            }
+
+            if cloud in {"lambda", "modal"}:
+                plan_kwargs["local_train_inputs"] = local_train_inputs
+
             plan = plan_func(
                 str(config_path),
-                gpu=gpu,
-                output_dir=cfg.output,
-                soup_version=_soup_version,
-                config_yaml=effective_yaml,
+                **plan_kwargs,
             )
             stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
@@ -1965,16 +2063,27 @@ def train(
 
         from soup_cli.utils.terminal import for_terminal as _plan_text
 
+        input_summary = (
+            "\n".join(
+                f"  {_plan_text(item.remote_path, single_line=True)} — "
+                f"{item.size_bytes:,} bytes"
+                for item in plan.local_train_inputs
+            )
+            or "  None"
+        )
+
         console.print(
             Panel(
                 f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
-                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n\n"
+                f"Output:   [bold]{_plan_text(plan.output_dir, single_line=True)}[/]\n"
+                f"Inputs:\n{input_summary}\n\n"
                 f"[bold]Run:[/] {_plan_text(plan.run_command)}",
                 title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
+
         if cloud_submit:
             try:
                 submit_func = getattr(cloud_mod, f"submit_{cloud}_run", None)
@@ -2400,18 +2509,27 @@ def train(
     # outside its range, or a quantization with no memory model such as hqq:*)
     # it says the fit is not checked and why.
     sharding, sharded_processes = _preflight_sharding(fsdp, ds_config_path, num_gpus, nodes)
-    # A refusal of a run that pads to its longest row is held back until the data is loaded
-    # and its longest row is known (`_realised_length_verdict`, below); anything else the
-    # pre-flight decides here, as before.
     fit_identity = None
-    fit_deferred = _hardware_fit_preflight(
+    fit_deferred = None
+    # training.packed_lora prices its own run (the planner's estimate against the card).
+    packed_lora_runs = _packed_lora_preflight(
         cfg,
-        gpu_info,
         allow_oom_attempt=allow_oom_attempt,
-        sharding=sharding,
-        num_processes=sharded_processes,
-        defer_refusal_to_data=True,
+        trust_remote_code=trust_remote_code,
+        sharding=f"--fsdp {fsdp}" if fsdp else ("--deepspeed" if ds_config_path else None),
     )
+    if not packed_lora_runs:
+        # A refusal of a run that pads to its longest row is held back until the data is loaded
+        # and its longest row is known (`_realised_length_verdict`, below); anything else the
+        # pre-flight decides here, as before.
+        fit_deferred = _hardware_fit_preflight(
+            cfg,
+            gpu_info,
+            allow_oom_attempt=allow_oom_attempt,
+            sharding=sharding,
+            num_processes=sharded_processes,
+            defer_refusal_to_data=True,
+        )
 
     backend_label = cfg.backend
     if cfg.backend == "unsloth":
@@ -2995,6 +3113,7 @@ def train(
         raise
 
     from soup_cli.monitoring.manual_save import capture_manual_stop
+    from soup_cli.utils.lisa import LisaResumeError
 
     try:
         with (
@@ -3056,6 +3175,10 @@ def train(
             run_id,
             trust_remote_code=trust_remote_code,
         )
+    except LisaResumeError as exc:
+        _record_run_failure(tracker, run_id, exc)
+        console.print(f"[red]{for_terminal(str(exc), single_line=True)}[/]")
+        raise typer.Exit(1) from None
     except Exception as exc:
         _record_run_failure(tracker, run_id, exc)
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.

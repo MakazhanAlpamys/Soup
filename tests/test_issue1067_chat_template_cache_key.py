@@ -79,7 +79,9 @@ class TestTheTemplateIsInTheKey:
         override = _preprocess(tmp_path, monkeypatch, _OVERRIDE)
 
         assert default.name != override.name
-        assert sorted(p.name for p in (tmp_path / ".soup-tokenized").iterdir()) == sorted(
+        assert sorted(
+            entry.name for entry in (tmp_path / ".soup-tokenized").iterdir() if entry.is_dir()
+        ) == sorted(
             [default.name, override.name]
         )
 
