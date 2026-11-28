@@ -16,7 +16,8 @@ MBR = "l2l_route_preserving_mbr"
 SIZE = "l2l_mbr_group_size"
 SPLIT = "l2l_mbr_split_backward"
 ORDERED = "l2l_mbr_ordered_backward"
-SWITCHES = (MBR, SPLIT, ORDERED)
+ORACLE = "l2l_routing_oracle"
+SWITCHES = (MBR, SPLIT, ORDERED, ORACLE)
 OPTIONS = [(name, True) for name in SWITCHES] + [(SIZE, 2)]
 PREREQUISITES = {"l2l_two_read_experts": True, "l2l_grouped_expert_routes": True}
 
@@ -91,7 +92,9 @@ def test_mbr_group_size_has_a_lower_bound(value: int) -> None:
     _assert_config_error("Input should be greater than or equal to 1", field=SIZE, **{SIZE: value})
 
 
-@pytest.mark.parametrize(("name", "value"), [(SIZE, 2), (SPLIT, True), (ORDERED, True)])
+@pytest.mark.parametrize(
+    ("name", "value"), [(SIZE, 2), (SPLIT, True), (ORDERED, True), (ORACLE, True)]
+)
 def test_mbr_options_require_mbr_enabled(name: str, value: Any) -> None:
     _assert_config_error(f"training.{name} requires training.{MBR}=true", **{name: value})
 
@@ -103,6 +106,13 @@ def test_mbr_requires_both_expert_levers(missing: str) -> None:
         f"training.{MBR} requires both l2l_two_read_experts=true "
         "and l2l_grouped_expert_routes=true",
         **options,
+    )
+
+
+def test_routing_oracle_requires_uncompressed_activations() -> None:
+    _assert_config_error(
+        "training.l2l_routing_oracle requires training.l2l_activation_codec='none'",
+        **{**PREREQUISITES, MBR: True, ORACLE: True, "l2l_activation_codec": "fp8_e4m3"},
     )
 
 
@@ -122,7 +132,10 @@ def test_mbr_backward_modes_are_mutually_exclusive() -> None:
 
 @pytest.mark.parametrize(
     ("name", "before", "after"),
-    [(MBR, False, True), (SIZE, None, 2), (SPLIT, False, True), (ORDERED, False, True)],
+    [
+        (MBR, False, True), (SIZE, None, 2), (SPLIT, False, True), (ORDERED, False, True),
+        (ORACLE, False, True), (ORACLE, True, False),
+    ],
 )
 def test_mbr_recipe_refuses_changed_options_on_resume(
     tmp_path, monkeypatch, name: str, before: Any, after: Any,
@@ -156,7 +169,10 @@ def test_mbr_recipe_refuses_changed_options_on_resume(
 
 @pytest.mark.parametrize(
     ("name", "before", "after"),
-    [(MBR, False, True), (SIZE, None, 2), (SPLIT, False, True), (ORDERED, False, True)],
+    [
+        (MBR, False, True), (SIZE, None, 2), (SPLIT, False, True), (ORDERED, False, True),
+        (ORACLE, False, True), (ORACLE, True, False),
+    ],
 )
 def test_sft_resume_refuses_changed_mbr_setting_from_source_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, before: Any, after: Any,
@@ -214,6 +230,42 @@ def test_recipe_from_before_mbr_resumes_with_mbr_defaults(tmp_path) -> None:
         encoding="utf-8",
     )
     validate_resume(tmp_path, resolve_l2l_recipe(_load()))
+
+
+def test_recipe_without_oracle_key_resumes_with_oracle_off(tmp_path, monkeypatch) -> None:
+    import json
+
+    from soup_cli.utils.l2l_recipe import RECIPE_NAME, resolve_l2l_recipe, validate_resume
+
+    monkeypatch.chdir(tmp_path)
+    recipe = resolve_l2l_recipe(_load(**{**PREREQUISITES, MBR: True}))
+    (tmp_path / RECIPE_NAME).write_text(
+        json.dumps({
+            "requested_k": 5, "effective_k": 5, "activation_codec": "none", "auto_k": False,
+            "route_preserving_mbr": True, "two_read_experts": True, "grouped_expert_routes": True,
+        }),
+        encoding="utf-8",
+    )
+    validate_resume(tmp_path, recipe)
+
+
+def test_l2l_builder_passes_the_recipe_oracle_switch(monkeypatch) -> None:
+    pytest.importorskip("torch")
+    from soup_cli.trainer.l2l_trainer import refuse_unsupported_l2l
+    from soup_cli.utils.l2l_recipe import resolve_l2l_recipe
+    from tests.test_l2l_sft_dispatch import _builder
+
+    calls = []
+    owner, build = _builder(monkeypatch, "none", calls, k=5)
+    owner.config.training = _load(**{**PREREQUISITES, MBR: True, ORACLE: True})
+    owner._l2l_recipe = resolve_l2l_recipe(owner.config.training)
+    build()
+    assert calls[-1]["routing_oracle"] is True
+    with pytest.raises(ValueError) as caught:
+        refuse_unsupported_l2l(owner.model.config, n_gpu=0, routing_oracle=True)
+    assert str(caught.value) == (
+        "training.l2l_routing_oracle requires model_type='deepseek_v3'; got 'llama'."
+    )
 
 
 @pytest.mark.parametrize(("mode", "window_size"), [(SPLIT, 5), (ORDERED, 5), (ORDERED, 2)])

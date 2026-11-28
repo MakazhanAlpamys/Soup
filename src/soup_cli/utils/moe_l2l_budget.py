@@ -28,12 +28,13 @@ class MoEL2LMemoryPlan:
     device_type: str
     saved_expert_input_bytes: int | None = None
     window_host_bytes: int = 0
+    routing_oracle_bytes: int = 0
 
     @property
     def host_bytes(self) -> int:
         return (
             self.activation_bytes + self.routing_record_bytes
-            + self.routing_comparison_bytes + self.window_host_bytes
+            + self.routing_comparison_bytes + self.window_host_bytes + self.routing_oracle_bytes
         )
 
     def validate_microbatches(
@@ -70,6 +71,8 @@ def plan_moe_l2l(
     codec: str = "none",
     device_type: str = "cuda",
     host_workspace_bytes_per_batch: int = 0,
+    routing_oracle: bool = False,
+    num_experts: int | None = None,
 ) -> MoEL2LMemoryPlan:
     """Select the largest RAM-fitting ``k`` for a fixed upper bound on micro-batch shape.
 
@@ -77,6 +80,7 @@ def plan_moe_l2l(
     capacity using the store's allocation calculation. FP8 includes per-token scales,
     pinned rounding and codec host scratch. Charge pageable int64 routing records for
     streamed MoE layers, plus one temporary record for the routing comparison of the recompute.
+    An enabled routing oracle adds its own compact index, score and normalizer slabs.
 
     If supplied, expert_input_dtype is the dtype of the gathered hidden states
     entering the streamed experts. Backward runs for one recomputed layer and
@@ -104,6 +108,12 @@ def plan_moe_l2l(
         raise ValueError("MoE L2L needs a cpu/cuda device type and boolean pin")
     if type(host_workspace_bytes_per_batch) is not int or host_workspace_bytes_per_batch < 0:
         raise ValueError("MoE L2L window workspace must be non-negative integer bytes")
+    if type(routing_oracle) is not bool:
+        raise ValueError("MoE L2L routing_oracle must be a bool")
+    if routing_oracle and codec != "none":
+        raise ValueError("MoE L2L routing_oracle requires uncompressed L2L activations")
+    if routing_oracle and (type(num_experts) is not int or num_experts < experts_per_token):
+        raise ValueError("MoE L2L routing_oracle requires num_experts >= experts_per_token")
 
     batch_size, sequence_length, hidden_size = max_shape
     tokens = batch_size * sequence_length
@@ -118,32 +128,40 @@ def plan_moe_l2l(
             chunk_bytes=tokens * hidden_size * dtype_bytes(dtype),
             spill_layers=0, ring=1, pin=pin,
         )
-        host_bytes_per_batch = activation_bytes_per_batch + window_bytes_per_batch
-        effective_k = min(requested_k, (available - comparison_bytes) // host_bytes_per_batch)
-        activation_bytes = max(0, effective_k) * activation_bytes_per_batch
-        minimum_bytes = host_bytes_per_batch + comparison_bytes
+
+        def activation(k: int) -> int:
+            return activation_bytes_per_batch * k
     else:
         from soup_cli.utils.fp8_activations import fp8_activation_allocation
 
-        def allocation(k: int) -> int:
+        def activation(k: int) -> int:
             return fp8_activation_allocation(
                 n_layers=n_layers, mb_shapes=[max_shape] * k, pin=pin,
                 compute_dtype=dtype, device_type=device_type,
             ).host_bytes
 
-        minimum_bytes = allocation(1) + window_bytes_per_batch + comparison_bytes
-        # Scale slabs and shared codec scratch need not scale linearly with k.
-        # Search the shared estimator rather than multiplying a one-batch estimate.
-        low, high = 0, requested_k
-        while low < high:
-            middle = (low + high + 1) // 2
-            needed = allocation(middle) + middle * window_bytes_per_batch + comparison_bytes
-            if needed <= available:
-                low = middle
-            else:
-                high = middle - 1
-        effective_k = low
-        activation_bytes = allocation(effective_k) if effective_k else 0
+    def oracle_bytes(k: int) -> int:
+        if not routing_oracle or num_experts is None:
+            return 0
+        from soup_cli.utils.routing_oracle import routing_oracle_allocation_bytes
+
+        return routing_oracle_allocation_bytes(
+            n_moe_layers * tokens * k, experts_per_token, num_experts=num_experts, pin=pin,
+        )
+
+    def total(k: int) -> int:
+        return activation(k) + k * window_bytes_per_batch + comparison_bytes + oracle_bytes(k)
+
+    # Slab rounding and shared codec scratch can make the cost nonlinear in k.
+    minimum_bytes = total(1)
+    low, high = 0, requested_k
+    while low < high:
+        middle = (low + high + 1) // 2
+        if total(middle) <= available:
+            low = middle
+        else:
+            high = middle - 1
+    effective_k = low
     if effective_k < 1:
         raise MemoryError(
             f"MoE L2L k=1 needs {minimum_bytes} host bytes "
@@ -160,7 +178,7 @@ def plan_moe_l2l(
         requested_k=requested_k,
         effective_k=effective_k,
         available_host_bytes=available,
-        activation_bytes=activation_bytes,
+        activation_bytes=activation(effective_k),
         routing_record_bytes=effective_k * routing_bytes_per_batch,
         routing_comparison_bytes=comparison_bytes,
         n_layers=n_layers,
@@ -173,4 +191,5 @@ def plan_moe_l2l(
         device_type=device_type,
         saved_expert_input_bytes=saved_expert_input_bytes,
         window_host_bytes=effective_k * host_workspace_bytes_per_batch,
+        routing_oracle_bytes=oracle_bytes(effective_k),
     )

@@ -36,11 +36,18 @@ class L2LRecipe:
     mbr_group_size: Optional[int] = None
     mbr_split_backward: bool = False
     mbr_ordered_backward: bool = False
+    routing_oracle: bool = False
 
 
 def validate_l2l_options(tcfg: Any) -> None:
     """Check options that can be refused before loading the model."""
     codec = str(tcfg.l2l_activation_codec)
+    if getattr(tcfg, "l2l_routing_oracle", False) and not getattr(
+        tcfg, "l2l_route_preserving_mbr", False
+    ):
+        raise ValueError(
+            "training.l2l_routing_oracle requires training.l2l_route_preserving_mbr=true"
+        )
     if codec not in AVAILABLE_CODECS:
         raise ValueError(
             f"training.l2l_activation_codec={codec!r} is not available yet: the launch "
@@ -108,6 +115,7 @@ def resolve_l2l_recipe(tcfg: Any, *, effective_k: int | None = None) -> L2LRecip
         mbr_group_size=mbr_group_size,
         mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
         mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
+        routing_oracle=getattr(tcfg, "l2l_routing_oracle", False),
     )
 
 
@@ -163,6 +171,7 @@ def _validate_recipe_match(saved: L2LRecipe, recipe: L2LRecipe) -> None:
         "mbr_group_size",
         "mbr_split_backward",
         "mbr_ordered_backward",
+        "routing_oracle",
     ):
         before, now = getattr(saved, name), getattr(recipe, name)
         if before != now:

@@ -1217,6 +1217,7 @@ training:
 | `l2l_mbr_group_size` | `null` | Micro-batches per expert group. `null` uses the full accumulation window. An explicit size must be between 1 and `gradient_accumulation_steps`. |
 | `l2l_mbr_split_backward` | `false` | Backpropagate through the grouped experts, then through each micro-batch's attention, router and shared experts in L2L order. Refuses deferred decoder forward hooks. |
 | `l2l_mbr_ordered_backward` | `false` | Recompute in reverse micro-batch order so one backward per MoE layer accumulates adapter gradients in L2L order. Excludes split backward. |
+| `l2l_routing_oracle` | `false` | Replay the forward's expert IDs and scores during MBR backward. Requires a frozen native DeepSeek-V3 router and `l2l_activation_codec: none`. |
 
 Both settings require `stream_expert_layout: per_expert` with L2L. Routing replay reads a routed
 expert in the forward pass and again in its backward pass. Grouped routing gathers the hit
@@ -1241,6 +1242,12 @@ shared-expert graphs and defaults to one micro-batch. Detached activations are h
 expert group. The mode requires the native pooled expert path and refuses batch-invariant GEMM,
 grouped expert compute, fused expert nodes, split or ordered backward, and deferred decoder
 forward hooks. This experimental mode is exposed through the step API pending GPU review.
+
+The routing oracle stores the selected expert IDs, sigmoid scores and normalization denominators
+in host RAM. MBR recompute uses the saved scores to differentiate the original routing weights.
+The trainer uses the streamed model's native BF16 or FP32 precision with autocast disabled for
+oracle windows. The step API also supports replay in decoupled backward. The checkpoint recipe
+records the setting and refuses resume when it changes.
 
 - **Scope.** Llama and Mistral models, and DeepSeek-V3-family MoE models streamed with `stream_expert_layout: per_expert`, on a single GPU, bf16 or fp32 (not fp16: the step runs backward itself, so the grad scaler would never see the loss). A MoE model with the fused expert layout is refused at launch, before any weight is sharded, naming `stream_expert_layout`. On a MoE model every routed expert is read through one bounded buffer pool (the pre-flight charges its arena in place of the single in-flight expert), the backward leases each hit expert again, and a routing guard stops a step whose recompute routed tokens differently from its forward. Only the stateless SiLU activation can be recomputed. `l2l_auto_k` stays refused on a MoE model: its host-RAM window planner is not wired into the launch. `l2l` is refused beside `data.format: raft`, `prefix_tree`, `multipack` and `stream_loss_chunk`, which build their own trainer or loss, and with any task but `sft`.
 - **Refusals name the key.** An `l2l_*` key set while `l2l` is false, or `l2l: true` without `stream_layers: true`, is refused at config load with the key named.

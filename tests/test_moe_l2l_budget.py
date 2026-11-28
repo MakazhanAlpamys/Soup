@@ -51,6 +51,20 @@ def test_expert_input_dtype_is_independent_of_host_storage():
     assert plan.host_bytes == 3840
 
 
+@pytest.mark.parametrize(("pin", "oracle_bytes"), [(False, 1760), (True, 2048)])
+def test_oracle_slabs_are_charged_in_addition_to_mbr_records(pin, oracle_bytes):
+    args = {**PLAN_ARGS, "pin": pin}
+    baseline = plan_moe_l2l(HostMemoryBudget(100_000), **args)
+    limit = baseline.host_bytes + oracle_bytes
+    plan = plan_moe_l2l(HostMemoryBudget(limit), **args, routing_oracle=True, num_experts=8)
+    assert plan.effective_k == 4
+    assert plan.host_bytes == limit
+    assert plan.routing_record_bytes == baseline.routing_record_bytes
+    assert plan.routing_oracle_bytes == oracle_bytes
+    short = plan_moe_l2l(HostMemoryBudget(limit - 1), **args, routing_oracle=True, num_experts=8)
+    assert short.effective_k == 3
+
+
 def test_selection_uses_remaining_budget_and_all_integer_window_sizes():
     budget = HostMemoryBudget(40_000, reserved_bytes=961)
     staging = budget.reserve("reader staging", 4600)

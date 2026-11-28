@@ -4120,6 +4120,14 @@ class TrainingConfig(BaseModel):
             "micro-batches in L2L order. Excludes l2l_mbr_split_backward."
         ),
     )
+    l2l_routing_oracle: bool = Field(
+        default=False,
+        description=(
+            "EXPERIMENTAL — replay the native DeepSeek-V3 router's forward routes and scores "
+            "during MBR backward. Requires l2l_route_preserving_mbr=true, frozen routers "
+            "and uncompressed L2L activations."
+        ),
+    )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
@@ -4708,6 +4716,7 @@ class TrainingConfig(BaseModel):
     @field_validator(
         "l2l", "l2l_auto_k", "l2l_two_read_experts", "l2l_grouped_expert_routes",
         "l2l_route_preserving_mbr", "l2l_mbr_split_backward", "l2l_mbr_ordered_backward",
+        "l2l_routing_oracle",
         mode="before",
     )
     @classmethod
@@ -8438,6 +8447,7 @@ class SoupConfig(BaseModel):
             "l2l_mbr_group_size": tcfg.l2l_mbr_group_size is not None,
             "l2l_mbr_split_backward": tcfg.l2l_mbr_split_backward,
             "l2l_mbr_ordered_backward": tcfg.l2l_mbr_ordered_backward,
+            "l2l_routing_oracle": tcfg.l2l_routing_oracle,
         }
         options = {
             "l2l_spill_dir": tcfg.l2l_spill_dir is not None,
@@ -8491,6 +8501,10 @@ class SoupConfig(BaseModel):
                     raise ValueError(
                         f"training.{name} requires training.l2l_route_preserving_mbr=true"
                     )
+        if tcfg.l2l_routing_oracle and tcfg.l2l_activation_codec != "none":
+            raise ValueError(
+                "training.l2l_routing_oracle requires training.l2l_activation_codec='none'"
+            )
         if self.task not in L2L_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.l2l supports task in {list(L2L_SUPPORTED_TASKS)}; "

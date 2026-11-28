@@ -905,6 +905,7 @@ class L2LStep:
         self.counters: Optional[LoadCounters] = None
         #: Per-layer phase counters from the opt-in route-preserving MBR path.
         self.route_preserving_mbr_stats: Optional[Dict[str, Any]] = None
+        self.routing_oracle_stats: Optional[Dict[str, Any]] = None
         #: Optional expert read counters split by layer and step phase.
         self.expert_phase_stats: Optional[Dict[str, Any]] = None
 
@@ -930,6 +931,8 @@ class L2LStep:
         split_records: Optional[List[Dict[str, Any]]] = None,
         reverse_graph_order: bool = False,
         preserve_expert_shapes: bool = False,
+        routing_oracle: Any = None,
+        oracle_phase: str = "forward",
     ) -> Tuple[List[Any], List[Tuple[Any, Any]], List[List[int]], Dict[str, int]]:
         """Run each layer's attention/router per micro-batch, grouping only routed experts.
 
@@ -968,7 +971,12 @@ class L2LStep:
                 build_order = list(reversed(indices)) if reverse_graph_order else list(indices)
                 for mb in build_order:
                     state = states[mb] if states is not None else None
-                    self._layer(module, hidden[mb], state, calls[mb])
+                    visit = (
+                        routing_oracle.visit(module.idx, mb, oracle_phase)
+                        if routing_oracle is not None else nullcontext()
+                    )
+                    with visit:
+                        self._layer(module, hidden[mb], state, calls[mb])
                     if getattr(module, "_forward_hooks", None) or getattr(
                         inner, "_forward_hooks", None
                     ):
@@ -1078,6 +1086,7 @@ class L2LStep:
         calls: Sequence[LayerCall], grads: List[Any], group_size: int, subwindow_size: int,
         expected_routes: Sequence[Tuple[Any, Any]], replay: Any,
         routing_budget: Optional[Tuple[int, int]], collect_phase_stats: bool,
+        routing_oracle: Any,
     ) -> None:
         """Replay expert inputs without a graph, then rebuild the decoder in subwindows."""
         import torch
@@ -1092,9 +1101,14 @@ class L2LStep:
         inner = getattr(layer, "inner", layer)
         expected_weights, replayed_weights = [], []
 
-        def capture_batch(mb: int, inputs: Any) -> Tuple[Any, Dict[str, Any]]:
+        def capture_batch(mb: int, inputs: Any, phase: str) -> Tuple[Any, Dict[str, Any]]:
             state = states[mb][idx] if states is not None else None
-            output = self._layer(layer, inputs, state, calls[mb])
+            visit = (
+                routing_oracle.visit(idx, mb, phase)
+                if routing_oracle is not None else nullcontext()
+            )
+            with visit:
+                output = self._layer(layer, inputs, state, calls[mb])
             if len(capture) != 1:
                 raise RuntimeError(
                     "route-preserving MBR expected one routed-expert call per micro-batch; "
@@ -1123,7 +1137,7 @@ class L2LStep:
                 ):
                     for mb in group:
                         inputs.append(store.get(idx, mb))
-                        placeholder, row = capture_batch(mb, inputs[-1])
+                        placeholder, row = capture_batch(mb, inputs[-1], "peek")
                         hidden.append(row["expert_input"])
                         ids.append(row["route_ids"])
                         weights.append(row["route_weights"])
@@ -1140,6 +1154,9 @@ class L2LStep:
                     torch.cat([grads[mb].flatten(0, -2) for mb in group]).to(hidden[0].dtype),
                     group_sizes=sizes, autocast_kwargs=autocast_kwargs,
                 )
+                # Oracle replay fixes route IDs and weights even if a grad-sensitive hook
+                # changed the rebuilt expert input. Keep the detached inputs for this check.
+                oracle_expert_inputs = hidden if routing_oracle is not None else None
                 del hidden, ids
                 after_experts = self._expert_read_snapshot() if collect_phase_stats else None
                 hidden_seeds, weight_seeds = d_hidden.split(sizes), d_weights.split(sizes)
@@ -1154,12 +1171,19 @@ class L2LStep:
                         _patched_route_preserving_forward(layer, capture),
                     ):
                         rebuilt = [
-                            capture_batch(group[pos], inputs[pos].requires_grad_(True))
+                            capture_batch(group[pos], inputs[pos].requires_grad_(True), "recompute")
                             for pos in positions
                         ]
                     with torch.autocast(device_type, enabled=False):
                         for pos, (output, row) in zip(positions, rebuilt):
                             mb = group[pos]
+                            if oracle_expert_inputs is not None and not torch.equal(
+                                row["expert_input"], oracle_expert_inputs[pos],
+                            ):
+                                raise RuntimeError(
+                                    "routing_oracle: decoupled MBR expert inputs changed between "
+                                    f"replays at layer {idx}, micro-batch {mb}"
+                                )
                             if not torch.equal(row["route_weights"], weights[pos]):
                                 raise RuntimeError(
                                     "decoupled MBR gate weights changed between replays at "
@@ -1178,7 +1202,7 @@ class L2LStep:
                             inputs[pos] = None
                             del output, row, root, roots, seeds
                     del rebuilt
-                del d_hidden, d_weights, hidden_seeds, weight_seeds
+                del d_hidden, d_weights, hidden_seeds, weight_seeds, oracle_expert_inputs
 
                 if collect_phase_stats:
                     after_rebuild = self._expert_read_snapshot()
@@ -1313,6 +1337,7 @@ class L2LStep:
         mbr_ordered_backward: bool = False,
         mbr_decoupled_subwindow: bool = False,
         mbr_recompute_subwindow: Optional[int] = None,
+        routing_oracle: Any = None,
     ) -> List[Any]:
         """``labels`` defaults to the input ids; pass them for SFT rows with ``-100``.
 
@@ -1340,7 +1365,10 @@ class L2LStep:
         limits attention, router and shared-expert recompute graphs to
         ``mbr_recompute_subwindow`` micro-batches (default 1). It requires native pooled experts
         and excludes the split and ordered modes and deferred decoder forward hooks.
+        ``routing_oracle`` replays the native forward's routes and scores in MBR recompute.
+        It requires uncompressed activations and native precision without autocast.
         """
+        self.routing_oracle_stats = None
         if type(route_preserving_mbr) is not bool:
             raise ValueError("route_preserving_mbr must be a bool")
         if type(collect_phase_stats) is not bool:
@@ -1355,6 +1383,26 @@ class L2LStep:
             raise ValueError("mbr_ordered_backward is only valid with route_preserving_mbr=True")
         if mbr_ordered_backward and mbr_split_backward:
             raise ValueError("mbr_ordered_backward and mbr_split_backward exclude each other")
+        if routing_oracle is not None:
+            import torch
+
+            from soup_cli.utils.fp8_activations import FP8ActivationStore
+            from soup_cli.utils.routing_oracle import DeepseekRoutingOracle
+
+            if not route_preserving_mbr:
+                raise ValueError("routing_oracle requires route_preserving_mbr=True")
+            if not isinstance(routing_oracle, DeepseekRoutingOracle):
+                raise ValueError("routing_oracle must be a DeepseekRoutingOracle")
+            if reference is not None:
+                reference = as_passes(reference)
+                if reference:
+                    raise ValueError("routing_oracle does not support reference passes")
+            if torch.is_autocast_enabled(torch.device(self.runtime.device).type):
+                raise ValueError(
+                    "routing_oracle requires native router precision with autocast disabled"
+                )
+            if isinstance(store, FP8ActivationStore):
+                raise ValueError("routing_oracle requires uncompressed L2L activations")
         if type(mbr_decoupled_subwindow) is not bool:
             raise ValueError("mbr_decoupled_subwindow must be a bool")
         if mbr_decoupled_subwindow:
@@ -1418,6 +1466,7 @@ class L2LStep:
                         mbr_ordered_backward=mbr_ordered_backward,
                         mbr_decoupled_subwindow=mbr_decoupled_subwindow,
                         mbr_recompute_subwindow=mbr_recompute_subwindow or 1,
+                        routing_oracle=routing_oracle,
                     )
                 else:
                     guard = (
@@ -1438,8 +1487,14 @@ class L2LStep:
                             collect_phase_stats=collect_phase_stats,
                         )
         finally:
-            if previous_phase_tracking is not None:
-                expert_pool.phase_read_tracking = previous_phase_tracking
+            try:
+                if routing_oracle is not None:
+                    routing_oracle.abort_step()
+            finally:
+                if previous_phase_tracking is not None:
+                    expert_pool.phase_read_tracking = previous_phase_tracking
+        if routing_oracle is not None:
+            self.routing_oracle_stats = routing_oracle.report()
         self.counters = counters
         return losses
 
@@ -1462,6 +1517,7 @@ class L2LStep:
         mbr_ordered_backward: bool = False,
         mbr_decoupled_subwindow: bool = False,
         mbr_recompute_subwindow: int = 1,
+        routing_oracle: Any = None,
     ) -> List[Any]:
         import torch
 
@@ -1546,6 +1602,8 @@ class L2LStep:
             for spec, ids in zip(passes, pass_ids):
                 with self._pass_adapters(spec):
                     pass_hidden.append([self.owner.embed_tokens(x) for x in ids])
+            if routing_oracle is not None:
+                routing_oracle.begin_step([value.shape for value in hidden])
             for idx, layer in enumerate(self.layers):
                 for mb in range(k):
                     store.put(idx, mb, hidden[mb])
@@ -1568,6 +1626,7 @@ class L2LStep:
                                 deferred_hooks,
                                 reverse_graph_order=mbr_ordered_backward,
                                 preserve_expert_shapes=preserve_expert_shapes,
+                                routing_oracle=routing_oracle,
                             )
                         )
                     for mb in range(k):
@@ -1681,7 +1740,7 @@ class L2LStep:
                         self._decoupled_mbr_layer_backward(
                             idx, layer, experts, store, states, calls, grads, group_size,
                             mbr_recompute_subwindow, expected_routes, pair[1] if pair else None,
-                            routing_budget, collect_phase_stats,
+                            routing_budget, collect_phase_stats, routing_oracle,
                         )
                         del expected_routes
                         continue
@@ -1719,6 +1778,8 @@ class L2LStep:
                                 split_records=split_records,
                                 reverse_graph_order=mbr_ordered_backward,
                                 preserve_expert_shapes=preserve_expert_shapes,
+                                routing_oracle=routing_oracle,
+                                oracle_phase="recompute",
                             )
                         )
                     after_recompute = (
@@ -1844,6 +1905,8 @@ class L2LStep:
                 layer.use_checkpoint = saved
         if route_preserving_mbr and (mbr_routes or mbr_route_record_bytes != 0):
             raise RuntimeError("route-preserving MBR did not consume every forward route record")
+        if routing_oracle is not None:
+            routing_oracle.require_complete()
         if train_embedding:
             # The reverse walk prefetches this at layer 0 and records it on the prefetcher. A
             # one-layer decoder never changes direction, so only then is it still to be asked.
@@ -1864,4 +1927,6 @@ class L2LStep:
         store.end_step()
         if replayed is not None:
             l2l_rng.leave_stream_at(replayed[1])
+        if routing_oracle is not None:
+            routing_oracle.end_step()
         return losses

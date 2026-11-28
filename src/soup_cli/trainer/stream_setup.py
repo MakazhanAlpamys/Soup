@@ -1184,6 +1184,7 @@ class StreamingSetupMixin:
                 model_config,
                 n_gpu=0,
                 expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
+                routing_oracle=getattr(tcfg, "l2l_routing_oracle", False),
             )
         two_read_experts = bool(getattr(tcfg, "l2l_two_read_experts", False))
         grouped_expert_routes = bool(getattr(tcfg, "l2l_grouped_expert_routes", False))
@@ -2063,16 +2064,20 @@ class StreamingSetupMixin:
                 f"supports {', '.join(repr(c) for c in AVAILABLE_CODECS)}. Set it to 'none'."
             )
         base = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
+        recipe = self._l2l_recipe
+        routing_oracle = getattr(
+            recipe, "routing_oracle", getattr(tcfg, "l2l_routing_oracle", False)
+        )
         refuse_unsupported_l2l(
             base.config,
             n_gpu=int(training_args.n_gpu),
             fp16=bool(training_args.fp16),
             expert_layout=getattr(tcfg, "stream_expert_layout", "fused"),
+            routing_oracle=routing_oracle,
         )
         warning = unready_task_warning(getattr(self.config, "task", None))
         if warning is not None:
             console.print(f"[yellow]Warning:[/] {warning}")
-        recipe = self._l2l_recipe
         effective_k = (
             recipe.effective_k if recipe is not None
             else int(training_args.gradient_accumulation_steps)
@@ -2097,6 +2102,7 @@ class StreamingSetupMixin:
             mbr_group_size=getattr(tcfg, "l2l_mbr_group_size", None),
             mbr_split_backward=getattr(tcfg, "l2l_mbr_split_backward", False),
             mbr_ordered_backward=getattr(tcfg, "l2l_mbr_ordered_backward", False),
+            routing_oracle=routing_oracle,
         )
         console.print(
             "[green]L2L:[/] each streamed layer loads once per optimizer step and runs "

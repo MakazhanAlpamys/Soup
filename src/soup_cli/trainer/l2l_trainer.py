@@ -62,6 +62,7 @@ from soup_cli.utils.l2l_step import (
 
 if TYPE_CHECKING:
     from soup_cli.utils.moe_l2l_budget import MoEL2LMemoryPlan
+    from soup_cli.utils.routing_oracle import DeepseekRoutingOracle
 
 #: Architectures ``training.l2l`` admits at launch with any weight layout.
 PUBLIC_ARCHS = ("llama", "mistral")
@@ -118,13 +119,18 @@ MAX_CACHED_SHAPES = 64
 
 
 def refuse_unsupported_l2l(
-    model_config: Any, *, n_gpu: int, fp16: bool = False, expert_layout: str = "fused"
+    model_config: Any, *, n_gpu: int, fp16: bool = False, expert_layout: str = "fused",
+    routing_oracle: bool = False,
 ) -> None:
     """Refuse at launch what the schema cannot see: the model, the GPU count, fp16.
 
     ``expert_layout`` is ``training.stream_expert_layout``; DeepSeek-V3 needs ``per_expert``.
     """
     arch = str(getattr(model_config, "model_type", ""))
+    if routing_oracle and arch != "deepseek_v3":
+        raise ValueError(
+            f"training.l2l_routing_oracle requires model_type='deepseek_v3'; got {arch!r}."
+        )
     if arch in PER_EXPERT_ARCHS:
         if expert_layout != EXPERT_LAYOUT_PER_EXPERT:
             raise ValueError(
@@ -195,10 +201,16 @@ class L2LState:
     mbr_group_size: Optional[int] = None
     mbr_split_backward: bool = False
     mbr_ordered_backward: bool = False
+    routing_oracle: bool = False
+    _routing_oracle: Optional[DeepseekRoutingOracle] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.loss is None:
             self.loss = SFT_WINDOW_LOSS
+        if self.routing_oracle and not self.route_preserving_mbr:
+            raise ValueError("routing_oracle requires route_preserving_mbr=True")
+        if self.routing_oracle and self.activation_codec != "none":
+            raise ValueError("routing_oracle requires uncompressed L2L activations")
         if self.activation_codec not in ("none", "fp8_e4m3"):
             raise ValueError(f"unsupported L2L activation codec {self.activation_codec!r}")
         if self.activation_codec == "fp8_e4m3":
@@ -220,6 +232,8 @@ class L2LState:
                 raise ValueError("an L2L memory_plan requires an explicit host_budget")
             if self.memory_plan.codec != self.activation_codec:
                 raise ValueError("L2L activation codec differs from the resolved memory plan")
+            if bool(self.memory_plan.routing_oracle_bytes) != self.routing_oracle:
+                raise ValueError("L2L routing_oracle differs from the resolved memory plan")
         if (
             self.c3_plan is not None and self.host_budget is not None
             and self.host_budget is not self.c3_plan.activations
@@ -230,6 +244,7 @@ class L2LState:
         if self.c3_plan is not None and self.memory_plan is not None:
             routing_bytes = (
                 self.memory_plan.routing_record_bytes + self.memory_plan.routing_comparison_bytes
+                + self.memory_plan.routing_oracle_bytes
             )
             if self.c3_plan.routing_bytes != routing_bytes:
                 raise ValueError(
@@ -264,6 +279,8 @@ class L2LState:
             fields["l2l_mbr_group_size"] = self.mbr_group_size or self.effective_k
             fields["l2l_mbr_split_backward"] = self.mbr_split_backward
             fields["l2l_mbr_ordered_backward"] = self.mbr_ordered_backward
+        if self.routing_oracle:
+            fields["l2l_routing_oracle"] = True
         return fields
 
     def spill_directory(self) -> str:
@@ -283,6 +300,9 @@ class L2LState:
     def close(self) -> None:
         """Release the routing reservation only after activation users have drained."""
         self.close_store()
+        if self._routing_oracle is not None:
+            self._routing_oracle.close()
+            self._routing_oracle = None
         if self._routing_lease is not None:
             self._routing_lease.close()
             self._routing_lease = None
@@ -599,26 +619,38 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
             state._routing_lease = state.host_budget.reserve("l2l.routing", routing)
         elif state._routing_lease.nbytes != routing:
             raise ValueError("L2L routing reservation differs from the resolved memory plan")
-    if store is not None and len(need) <= len(have) and all(
+    reuse_store = store is not None and len(need) <= len(have) and all(
         n <= h for n, h in zip(need, have)
-    ):
-        return store
-    rebuilding_cuda = store is not None and pin
-    state.close_store()
-    # Drop old storage before replanning. Routing headroom survives routine store growth.
-    del store
-    if rebuilding_cuda:
-        empty_host_cache = getattr(getattr(torch, "accelerator", None), "empty_host_cache", None)
-        if empty_host_cache is not None:
-            empty_host_cache()
-        else:
-            # Older torch has no supported cache-release API. Do not invent reusable-byte
-            # credit: a larger window can need different pinned allocation size buckets.
-            logger.warning(
-                "training.l2l is growing its CUDA activation store, but this torch has no "
-                "torch.accelerator.empty_host_cache(); idle pinned blocks may remain charged "
-                "to host RAM, so the new plan may need extra free RAM."
+    )
+    if not reuse_store:
+        rebuilding_cuda = store is not None and pin
+        state.close_store()
+        # Drop old storage before replanning. Routing headroom survives routine store growth.
+        store = None
+        if rebuilding_cuda:
+            empty_host_cache = getattr(
+                getattr(torch, "accelerator", None), "empty_host_cache", None,
             )
+            if empty_host_cache is not None:
+                empty_host_cache()
+            else:
+                # A larger window can need different pinned allocation size buckets.
+                logger.warning(
+                    "training.l2l is growing its CUDA activation store, but this torch has no "
+                    "torch.accelerator.empty_host_cache(); idle pinned blocks may remain charged "
+                    "to host RAM, so the new plan may need extra free RAM."
+                )
+    oracle_budget = None
+    oracle_charge = 0
+    oracle = state._routing_oracle
+    if oracle is not None and state.memory_plan is None:
+        oracle_budget = oracle.reserve_tokens(sum(need) // hidden, check_available_ram=True)
+        if oracle_budget is not None:
+            # torch.empty can leave pages uncommitted. Plan from the same snapshot and
+            # deduct the new slabs explicitly before admitting the activation store.
+            oracle_charge = oracle.host_bytes()["host_reserved_bytes"]
+    if reuse_store:
+        return store
     host_budget = state.host_budget
     if state.c3_plan is not None:
         host_budget = state.c3_plan.activations
@@ -653,20 +685,25 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
         }
         return state.store
     itemsize = torch.empty((), dtype=state.dtype).element_size()
-    budget = l2l_spill.ram_budget()
+    budget = oracle_budget if oracle_budget is not None else l2l_spill.ram_budget()
+    activation_budget = budget.budget_bytes
+    budget_source = budget.describe()
+    if activation_budget is not None and oracle_charge:
+        activation_budget -= oracle_charge
+        budget_source += f" after charging {oracle_charge:,} host bytes for routing replay"
     logger.info(
         "training.l2l activation budget: %s [limiting level %s: %s]",
-        budget.describe(), budget.limiting_level, budget.limiting_numbers,
+        budget_source, budget.limiting_level, budget.limiting_numbers,
     )
     plan = l2l_spill.plan_spill(
-        budget.budget_bytes,
+        activation_budget,
         n_layers=n_layers,
         k=len(caps),
         chunk_bytes=max(caps) * itemsize,
         mb_bytes=[cap * itemsize for cap in caps],
         ring=l2l_spill.TRAINER_RING,
         pin=pin,
-        budget_source=budget.describe(),
+        budget_source=budget_source,
     )
     record = {
         **plan.as_dict(),
@@ -708,6 +745,19 @@ def _store_for(state: L2LState, stepper: Any, ids_list: List[Any], device: Any) 
     return state.store
 
 
+def _oracle_for(state: L2LState, model: Any) -> DeepseekRoutingOracle:
+    if state._routing_oracle is None:
+        from soup_cli.utils.routing_oracle import DeepseekRoutingOracle
+
+        plan = state.memory_plan
+        state._routing_oracle = DeepseekRoutingOracle(
+            model,
+            host_budget=state.host_budget,
+            max_host_bytes=plan.routing_oracle_bytes if plan is not None else None,
+        )
+    return state._routing_oracle
+
+
 def run_window(
     state: L2LState,
     model: Any,
@@ -724,6 +774,7 @@ def run_window(
     strategy = state.loss
     divisor = strategy.divisor(len(ids_list), n_items)
     stepper, calls = _l2l_step_for(state, model, ids_list)
+    oracle = _oracle_for(state, model) if state.routing_oracle else None
     store = _store_for(state, stepper, ids_list, device)
     head = strategy.make_head(label_list, divisor)
     reference = None if strategy.make_reference is None else strategy.make_reference(label_list)
@@ -752,6 +803,7 @@ def run_window(
         mbr_group_size=mbr_group_size,
         mbr_split_backward=state.mbr_split_backward,
         mbr_ordered_backward=state.mbr_ordered_backward,
+        routing_oracle=oracle,
     )
     return losses, stepper.counters
 
@@ -827,7 +879,12 @@ def make_l2l_trainer_class(base_cls: type) -> type:
             )
             # The step bypasses the wrapped forward, where the Trainer applies its mixed
             # precision; forward, head and the recompute in backward all run inside it.
-            with self.accelerator.autocast():
+            # The oracle needs the gate's native FP32 linear in a native-dtype model.
+            precision = (
+                torch.autocast(torch.device(device).type, enabled=False)
+                if state.routing_oracle else self.accelerator.autocast()
+            )
+            with precision:
                 losses, counters = run_window(
                     state,
                     model,
@@ -868,6 +925,7 @@ def attach_l2l_state(
     mbr_group_size: Optional[int] = None,
     mbr_split_backward: bool = False,
     mbr_ordered_backward: bool = False,
+    routing_oracle: bool = False,
 ) -> L2LState:
     """Give a trainer from :func:`make_l2l_trainer_class` its streaming runtime.
 
@@ -904,6 +962,7 @@ def attach_l2l_state(
         mbr_group_size=mbr_group_size,
         mbr_split_backward=mbr_split_backward,
         mbr_ordered_backward=mbr_ordered_backward,
+        routing_oracle=routing_oracle,
     )
     # The trainer's run directory is the fallback location for activation spill.
     state.output_dir = getattr(args, "output_dir", None)

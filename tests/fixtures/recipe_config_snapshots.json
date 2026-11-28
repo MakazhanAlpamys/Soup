@@ -150,6 +150,7 @@
     "training.l2l_mbr_ordered_backward": false,
     "training.l2l_mbr_split_backward": false,
     "training.l2l_route_preserving_mbr": false,
+    "training.l2l_routing_oracle": false,
     "training.l2l_spill_dir": null,
     "training.l2l_two_read_experts": false,
     "training.label_names": null,
