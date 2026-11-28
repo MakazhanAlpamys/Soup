@@ -1,0 +1,1 @@
+- Add benchmark records for NF4 double-quantization prevalence and giant MoE serving scope with a controlled FP32 adapter repeat. (#PENDING by @Lameda12, @Batyrkhantzy111)
