@@ -735,6 +735,18 @@ def _is_regressed(base: float, tuned: float, threshold: float) -> bool:
     return (base - tuned) > threshold + _REGRESSION_EPS
 
 
+def _benchmark_delta(base: float, tuned: float, name: str) -> float:
+    """``tuned - base`` rounded, refusing a difference outside the float range (#2804).
+
+    Both scores are finite, but ``1e308 - (-1e308)`` is ``inf``: it would print SHIP
+    and write a bare ``Infinity`` into the verdict JSON.
+    """
+    delta = tuned - base
+    if not math.isfinite(delta):
+        raise ValueError(f"benchmark delta for {name!r} must be finite")
+    return round(delta, _DELTA_ROUND)
+
+
 # ---------------------------------------------------------------------------
 # Builders (pure)
 # ---------------------------------------------------------------------------
@@ -1158,7 +1170,7 @@ def compute_benchmark_deltas(
                 name=str(name),
                 base=base_f,
                 tuned=tuned_f,
-                delta=round(tuned_f - base_f, _DELTA_ROUND),
+                delta=_benchmark_delta(base_f, tuned_f, str(name)),
                 regressed=_is_regressed(base_f, tuned_f, effective),
             )
         )
@@ -1215,7 +1227,7 @@ def decide_ship(
             name=item.name,
             base=item.base,
             tuned=item.tuned,
-            delta=round(item.tuned - item.base, _DELTA_ROUND),
+            delta=_benchmark_delta(item.base, item.tuned, item.name),
             regressed=_is_regressed(
                 item.base,
                 item.tuned,
