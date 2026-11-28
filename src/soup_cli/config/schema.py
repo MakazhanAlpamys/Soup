@@ -2532,6 +2532,13 @@ class TrainingConfig(BaseModel):
         stays in agreement (#321)."""
         return self.bnb_4bit_use_double_quant is not False
 
+    embed_on_host: bool = Field(
+        default=False,
+        description=(
+            "Keep an untied, frozen input embedding in host memory and transfer only looked-up "
+            "rows to the GPU. Supports resident text SFT with transformers and 4bit/8bit."
+        ),
+    )
     llm_int8: bool = Field(
         default=False,
         description=(
@@ -7405,6 +7412,32 @@ class SoupConfig(BaseModel):
             )
         if reason is not None:
             raise ValueError(f"training.fast_lora {reason}")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_embed_on_host(self) -> "SoupConfig":
+        tcfg = self.training
+        if not tcfg.embed_on_host:
+            return self
+        if self.task != "sft" or self.backend != "transformers":
+            raise ValueError(
+                "training.embed_on_host requires task='sft' and backend='transformers'"
+            )
+        if self.modality != "text":
+            raise ValueError("training.embed_on_host requires modality='text'")
+        if tcfg.quantization not in ("4bit", "8bit"):
+            raise ValueError("training.embed_on_host requires quantization='4bit' or '8bit'")
+        if tcfg.stream_layers:
+            raise ValueError(
+                "training.embed_on_host requires resident SFT with training.stream_layers=false"
+            )
+        if tcfg.unfrozen_parameters:
+            raise ValueError(
+                "training.embed_on_host requires a frozen input embedding. "
+                "Remove training.unfrozen_parameters"
+            )
+        if tcfg.packed_lora is not None and tcfg.packed_lora.enabled:
+            raise ValueError("training.embed_on_host cannot be combined with training.packed_lora")
         return self
 
     @model_validator(mode="after")

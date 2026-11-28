@@ -210,6 +210,7 @@ Sections:
 | `training.nvfp4` | `bool` | `false` |  | NVFP4 training, SM 10.0 / 10.3 only (unsloth + axolotl). DPO-family, GRPO/PPO, pre-training, reward-model, and embedding wrappers route it through torchao conversion; the default SFT path does not consume it. |
 | `training.unsloth_bnb_4bit` | `bool` | `false` |  | Promote Unsloth Dynamic 4-bit from 'inferable' to a native flag. Requires backend='unsloth' and quantization='4bit'. (v0.53.0) |
 | `training.bnb_4bit_use_double_quant` | `bool \| null` | `null` |  | Apply BNB 4-bit double-quantization (LF / Axolotl parity). Unset means the shipped default (on, to match every 4-bit load path); set false to disable it. Only meaningful when quantization='4bit'. (v0.53.0) |
+| `training.embed_on_host` | `bool` | `false` |  | Keep an untied, frozen input embedding in host memory and transfer only looked-up rows to the GPU. Supports resident text SFT with transformers and 4bit/8bit. |
 | `training.llm_int8` | `bool` | `false` |  | Explicit 8-bit LLM.int8 alias for quantization='8bit'. When True, requires quantization='8bit'. (v0.53.0) |
 | `training.quantize_ref_model` | `bool` | `false` |  | Apply the same Quant Menu config to the reference model (DPO/IPO/SimPO/ORPO/BCO ref model) — extends v0.40.5. (v0.53.0). Refused at load when set away from its default (v0.77, #808). |
 | `training.quantize_reward_model` | `bool` | `false` |  | Apply the same Quant Menu config to the reward model (PPO/reward_model task) — extends v0.40.5. (v0.53.0) |

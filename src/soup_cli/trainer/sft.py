@@ -1747,6 +1747,19 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
         )
         from soup_cli.utils.moe import detect_moe_model
 
+        embed_on_host = getattr(tcfg, "embed_on_host", False)
+        if embed_on_host:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+
+            if (
+                getattr(self, "deepspeed_config", None)
+                or getattr(self, "fsdp_config", None)
+                or _distributed_launch()
+            ):
+                raise ValueError(
+                    "training.embed_on_host requires single-process SFT without DeepSpeed or FSDP"
+                )
+
         # #2104 — the resident Kimi K2 route rewrites the checkpoint config in memory and
         # never runs the repository's config code, so there is no config for a rope
         # override to land on. Refuse before AutoConfig (which would execute that code
@@ -1937,6 +1950,7 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
                         tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
                     ),
                     compute_dtype=compute_dtype,
+                    avoid_bf16_upcast=getattr(cfg, "task", None) == "sft",
                 )
 
         # Freeze training — freeze bottom layers before LoRA
@@ -2212,6 +2226,14 @@ class SFTTrainerWrapper(StreamingSetupMixin, PackedLoraSetupMixin):
             apply_router_only_freeze_if_configured(self.model, tcfg, console)
 
         self._apply_quantization_aware(tcfg)
+        if embed_on_host:
+            from soup_cli.utils.embed_on_host import embedding_on_host
+
+            freed = embedding_on_host(self.model)
+            console.print(
+                "[green]Input embedding stays on the CPU[/] "
+                f"({freed / 2**30:.2f} GiB moved off the GPU)"
+            )
         # training.packed_lora -- on the final LoRA model, last, so the kernels see what trains.
         self._install_packed_lora(cfg, tcfg)
 

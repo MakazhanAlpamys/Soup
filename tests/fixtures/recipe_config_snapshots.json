@@ -97,6 +97,7 @@
     "training.echo_trap_halt": false,
     "training.echo_trap_threshold": 0.6,
     "training.echo_trap_tokenizer_aware": false,
+    "training.embed_on_host": false,
     "training.embedding_loss": "contrastive",
     "training.embedding_margin": 0.5,
     "training.embedding_pooling": "mean",
