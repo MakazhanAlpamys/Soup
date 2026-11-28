@@ -463,7 +463,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             from soup_cli.utils.sse_train_stream import TrainEvent
             from soup_cli.utils.train_event_buffer import push_train_event
 
-            if is_chief and measured_any:
+            if measured_any:
                 push_train_event(
                     TrainEvent(
                         type="metric",

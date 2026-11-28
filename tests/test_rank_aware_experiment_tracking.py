@@ -298,7 +298,7 @@ class TestIsChiefRank:
 class TestCallbackAndPpoMetricGuards:
     """Defense-in-depth rank gating on SoupTrainerCallback and PPO manual loops."""
 
-    def test_callback_only_writes_metrics_and_sse_on_chief_rank(
+    def test_callback_only_writes_metrics_on_chief_but_preserves_sse(
         self, tmp_path, monkeypatch
     ):
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -311,7 +311,7 @@ class TestCallbackAndPpoMetricGuards:
         events = []
         monkeypatch.setattr(train_event_buffer, "push_train_event", events.append)
 
-        # Even if caller didn't strip tracker/run_id, non-chief must not write metrics/SSE.
+        # Non-chief workers must still emit SSE dashboard events, but never write tracker rows.
         monkeypatch.setenv("RANK", "1")
         monkeypatch.setenv("LOCAL_RANK", "0")
         display_worker = MagicMock()
@@ -322,6 +322,9 @@ class TestCallbackAndPpoMetricGuards:
             MagicMock(),
             logs={"loss": 9.9, "learning_rate": 1e-4},
         )
+        assert len(events) == 1
+        assert tracker.get_metrics(run_id) == []
+
         cb_worker.on_log(
             MagicMock(),
             SimpleNamespace(global_step=1, epoch=0.5, is_world_process_zero=True),
@@ -329,10 +332,10 @@ class TestCallbackAndPpoMetricGuards:
             logs={"train_runtime": 1.0, "train_steps_per_second": 2.0},
         )
         assert tracker.get_metrics(run_id) == []
-        assert events == []
+        assert len(events) == 1
         assert display_worker.update.call_count == 2
 
-        # is_world_process_zero=False must also block writes even if env is unset.
+        # is_world_process_zero=False also blocks tracker writes while preserving SSE events.
         monkeypatch.delenv("RANK", raising=False)
         monkeypatch.delenv("LOCAL_RANK", raising=False)
         cb_worker.on_log(
@@ -342,7 +345,7 @@ class TestCallbackAndPpoMetricGuards:
             logs={"loss": 8.8, "learning_rate": 1e-4},
         )
         assert tracker.get_metrics(run_id) == []
-        assert events == []
+        assert len(events) == 2
 
         # Chief rank writes metrics and emits SSE normally.
         monkeypatch.setenv("RANK", "0")
@@ -358,7 +361,7 @@ class TestCallbackAndPpoMetricGuards:
         rows = tracker.get_metrics(run_id)
         assert len(rows) == 1
         assert rows[0]["loss"] == pytest.approx(1.25)
-        assert len(events) == 1
+        assert len(events) == 3
 
     def test_ppo_manual_loop_logs_metrics_only_on_chief_rank(self, tmp_path, monkeypatch):
         from soup_cli.config.loader import load_config_from_string
@@ -494,7 +497,7 @@ class TestTwoWorkerCliLifecycle:
         assert provenance_file.is_file()
         assert json.loads(provenance_file.read_text(encoding="utf-8"))["run_id"] == row["run_id"]
 
-    def test_two_worker_with_profile_only_profiles_chief_rank(self, tmp_path):
+    def test_two_worker_with_profile_profiles_each_rank(self, tmp_path):
         db_path = tmp_path / "experiments.db"
         work = _setup_workspace(tmp_path, db_path)
         script = tmp_path / "worker.py"
@@ -522,7 +525,16 @@ class TestTwoWorkerCliLifecycle:
         w0 = json.loads((tmp_path / "worker-0.json").read_text(encoding="utf-8"))
         w1 = json.loads((tmp_path / "worker-1.json").read_text(encoding="utf-8"))
         assert len(w0["profile_calls"]) == 1 and w0["profile_calls"][0][0] == 0
-        assert w1["profile_calls"] == []
+        assert len(w1["profile_calls"]) == 1 and w1["profile_calls"][0][0] == 1
+        chief_profile_id = w0["profile_calls"][0][2]
+        worker_profile_id = w1["profile_calls"][0][2]
+        assert isinstance(chief_profile_id, str) and chief_profile_id
+        assert isinstance(worker_profile_id, str) and worker_profile_id
+        assert chief_profile_id != worker_profile_id
+
+        runs, _ = _read_db(db_path)
+        assert len(runs) == 1
+        assert chief_profile_id == runs[0]["run_id"]
 
     def test_chief_failure_not_overwritten_by_worker_completion(self, tmp_path):
         db_path = tmp_path / "experiments.db"

@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sys
+import uuid
 from csv import Error as CsvError
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -3092,13 +3093,20 @@ def train(
         console.print("[bold green]Training started![/]\n")
 
         profiler_ctx = contextlib.nullcontext()
-        if profile_run and is_chief:
+        if profile_run:
             from soup_cli.utils.profiling import profile_training
 
-            profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
+            # Profiling remains enabled on every worker. Only the chief owns
+            # the experiment-tracker run ID; other workers need unique trace IDs.
+            profile_run_id = run_id or f"worker-{uuid.uuid4().hex}"
+
+            profiler_ctx = profile_training(
+                output_dir=Path(cfg.output),
+                run_id=profile_run_id,
+            )
             console.print(
                 "[cyan]--profile:[/] writing torch.profiler trace to "
-                f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
+                f"{cfg.output}/profiles/{profile_run_id}.trace.json (early-steps window)"
             )
 
         # v0.71.3 #180 — optional codecarbon energy/CO2 measurement around the
