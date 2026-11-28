@@ -106,6 +106,17 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
+        # Refuse unsupported L2L options before any model load, as the SFT wrapper does.
+        self._l2l_recipe = None
+        if tcfg.l2l:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+            from soup_cli.utils.l2l_recipe import refuse_distributed_l2l, resolve_l2l_recipe
+
+            refuse_distributed_l2l(
+                _distributed_launch() or bool(getattr(self, "_distributed_stream", False))
+            )
+            self._l2l_recipe = resolve_l2l_recipe(tcfg)
+
         use_unsloth = cfg.backend == "unsloth"
         # v0.72.4 — layer streaming replaces the model-load path entirely (meta
         # skeleton, never a resident load), so it dispatches ahead of the backend
@@ -221,13 +232,21 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         )
 
         # --- Trainer ---
-        self.trainer = DPOTrainer(
-            model=self.model,
-            args=dpo_config,
-            train_dataset=train_ds,
-            eval_dataset=eval_ds,
-            processing_class=self.tokenizer,
-        )
+        trainer_kwargs = {
+            "model": self.model,
+            "args": dpo_config,
+            "train_dataset": train_ds,
+            "eval_dataset": eval_ds,
+            "processing_class": self.tokenizer,
+        }
+        if tcfg.l2l:
+            from soup_cli.trainer.l2l_dpo import dpo_window_loss
+
+            self.trainer = self._build_l2l_trainer(
+                DPOTrainer, trainer_kwargs, dpo_config, loss=dpo_window_loss(args=dpo_config)
+            )
+        else:
+            self.trainer = DPOTrainer(**trainer_kwargs)
         if not config_accepts(DPOConfig, "max_prompt_length"):
             # TRL 0.29 removed the prompt cap and its new DPO tokenizer leaves
             # max_length enforcement to callers. Cap the prepared token ids so
@@ -255,6 +274,10 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.layer_stream_runtime import materialize_meta_adapter_copy
 
             materialize_meta_adapter_copy(self.model)
+        if tcfg.l2l:
+            from soup_cli.trainer.l2l_dpo import refuse_unsupported_dpo
+
+            refuse_unsupported_dpo(self.trainer)
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -444,6 +467,21 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         """Run DPO training and return results summary."""
         start = time.time()
 
+        from soup_cli.utils.l2l_recipe import (
+            checkpoint_recipe_context,
+            validate_resume_source,
+            write_run_recipe,
+        )
+
+        l2l_recipe = getattr(self, "_l2l_recipe", None)
+        if resume_from_checkpoint is not None:
+            # The recipe of the checkpoint being resumed, which may sit in another run
+            # directory, and with training.l2l off as well. A rejected resume must not
+            # overwrite the recipe the checkpoint was trained with.
+            l2l_recipe = validate_resume_source(resume_from_checkpoint, l2l_recipe)
+        if l2l_recipe is not None:
+            write_run_recipe(self._output_dir, l2l_recipe)
+
         # Add callback for live display and experiment tracking
         if display:
             from soup_cli.monitoring.callback import build_soup_trainer_callback
@@ -491,7 +529,10 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             if resume_from_checkpoint is not None:
                 reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
-            with manual_save_context(self.trainer):
+            with (
+                checkpoint_recipe_context(self.trainer, self._output_dir, l2l_recipe),
+                manual_save_context(self.trainer),
+            ):
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
