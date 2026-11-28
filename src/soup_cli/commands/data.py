@@ -2873,7 +2873,7 @@ def _cache_key_dataset_path(cfg) -> str:
     return preprocess_dataset_key_input(cfg.data)
 
 
-def _refuse_row(idx: int, row, reason: str) -> NoReturn:
+def _refuse_row(idx: int, row, reason: str, *, split: str = "Train") -> NoReturn:
     """Stop ``soup data preprocess`` on a chat row it cannot tokenize (#1180).
 
     Numbers the row from 1, as the live SFT path does (``trainer/sft.py``), among
@@ -2893,7 +2893,8 @@ def _refuse_row(idx: int, row, reason: str) -> NoReturn:
         # A pretrain row has raw text, not messages.
         label, preview = "text", f"{text[:60]!r}"
     console.print(
-        f"[red]Train row {idx + 1} cannot be tokenized:[/] {for_terminal(reason)}"
+        f"[red]{for_terminal(split)} row {idx + 1} cannot be tokenized:[/] "
+        f"{for_terminal(reason)}"
         + (f"\n  {label}: {for_terminal(preview)}" if preview else "")
     )
     console.print(
@@ -2996,14 +2997,22 @@ def _publish_preprocess_cache(
     import shutil
     import tempfile
 
-    from datasets import load_from_disk
+    from datasets import DatasetDict, load_from_disk
 
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".tmp_" + target.name + ".", dir=target.parent))
     try:
-        dataset.save_to_disk(str(staging))
+        if isinstance(dataset, DatasetDict) and any(
+            len(split_ds) == 0 for split_ds in dataset.values()
+        ):
+            empty_shards = {
+                name: 1 for name, split_ds in dataset.items() if len(split_ds) == 0
+            }
+            dataset.save_to_disk(str(staging), num_shards=empty_shards)
+        else:
+            dataset.save_to_disk(str(staging))
         metadata_path = staging / "metadata.json"
         with open(metadata_path, "w", encoding="utf-8") as handle:
             json.dump(metadata, handle, indent=2)
@@ -3012,7 +3021,20 @@ def _publish_preprocess_cache(
                 raise ValueError("preprocess staged metadata does not match")
         # No validation mmap may outlive this check: Windows must be able to move the shards.
         validated = load_from_disk(str(staging), keep_in_memory=True)
-        if len(validated) != metadata["row_count"] or validated.features != dataset.features:
+        if isinstance(dataset, DatasetDict):
+            if (
+                not isinstance(validated, DatasetDict)
+                or set(validated.keys()) != set(dataset.keys())
+                or "train" not in validated
+                or len(validated["train"]) != metadata["row_count"]
+                or any(
+                    len(validated[split]) != len(dataset[split])
+                    or validated[split].features != dataset[split].features
+                    for split in dataset
+                )
+            ):
+                raise ValueError("preprocess staged Arrow does not match")
+        elif len(validated) != metadata["row_count"] or validated.features != dataset.features:
             raise ValueError("preprocess staged Arrow does not match")
         del validated
 
@@ -3151,7 +3173,7 @@ def preprocess_dataset(
         )
         raise typer.Exit(1) from None
     try:
-        from datasets import Dataset
+        from datasets import Dataset, DatasetDict
     except ImportError:
         console.print(
             "[red]datasets not installed.[/] Run: pip install datasets"
@@ -3182,7 +3204,11 @@ def preprocess_dataset(
     # post-processor prepends, so the chat path can keep only the template's own.
     bos_added_by_post_processor = None
     if not is_pretrain:
-        from soup_cli.data.loss_mask import post_processor_leading_bos_count
+        from soup_cli.data.loss_mask import (
+            append_training_eos,
+            post_processor_leading_bos_count,
+            strip_post_processor_leading_bos,
+        )
 
         bos_added_by_post_processor = post_processor_leading_bos_count(tokenizer)
 
@@ -3196,122 +3222,107 @@ def preprocess_dataset(
         )
         raise typer.Exit(1)
 
-    rendered_rows: list[dict] = []
-    for idx, row in enumerate(raw_rows):
-        if idx >= max_preprocess_rows:
-            console.print(
-                f"[yellow]Reached row cap {max_preprocess_rows}, truncating.[/]"
-            )
-            break
-        if is_pretrain:
-            # Pretrain uses raw text.
-            text = ""
-            if isinstance(row, dict):
-                text = row.get("text") or row.get("content") or ""
-            if not isinstance(text, str):
-                continue
-            if not text:
-                continue
-        else:
-            # #1180: a chat row that cannot be rendered stops the command, as the
-            # live training path stops on it. Skipping it wrote a smaller dataset
-            # than the one configured, exited 0, and the cached run trained on it.
-            messages = row.get("messages") if isinstance(row, dict) else None
-            if not messages:
-                _refuse_row(idx, row, "it has no messages")
-            try:
-                text = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
+    def _tokenize_split(split_rows: list, *, split_label: str) -> list[dict]:
+        tokenized: list[dict] = []
+        for idx, row in enumerate(split_rows):
+            if idx >= max_preprocess_rows:
+                console.print(
+                    f"[yellow]Reached row cap {max_preprocess_rows}, truncating.[/]"
                 )
-            except Exception as exc:  # noqa: BLE001 — tokenizer template errors vary
-                _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
-            if not isinstance(text, str) or not text:
-                _refuse_row(idx, row, "the chat template rendered it as empty text")
-        try:
-            tokens = tokenizer(
-                text,
-                max_length=max_length,
-                truncation=True,
-                padding=False,
-                return_attention_mask=True,
-                # Tokenise exactly as ``main`` (add_special_tokens defaults to
-                # True). This keeps ``main``'s truncation reservation — a
-                # truncated row still ends on the post-processor's EOS — and the
-                # post-processor BOS/EOS. #785 removed the one doubled leading BOS
-                # here; #791 then applies TRL's training EOS rule below, both only
-                # for the chat path.
-            )
-        except Exception as exc:  # noqa: BLE001 — tokenizer errors vary
-            # Pretrain too (#1182 review, round 3): live pretraining stops on a row
-            # the tokenizer rejects -- TRL's map has no per-row skip -- so skipping
-            # it here cached fewer rows than the live run trains on.
-            _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
-        input_ids = tokens["input_ids"]
-        attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
-        if not is_pretrain:
-            # #785/#788/#876: add_special_tokens=True prepends the post-processor's
-            # BOS, which the live path (add_special_tokens=False) never trains on.
-            # Keep only the BOS the template itself renders: one for a
-            # ``{{ bos_token }}`` template (#785's doubled case), zero for a
-            # ``data.chat_template`` preset (#876). Pretrain feeds raw document
-            # text with no template, so it keeps ``main``'s encoding untouched.
-            from soup_cli.data.loss_mask import (
-                append_training_eos,
-                strip_post_processor_leading_bos,
-            )
-
-            # Decide "was this row truncated" BEFORE removing a BOS. Afterwards a
-            # row cut to the budget reads as one token short of it, and the EOS
-            # check below would hand it a stop token the live path (append, then
-            # truncate) does not have. Only the exact-fit length is ambiguous, so
-            # only that row is re-measured without truncation.
-            truncated = False
-            if len(input_ids) >= max_length:
+                break
+            if is_pretrain:
+                # Pretrain uses raw text.
+                text = ""
+                if isinstance(row, dict):
+                    text = row.get("text") or row.get("content") or ""
+                if not isinstance(text, str):
+                    continue
+                if not text:
+                    continue
+            else:
+                # #1180: a chat row that cannot be rendered stops the command, as
+                # the live training path stops on it. Skipping it wrote a smaller
+                # dataset than configured, exited 0, and cached runs trained on it.
+                messages = row.get("messages") if isinstance(row, dict) else None
+                if not messages:
+                    _refuse_row(idx, row, "it has no messages", split=split_label)
                 try:
-                    full = tokenizer(text, truncation=False, verbose=False)
-                    truncated = len(full["input_ids"]) > max_length
-                except Exception:  # noqa: BLE001 — tokenizer errors vary
-                    truncated = True
-            input_ids, attention_mask = strip_post_processor_leading_bos(
-                tokenizer, input_ids, attention_mask, bos_added_by_post_processor
+                    text = tokenizer.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=False
+                    )
+                except Exception as exc:  # noqa: BLE001 — tokenizer template errors vary
+                    _refuse_row(
+                        idx, row, f"{type(exc).__name__}: {exc}", split=split_label
+                    )
+                if not isinstance(text, str) or not text:
+                    _refuse_row(
+                        idx,
+                        row,
+                        "the chat template rendered it as empty text",
+                        split=split_label,
+                    )
+            try:
+                tokens = tokenizer(
+                    text,
+                    max_length=max_length,
+                    truncation=True,
+                    padding=False,
+                    return_attention_mask=True,
+                    # Tokenise exactly as ``main`` (add_special_tokens defaults to
+                    # True). This keeps ``main``'s truncation reservation — a
+                    # truncated row still ends on the post-processor's EOS — and the
+                    # post-processor BOS/EOS. #785 removed the one doubled leading BOS
+                    # here; #791 then applies TRL's training EOS rule below, both only
+                    # for the chat path.
+                )
+            except Exception as exc:  # noqa: BLE001 — tokenizer errors vary
+                # Pretrain too (#1182 review, round 3): live pretraining stops on a
+                # row the tokenizer rejects -- TRL's map has no per-row skip -- so
+                # skipping it here cached fewer rows than the live run trains on.
+                _refuse_row(idx, row, f"{type(exc).__name__}: {exc}", split=split_label)
+            input_ids = tokens["input_ids"]
+            attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
+            if not is_pretrain:
+                # #785/#788/#876: add_special_tokens=True prepends the post-processor's
+                # BOS, which the live path (add_special_tokens=False) never trains on.
+                # Keep only the BOS the template itself renders: one for a
+                # ``{{ bos_token }}`` template (#785's doubled case), zero for a
+                # ``data.chat_template`` preset (#876). Pretrain feeds raw document
+                # text with no template, so it keeps ``main``'s encoding untouched.
+                truncated = False
+                if len(input_ids) >= max_length:
+                    try:
+                        full = tokenizer(text, truncation=False, verbose=False)
+                        truncated = len(full["input_ids"]) > max_length
+                    except Exception:  # noqa: BLE001 — tokenizer errors vary
+                        truncated = True
+                input_ids, attention_mask = strip_post_processor_leading_bos(
+                    tokenizer, input_ids, attention_mask, bos_added_by_post_processor
+                )
+                # #791: reproduce TRL's ``add_eos`` rule in token space so the
+                # cached row gets an EOS when under ``max_length``.
+                if not truncated and len(input_ids) < max_length:
+                    with_eos = append_training_eos(tokenizer, input_ids)
+                    if len(with_eos) != len(input_ids):
+                        input_ids = with_eos
+                        attention_mask = attention_mask + [1]
+                # #1054: build the exact loss mask for this row.
+                labels = _mask_labels_for_cache_row(
+                    messages, tokenizer, mask_mode, max_length, input_ids
+                )
+            else:
+                # Pretrain trains on every token by design — no masking.
+                labels = list(input_ids)
+            tokenized.append(
+                {
+                    "input_ids": input_ids,
+                    "labels": labels,
+                    "attention_mask": attention_mask,
+                }
             )
-            # #791: the live training path appends ``eos_token`` (TRL 0.29.1's
-            # ``add_eos``, ``sft_trainer.py:1026-1038``) to every chat row that
-            # does not already end on it, before tokenizing. This cache path
-            # tokenizes directly, so on a template that renders no EOS and a
-            # tokenizer whose post-processor appends none (Qwen-shaped) the cached
-            # row carried zero stop tokens while the live path trained on one —
-            # run-on generation, and silent (the loss curve looks normal and
-            # ``soup data doctor`` renders the live path, not the cache). Reproduce
-            # the rule in token space so the cache trains on the same EOS count.
-            # Only when the row is under the length budget: a row that filled
-            # ``max_length`` was truncated, and the live path (append-then-truncate)
-            # keeps no trailing EOS there either, so matching it means not pushing
-            # the row past the budget.
-            if not truncated and len(input_ids) < max_length:
-                with_eos = append_training_eos(tokenizer, input_ids)
-                if len(with_eos) != len(input_ids):
-                    input_ids = with_eos
-                    attention_mask = attention_mask + [1]
-            # #1054: without a ``labels`` column TRL's collator falls back to
-            # ``labels = input_ids`` and the cached run trains on the prompt
-            # too, silently diverging from the equivalent live chatml run. Build
-            # the mask with the very helpers the live path uses, then align it
-            # onto this path's ids, which are left exactly as the tokenization
-            # above produced them — only ``labels`` is new here.
-            labels = _mask_labels_for_cache_row(
-                messages, tokenizer, mask_mode, max_length, input_ids
-            )
-        else:
-            # Pretrain trains on every token by design — no masking.
-            labels = list(input_ids)
-        rendered_rows.append(
-            {
-                "input_ids": input_ids,
-                "labels": labels,
-                "attention_mask": attention_mask,
-            }
-        )
+        return tokenized
+
+    rendered_rows = _tokenize_split(raw_rows, split_label="Train")
 
     if not rendered_rows:
         console.print(
@@ -3320,7 +3331,33 @@ def preprocess_dataset(
         )
         raise typer.Exit(1)
 
-    ds = Dataset.from_list(rendered_rows)
+    val_split_ratio = getattr(cfg.data, "val_split", 0) or 0
+    has_val_split = (
+        isinstance(dataset, dict)
+        and "val" in dataset
+        and isinstance(val_split_ratio, (int, float))
+        and not isinstance(val_split_ratio, bool)
+        and val_split_ratio > 0
+    )
+    rendered_val_rows: list[dict] = []
+    if has_val_split:
+        raw_val_rows = dataset["val"]
+        if raw_val_rows:
+            rendered_val_rows = _tokenize_split(raw_val_rows, split_label="Val")
+
+    train_ds = Dataset.from_list(rendered_rows)
+    if has_val_split:
+        val_ds = (
+            Dataset.from_list(rendered_val_rows)
+            if rendered_val_rows
+            else Dataset.from_dict(
+                {col: [] for col in train_ds.column_names},
+                features=train_ds.features,
+            )
+        )
+        ds = DatasetDict({"train": train_ds, "val": val_ds})
+    else:
+        ds = train_ds
     from soup_cli import __version__ as _soup_version
     from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
 
@@ -3342,9 +3379,15 @@ def preprocess_dataset(
     if not _publish_preprocess_cache(ds, target, metadata, overwrite=yes):
         raise typer.Exit(0)
 
-    console.print(
-        f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {for_terminal(target)}"
-    )
+    if has_val_split:
+        console.print(
+            f"[green]Wrote {len(rendered_rows)} train + {len(rendered_val_rows)} val "
+            f"tokenized rows to[/] {for_terminal(target)}"
+        )
+    else:
+        console.print(
+            f"[green]Wrote {len(rendered_rows)} tokenized rows to[/] {for_terminal(target)}"
+        )
     console.print(
         f"[dim]Set data.tokenized_path={for_terminal(target)} + data.format=pre_tokenized "
         "in your soup.yaml to short-circuit tokenization on subsequent runs.[/]"

@@ -88,11 +88,19 @@ def maybe_load_pretokenized(
                 changed = preprocess_dataset_key_diff(
                     metadata.get("dataset_key"), dataset_key
                 )
+                if changed == ["split_layout"]:
+                    raise ValueError(
+                        "pre_tokenized cache hash mismatch: was generated with "
+                        f"{stored_key!r}, current config implies {current_key!r}; "
+                        "the cache was built before validation rows were preserved "
+                        "and must be regenerated using: soup data preprocess"
+                    )
+                data_changed = [name for name in changed if name != "split_layout"]
                 predates = (
                     "the cache was built with a different "
-                    + ", ".join(f"data.{name}" for name in changed)
+                    + ", ".join(f"data.{name}" for name in data_changed)
                     + "; "
-                    if changed
+                    if data_changed
                     else ""
                 )
             raise ValueError(

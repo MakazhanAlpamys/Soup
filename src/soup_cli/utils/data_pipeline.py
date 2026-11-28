@@ -291,6 +291,7 @@ _DATASET_KEY_FIELDS: Tuple[str, ...] = tuple(
     name for name, carrier in PREPROCESS_KEY_FIELDS.items()
     if carrier == "dataset_path"
 )
+_SPLIT_LAYOUT_V1 = "train_val_v1"
 
 
 def preprocess_dataset_key_input(data_cfg: Any) -> str:
@@ -304,13 +305,26 @@ def preprocess_dataset_key_input(data_cfg: Any) -> str:
     set differently: the gate once passed the raw list and
     ``make_preprocess_cache_key`` raised.
 
+    When ``val_split > 0``, adds ``split_layout="train_val_v1"`` (#3371) so an
+    older train-only cache created with ``val_split > 0`` cannot load as a
+    split-preserving cache, while ``val_split == 0`` preserves the exact prior
+    key input so existing flat ``Dataset`` caches continue loading.
+
     ``getattr`` with a ``None`` default, per #761/#1101: several suites hand this a
     duck-typed stand-in carrying only ``train`` and ``interleave``.
     """
-    return json.dumps(
-        {name: getattr(data_cfg, name, None) for name in _DATASET_KEY_FIELDS},
-        sort_keys=True,
-    )
+    payload: Dict[str, Any] = {
+        name: getattr(data_cfg, name, None) for name in _DATASET_KEY_FIELDS
+    }
+    val_split = getattr(data_cfg, "val_split", None)
+    if (
+        isinstance(val_split, (int, float))
+        and not isinstance(val_split, bool)
+        and math.isfinite(val_split)
+        and val_split > 0
+    ):
+        payload["split_layout"] = _SPLIT_LAYOUT_V1
+    return json.dumps(payload, sort_keys=True)
 
 
 def preprocess_dataset_key_diff(stored: Any, current: str) -> List[str]:
@@ -319,14 +333,18 @@ def preprocess_dataset_key_diff(stored: Any, current: str) -> List[str]:
     ``stored`` is the ``dataset_key`` a cache recorded in ``metadata.json`` (a
     dict); ``current`` is ``preprocess_dataset_key_input``'s JSON for the config
     being trained. Returns the differing field names in table order, so a refused
-    cache can name what changed rather than leave two hashes to compare. A
+    cache can name what changed rather than leave two hashes to compare. Also
+    includes ``"split_layout"`` when the split-layout marker differs (#3371). A
     ``stored`` value that is not a dict (a hand-edited file) names no field
     rather than claim differences it cannot see.
     """
     now = json.loads(current)
     if not isinstance(stored, dict):
         return []
-    return [name for name in _DATASET_KEY_FIELDS if stored.get(name) != now.get(name)]
+    diff = [name for name in _DATASET_KEY_FIELDS if stored.get(name) != now.get(name)]
+    if stored.get("split_layout") != now.get("split_layout"):
+        diff.append("split_layout")
+    return diff
 
 
 def preprocess_mask_mode(data_cfg, training_cfg=None) -> str:
