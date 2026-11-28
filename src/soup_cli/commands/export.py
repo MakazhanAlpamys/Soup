@@ -556,7 +556,9 @@ def _resolve_export_trust(base_model: str, tokenizer_path: str, requested: bool)
         base_model,
         requested=requested,
         console=console,
-        requires_remote_code=bool(model_requires_trust_remote_code(base_model)),
+        requires_remote_code=bool(
+            model_requires_trust_remote_code(base_model, allow_builtin_config=True)
+        ),
     )
     resolve_trust_remote_code(
         tokenizer_path,

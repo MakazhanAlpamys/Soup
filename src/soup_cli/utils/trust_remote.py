@@ -10,9 +10,9 @@ Design:
   org prefix that does NOT ship custom modeling code (Meta, Mistral, Qwen,
   Google, etc.). Local paths and unknown orgs return False.
 - ``model_requires_trust_remote_code(model_or_path)``: best-effort probe of
-  ``config.json`` for custom code without a built-in config class.
+  ``config.json`` for ``auto_map``. Export can allow built-in config classes.
 - ``tokenizer_requires_trust_remote_code(model_or_path)``: independent local
-  probe of ``tokenizer_config.json`` for a custom tokenizer mapping.
+  probe for a custom tokenizer mapping without an installed fallback.
 - ``resolve_trust_remote_code(model_name, requested, console, requires_remote_code)``:
   the gate. Returns ``True`` / ``False`` for the kwarg, or raises ``ValueError``
   with an actionable message when the model needs custom code but the user
@@ -93,25 +93,62 @@ def _is_builtin_model_type(model_type: Any) -> bool:
     return model_type in CONFIG_MAPPING_NAMES
 
 
-def model_requires_trust_remote_code(model_or_path: str) -> Optional[bool]:
+def model_requires_trust_remote_code(
+    model_or_path: str, *, allow_builtin_config: bool = False,
+) -> Optional[bool]:
     """Return whether local config metadata signals that custom code is required.
 
-    Transformers can use its built-in config class with the flag off even when
-    ``auto_map`` exists. Missing or unreadable metadata returns ``None``.
+    By default any nonempty ``auto_map`` signals custom code. Export opts into
+    the built-in config exception and passes the requested trust flag to its
+    Transformers loaders. Missing or unreadable metadata returns ``None``.
     """
     data = _read_local_metadata(model_or_path, "config.json")
     if data is None:
         return None
-    return bool(data.get("auto_map")) and not _is_builtin_model_type(data.get("model_type"))
+    return bool(data.get("auto_map")) and not (
+        allow_builtin_config and _is_builtin_model_type(data.get("model_type"))
+    )
+
+
+def _has_native_tokenizer(model_or_path: str, tokenizer_class: Any) -> bool:
+    """Check the installed AutoTokenizer registry without loading a checkpoint."""
+    config = _read_local_metadata(model_or_path, "config.json") or {}
+    model_type = config.get("model_type")
+    try:
+        from transformers.models.auto.tokenization_auto import (
+            MODELS_WITH_INCORRECT_HUB_TOKENIZER_CLASS,
+            TOKENIZER_MAPPING_NAMES,
+            tokenizer_class_from_name,
+        )
+        from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
+        if isinstance(model_type, str):
+            # Transformers ignores remote tokenizer mappings for these types with trust off.
+            if model_type in MODELS_WITH_INCORRECT_HUB_TOKENIZER_CLASS:
+                return True
+            if TOKENIZER_MAPPING_NAMES.get(model_type) and _is_builtin_model_type(model_type):
+                return True
+        if isinstance(tokenizer_class, str) and tokenizer_class:
+            name = tokenizer_class.removesuffix("Fast")
+            cls = tokenizer_class_from_name(name) or tokenizer_class_from_name(name + "Fast")
+            return isinstance(cls, type) and issubclass(cls, PreTrainedTokenizerBase)
+    except Exception:
+        # If the installed registry cannot resolve a fallback, retain the opt-in requirement.
+        return False
+    return False
 
 
 def tokenizer_requires_trust_remote_code(model_or_path: str) -> bool:
-    """Return whether local tokenizer metadata declares a custom tokenizer."""
+    """Return whether local tokenizer metadata declares only a custom tokenizer."""
     data = _read_local_metadata(model_or_path, "tokenizer_config.json")
-    auto_map = data.get("auto_map") if data is not None else None
+    if data is None:
+        return False
+    auto_map = data.get("auto_map")
     if isinstance(auto_map, dict):
-        return bool(auto_map.get("AutoTokenizer"))
-    return isinstance(auto_map, list) and bool(auto_map)
+        mapping = auto_map.get("AutoTokenizer")
+    else:
+        mapping = auto_map if isinstance(auto_map, list) else None
+    return bool(mapping) and not _has_native_tokenizer(model_or_path, data.get("tokenizer_class"))
 
 
 def resolve_trust_remote_code(

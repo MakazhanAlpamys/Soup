@@ -208,7 +208,7 @@ class TestRequiresProbe:
         )
         assert model_requires_trust_remote_code(str(tmp_path)) is True
 
-    def test_builtin_model_type_with_auto_map_returns_false(self, tmp_path):
+    def test_shared_probe_requires_opt_in_for_builtin_model_with_auto_map(self, tmp_path):
         pytest.importorskip("transformers")
         from soup_cli.utils.trust_remote import model_requires_trust_remote_code
 
@@ -216,7 +216,17 @@ class TestRequiresProbe:
             '{"model_type": "deepseek_v3", "auto_map": {"AutoConfig": "config.Custom"}}',
             encoding="utf-8",
         )
-        assert model_requires_trust_remote_code(str(tmp_path)) is False
+        assert model_requires_trust_remote_code(str(tmp_path)) is True
+
+    def test_builtin_model_type_with_auto_map_returns_false_for_export(self, tmp_path):
+        pytest.importorskip("transformers")
+        from soup_cli.utils.trust_remote import model_requires_trust_remote_code
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type": "deepseek_v3", "auto_map": {"AutoConfig": "config.Custom"}}',
+            encoding="utf-8",
+        )
+        assert model_requires_trust_remote_code(str(tmp_path), allow_builtin_config=True) is False
 
     def test_builtin_lookup_failure_keeps_requiring_opt_in(self, tmp_path, monkeypatch):
         from soup_cli.utils.trust_remote import model_requires_trust_remote_code
@@ -226,7 +236,7 @@ class TestRequiresProbe:
             '{"model_type": "llama", "auto_map": {"AutoConfig": "config.Custom"}}',
             encoding="utf-8",
         )
-        assert model_requires_trust_remote_code(str(tmp_path)) is True
+        assert model_requires_trust_remote_code(str(tmp_path), allow_builtin_config=True) is True
 
     def test_missing_config_returns_none(self, tmp_path):
         """Missing config.json → None (unknown — caller decides)."""

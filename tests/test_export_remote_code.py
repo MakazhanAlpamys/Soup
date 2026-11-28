@@ -113,9 +113,10 @@ def test_export_torchao_refuses_custom_tokenizer_on_a_native_model(sources, monk
 
     base, _ = sources
     (base / "config.json").write_text(
-        '{"model_type": "deepseek_v3", "auto_map": {"AutoConfig": "c.C"}}', encoding="utf-8"
+        '{"model_type": "diffllama", "auto_map": {"AutoConfig": "c.C"}}', encoding="utf-8"
     )
-    (base / "tokenizer_config.json").write_text(json.dumps(_CUSTOM_TOKENIZER), encoding="utf-8")
+    tokenizer_config = {**_CUSTOM_TOKENIZER, "tokenizer_class": "SoupTestCustomTokenizer"}
+    (base / "tokenizer_config.json").write_text(json.dumps(tokenizer_config), encoding="utf-8")
     (base.parent / "q.yaml").write_text("scheme: Int4WeightOnly\n", encoding="utf-8")
     pytest.importorskip("transformers")
     export_torchao = Mock()
@@ -133,6 +134,49 @@ def test_export_torchao_refuses_custom_tokenizer_on_a_native_model(sources, monk
         f"{_OPT_IN}"
     ) in strip_ansi(buffer.getvalue())
     export_torchao.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model_type", "tokenizer_class"),
+    [
+        ("gpt2", None),
+        ("qwen2", None),
+        ("deepseek_v3", "TokenizersBackend"),
+        ("diffllama", "TokenizersBackend"),
+    ],
+)
+def test_export_torchao_allows_native_tokenizer_with_trust_off(
+    sources, monkeypatch, model_type, tokenizer_class,
+):
+    from soup_cli.cli import app
+    from soup_cli.utils import save_formats
+
+    pytest.importorskip("transformers")
+    base, _ = sources
+    (base / "config.json").write_text(
+        json.dumps({"model_type": model_type, "auto_map": {"AutoConfig": "c.C"}}),
+        encoding="utf-8",
+    )
+    tokenizer_config = dict(_CUSTOM_TOKENIZER)
+    if tokenizer_class is not None:
+        tokenizer_config["tokenizer_class"] = tokenizer_class
+    (base / "tokenizer_config.json").write_text(json.dumps(tokenizer_config), encoding="utf-8")
+    (base.parent / "q.yaml").write_text("scheme: Int4WeightOnly\n", encoding="utf-8")
+    export_torchao = Mock()
+    monkeypatch.setattr(save_formats, "export_torchao", export_torchao)
+
+    result = CliRunner().invoke(
+        app, ["export", "--model", "base", "--format", "torchao", "--quant-config", "q.yaml"]
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    export_torchao.assert_called_once_with(
+        model_dir="base",
+        output_dir="base.torchao.Int4WeightOnly",
+        scheme="Int4WeightOnly",
+        quant_config_data={},
+        trust_remote_code=False,
+    )
 
 
 def test_export_torchao_checks_path_containment_before_trust_metadata(sources, monkeypatch):

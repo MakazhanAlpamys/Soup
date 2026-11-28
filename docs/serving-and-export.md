@@ -151,9 +151,9 @@ Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
 
 When export merges a LoRA adapter, it checks the local base model's `config.json`
 and the adapter's `tokenizer_config.json` independently. TorchAO export of a full
-local checkpoint checks both files in that checkpoint. A model type built into
-Transformers can use its native config even when `config.json` contains an
-`auto_map` entry. A custom tokenizer mapping still requires explicit
+local checkpoint checks both files in that checkpoint. Export can use a native
+Transformers model config or tokenizer when local metadata includes an `auto_map`
+entry. A tokenizer that has only a custom mapping requires explicit
 `--trust-remote-code`.
 
 GGUF export prints phase lines for toolchain lookup, dependency checking, adapter
