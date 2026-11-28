@@ -80,6 +80,35 @@ MACOS_SANDBOX_PROFILE = (
     "(deny network*)"
 )
 
+# Per-run macOS profile: the static profile above allows ``(subpath
+# "/var/folders")``, but on macOS the per-user temporary directory
+# resolves to ``/private/var/folders/...``, so that entry never matches
+# and a sandboxed child cannot write in its own working directory
+# (issue #3209). The narrower fix is to name the run's own resolved
+# directory in a per-run profile, instead of widening the static entry
+# to ``/private/var/folders`` — that would allow writes in every other
+# process's temp dir too.
+def _macos_sandbox_profile_for_dir(directory: str) -> str:
+    """Return a macOS sandbox profile that also allows writes in ``directory``.
+
+    Only the resolved ``directory`` itself is added; every other entry
+    of ``MACOS_SANDBOX_PROFILE`` is kept verbatim.
+    """
+    resolved = os.path.realpath(directory)
+    escaped = resolved.replace("\\", "\\\\").replace('"', '\\"')
+    static_rule = (
+        '(allow file-write* (subpath "/tmp") (subpath "/private/tmp")'
+        ' (subpath "/var/folders"))'
+    )
+    per_run_rule = (
+        '(allow file-write* (subpath "/tmp") (subpath "/private/tmp")'
+        f' (subpath "/var/folders") (subpath "{escaped}"))'
+    )
+    profile = MACOS_SANDBOX_PROFILE.replace(static_rule, per_run_rule)
+    assert profile != MACOS_SANDBOX_PROFILE, "static file-write rule not found"
+    return profile
+
+
 # Python-level socket monkey-patch prepended before any sandboxed user code.
 # Best-effort (bypassable via os.system / ctypes) — defence-in-depth on top of
 # the RLIMIT + namespace / sandbox-exec isolation. Shared so the v0.71.18 #110
@@ -456,13 +485,22 @@ def _run_sandboxed_subprocess(
     is still held is left behind rather than raising: one completion must not abort a
     training run.
     """
-    if _get_isolation_strategy() == "sandbox-exec" and sys.platform == "darwin":
-        argv = [_MACOS_SANDBOX_EXEC, "-p", MACOS_SANDBOX_PROFILE, *argv]
-
     if env is None:
         env = _get_safe_sandbox_env()
 
     with _SANDBOX_SEMAPHORE, _sandbox_directory() as tmpdir:
+        # The per-run profile is built here, once the run's directory
+        # exists: on macOS it names the resolved tmpdir so the child can
+        # write in its own working directory (issue #3209). The tmpdir
+        # is created before the argv wrap, not after.
+        if _get_isolation_strategy() == "sandbox-exec" and sys.platform == "darwin":
+            argv = [
+                _MACOS_SANDBOX_EXEC,
+                "-p",
+                _macos_sandbox_profile_for_dir(tmpdir),
+                *argv,
+            ]
+
         try:
             proc = subprocess.Popen(
                 argv,
