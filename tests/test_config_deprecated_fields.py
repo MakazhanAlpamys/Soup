@@ -73,8 +73,11 @@ class TestTheWarning:
     def test_warmup_auto_true_names_the_field_the_effect_the_fix_and_the_release(self):
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             TrainingConfig(warmup_auto=True)
-        assert len(record) == 1
-        message = str(record[0].message)
+        config_warnings = [
+            item for item in record if issubclass(item.category, SoupConfigDeprecationWarning)
+        ]
+        assert len(config_warnings) == 1
+        message = str(config_warnings[0].message)
         assert message.startswith(_WARMUP_LINE + ":")
         assert "training.warmup_ratio" in message  # what to use instead
         assert "Remove the line." in message
@@ -83,8 +86,11 @@ class TestTheWarning:
     def test_forgetting_threshold_names_the_field_the_effect_the_fix_and_the_release(self):
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             TrainingConfig(forgetting_threshold=0.2)
-        assert len(record) == 1
-        message = str(record[0].message)
+        config_warnings = [
+            item for item in record if issubclass(item.category, SoupConfigDeprecationWarning)
+        ]
+        assert len(config_warnings) == 1
+        message = str(config_warnings[0].message)
         assert message.startswith(_THRESHOLD_LINE + ":")
         assert "Remove the line." in message
         # the ship threshold has the same name and IS read: say where it lives

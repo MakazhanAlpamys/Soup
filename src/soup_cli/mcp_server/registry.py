@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -543,10 +544,54 @@ def tool_recipes_show(args: dict) -> dict:
     }
 
 
+_RUN_SUMMARY_FIELDS = (
+    "run_id",
+    "experiment_name",
+    "created_at",
+    "status",
+    "task",
+    "run_kind",
+    "device",
+    "device_name",
+    "gpu_memory",
+    "initial_loss",
+    "final_loss",
+    "loss_summary_kind",
+    "total_steps",
+    "duration_secs",
+    "output_dir",
+    "base_model",
+    "base_revision",
+    "base_revision_source",
+    "training_data_sha256",
+    "code_commit",
+    "code_dirty",
+    "cost_usd",
+    "cost_gpu_label",
+    "cost_history_eligible",
+    "exit_code",
+)
+
+
+def _run_summary(row: dict) -> dict:
+    """Select the run fields offered by the MCP tools."""
+    from soup_cli.utils.paths import sanitize_run_output_dir
+
+    summary = {name: row[name] for name in _RUN_SUMMARY_FIELDS if name in row}
+    if "output_dir" in summary:
+        summary["output_dir"] = sanitize_run_output_dir(summary["output_dir"])
+    base_model = summary.get("base_model")
+    if isinstance(base_model, str) and (
+        base_model.startswith(("/", "\\")) or ntpath.splitdrive(base_model)[0]
+    ):
+        summary["base_model"] = sanitize_run_output_dir(base_model)
+    summary["has_error"] = bool(row.get("error_message"))
+    return summary
+
+
 def tool_runs_list(args: dict) -> dict:
     """`soup runs` — recent experiment runs."""
     from soup_cli.experiment.tracker import ExperimentTracker
-    from soup_cli.utils.paths import sanitize_run_row
 
     limit = _opt_int(args, "limit", 50, lo=1, hi=500)
     tracker = ExperimentTracker()
@@ -554,13 +599,12 @@ def tool_runs_list(args: dict) -> dict:
         runs = tracker.list_runs(limit=limit)
     finally:
         tracker.close()
-    return {"runs": [sanitize_run_row(run) for run in runs], "count": len(runs)}
+    return {"runs": [_run_summary(run) for run in runs], "count": len(runs)}
 
 
 def tool_runs_show(args: dict) -> dict:
-    """`soup runs show` — one run's full record."""
+    """`soup runs show` — one run's summary."""
     from soup_cli.experiment.tracker import ExperimentTracker, run_lookup_failure
-    from soup_cli.utils.paths import sanitize_run_row
 
     run_id = _require_str(args, "run_id")
     tracker = ExperimentTracker()
@@ -571,7 +615,7 @@ def tool_runs_show(args: dict) -> dict:
             if tracker.count_run_id_matches(run_id) > 1:
                 raise McpToolError(run_lookup_failure(tracker, run_id, markup=False))
             raise McpToolError("run not found")
-        return sanitize_run_row(run)
+        return _run_summary(run)
     finally:
         tracker.close()
 
@@ -1171,7 +1215,7 @@ def _readonly_specs() -> list[ToolSpec]:
         ToolSpec(
             name="runs_list",
             title="List runs",
-            description="Recent experiment runs from the local tracker.",
+            description="Summaries of recent experiment runs.",
             input_schema={
                 "type": "object",
                 "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 500}},
@@ -1187,7 +1231,7 @@ def _readonly_specs() -> list[ToolSpec]:
         ToolSpec(
             name="runs_show",
             title="Show run",
-            description="One run's full record (config, metrics summary). Accepts an id prefix.",
+            description="Run status, metrics and error indication. Accepts an id prefix.",
             input_schema={
                 "type": "object",
                 "properties": {"run_id": {"type": "string"}},

@@ -134,7 +134,10 @@ NIGHTLY_ONLY_CONTEXTS = frozenset(
 #: The two cells only a push to ``release/**`` runs. Not required, so not a merge gate.
 RELEASE_ONLY_CONTEXTS = frozenset({"test (windows-latest, 3.11)", "test (macos-latest, 3.11)"})
 #: The condition on the two jobs that wait for nothing: everything but a draft pull request.
-DRAFT_GATE = "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
+DRAFT_GATE = (
+    "github.event_name != 'pull_request' || (github.event.pull_request.draft == false "
+    "&& (github.event.action != 'labeled' || github.event.label.name == 'ci:full'))"
+)
 UNGATED_JOBS = ("plan", "lint")
 #: The pinned upstream stack, relative to the checkout: what a pull-request run and a push
 #: to ``main`` install under.
@@ -500,27 +503,13 @@ def _release_for(context: dict[str, Any]) -> str:
     return _render(_decide_step()["env"]["RELEASE"], context)
 
 
-def _live_label_from_payload(context: dict[str, Any]) -> dict[str, Any]:
-    """*context* with the `labels` step's answer filled in from the event's own payload.
-
-    Since 2026-11-23 the decision reads `steps.labels.outputs.ci_full`, the pull request's labels
-    as the API reports them when `plan` runs (tests/test_ci_plan_live_labels.py). A test that
-    names no answer means that the API agrees with the payload, which is the case for every
-    row of ``EVENTS``; one that wants them to differ passes its own `steps` and keeps it.
-    """
-    if "steps" in context:
-        return context
-    event = context["github"].get("event", {})
-    labels = (event.get("pull_request") or {}).get("labels", [])
-    present = any(str(item.get("name", "")).lower() == LABEL for item in labels)
-    answer = "true" if present else "false"
-    return {**context, "steps": {"labels": {"outputs": {"ci_full": answer}}}}
-
-
 def _approval_for(context: dict[str, Any]) -> str:
     expression = _decide_step()["env"].get("APPROVAL")
     assert isinstance(expression, str), "the decide step must compute APPROVAL in its env"
-    return _render(expression, _live_label_from_payload(context))
+    if "steps" not in context:
+        # The approval probe's own script and gate are exercised in the head tests.
+        context = {**context, "steps": {"approval": {"outputs": {"current": "true"}}}}
+    return _render(expression, context)
 
 
 def _runs(job: str, context: dict[str, Any]) -> bool:
@@ -542,13 +531,13 @@ EVENTS = [
     pytest.param(_pull_request("opened"), "QUICK", id="pr-opened"),
     pytest.param(_pull_request("synchronize", labels=("bug",)), "QUICK", id="pr-push-other-label"),
     pytest.param(
-        _pull_request("synchronize", labels=("bug", LABEL)), "APPROVAL", id="pr-push-ci-full"
+        _pull_request("synchronize", labels=("bug", LABEL)), "QUICK", id="pr-push-ci-full"
     ),
     pytest.param(_pull_request("labeled", label=LABEL), "APPROVAL", id="adds-ci-full"),
     pytest.param(_pull_request("labeled", label="bug"), "QUICK", id="adds-other"),
     pytest.param(
         _pull_request("labeled", label="bug", labels=(LABEL,)),
-        "APPROVAL",
+        "QUICK",
         id="adds-other-while-ci-full",
     ),
 ]
@@ -668,10 +657,7 @@ class TestPlanDecision:
         }
 
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
-    def test_the_decision_follows_the_event_and_the_current_labels(self, context, kind):
-        """RELEASE only for a push to release/**; FULL for that, the nightly run and a
-        manual dispatch; APPROVAL for a pull request whose CURRENT labels carry ci:full,
-        whichever event started the run."""
+    def test_the_decision_follows_the_event_and_the_approved_head(self, context, kind):
         assert _release_for(context) == ("true" if kind == "RELEASE" else "false")
         assert _full_for(context) == ("true" if kind in ("RELEASE", "FULL") else "false")
         assert _approval_for(context) == ("true" if kind == "APPROVAL" else "false")
@@ -836,9 +822,11 @@ class TestConcurrency:
         second = _group(_pull_request("labeled", label="bug", run_id="2"))
         assert first != second
 
-    def test_adding_ci_full_supersedes_the_quick_run(self):
+    def test_adding_ci_full_has_its_own_group(self):
         quick = _group(_pull_request("synchronize"))
-        assert _group(_pull_request("labeled", label=LABEL, run_id="2")) == quick
+        first = _group(_pull_request("labeled", label=LABEL, run_id="1"))
+        second = _group(_pull_request("labeled", label=LABEL, run_id="2"))
+        assert first == second != quick
 
     @pytest.mark.parametrize("action", ["opened", "synchronize", "reopened", "ready_for_review"])
     def test_every_other_pull_request_event_still_supersedes(self, action):
@@ -873,7 +861,7 @@ class TestConcurrency:
         """Renaming the label in one expression only would make the approval label either
         start a quick run or cancel nothing -- both silently."""
         event = _pull_request("labeled", label=label)
-        joins = _group(event) == _group(_pull_request("synchronize"))
+        joins = _group(event) == _group(_pull_request("labeled", label=LABEL))
         assert joins == (_approval_for(event) == "true")
 
 
@@ -922,6 +910,7 @@ def _decide(tmp_path: Path, *, release: str, full: str, approval: str) -> dict[s
         "RELEASE": release,
         "FULL": full,
         "APPROVAL": approval,
+        "EVENT_NAME": "pull_request",
         "GITHUB_OUTPUT": output.as_posix(),
     }
     result = subprocess.run(
@@ -1524,8 +1513,10 @@ class TestADraftRunsNothing:
 
     @pytest.mark.parametrize("job", UNGATED_JOBS)
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
-    def test_everything_that_is_not_a_draft_still_starts_them(self, job, context, kind):
-        assert _runs(job, context), kind
+    def test_non_draft_events_other_than_unrelated_labels_start_them(self, job, context, kind):
+        event = context["github"]["event"]
+        unrelated_label = event.get("action") == "labeled" and event["label"]["name"] != LABEL
+        assert _runs(job, context) is not unrelated_label, kind
 
     def test_marking_it_ready_starts_the_first_run(self):
         assert "ready_for_review" in _triggers()["pull_request"].get("types", [])

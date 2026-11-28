@@ -19,7 +19,9 @@ import ast
 import importlib
 import inspect
 import io
+import json
 import typing
+from unittest.mock import Mock
 
 import pytest
 import typer
@@ -32,7 +34,7 @@ from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import TEMPLATES, SoupConfig
 from soup_cli.utils import hardware_fit, model_shape
 from soup_cli.utils.vram_estimate import GB, OVERHEAD_FIXED_BYTES
-from tests.conftest import strip_ansi
+from tests.conftest import make_cli_runner, strip_ansi
 
 # Llama-3.1-8B: 8.03B parameters, a 128,256-token vocabulary.
 _LLAMA_8B = {
@@ -728,3 +730,150 @@ def test_the_preflight_names_the_optimizer_step(shape_of, screen):
     )
     _run(yaml.safe_dump(cfg), card={"memory_total_bytes": int(2e9)}, allow_oom_attempt=True)
     assert "| optimizer step 0.5 |" in screen()
+
+
+@pytest.fixture
+def fit_receipt(tmp_path, monkeypatch, shape_of):
+    """Keep the real CLI, fit decision, and local loader; stub hardware and model metadata."""
+    from soup_cli.cli import app
+    from soup_cli.utils import gpu, realised_length
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    for name in (
+        "RANK", "WORLD_SIZE", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION",
+        "ACCELERATE_USE_DEEPSPEED", "ACCELERATE_USE_FSDP",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    row = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}
+    (tmp_path / "train.jsonl").write_text((json.dumps(row) + "\n") * 2, encoding="utf-8")
+    monkeypatch.setattr(gpu, "bf16_fp16_flags", lambda _device: (True, False))
+
+    def invoke(peaks, *, device="cuda", model=_SMALL, params=_SMALL_PARAMS,
+               measured=None, flags=(), **training):
+        config = yaml.safe_load(_yaml(**training))
+        config["data"].update(format="chatml", val_split=0)
+        config["output"] = str(tmp_path / "output")
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        shape_of(model, params)
+        card_bytes = 10_000_000_000 if device == "cuda" else 0
+        monkeypatch.setattr(train_mod, "detect_device", lambda **_kwargs: (device, device))
+        monkeypatch.setattr(
+            train_mod, "get_gpu_info",
+            lambda **_kwargs: {"memory_total": "test card", "memory_total_bytes": card_bytes},
+        )
+        priced_lengths = []
+
+        def estimate(inp):
+            priced_lengths.append(inp.seq_len)
+            return hardware_fit.VRAMBreakdown(
+                weights_gb=1, optimizer_gb=0, gradients_gb=0,
+                activations_gb=peaks[inp.seq_len] - 1, overhead_gb=0,
+            )
+
+        loader = Mock(wraps=train_mod.load_dataset)
+        measure = Mock(return_value=measured)
+        monkeypatch.setattr(hardware_fit, "estimate_peak_vram_gb", estimate)
+        monkeypatch.setattr(train_mod, "load_dataset", loader)
+        monkeypatch.setattr(realised_length, "longest_row_tokens", measure)
+        result = make_cli_runner().invoke(app, ["train", "--dry-run", "--result-json", *flags])
+        return result, loader, measure, priced_lengths
+
+    return invoke
+
+
+def _assert_fit_receipt(result, status, code, *, peak, required, train_rows):
+    assert result.exit_code == code, _plain(result.output)
+    assert result.stdout.endswith("\n")
+    assert result.stdout.count("\n") == 1
+    receipt = json.loads(result.stdout)
+    assert (receipt["command"], receipt["phase"], receipt["status"], receipt["exit_code"]) == (
+        "train", "preflight", status, code,
+    )
+    if status == "refused":
+        assert receipt["reasons"][0]["code"] == "soup.train.hardware_fit"
+    else:
+        assert receipt["reasons"] == []
+    data = receipt["data"]
+    assert data["dry_run"] is True
+    assert data["training_rows"] == train_rows
+    assert data["validation_rows"] == (None if train_rows is None else 0)
+    assert data["estimate_basis"]["vram"] == ("unavailable" if peak is None else "analytical_model")
+    assert data["vram"] == {
+        "estimated_peak_gb": peak,
+        "available_gb": None if peak is None else 10,
+        "margin_fraction": None if peak is None else 0.10,
+        "required_gb": None if required is None else pytest.approx(required),
+    }
+
+
+def test_result_json_reports_a_silent_passing_hardware_fit(fit_receipt):
+    result, loader, measure, priced_lengths = fit_receipt({2048: 8})
+    _assert_fit_receipt(result, "ok", 0, peak=8, required=8.8, train_rows=2)
+    assert "Hardware-fit" not in _plain(result.stderr)
+    assert "Config valid." in _plain(result.stderr)
+    loader.assert_called_once()
+    measure.assert_not_called()
+    assert priced_lengths == [2048]
+
+
+def test_result_json_reports_an_immediate_hardware_refusal_before_loading(fit_receipt):
+    result, loader, measure, priced_lengths = fit_receipt({2048: 10, 64: 9.5})
+    _assert_fit_receipt(result, "refused", 1, peak=10, required=11, train_rows=None)
+    assert "Hardware-fit gate" in _plain(result.stderr)
+    loader.assert_not_called()
+    measure.assert_not_called()
+    assert priced_lengths == [2048, 64]
+
+
+@pytest.mark.parametrize(
+    ("tokens", "peak", "required", "status", "code", "diagnostic"),
+    [
+        pytest.param(512, 8, 8.8, "ok", 0, "fits 10.0 GB available", id="shorter-row-fits"),
+        pytest.param(1024, 9.5, 10.45, "refused", 1, "Hardware-fit gate", id="row-still-too-long"),
+        pytest.param(None, 10, 11, "refused", 1, "reading unavailable", id="no-measurement"),
+    ],
+)
+def test_result_json_uses_the_final_deferred_fit(
+    fit_receipt, tokens, peak, required, status, code, diagnostic,
+):
+    from soup_cli.utils.realised_length import LongestRow, RealisedLengthUnavailable
+
+    measured = LongestRow(tokens, 2) if tokens else RealisedLengthUnavailable("reading unavailable")
+    result, loader, measure, priced_lengths = fit_receipt(
+        {2048: 10, 64: 6, 512: 8, 1024: 9.5}, measured=measured,
+    )
+    _assert_fit_receipt(result, status, code, peak=peak, required=required, train_rows=2)
+    assert diagnostic in _plain(result.stderr)
+    loader.assert_called_once()
+    measure.assert_called_once()
+    assert priced_lengths == ([2048, 64, tokens] if tokens else [2048, 64])
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_result_json_leaves_unpriced_vram_null(fit_receipt, device):
+    training = {"batch_size": "auto"} if device == "cuda" else {}
+    result, loader, measure, priced_lengths = fit_receipt({}, device=device, **training)
+    _assert_fit_receipt(result, "ok", 0, peak=None, required=None, train_rows=2)
+    loader.assert_called_once()
+    measure.assert_not_called()
+    assert priced_lengths == []
+
+
+@pytest.mark.parametrize("allow_oom", [False, True], ids=["extrapolation", "oom-override"])
+def test_result_json_keeps_the_report_when_hardware_fit_warns(fit_receipt, allow_oom):
+    options = (
+        {"flags": ("--allow-oom-attempt",)}
+        if allow_oom else {"model": _LLAMA_8B, "params": _LLAMA_8B_PARAMS}
+    )
+    result, loader, measure, priced_lengths = fit_receipt({2048: 10}, **options)
+    _assert_fit_receipt(result, "ok", 0, peak=10, required=11, train_rows=2)
+    diagnostics = _plain(result.stderr)
+    assert "Hardware-fit warning" in diagnostics
+    if allow_oom:
+        assert "--allow-oom-attempt set" in diagnostics
+    else:
+        assert OUTSIDE in diagnostics
+    loader.assert_called_once()
+    measure.assert_not_called()
+    assert priced_lengths == [2048]

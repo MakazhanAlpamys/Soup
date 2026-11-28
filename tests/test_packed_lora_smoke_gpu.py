@@ -36,7 +36,13 @@ def _load(dt):
                                                      local_files_only=True)
     except OSError as exc:
         pytest.skip(f"{MODEL} is not in the local Hugging Face cache: {exc}")
-    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+    # as Soup prepares it when the kernels are on: the tables stay in the compute dtype (a 7B
+    # model's fp32 copies do not fit an 8 GB card), and the stock forward below is fed the same
+    # embedding as an fp32 table would give
+    from soup_cli.kernels.packed_lora.model import keep_tables_in_compute_dtype
+
+    with keep_tables_in_compute_dtype(model):
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
     model = get_peft_model(model, LoraConfig(
         r=16, lora_alpha=32, lora_dropout=0.0, task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj",
@@ -77,9 +83,12 @@ def _free_gpu():
 
 
 def test_a_real_checkpoint_matches_the_stock_step():
-    """Loss within 0.5 % of the stock step's (measured 0.03 to 0.27 %: bf16 matmuls in another
-    order), and the LoRA gradient vector within a cosine of 0.998 (exact mode; measured 0.9990)
-    or 0.99 (the default int8 backward with stochastic rounding; measured 0.9941 to 0.9946)."""
+    """Loss within 0.5 % of the stock step's (measured 0.03 to 0.27 % on the 1.5B, 0.02 to 0.26 %
+    on the 7B: bf16 matmuls in another order; the LoRA A matrices are not seeded, so it varies from
+    run to run), and the LoRA gradient vector within a cosine of 0.998 (exact mode, also with the
+    embedding and lm_head parked in host memory; measured 0.9990 to 0.9994 on the 1.5B, 0.9992 to
+    0.9995 on the 7B) or 0.99 (the default int8 backward with stochastic rounding; measured 0.9941
+    to 0.9949 on the 1.5B, 0.9919 to 0.9926 on the 7B)."""
     from soup_cli.kernels.packed_lora.policy import Policy
     from soup_cli.kernels.packed_lora.runtime import PackedRun
 
@@ -89,21 +98,32 @@ def test_a_real_checkpoint_matches_the_stock_step():
     for p in model.parameters():
         p.grad = None
     with torch.autocast("cuda", dtype=dt):
-        ref_loss = model(input_ids=ids, attention_mask=mask, labels=labels, use_cache=False).loss
+        embedded = model.get_base_model().get_input_embeddings()(ids).float()
+        ref_loss = model(inputs_embeds=embedded, attention_mask=mask, labels=labels,
+                         use_cache=False).loss
     ref_loss.backward()
     ref_grad = _grad_vector(model)
-    for policy, bar in ((Policy(int8_backward="off"), 0.998), (Policy(), 0.99)):
+    for policy, bar, parked in ((Policy(int8_backward="off"), 0.998, False),
+                                (Policy(int8_backward="off"), 0.998, True),
+                                (Policy(), 0.99, False)):
         run = PackedRun(policy, log=lambda _: None)
-        run.prepare(model, dt, ids.numel())
+        run.prepare(model, dt, ids.numel(), park=False)
         try:
             for p in model.parameters():
                 p.grad = None
+            if parked:  # the embedding and lm_head in pinned host memory, as a small budget does
+                from soup_cli.kernels.packed_lora.hostembed import HostTables
+
+                run.tables = HostTables(run.pool, run.packed.tied)
+                assert run.tables.park(*run._tables_args())
+                assert run.tables.active_embed() and run.tables.active_head()
             loss, _ = run.forward(ids, mask, labels, None)
             loss.backward()
             grad = _grad_vector(model)
             cosine = float(torch.nn.functional.cosine_similarity(grad, ref_grad, dim=0))
             rel = abs(loss.item() - ref_loss.item()) / abs(ref_loss.item())
-            print(f"[smoke] {MODEL} int8_backward={policy.int8_backward}: loss rel {rel:.2e}, "
+            print(f"[smoke] {MODEL} int8_backward={policy.int8_backward}"
+                  f"{' tables parked' if parked else ''}: loss rel {rel:.2e}, "
                   f"gradient cosine {cosine:.5f}")
             assert rel < 5e-3 and cosine > bar
         finally:

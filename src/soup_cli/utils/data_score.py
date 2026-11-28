@@ -590,21 +590,35 @@ def _check_input_path(path: Any) -> str:
     return os.path.realpath(path)
 
 
-def load_jsonl_rows(path: Any, *, strict: bool = False) -> List[Mapping[str, Any]]:
-    """Read bounded JSONL under cwd; optionally refuse malformed/non-object rows."""
+class JsonlLimitError(ValueError):
+    """A JSONL file exceeds the reader's byte or record limit."""
+
+
+def load_jsonl_rows(
+    path: Any,
+    *,
+    strict: bool = False,
+    max_file_bytes: Optional[int] = None,
+    max_rows: Optional[int] = None,
+) -> List[Mapping[str, Any]]:
+    """Read bounded JSONL under cwd, with optional tighter byte and record caps."""
+    max_file_bytes = _MAX_FILE_BYTES if max_file_bytes is None else min(
+        max_file_bytes, _MAX_FILE_BYTES,
+    )
+    max_rows = _MAX_ROWS if max_rows is None else min(max_rows, _MAX_ROWS)
     target = _check_input_path(path)
     size = os.path.getsize(target)
-    if size > _MAX_FILE_BYTES:
-        raise ValueError(f"file exceeds {_MAX_FILE_BYTES} bytes")
+    if size > max_file_bytes:
+        raise JsonlLimitError(f"file exceeds {max_file_bytes} bytes")
     out: List[Mapping[str, Any]] = []
     with open(target, "r", encoding="utf-8-sig") as fh:
         for line_number, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
                 continue
-            if len(out) >= _MAX_ROWS:
+            if len(out) >= max_rows:
                 if strict:
-                    raise ValueError(f"file exceeds {_MAX_ROWS} rows")
+                    raise JsonlLimitError(f"file exceeds {max_rows} rows")
                 break
             try:
                 row = json.loads(line)

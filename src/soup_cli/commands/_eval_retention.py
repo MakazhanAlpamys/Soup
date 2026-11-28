@@ -27,6 +27,7 @@ from typing import Callable, Dict, List, NoReturn, Optional, Tuple
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
@@ -37,7 +38,7 @@ from soup_cli.utils.exit_codes import (
 )
 from soup_cli.utils.retention_ledger import DEFAULT_LEDGER_PATH, DEFAULT_THRESHOLD
 from soup_cli.utils.run_provenance import warn_stopped_inputs
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control, terminal_text
 
 #: Earlier versions shown as table columns; the JSON report always has all of them.
 _MAX_TABLE_VERSIONS = 8
@@ -46,8 +47,14 @@ _MAX_TABLE_VERSIONS = 8
 _MAX_ERROR_CHARS = 200
 
 
+# Labels, task names, paths, numerics and error text come from outside the
+# program, so every line that carries them is printed as ``Text``: shown as
+# typed, never read as markup or ``:name:`` emoji, control characters removed
+# (#2489).
+
+
 def _error(console: Console, message: str) -> None:
-    console.print(f"[red]Error:[/] {for_terminal(message)}")
+    console.print(Text.assemble(("Error:", "red"), " ", strip_control(message)))
 
 
 def _fail(console: Console, message: str, code: int) -> NoReturn:
@@ -95,19 +102,21 @@ def _print_report(
     earlier = report.versions[:-1]
     shown = earlier[-_MAX_TABLE_VERSIONS:]
     table = Table(
-        title=f"Retention: {for_terminal(report.label)} vs {len(earlier)} earlier version(s)",
+        title=terminal_text(
+            f"Retention: {report.label} vs {len(earlier)} earlier version(s)", "table.title"
+        ),
         show_header=True,
     )
     table.add_column("Task")
     for version in shown:
-        table.add_column(for_terminal(version), justify="right")
-    table.add_column(f"{for_terminal(report.label)} (now)", justify="right")
+        table.add_column(terminal_text(version), justify="right")
+    table.add_column(terminal_text(f"{report.label} (now)"), justify="right")
     table.add_column("Best", justify="right")
     table.add_column("Drop", justify="right")
     table.add_column("Status")
     colour = {"new": "dim", "ok": "green", "regressed": "red"}
     for row in report.tasks:
-        cells = [for_terminal(row.name)]
+        cells = [terminal_text(row.name)]
         cells.extend(_score_text(row.scores.get(version)) for version in shown)
         cells.append(_score_text(row.current))
         cells.append(_score_text(row.best_previous))
@@ -145,16 +154,23 @@ def _print_report(
         )
     if report.regressions:
         named = ", ".join(
-            f"{for_terminal(row.name)} ({_decimals_text(row.drop, signed=True)})"
+            f"{row.name} ({_decimals_text(row.drop, signed=True)})"
             for row in report.regressions
         )
-        console.print(f"[red]RETENTION REGRESSION:[/] {named}")
+        console.print(
+            Text.assemble(("RETENTION REGRESSION:", "red"), " ", strip_control(named))
+        )
     else:
         console.print("[green]NO RETENTION REGRESSION[/]")
     if recorded:
         console.print(
-            f"[green]Recorded[/] version {for_terminal(report.label)} in "
-            f"{for_terminal(ledger_path)}"
+            Text.assemble(
+                ("Recorded", "green"),
+                " version ",
+                strip_control(report.label),
+                " in ",
+                strip_control(ledger_path),
+            )
         )
     elif not record_requested:
         console.print("[dim]Dry run: pass --record to append this version to the ledger.[/]")
@@ -363,7 +379,7 @@ def _run(
                 f"{exc}; start a ledger with --add-task NAME=PATH",
                 EXIT_USAGE_ERROR,
             )
-        console.print(f"[dim]No ledger at {for_terminal(ledger_path)}; starting a new one.[/]")
+        console.print(terminal_text(f"No ledger at {ledger_path}; starting a new one.", "dim"))
         ledger = rl.Ledger()
     except (rl.LedgerError, OSError) as exc:
         _fail(console, f"cannot read --ledger: {exc}", EXIT_USAGE_ERROR)
@@ -389,14 +405,14 @@ def _run(
         rl.check_numerics(ledger, numerics)
     except (rl.LedgerError, ValueError) as exc:
         _fail(console, str(exc), EXIT_USAGE_ERROR)
-    console.print(f"[dim]Numerics: {for_terminal(_numerics_line(numerics))}[/]")
+    console.print(terminal_text(f"Numerics: {_numerics_line(numerics)}", "dim"))
 
     # 4. Register new control tasks, then prove every control file is the one on record.
     now = rl.utc_timestamp()
     try:
         for name, path in specs:
             ledger, status = rl.register_task(ledger, name, path, label=label, now=now)
-            console.print(f"[dim]Control task {for_terminal(name)}: {status}.[/]")
+            console.print(terminal_text(f"Control task {name}: {status}.", "dim"))
         if not ledger.tasks:
             raise rl.LedgerError(
                 "the ledger has no control tasks; register one with --add-task NAME=PATH"
@@ -432,8 +448,10 @@ def _run(
             scores[task.name] = float(result.accuracy)
             counts[task.name] = int(result.total)
             console.print(
-                f"[dim]  {for_terminal(task.name)}: {result.accuracy:.3f} "
-                f"({result.correct}/{result.total})[/]"
+                terminal_text(
+                    f"  {task.name}: {result.accuracy:.3f} ({result.correct}/{result.total})",
+                    "dim",
+                )
             )
     except (ValueError, TypeError, OSError, RuntimeError, ImportError) as exc:
         _fail(
@@ -490,7 +508,7 @@ def _run(
             atomic_write_text(
                 json.dumps(payload, indent=2, allow_nan=False) + "\n", output, field="--output"
             )
-            console.print(f"[green]Wrote report[/] {for_terminal(output)}")
+            console.print(Text.assemble(("Wrote report", "green"), " ", strip_control(output)))
         except (ValueError, OSError) as exc:
             errors.append(f"cannot write --output: {type(exc).__name__}: {exc}")
     for message in errors:

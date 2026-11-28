@@ -226,7 +226,7 @@ def test_warning_guard_rejects_unknown_digit_suffixes(tmp_path, monkeypatch, fie
 def test_an_unregistered_task_backend_pair_reports_nothing():
     from soup_cli.config.backend_support import unsupported_for
 
-    assert unsupported_for("sft", "transformers") == ()
+    assert unsupported_for("grpo", "transformers") == ()
     assert unsupported_for("no_such_task", "no_such_backend") == ()
 
 

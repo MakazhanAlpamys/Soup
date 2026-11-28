@@ -179,33 +179,37 @@ def _path_field_is_local(value: str, *, py_file_only: bool = False) -> bool:
 
 
 def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
-    """Dotted paths whose local file the stub would not carry, sorted.
+    """Dotted paths whose local files the stub would not carry.
 
-    data.train may be a single entry or a list, and each is classified
-    separately: a Hub id in the list is fine and a ./data file beside it is
-    not, so the whole field cannot be judged by its first entry. It is judged
-    twice: by the schema's suffix rule (a data file that does not exist yet) and
-    by the walk below (a local dataset directory, which has no suffix). Every
-    field is walked as a dotted schema path so a list or a comma-separated
-    value is judged entry by entry.
+    Local data.train files supported by the upload mechanism are rewritten
+    before this function is called. Remaining fields are walked as dotted
+    schema paths so lists and comma-separated values are judged entry by
+    entry. Existing local directories are still detected and refused.
     """
     found: List[str] = []
-    train = getattr(getattr(cfg, "data", None), "train", None)
-    if train is not None:
-        entries = [train] if isinstance(train, str) else list(train or [])
-        if any(_train_entry_is_local(e) for e in entries if isinstance(e, str)):
-            found.append("data.train")
 
     for dotted in _PATH_FIELDS:
         value = _resolve_plan_input(cfg, dotted)
         if value is None:
             continue
+
         entries = _entries_for_plan_input(value, dotted)
         py_file_only = dotted in _PY_FILE_FIELDS
-        if any(
-            _path_field_is_local(str(entry), py_file_only=py_file_only) for entry in entries
-        ):
+
+        if dotted == "data.train":
+            for entry in entries:
+                if _train_entry_is_local(entry):
+                    if os.path.isdir(entry):
+                        found.append(dotted)
+                    continue
+
+                if _path_field_is_local(entry):
+                    found.append(dotted)
+            continue
+
+        if any(_path_field_is_local(str(entry), py_file_only=py_file_only) for entry in entries):
             found.append(dotted)
+
     return sorted(set(found))
 
 
@@ -239,7 +243,7 @@ def refuse_unshipped_inputs(cfg: "SoupConfig") -> None:
         return
     listed = ", ".join(fields)
     raise ValueError(
-        f"--cloud ships only the config: {listed} would leave local files behind, "
-        f"so the remote run would fail after the instance boots. {_escape_hatch(fields)} "
+        f"--cloud does not ship these local inputs: {listed}. "
+        f"The remote run would fail after the instance boots. {_escape_hatch(fields)} "
         "See issue #1430."
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 
@@ -231,6 +232,71 @@ def test_cli_saves_finite_weighted_and_aggregate_scores(
         assert len(calls) == rows
     finally:
         tracker.close()
+
+
+_URL_MODEL = "https://sample-user:sample-pass@judge.example.invalid/model"
+_URL_LABEL = "https://judge.example.invalid/model"
+
+
+@pytest.mark.parametrize(
+    ("model", "label", "record"),
+    [
+        pytest.param(_URL_MODEL, _URL_LABEL, True, id="userinfo"),
+        pytest.param("gpt-4o-mini", "gpt-4o-mini", True, id="model-name"),
+        pytest.param("model@sha256:abc123", "model@sha256:abc123", True, id="model-digest"),
+        pytest.param(
+            "ollama://model@sha256:abc123", "ollama://model@sha256:abc123", True,
+            id="ollama-digest",
+        ),
+        pytest.param("https://[invalid/model", "<invalid URL>", True, id="malformed"),
+        pytest.param("file:///first", "file:///first", True, id="file-url-first"),
+        pytest.param("file:///second", "file:///second", True, id="file-url-second"),
+        pytest.param("https:///sample-user:sample-pass@invalid/model", "<invalid URL>", True,
+                     id="missing-authority-with-userinfo"),
+        pytest.param(
+            "https:///sample-user:sample-pass\uff20invalid/model", "<invalid URL>", True,
+            id="missing-authority-with-fullwidth-at",
+        ),
+        pytest.param(_URL_MODEL, _URL_LABEL, False, id="no-run-id"),
+    ],
+)
+def test_cli_uses_a_safe_judge_label_without_changing_the_evaluator_model(
+    model: str, label: str, record: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "responses.jsonl"
+    target.write_text('{"prompt":"q","response":"synthetic"}\n', encoding="utf-8")
+    rubric_path = tmp_path / "rubric.yaml"
+    rubric_path.write_text(yaml.safe_dump(rubric([1.0])), encoding="utf-8")
+    models: list[str] = []
+    monkeypatch.setattr(
+        JudgeEvaluator, "_call_llm",
+        lambda self, prompt: models.append(self.model) or '{"scores":{"0":5}}',
+    )
+    monkeypatch.setattr(eval_command, "console", Console(width=160))
+
+    tracker_calls: list[bool] = []
+    with closing(ExperimentTracker(db_path=tmp_path / "synthetic.db")) as tracker:
+        if record:
+            tracker.start_run({}, "cpu", "synthetic", {}, run_id="synthetic")
+        monkeypatch.setattr(
+            "soup_cli.experiment.tracker.ExperimentTracker",
+            lambda: tracker_calls.append(True) or tracker,
+        )
+        run_args = ["--run-id", "synthetic"] if record else []
+        result = CliRunner().invoke(app, [
+            "eval", "judge", "--target", str(target), "--rubric", str(rubric_path),
+            "--provider", "ollama", "--model", model, *run_args,
+        ])
+        output = " ".join(strip_ansi(result.output).split())
+        assert result.exit_code == 0, (output, result.exception)
+        assert f"responses with {label} (provider: ollama)" in output
+        assert "sample-user" not in output
+        assert "sample-pass" not in output
+        assert models == [model]
+        assert tracker_calls == ([True] if record else [])
+        saved = tracker.get_eval_results()
+        assert [row["benchmark"] for row in saved] == ([f"judge:{label}"] if record else [])
 
 
 @pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf"),
