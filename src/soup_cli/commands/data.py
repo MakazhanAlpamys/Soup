@@ -244,9 +244,11 @@ def _validate_data(
             ))
 
     load_issues = SkippedRows()
+    row_numbers: list[int] = []
     try:
         data = load_raw_data(
             file_path, issues=load_issues, diagnostics=output if preview else None,
+            row_numbers=row_numbers,
         )
     except (OSError, ValueError, ImportError, CsvError) as exc:
         if not preview:
@@ -284,7 +286,7 @@ def _validate_data(
                 fix="Supply the correct explicit format and check the file.",
             ), warnings=warnings)
 
-    result = validate_and_stats(data, expected_format=fmt)
+    result = validate_and_stats(data, expected_format=fmt, row_numbers=row_numbers or None)
     if preview and result["issues"] and (data or not skipped):
         warnings.append(ResultReason(
             code="soup.data.validation_warnings",

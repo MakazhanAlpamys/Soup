@@ -104,7 +104,7 @@ soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path> [--image-dir <dir>]  View dataset stats; optionally override vision image directory
 soup data validate <path>                     Check format (auto-detect)
-soup data doctor <path> --model <id>          Chat-template compat report: 8 checks, OK/MINOR/MAJOR
+soup data doctor <path> --model <id>          Chat-template and answer checks, OK/MINOR/MAJOR
 soup data doctor <path> --model <id> --show-mask N  Per-token trained/masked colouring via the real collator
 soup data lint <path>                         Preference-data linter: length bias, near-dups, chosen==rejected
 soup data clean <path> [-o out]               Sanitize dataset: control chars, zero-width spaces, empty turns

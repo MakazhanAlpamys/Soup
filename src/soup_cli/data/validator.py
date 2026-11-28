@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
+from soup_cli.data.answer_checks import count_empty_assistant_turns
 from soup_cli.data.formats import (
     _DROP_EXCEPTIONS,
     VALID_FORMATS,
@@ -65,8 +66,16 @@ def _compute_row_text_length(row: dict) -> tuple[int, int]:
     return char_len, empty_count
 
 
-def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) -> dict:
-    """Compute stats and validate dataset."""
+def validate_and_stats(
+    data: list[dict],
+    expected_format: Optional[str] = None,
+    *,
+    row_numbers: Sequence[int] | None = None,
+) -> dict:
+    """Compute stats and validate dataset.
+
+    When supplied, ``row_numbers`` maps retained rows to their source positions.
+    """
     if not data:
         return {
             "total": 0,
@@ -93,6 +102,8 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
     invalid_count = 0
     sample_reasons: list[str] = []
     check_format = bool(expected_format and expected_format in VALID_FORMATS)
+    empty_answer_rows = empty_answer_turns = 0
+    empty_answer_examples: list[int] = []
 
     # Probe whether the dataset values are all strings/None (flat rows).
     # Real JSONL datasets are homogeneous — if row 0 is flat, all rows are.
@@ -134,14 +145,20 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
         # expected_format ∈ VALID_FORMATS above, so skip the per-row check.
         if check_format:
             try:
-                _dispatch_conversion(row, expected_format)
-                reason = None
+                converted = _dispatch_conversion(row, expected_format)
             except _DROP_EXCEPTIONS as exc:
-                reason = str(exc)
-            if reason is not None:
                 invalid_count += 1
                 if len(sample_reasons) < _MAX_REASON_SAMPLES:
-                    sample_reasons.append(f"row {idx}: {reason}")
+                    sample_reasons.append(f"row {idx}: {exc}")
+            else:
+                empty_turns = count_empty_assistant_turns(converted)
+                if empty_turns:
+                    empty_answer_rows += 1
+                    empty_answer_turns += empty_turns
+                    if len(empty_answer_examples) < _MAX_REASON_SAMPLES:
+                        empty_answer_examples.append(
+                            row_numbers[idx] if row_numbers is not None else idx + 1
+                        )
 
         # 3. Shared text length & empty field calculation
         char_len, empty_fields_in_row = _compute_row_text_length(row)
@@ -166,6 +183,12 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
         if invalid_count > len(sample_reasons):
             issues.append(f"... and {invalid_count - len(sample_reasons)} more")
 
+    if empty_answer_rows:
+        examples = ", ".join(map(str, empty_answer_examples))
+        issues.append(
+            f"Empty assistant answers in {empty_answer_rows} row(s) "
+            f"({empty_answer_turns} turn(s)). First rows: {examples}."
+        )
     if dup_count > 0:
         issues.append(f"{dup_count} duplicate rows found")
     if empty_count > 0:
