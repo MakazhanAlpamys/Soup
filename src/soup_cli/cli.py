@@ -240,7 +240,8 @@ app.command(
     name="diagnose",
     help=(
         "Post-training report card: forgetting / refusal / format / "
-        "mode_collapse / memorization / contamination (v0.56.0)."
+        "mode_collapse / memorization / contamination / citation "
+        "(v0.56.0; citation v0.71.10)."
     ),
 )(_diagnose_cmd.diagnose)
 

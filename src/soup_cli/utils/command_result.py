@@ -210,7 +210,7 @@ class PreflightInputDigests(_StrictModel):
 class TrainPreflightData(_StrictModel):
     """Measurements and estimates from a reached local training preflight."""
 
-    dry_run: Literal[True]
+    dry_run: Literal[True] = Field(json_schema_extra={"type": "boolean"})
     training_rows: NonNegativeInt | None = None
     validation_rows: NonNegativeInt | None = None
     vram: PreflightVram = Field(default_factory=PreflightVram)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -687,26 +688,43 @@ class TestStructuredOutputExtra:
 
 class TestJsonSchemaContainment:
     def test_json_schema_outside_cwd_rejected(self, tmp_path, monkeypatch):
-        """JSON schema path must stay under cwd."""
-        pytest.importorskip("fastapi")  # CLI exits early w/o FastAPI
+        """Serve refuses a schema outside cwd without reading it or starting."""
+        pytest.importorskip("fastapi")
+        uvicorn = pytest.importorskip("uvicorn")
+        from rich.console import Console
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from soup_cli.commands import serve
 
-        # Put the schema OUTSIDE cwd
         outside_dir = tmp_path / "outside"
         outside_dir.mkdir()
         schema_file = outside_dir / "schema.json"
-        schema_file.write_text('{"type": "object"}')
+        schema_file.write_text('{"type": "object"}', encoding="utf-8")
 
         cwd = tmp_path / "work"
         cwd.mkdir()
         model_dir = cwd / "model"
         model_dir.mkdir()
         monkeypatch.chdir(cwd)
+        # serve.py builds its Console at import, so COLUMNS set here is read too late and a
+        # CI worker's 80 columns would wrap the long tmp path; give the command a wide one.
+        monkeypatch.setattr(serve, "console", Console(width=500, height=100))
 
-        runner = CliRunner()
-        result = runner.invoke(
+        loader = MagicMock(return_value=(object(), object()))
+        server = MagicMock(side_effect=AssertionError("unexpected server startup"))
+        monkeypatch.setattr(serve, "_load_model", loader)
+        monkeypatch.setattr(uvicorn, "run", server)
+        read_text = Path.read_text
+
+        def guarded_read_text(path, *args, **kwargs):
+            if path == schema_file:
+                pytest.fail("serve attempted to read the refused schema")
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", guarded_read_text)
+
+        result = CliRunner().invoke(
             app,
             [
                 "serve",
@@ -720,5 +738,9 @@ class TestJsonSchemaContainment:
                 str(schema_file),
             ],
         )
-        # Command may fail for other reasons too, but must reject the path
-        assert "under" in result.output.lower() or result.exit_code != 0
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        output = " ".join(_strip_ansi(result.output).split())
+        assert "JSON schema path must stay under the current working directory:" in output
+        assert str(schema_file) in output
+        server.assert_not_called()

@@ -11,9 +11,10 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
 from soup_cli.utils.paths import is_under_cwd
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.terminal import strip_control
 
 console = Console()
 
@@ -159,12 +160,14 @@ def train(
 
     resolved_input = Path(input_real)
     if not resolved_input.is_file():
-        console.print(f"[red]Input file not found:[/] {input_path}")
+        console.print(
+            Text.assemble(("Input file not found:", "red"), " ", strip_control(input_path))
+        )
         raise typer.Exit(1)
     output_path = Path(output_real)
     if output_path.exists() and not output_path.is_dir():
         console.print(
-            f"[red]Output path is not a directory:[/] {for_terminal(output)}", emoji=False
+            Text.assemble(("Output path is not a directory:", "red"), " ", strip_control(output))
         )
         raise typer.Exit(1)
 
@@ -180,7 +183,11 @@ def train(
     texts = _extract_texts(resolved_input)
     if not texts:
         console.print(
-            f"[red]No usable training text found in[/] {resolved_input.name}"
+            Text.assemble(
+                ("No usable training text found in", "red"),
+                " ",
+                strip_control(resolved_input.name),
+            )
         )
         raise typer.Exit(1)
 
@@ -211,10 +218,12 @@ def train(
 
     console.print(
         Panel(
-            f"Input:        [bold]{resolved_input.name}[/]\n"
-            f"Texts:        [bold]{len(texts)}[/]\n"
-            f"Vocab size:   [bold]{vocab_size}[/]\n"
-            f"Output dir:   [bold]{output_path.name}[/]",
+            Text.assemble(
+                "Input:        ", (strip_control(resolved_input.name), "bold"), "\n",
+                "Texts:        ", (str(len(texts)), "bold"), "\n",
+                "Vocab size:   ", (str(vocab_size), "bold"), "\n",
+                "Output dir:   ", (strip_control(output_path.name), "bold"),
+            ),
             title="BPE Tokenizer Training",
         )
     )
@@ -242,7 +251,9 @@ def train(
     try:
         post_st = os.lstat(output_path)
     except OSError as exc:
-        console.print(f"[red]Output directory not accessible:[/] {exc}")
+        console.print(
+            Text.assemble(("Output directory not accessible:", "red"), " ", strip_control(exc))
+        )
         raise typer.Exit(1) from exc
     if stat.S_ISLNK(post_st.st_mode):
         console.print(
@@ -263,6 +274,11 @@ def train(
     )
 
     console.print(
-        f"[green]Trained tokenizer with[/] [bold]{len(vocab)}[/] tokens "
-        f"-> [bold]{output_path.name}/{tokenizer_file.name}[/]"
+        Text.assemble(
+            ("Trained tokenizer with", "green"),
+            " ",
+            (str(len(vocab)), "bold"),
+            " tokens -> ",
+            (f"{strip_control(output_path.name)}/{tokenizer_file.name}", "bold"),
+        )
     )

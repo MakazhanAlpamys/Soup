@@ -1148,16 +1148,20 @@ class L2LStep:
 
                 sizes = [value.shape[0] for value in hidden]
                 tokens = sum(sizes)
+                group_hidden = torch.cat(hidden)
+                del hidden
                 before_experts = self._expert_read_snapshot() if collect_phase_stats else None
                 d_hidden, d_weights, expert_count = experts.backward_from_inputs(
-                    torch.cat(hidden), torch.cat(ids), torch.cat(weights),
-                    torch.cat([grads[mb].flatten(0, -2) for mb in group]).to(hidden[0].dtype),
+                    group_hidden, torch.cat(ids), torch.cat(weights),
+                    torch.cat([grads[mb].flatten(0, -2) for mb in group]).to(group_hidden.dtype),
                     group_sizes=sizes, autocast_kwargs=autocast_kwargs,
                 )
+                # Keep views of the exact detached inputs used by the expert VJP.
+                expert_inputs = group_hidden.split(sizes)
                 # Oracle replay fixes route IDs and weights even if a grad-sensitive hook
-                # changed the rebuilt expert input. Keep the detached inputs for this check.
-                oracle_expert_inputs = hidden if routing_oracle is not None else None
-                del hidden, ids
+                # changed the rebuilt expert input; it checks the same detached inputs.
+                oracle_expert_inputs = expert_inputs if routing_oracle is not None else None
+                del group_hidden, ids
                 after_experts = self._expert_read_snapshot() if collect_phase_stats else None
                 hidden_seeds, weight_seeds = d_hidden.split(sizes), d_weights.split(sizes)
 
@@ -1189,6 +1193,16 @@ class L2LStep:
                                     "decoupled MBR gate weights changed between replays at "
                                     f"layer {idx}, micro-batch {mb}"
                                 )
+                            if (
+                                row["expert_input"].dtype != expert_inputs[pos].dtype
+                                or not torch.equal(row["expert_input"], expert_inputs[pos])
+                            ):
+                                raise RuntimeError(
+                                    "decoupled MBR expert inputs changed between replays at "
+                                    f"layer {idx}, micro-batch {mb}"
+                                )
+                        for pos, (output, row) in zip(positions, rebuilt):
+                            mb = group[pos]
                             roots, seeds = [output], [grads[mb]]
                             for root, seed in (
                                 (row["expert_input"], hidden_seeds[pos]),
@@ -1202,7 +1216,8 @@ class L2LStep:
                             inputs[pos] = None
                             del output, row, root, roots, seeds
                     del rebuilt
-                del d_hidden, d_weights, hidden_seeds, weight_seeds, oracle_expert_inputs
+                del expert_inputs, d_hidden, d_weights, hidden_seeds, weight_seeds
+                del oracle_expert_inputs
 
                 if collect_phase_stats:
                     after_rebuild = self._expert_read_snapshot()

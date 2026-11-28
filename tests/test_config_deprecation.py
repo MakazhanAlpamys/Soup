@@ -93,7 +93,11 @@ class TestTheWarning:
         with pytest.warns(SoupConfigDeprecationWarning) as record:
             warn_deprecated_value("x: y is ignored.")
         assert issubclass(SoupConfigDeprecationWarning, FutureWarning)
-        message = str(record[0].message)
+        message = next(
+            str(warning.message)
+            for warning in record
+            if issubclass(warning.category, SoupConfigDeprecationWarning)
+        )
         assert message.startswith("x: y is ignored.")
         assert f"v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it" in message
 
