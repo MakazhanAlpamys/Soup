@@ -1,0 +1,51 @@
+{
+  "n_layers": 2,
+  "layer_keys": [
+    "mlp.gate.e_score_correction_bias",
+    "mlp.shared_experts.down_proj.weight",
+    "self_attn.q_proj.weight"
+  ],
+  "extra_keys": [
+    "model.norm.weight"
+  ],
+  "dtype": "float32",
+  "total_params": 1422,
+  "arch": "deepseek_v3",
+  "soup_version": "0.78.0",
+  "large_keys": [],
+  "format_version": 5,
+  "source_fingerprint": "25599a35714e4b8638a0d11872e09b70c7e12ce69a0b2e7a493b6f1e1dbcc4a6",
+  "source_files": [
+    [
+      "model.safetensors",
+      8272,
+      1795701947150142600
+    ]
+  ],
+  "quant": "none",
+  "double_quant": false,
+  "quant_device": "",
+  "quant_specs": {},
+  "external_tensors": {},
+  "external_mode": "",
+  "stripe_roots": [],
+  "layer_roots": [],
+  "expert_layout": "per_expert",
+  "expert_layers": [
+    0,
+    1
+  ],
+  "expert_count": 3,
+  "expert_shapes": {
+    "gate_up": [
+      16,
+      8
+    ],
+    "down": [
+      8,
+      8
+    ]
+  },
+  "expert_quant_specs": {},
+  "fp32_router_weights": false
+}
