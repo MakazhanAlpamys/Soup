@@ -1,1 +1,0 @@
-- Add benchmark records for 14B streaming capacity, FSDP2 scaling, GPipe placement, measured cache placement, streamed Fast-LoRA, resident LoRA stack comparison, CUDA dropout replay, and streamed SFT batch capacity. (#PENDING by @kok-o, @M1kado0)
