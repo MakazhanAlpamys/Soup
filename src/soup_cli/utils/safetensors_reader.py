@@ -32,6 +32,16 @@ logger = logging.getLogger(__name__)
 # a named refusal instead of a 16 EB allocation attempt.
 _MAX_HEADER_BYTES = 100_000_000
 
+
+def reject_duplicate_keys(pairs):
+    """``object_pairs_hook`` for ``json``: a repeated key is an error, not a silent last-wins."""
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate key {key!r} in JSON object")
+        out[key] = value
+    return out
+
 #: The unit direct I/O demands of a file offset, a request length and a buffer
 #: address: a multiple of every sector size in use (512-byte and 4 KiB volumes
 #: alike). Measured on the dev box (#974): an unaligned LENGTH is refused with
@@ -187,9 +197,11 @@ def read_header_with_identity(path: str) -> Tuple[Dict[str, TensorRange], ShardI
     if len(body) != length:
         raise ValueError(f"{path}: header is truncated ({len(body)} of {length} bytes)")
     try:
-        payload = json.loads(body)
+        payload = json.loads(body, object_pairs_hook=reject_duplicate_keys)
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path}: header is not valid JSON ({exc})") from exc
+    except ValueError as exc:
+        raise ValueError(f"{path}: header is not valid ({exc})") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: header is not a JSON object")
 

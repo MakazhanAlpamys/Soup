@@ -1,0 +1,10 @@
+{
+  "train": [
+    "Explain why a language model fine-tuning experiment must record its model revision, software versions, training data, random seed, gradient norms and measured memory use. An experiment is reproducible when these details and the exact launch command are preserved. A small synthetic model can test correctness of a code path but it cannot establish the quality or speed of a released giant checkpoint.",
+    "Describe how LoRA fine-tunes a frozen language model. Low-rank trainable matrices add a small update to selected projections. The optimizer changes only those adapter matrices while the original model weights remain frozen. Saving and reloading the adapter should preserve the resulting model outputs when the base checkpoint and numerical settings are identical."
+  ],
+  "heldout": [
+    "A reliable machine-learning report distinguishes measured results from estimates. It records the hardware, data split, model checkpoint and evaluation procedure, and retains unsuccessful runs. A finite training loss alone does not demonstrate generalization. Independent evaluation and successful checkpoint reload provide additional evidence about the completed experiment."
+  ],
+  "provenance": "Small developer-authored diagnostic text. Heldout loss is a narrow numerical probe, not a general quality benchmark."
+}
