@@ -1,8 +1,9 @@
 # Native expert reader
 
 This C++17 extension reads packed expert records from shard file descriptors into
-a bounded host ring. Soup ships the sources for explicit builds. The extension is
-available for direct use after building.
+a bounded host ring. Soup ships the sources for explicit builds. The C++-only
+build supports `training.stream_expert_loader: cpp_async_2slot` for per-expert
+streaming on a CUDA device and also supports direct CPU use.
 
 ## Build on Linux
 

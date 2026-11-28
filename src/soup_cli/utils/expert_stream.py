@@ -323,6 +323,7 @@ class ExpertBufferPool:
         transfer: str = "sync",
         host_cache_bytes: int = 0,
         prefetch: bool = False,
+        stream: Any = None,
     ) -> None:
         """``prefetch`` (off by default) adds a second host staging buffer and one worker
         thread. ``prefetch(reader, expert)`` then reads the named expert in the background
@@ -334,7 +335,10 @@ class ExpertBufferPool:
         component; the dequantised weights are the same. ``host_cache_bytes`` (packed only)
         also keeps whole packed blocks in pageable RAM up to that many bytes, first come first
         kept; a hit reads nothing from the experts file. The cache is not charged to any other
-        RAM budget. Both are off by default."""
+        RAM budget. Both are off by default.
+
+        A native ``stream`` supplies the stored bytes and becomes owned by the pool on success.
+        It can fill the packed pinned block directly or supply views for ordinary copies."""
         import torch
 
         from soup_cli.utils.expert_shard import aligned_staging
@@ -357,7 +361,15 @@ class ExpertBufferPool:
             raise ValueError("host_cache_bytes needs transfer='packed'")
         if type(prefetch) is not bool:
             raise ValueError("prefetch must be a bool")
+        if stream is not None and prefetch:
+            from soup_cli.utils.expert_loader import NATIVE_LOADER_OPTION
+
+            raise ValueError(f"{NATIVE_LOADER_OPTION} cannot be combined with expert_prefetch=True")
         self.plan, layout = _buffer_layout(reader, dtype, transfer)
+        if stream is not None:
+            from soup_cli.utils.expert_loader import account_native_expert_staging
+
+            self.plan = account_native_expert_staging(self.plan, stream.plan, transfer=transfer)
         if self.plan.weight_bytes > weight_budget_bytes:
             raise ValueError(
                 f"expert slot needs {self.plan.weight_bytes} bytes; budget is {weight_budget_bytes}"
@@ -402,6 +414,7 @@ class ExpertBufferPool:
         self._arena = None
         self._buffers: dict = {}
         self._staging_owner = self._staging = None
+        self._native_stream = stream
         self._pinned = None
         #: Prefetch state. ``prefetch_enabled`` may be switched at run time; it has an effect
         #: only on a pool built with ``prefetch=True`` (the staging and the worker exist).
@@ -424,6 +437,11 @@ class ExpertBufferPool:
                 for name, shape, kind, offset, size in layout if ":" in name
             ]
             self._packed_bytes = self.plan.packed_region_bytes
+            if stream is not None and (
+                stream.plan.packed_bytes != self._packed_bytes
+                or stream.packed_geometry(reader) != tuple(row[1:] for row in self._packed_rows)
+            ):
+                raise ValueError("native expert stream does not match the packed transfer layout")
             if host_cache_bytes:
                 self._host_cache = PackedHostHotset(host_cache_bytes)
         before = torch.cuda.memory_allocated(self.device) if self.device.type == "cuda" else 0
@@ -433,7 +451,10 @@ class ExpertBufferPool:
                 self._buffers[name] = self._arena[offset : offset + size].view(kind).view(shape)
             for name, value in tables.items():
                 self._buffers[name].copy_(value, non_blocking=False)
-            self._staging_owner, self._staging = aligned_staging(reader.max_span)
+            if stream is None:
+                self._staging_owner, self._staging = aligned_staging(reader.max_span)
+            elif transfer == "sync":
+                self._staging = torch.empty(stream.plan.packed_bytes, dtype=torch.uint8)
             if prefetch:
                 self._prefetch_staging_owner, self._prefetch_staging = aligned_staging(
                     reader.max_span
@@ -543,6 +564,8 @@ class ExpertBufferPool:
             self.fetches += 1
             fetch_succeeded = True
         finally:
+            if not fetch_succeeded:
+                self.last_lease_bytes = 0
             bytes_read = self.last_lease_bytes
             self.logical_bytes_read += bytes_read
             if self.phase_read_tracking and phase is not None and layer_idx is not None:
@@ -567,13 +590,16 @@ class ExpertBufferPool:
         if block is not None:
             region.copy_(block)
         else:
-            host = self._read_host(reader, expert)
-            stored = {}
-            for part in EXPERT_PARTS:
-                names = quant_sidecar_keys(expert_key(expert, part), self._specs[part])
-                for idx, name in enumerate(names):
-                    stored[f"{part}:{idx}"] = host[name]
-            pack_into(region, self._packed_rows, stored)
+            if self._native_stream is not None:
+                self.last_lease_bytes = self._native_stream.read_into(reader, expert, region)
+            else:
+                host = self._read_host(reader, expert)
+                stored = {}
+                for part in EXPERT_PARTS:
+                    names = quant_sidecar_keys(expert_key(expert, part), self._specs[part])
+                    for idx, name in enumerate(names):
+                        stored[f"{part}:{idx}"] = host[name]
+                pack_into(region, self._packed_rows, stored)
             if self._host_cache is not None:
                 self._host_cache.put(key, region)
         # One copy for every stored component; the arena's dequantised part is rebuilt below.
@@ -642,6 +668,9 @@ class ExpertBufferPool:
         them out before the lease yields, which is also before the next hint can be given.
         ``last_lease_bytes`` is set to what the reader read for this lease.
         """
+        if self._native_stream is not None:
+            self.last_lease_bytes = self._native_stream.read_into(reader, expert, self._staging)
+            return self._native_stream.host_views(reader, expert, self._staging)
         with self._prefetch_lock:
             pending, self._pending = self._pending, None
         if pending is not None:
@@ -762,22 +791,29 @@ class ExpertBufferPool:
         }
 
     def close(self) -> None:
-        """Release this pool's buffers; it does not own its readers."""
+        """Release the buffers and native stream; the shard readers belong to the caller."""
         if not self._lock.acquire(blocking=False):
             raise RuntimeError("cannot close an expert pool with an active lease")
         try:
+            if self._closed:
+                return
             try:
                 self._synchronize()
             finally:
-                self._discard_pending()
-                if self._prefetch_executor is not None:
-                    self._prefetch_executor.shutdown(wait=True)
-                    self._prefetch_executor = None
-                self._prefetch_staging_owner = self._prefetch_staging = None
-                self._buffers.clear()
-                self._arena = self._staging_owner = self._staging = self._pinned = None
-                self._host_cache = None
-                self._closed = True
+                try:
+                    self._discard_pending()
+                    if self._prefetch_executor is not None:
+                        self._prefetch_executor.shutdown(wait=True)
+                    if self._native_stream is not None:
+                        self._native_stream.close()
+                finally:
+                    self._native_stream = self._prefetch_executor = None
+                    self._prefetch_staging_owner = self._prefetch_staging = None
+                    self._buffers.clear()
+                    self._arena = self._staging_owner = self._staging = self._pinned = None
+                    self._host_cache = None
+                    self._h2d_event = None
+                    self._closed = True
         finally:
             self._lock.release()
 
@@ -1423,7 +1459,6 @@ def _build_streamed_experts_class():
                         "logical_bytes_read": 0, "status": "loading",
                     }
                     self.last_trace.append(row)
-                    before = self.reader.bytes_read
                     fetches = self.pool.fetches
                     try:
                         current_state, weights = self._gather(
@@ -1441,13 +1476,9 @@ def _build_streamed_experts_class():
                         row["status"] = "error"
                         raise
                     finally:
-                        if hinting:
-                            # The reader's counter also moves for the expert read ahead.
-                            row["logical_bytes_read"] = (
-                                self.pool.last_lease_bytes if self.pool.fetches != fetches else 0
-                            )
-                        else:
-                            row["logical_bytes_read"] = self.reader.bytes_read - before
+                        row["logical_bytes_read"] = (
+                            self.pool.last_lease_bytes if self.pool.fetches != fetches else 0
+                        )
                     # Outside the load status on purpose: the lease is over, and a non-reentrant
                     # checkpoint recompute may stop here (it raises once every saved tensor has
                     # been recomputed), which is not an expert load failure.

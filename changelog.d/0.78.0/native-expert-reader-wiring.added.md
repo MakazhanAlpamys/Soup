@@ -1,0 +1,1 @@
+- Add an opt-in compiled host reader for streamed routed experts on CUDA. (#PENDING by @M1kado0, @kok-o)

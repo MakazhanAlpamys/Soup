@@ -1009,6 +1009,19 @@ class StreamingSetupMixin:
         # load, a weight resolve or a shard write.
         refuse_if_distributed_launch()
 
+        from soup_cli.utils.expert_loader import (
+            DEFAULT_EXPERT_LOADER,
+            NATIVE_EXPERT_LOADER,
+            NATIVE_LOADER_OPTION,
+            native_expert_buffer_requirements,
+            resolve_expert_loader,
+        )
+
+        expert_loader = resolve_expert_loader(
+            getattr(tcfg, "stream_expert_loader", DEFAULT_EXPERT_LOADER), device=self.device,
+        )
+        native_experts = expert_loader == NATIVE_EXPERT_LOADER
+
         from dataclasses import replace
 
         from peft import TaskType
@@ -1469,6 +1482,11 @@ class StreamingSetupMixin:
         )
         ngram_bytes = external_tensor_bytes(getattr(index, "external_tensors", None) or {})
 
+        native_pool_bytes = expert_host_bytes = 0
+        if native_experts:
+            native_pool_bytes, expert_host_bytes = native_expert_buffer_requirements(
+                shard_dir, index, device=str(self.device),
+            )
         free_ram = free_ram_bytes()
         total_ram = total_ram_bytes()
         if free_ram is None:
@@ -1477,6 +1495,14 @@ class StreamingSetupMixin:
                 "proceeding and letting the allocation fail loudly if it must[/]"
             )
             free_ram = (layer_bytes * index.n_layers + large_store_bytes + embed_bytes) * 10
+
+        if expert_host_bytes:
+            if free_ram < expert_host_bytes:
+                raise ValueError(
+                    f"{NATIVE_LOADER_OPTION} needs {expert_host_bytes} bytes of host staging, "
+                    f"but only {free_ram} bytes of RAM are available"
+                )
+            free_ram -= expert_host_bytes
 
         store_total = layer_store_bytes + large_store_bytes
         ngram_source = "disk"
@@ -1652,7 +1678,14 @@ class StreamingSetupMixin:
             index=index,
             on_cuda=on_cuda,
             target_modules=target_modules,
+            **({"expert_pool_bytes": native_pool_bytes} if native_experts else {}),
         )
+        if expert_host_bytes:
+            forecast_lines = (
+                *forecast_lines,
+                f"  experts      {expert_host_bytes / 1e9:.3f} GB of host staging "
+                f"({NATIVE_LOADER_OPTION}), reserved above",
+            )
         console.print(render_stream_panel(plan, forecast_lines))
         console.print(
             "[yellow]Layer streaming is BETA:[/] slower than resident training, "
@@ -1715,6 +1748,7 @@ class StreamingSetupMixin:
             ngram_source=ngram_source,
             refill_before_backward=self._STREAM_REFILL_BEFORE_BACKWARD,
             nf4_scale_cache=bool(getattr(tcfg, "stream_nf4_scale_cache", False)),
+            **({"expert_loader": expert_loader} if native_experts else {}),
         )
         self.model = model
         self._stream_runtime = runtime
@@ -1997,6 +2031,7 @@ class StreamingSetupMixin:
         on_cuda,
         large_layer_bytes=0,
         target_modules=None,
+        expert_pool_bytes=0,
     ):
         """Predict peak VRAM + bracket throughput, and REFUSE a run that cannot fit.
 
@@ -2057,9 +2092,13 @@ class StreamingSetupMixin:
         # training.stream_expert_layout='per_expert': the layer buffers above hold
         # only the dense part (the layer files no longer carry the experts); one
         # routed expert is in flight at a time on top of them.
-        expert_bytes = 0
+        expert_bytes = expert_pool_bytes
         expert_shapes = getattr(index, "expert_shapes", None)
-        if getattr(index, "expert_layout", "") == EXPERT_LAYOUT_PER_EXPERT and expert_shapes:
+        if (
+            not expert_bytes
+            and getattr(index, "expert_layout", "") == EXPERT_LAYOUT_PER_EXPERT
+            and expert_shapes
+        ):
             expert_bytes = expert_stream_vram_bytes(
                 expert_shapes,
                 dtype_bytes=dtype_bytes(index.dtype),
@@ -2185,8 +2224,11 @@ class StreamingSetupMixin:
                 "(training.stream_nf4_scale_cache), included above"
             )
         if expert_bytes:
+            expert_storage = (
+                "expert buffer pool arena" if expert_pool_bytes else "routed expert in flight"
+            )
             lines.append(
-                f"  experts      {expert_bytes / 1e9:.3f} GB for the routed expert in flight "
+                f"  experts      {expert_bytes / 1e9:.3f} GB for the {expert_storage} "
                 "(training.stream_expert_layout='per_expert'), included above"
             )
         if calibrated > LOGITS_BYTES_PER_ELEMENT:

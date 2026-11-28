@@ -9,8 +9,9 @@ the ordinary layer file holds attention, norms, router and shared experts.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 
 GATE_UP = "gate_up"
 DOWN = "down"
@@ -282,16 +283,39 @@ class ExpertShardReader:
                     self.direct = False
             if self._handle is None:
                 self._handle = open(self.path, "rb", buffering=0)
-            if self._identity is not None:
-                from soup_cli.utils.safetensors_reader import identity_of
-
-                if identity_of(self._handle) != self._identity:
-                    self.close()
-                    raise ValueError(
-                        f"experts file {os.path.basename(self.path)} changed on disk since "
-                        f"its header was read — reshard the checkpoint and restart"
-                    )
+            try:
+                self._check_identity(self._handle)
+            except BaseException:
+                self.close()
+                raise
         return self._handle
+
+    def _check_identity(self, handle: Any) -> None:
+        from soup_cli.utils.safetensors_reader import identity_of
+
+        if self._identity is not None and identity_of(handle) != self._identity:
+            raise ValueError(
+                f"experts file {os.path.basename(self.path)} changed on disk since "
+                "its header was read — reshard the checkpoint and restart"
+            )
+
+    @contextmanager
+    def open_buffered(self) -> Iterator[Any]:
+        """Open a checked descriptor for native registration without changing Python I/O."""
+        with open(self.path, "rb", buffering=0) as handle:
+            self._check_identity(handle)
+            yield handle
+
+    def stored_components(
+        self, expert: int,
+    ) -> Tuple[Tuple[str, Tuple[int, ...], Any, int, int], ...]:
+        """Return each stored component's name, shape, dtype and absolute file range."""
+        if type(expert) is not int or not 0 <= expert < self.count:
+            raise IndexError(f"expert {expert!r} outside [0, {self.count})")
+        return tuple(
+            (name, tuple(entry.shape), _stored_torch_dtype(entry.dtype), entry.start, entry.end)
+            for name, entry in self._entries[expert]
+        )
 
     def read_host(self, expert: int, staging: Any) -> Dict[str, Any]:
         """``expert``'s stored tensors as CPU views into ``staging``.
