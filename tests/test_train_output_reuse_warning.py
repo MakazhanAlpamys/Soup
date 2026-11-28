@@ -9,7 +9,6 @@ silent.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +16,7 @@ import pytest
 from soup_cli.cli import app
 from soup_cli.commands.train import _warn_existing_output_files
 from soup_cli.config.schema import SoupConfig
+from tests._windows_filenames import skip_colon_on_windows
 from tests.conftest import make_cli_runner, strip_ansi
 
 _ADAPTER_FILES = (
@@ -250,9 +250,7 @@ def test_fresh_run_stays_silent_on_non_chief_rank(run, monkeypatch: pytest.Monke
     assert "This run may replace them" not in _output(result)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="':' is not a valid Windows filename character"
-)
+@skip_colon_on_windows
 def test_helper_prints_emoji_alias_path_as_supplied(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
