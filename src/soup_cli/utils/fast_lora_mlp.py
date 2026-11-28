@@ -2,6 +2,10 @@
 
 Targets gate_proj/up_proj/down_proj blocks with SiLU/swish. This is the
 correctness slice from tracker #792; it makes no throughput claim.
+
+Under autocast the forward records the autocast dtype and the backward runs
+separate, cast-preserving adapter GEMMs (the grouped gate/up GEMM would round a
+low-precision update across a boundary PEFT's own graph does not have).
 """
 
 from __future__ import annotations
@@ -11,11 +15,18 @@ import types
 from typing import Any
 
 from soup_cli.utils.fast_lora import (
+    _FORWARD_OWNER_MARKER,
     _GROUP_PATCH_OWNER_MARKER,
+    _amp_adapter_backward,
+    _amp_base_backward,
+    _amp_input_accumulation_dtype,
     _as_dtype,
     _dense_weight,
     _flatten,
     _is_supported_lora_projection,
+    _nf4_autocast_requires_fallback,
+    _peft_ordered_lora_add,
+    _projection_autocast_dtype,
     _projection_compute_dtype,
     _projection_state,
     _release_single_projection,
@@ -51,6 +62,66 @@ def _lora_dx_add(grad_base: Any, grad_h: Any, lora_a: Any) -> Any:
 __all__ = ["patch_fast_lora_mlp", "unpatch_fast_lora_mlp"]
 
 
+def _amp_backward(
+    ctx: Any, grad_y: Any, x: Any, weights: Any, g: Any, u: Any, adapters: Any, h_gu: Any,
+    metas: Any, parts: Any, has: Any, scalings: Any,
+) -> tuple[Any, ...]:
+    """Backward of the autocast forward: separate GEMMs, each cast like PEFT's."""
+    import torch
+
+    wg, wu, wd = weights
+    ag, bgl, au, bul, ad, bdl = adapters
+    has_g, has_u, has_d = has
+    sg, su, sd = scalings
+    dtype = ctx.amp_dtype
+
+    silu_g = torch.nn.functional.silu(g)
+    m = silu_g * u
+    grad_ad = grad_bdl = None
+    grad_m = _amp_base_backward(m, wd, grad_y, dtype, metas[2], parts[2])
+    if has_d:
+        with torch.autocast(x.device.type, enabled=False):
+            hd = torch.matmul(m.to(dtype), ad.to(dtype).t())
+        grad_ad, grad_bdl, adapter_dm = _amp_adapter_backward(
+            m, ad, bdl, hd, grad_y, sd, dtype, True
+        )
+        grad_m = adapter_dm + grad_m
+    grad_u = grad_m * silu_g
+    grad_g = torch.ops.aten.silu_backward.default(grad_m * u, g)
+
+    grad_as, grad_bs, adapter_dx = [None] * 2, [None] * 2, [None] * 2
+    cursor = 0
+    for i, (present, a, b, grad, scale, rank) in enumerate((
+        (has_g, ag, bgl, grad_g, sg, ctx.gu_ranks[0]),
+        (has_u, au, bul, grad_u, su, ctx.gu_ranks[1]),
+    )):
+        if present:
+            hidden = h_gu[..., cursor : cursor + rank].contiguous()
+            cursor += rank
+            grad_as[i], grad_bs[i], adapter_dx[i] = _amp_adapter_backward(
+                x, a, b, hidden, grad, scale, dtype, ctx.needs_input_grad[0]
+            )
+    grad_x = None
+    if ctx.needs_input_grad[0]:
+        for i, grad, weight, meta, qparts in (
+            (1, grad_u, wu, metas[1], parts[1]), (0, grad_g, wg, metas[0], parts[0]),
+        ):
+            terms = []
+            if adapter_dx[i] is not None:
+                terms.append(adapter_dx[i])
+            terms.append(_amp_base_backward(x, weight, grad, dtype, meta, qparts))
+            for term in terms:
+                term = term.to(ctx.amp_input_dtype)
+                grad_x = term if grad_x is None else grad_x + term
+        grad_x = grad_x.to(x.dtype)
+    return (
+        grad_x, None, None, None, None, None, None,
+        grad_as[0], grad_bs[0], grad_as[1], grad_bs[1], grad_ad, grad_bdl,
+        None, None, None, None, None, None,
+        *([None] * ctx.qparts_len),
+    )
+
+
 def _mlp_function() -> Any:
     global _FUNCTION
     if _FUNCTION is not None:
@@ -76,6 +147,12 @@ def _mlp_function() -> Any:
             sg, su, sd, qg_meta, qu_meta, qd_meta, *qparts,
         ):
             metas = (qg_meta, qu_meta, qd_meta)
+            ctx.amp_dtype = _projection_autocast_dtype(x)
+            ctx.amp_input_dtype = (
+                x.dtype if any(meta is not None for meta in metas)
+                else _amp_input_accumulation_dtype(x, (ag, au), ctx.amp_dtype)
+            )
+            amp = ctx.amp_dtype is not None
             counts = [0 if meta is None else int(meta["_count"]) for meta in metas]
             starts = (0, counts[0], counts[0] + counts[1])
             qlists = [
@@ -122,18 +199,24 @@ def _mlp_function() -> Any:
             if gu_parts:
                 # #837's advertised fusion: gate/up LoRA A projections share X,
                 # so concatenate A and perform one GEMM, then split by rank.
-                a_gu = torch.cat(gu_parts, dim=0)
-                h_gu = functional.linear(_as_dtype(x, a_gu.dtype), a_gu)
+                if amp:
+                    # PEFT casts and multiplies each projection on its own.
+                    h_gu = torch.cat([
+                        functional.linear(_as_dtype(x, a.dtype), a) for a in gu_parts
+                    ], dim=-1)
+                else:
+                    a_gu = torch.cat(gu_parts, dim=0)
+                    h_gu = functional.linear(_as_dtype(x, a_gu.dtype), a_gu)
                 cursor = 0
                 if has_g:
                     rank = ag.shape[0]
                     hg = h_gu[..., cursor : cursor + rank]
-                    g = _scaled_lora_add(g, hg, bgl, sg)
+                    g = (_peft_ordered_lora_add if amp else _scaled_lora_add)(g, hg, bgl, sg)
                     cursor += rank
                 if has_u:
                     rank = au.shape[0]
                     hu = h_gu[..., cursor : cursor + rank]
-                    u = _scaled_lora_add(u, hu, bul, su)
+                    u = (_peft_ordered_lora_add if amp else _scaled_lora_add)(u, hu, bul, su)
             else:
                 h_gu = x.new_empty((*x.shape[:-1], 0))
 
@@ -153,7 +236,7 @@ def _mlp_function() -> Any:
             del base_m, base_y, dense_d
             if has_d:
                 hd = functional.linear(_as_dtype(m, ad.dtype), ad)
-                y = _scaled_lora_add(y, hd, bdl, sd)
+                y = (_peft_ordered_lora_add if amp else _scaled_lora_add)(y, hd, bdl, sd)
 
             ctx.has_adapters = (has_g, has_u, has_d)
             ctx.gu_ranks = (ag.shape[0] if has_g else 0, au.shape[0] if has_u else 0)
@@ -179,6 +262,13 @@ def _mlp_function() -> Any:
             qd = qparts[cg + cu : cg + cu + cd]
             has_g, has_u, has_d = ctx.has_adapters
             sg, su, sd = ctx.scalings
+
+            if ctx.amp_dtype is not None:
+                return _amp_backward(
+                    ctx, grad_y, x, (wg, wu, wd), g, u, (ag, bgl, au, bul, ad, bdl), h_gu,
+                    (qg_meta, qu_meta, qd_meta), (qg, qu, qd), (has_g, has_u, has_d),
+                    (sg, su, sd),
+                )
 
             silu_g = torch.nn.functional.silu(g)
             m = silu_g * u
@@ -296,6 +386,18 @@ def _make_mlp_forward(original_forward: Any) -> Any:
         ]
         if any(state is None for state in states):
             return original_forward(x)
+        if _nf4_autocast_requires_fallback(x, states):
+            return original_forward(x)
+        # Concatenating A matrices promotes their dtype, while PEFT casts each
+        # projection's input on its own. Mixed adapter dtypes stay on PEFT.
+        adapter_dtypes = {
+            tensor.dtype
+            for state in states
+            for tensor in (state.lora_a, state.lora_b)
+            if tensor.numel()
+        }
+        if len(adapter_dtypes) > 1:
+            return original_forward(x)
         gate, up, down = states
         compute_dtypes = {
             state.compute_dtype for state in states if state.compute_dtype is not None
@@ -314,6 +416,7 @@ def _make_mlp_forward(original_forward: Any) -> Any:
         )
         return out
 
+    setattr(_forward, _FORWARD_OWNER_MARKER, _OWNER)
     return _forward
 
 
@@ -392,10 +495,12 @@ def unpatch_fast_lora_mlp(model: Any) -> int:
         original = getattr(module, _ORIGINAL_FORWARD_MARKER, None)
         if original is None or not getattr(module, _PATCH_MARKER, False):
             continue
-        if getattr(module, _HAD_INSTANCE_FORWARD_MARKER, False):
-            module.forward = original
-        else:
-            del module.forward
+        # A forward someone else installed over this kernel's is left in place.
+        if getattr(module.forward, _FORWARD_OWNER_MARKER, None) == _OWNER:
+            if getattr(module, _HAD_INSTANCE_FORWARD_MARKER, False):
+                module.forward = original
+            else:
+                del module.forward
         delattr(module, _ORIGINAL_FORWARD_MARKER)
         delattr(module, _HAD_INSTANCE_FORWARD_MARKER)
         delattr(module, _PATCH_MARKER)
