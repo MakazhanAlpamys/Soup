@@ -874,6 +874,18 @@ class L2LStep:
         #: Optional expert read counters split by layer and step phase.
         self.expert_phase_stats: Optional[Dict[str, Any]] = None
 
+    def _backward_floor(self) -> int:
+        """Keep the full reverse walk when the embedding has a trainable parameter."""
+        if any(param.requires_grad for param in self.owner.embed_tokens.parameters()):
+            return 0
+        return next(
+            (
+                idx for idx, layer in enumerate(self.layers)
+                if any(param.requires_grad for param in layer.parameters())
+            ),
+            len(self.layers),
+        )
+
     def _layer(self, module: Any, hidden: Any, state: Any, call: LayerCall) -> Any:
         # ``state`` is where accumulation's stream stands before this (micro-batch, layer)
         # pair, so the forward and the recompute in the backward draw the same mask in any
@@ -1201,6 +1213,11 @@ class L2LStep:
         self.route_preserving_mbr_stats = None
         expert_pool = getattr(self.runtime, "expert_pool", None)
         previous_phase_tracking = getattr(expert_pool, "phase_read_tracking", None)
+        prefetcher = self.runtime.prefetcher
+        previous_floor = prefetcher.backward_floor
+        # MBR accounts for every layer's routing trace, including frozen layers.
+        floor = 0 if route_preserving_mbr else self._backward_floor()
+        prefetcher.backward_floor = floor
         if collect_phase_stats and previous_phase_tracking is not None:
             expert_pool.phase_read_tracking = True
         try:
@@ -1215,6 +1232,7 @@ class L2LStep:
                         None,
                         head,
                         reference,
+                        backward_floor=floor,
                         route_preserving_mbr=True,
                         mbr_group_size=mbr_group_size,
                         collect_phase_stats=collect_phase_stats,
@@ -1238,9 +1256,11 @@ class L2LStep:
                             guard,
                             head,
                             reference,
+                            backward_floor=floor,
                             collect_phase_stats=collect_phase_stats,
                         )
         finally:
+            prefetcher.backward_floor = previous_floor
             if previous_phase_tracking is not None:
                 expert_pool.phase_read_tracking = previous_phase_tracking
         self.counters = counters
@@ -1257,6 +1277,7 @@ class L2LStep:
         head: Optional[LossHead],
         reference: Union[ReferencePass, Sequence[ReferencePass], None] = None,
         *,
+        backward_floor: int,
         route_preserving_mbr: bool = False,
         mbr_group_size: Optional[int] = None,
         collect_phase_stats: bool = False,
@@ -1345,8 +1366,9 @@ class L2LStep:
                 with self._pass_adapters(spec):
                     pass_hidden.append([self.owner.embed_tokens(x) for x in ids])
             for idx, layer in enumerate(self.layers):
-                for mb in range(k):
-                    store.put(idx, mb, hidden[mb])
+                if idx >= backward_floor:
+                    for mb in range(k):
+                        store.put(idx, mb, hidden[mb])
                 if route_preserving_mbr and _streamed_moe_experts(layer) is not None:
                     pair = contexts.get(idx)
                     before = self._expert_read_snapshot() if phase_stats is not None else None
@@ -1404,7 +1426,8 @@ class L2LStep:
                     for mb in range(k):
                         pair = contexts.get((idx, mb))
                         route_context = (
-                            guard.record(idx, mb) if guard is not None else nullcontext()
+                            guard.record(idx, mb)
+                            if guard is not None and idx >= backward_floor else nullcontext()
                         )
                         with route_context, pair[0] if pair else nullcontext():
                             hidden[mb] = self._layer(
@@ -1453,7 +1476,7 @@ class L2LStep:
             grads.append(last.grad)
 
         store.begin_backward()
-        for idx in range(len(self.layers) - 1, -1, -1):
+        for idx in range(len(self.layers) - 1, backward_floor - 1, -1):
             layer = self.layers[idx]
             saved = layer.use_checkpoint
             layer.use_checkpoint = False

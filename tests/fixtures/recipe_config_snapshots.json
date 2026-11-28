@@ -171,6 +171,7 @@
     "training.lora.use_olora": false,
     "training.lora.use_rslora": false,
     "training.lora.use_vera": false,
+    "training.lora_layers": null,
     "training.loraplus_lr_ratio": null,
     "training.loss_spike_recovery": false,
     "training.loss_spike_recovery_lr_decay": 0.5,

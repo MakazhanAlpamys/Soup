@@ -672,6 +672,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         cfg = self.config
         tcfg = cfg.training
 
+        if getattr(tcfg, "lora_layers", None) is not None:
+            from soup_cli.trainer.stream_setup import _distributed_launch
+
+            if self.deepspeed_config or self.fsdp_config or _distributed_launch():
+                raise ValueError(
+                    "training.lora_layers requires single-device training without "
+                    "DeepSpeed or FSDP"
+                )
+
         # #353: seed before the model exists. Threading `seed` into
         # TrainingArguments is not enough on its own, because `get_peft_model`
         # draws `lora_A` before there is a Trainer to run `set_seed(args.seed)`.
@@ -1264,6 +1273,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
+        self._layer_select_callback = None
+        if getattr(tcfg, "lora_layers", None) is not None:
+            from soup_cli.utils.layer_select import attach_layer_select_callback
+
+            if self.trainer.args.n_gpu > 1:
+                raise ValueError("training.lora_layers requires single-device training")
+            self._layer_select_callback = attach_layer_select_callback(
+                self.trainer, tcfg, self._output_dir, console
+            )
 
         # #351: normalise every `checkpoint-*` adapter as the Trainer writes it.
         # The final save is repaired at the end of `train()`; HF dispatches
@@ -2614,6 +2632,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
     ) -> dict:
         """Run training and return results summary."""
         start = time.time()
+        layer_select = getattr(self, "_layer_select_callback", None)
+        if layer_select is not None:
+            layer_select.resume_checkpoint = resume_from_checkpoint
 
         # Add callback for live display and experiment tracking
         if display:

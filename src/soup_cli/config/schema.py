@@ -19,6 +19,7 @@ from typing import (
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationInfo,
     field_validator,
@@ -1345,6 +1346,51 @@ class EvalGateConfig(BaseModel):
         return self
 
 
+class LoraLayersConfig(BaseModel):
+    """Choose which LoRA adapters inside numbered decoder layers can train."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["fixed", "random", "grad", "angular", "lisa"]
+    layers: Optional[List[int]] = None
+    k: Optional[int] = Field(default=None, ge=1)
+    probe_rows: Optional[int] = Field(default=None, ge=1)
+    interval_steps: Optional[int] = Field(default=None, ge=1)
+    seed: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("k", "probe_rows", "interval_steps", "seed", mode="before")
+    @classmethod
+    def _reject_boolean_numeric_inputs(cls, value: Any, info: ValidationInfo) -> Any:
+        return _reject_boolean_numeric_field(cls, info.field_name, value)
+
+    @field_validator("layers", mode="before")
+    @classmethod
+    def _reject_boolean_layer_indices(cls, value: Any) -> Any:
+        if isinstance(value, (list, tuple)) and any(isinstance(i, bool) for i in value):
+            raise ValueError("layers entries must be ints, not bools")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_method_fields(self) -> "LoraLayersConfig":
+        if self.method == "fixed":
+            if self.k is not None:
+                raise ValueError("training.lora_layers.k only applies to sampled or scored methods")
+            if not self.layers or any(index < 0 for index in self.layers):
+                raise ValueError("training.lora_layers.method='fixed' requires nonnegative layers")
+        else:
+            if self.layers is not None:
+                raise ValueError("training.lora_layers.layers only applies to fixed")
+            if self.k is None:
+                raise ValueError(f"training.lora_layers.method={self.method!r} requires k")
+        if self.probe_rows is not None and self.method not in ("grad", "angular"):
+            raise ValueError("training.lora_layers.probe_rows only applies to grad and angular")
+        if self.interval_steps is not None and self.method != "lisa":
+            raise ValueError("training.lora_layers.interval_steps only applies to lisa")
+        if self.seed is not None and self.method not in ("random", "lisa"):
+            raise ValueError("training.lora_layers.seed only applies to random and lisa")
+        return self
+
+
 class TrainingConfig(BaseModel):
     @field_validator("*", mode="before")
     @classmethod
@@ -1461,6 +1507,10 @@ class TrainingConfig(BaseModel):
     lora: LoraConfig = Field(
         default_factory=LoraConfig,
         description="LoRA (Low-Rank Adaptation) adapter architecture and target modules.",
+    )
+    lora_layers: Optional[LoraLayersConfig] = Field(
+        default=None,
+        description="Select trainable decoder LoRA adapters in Transformers text SFT.",
     )
     quantization: Literal[
         "4bit",
@@ -6245,6 +6295,45 @@ class SoupConfig(BaseModel):
             f"quantization={tcfg.quantization!r} would record a quantised run that "
             "never happens. Remove it or set quantization: none."
         )
+
+    @model_validator(mode="after")
+    def _validate_lora_layers_scope(self) -> "SoupConfig":
+        tcfg = self.training
+        if tcfg.lora_layers is None:
+            return self
+        if (self.task, self.backend, self.modality) != ("sft", "transformers", "text"):
+            raise ValueError(
+                "training.lora_layers requires task='sft', backend='transformers' "
+                f"and modality='text'; got {self.task=}, {self.backend=}, {self.modality=}."
+            )
+        if tcfg.lora.r == 0:
+            raise ValueError("training.lora_layers requires training.lora.r > 0")
+        lisa_tuned = any(
+            getattr(tcfg, name) != TrainingConfig.model_fields[name].default
+            for name in (
+                "lisa_num_layers", "lisa_interval_steps", "lisa_reset_optimizer",
+                "lisa_train_embeddings",
+            )
+        )
+        conflicts = [
+            f"training.{name}"
+            for name, enabled in (
+                ("freeze_layers", tcfg.freeze_layers is not None),
+                ("freeze_ratio", tcfg.freeze_ratio is not None),
+                ("unfrozen_parameters", bool(tcfg.unfrozen_parameters)),
+                ("lisa_enabled", tcfg.lisa_enabled),
+                ("lisa_*", lisa_tuned and not tcfg.lisa_enabled),
+                ("lora.use_vera", tcfg.lora.use_vera),
+                ("use_lorafa", tcfg.use_lorafa),
+                ("relora_steps", tcfg.relora_steps is not None),
+            )
+            if enabled
+        ]
+        if conflicts:
+            raise ValueError(
+                "training.lora_layers is mutually exclusive with " + ", ".join(conflicts)
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_expand_layers_scope(self) -> "SoupConfig":
