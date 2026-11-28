@@ -1,0 +1,26 @@
+{
+  "examples": 10000,
+  "max_length": 512,
+  "tokens": 4000000,
+  "rows": 5014,
+  "ratio": 1.5973,
+  "trace": false,
+  "python": "3.11.5",
+  "torch": "2.15.0+cpu",
+  "machine": "Windows-10-10.0.19045-SP0",
+  "processor": "Intel64 Family 6 Model 141 Stepping 1, GenuineIntel",
+  "runs": [
+    {
+      "read_s": 3.125,
+      "plan_s": 4.076
+    },
+    {
+      "read_s": 3.139,
+      "plan_s": 4.057
+    },
+    {
+      "read_s": 3.11,
+      "plan_s": 4.127
+    }
+  ]
+}

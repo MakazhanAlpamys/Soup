@@ -84,13 +84,17 @@ class TestGuardCoverage:
             "with LoRA it dies at the first lr_scheduler.step() (#359)."
         )
 
-    #: Modules that forward a ``deepspeed_config`` without calling the guard,
+    #: Modules that touch a ``deepspeed_config`` without calling the guard,
     #: because they build no trainer of their own. Today: ``preference.py``
     #: forwards it into five wrappers that each carry the guard, and
     #: ``dispatch.py`` (#1213) forwards it to whichever wrapper it resolves.
+    #: ``packed_lora_setup.py`` is a mixin of ``SFTTrainerWrapper`` that only
+    #: reads ``self.deepspeed_config`` to name the sharding for its start-up
+    #: check; the trainer is built, and the guard attached under
+    #: ``if self.deepspeed_config:``, in ``sft.py``.
     #: Named here so that the next such module has to be argued for rather than
     #: slipping through a regex that stopped matching.
-    _GUARD_EXEMPT = {"preference.py", "dispatch.py"}
+    _GUARD_EXEMPT = {"preference.py", "dispatch.py", "packed_lora_setup.py"}
 
     def test_no_deepspeed_capable_module_quietly_loses_the_guard(self):
         """Closes the rebind evasion: ``_BUILDS_TRAINER`` requires the

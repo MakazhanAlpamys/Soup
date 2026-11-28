@@ -637,7 +637,12 @@ class TestPartEVocabExpansion:
         ) as record:
             cfg = DataConfig(train="d.jsonl", remove_unused_columns=True)
         assert cfg.remove_unused_columns is False, "the run must see what the trainers pass"
-        message = str(record[0].message)
+        message = next(
+            str(item.message)
+            for item in record
+            if issubclass(item.category, SoupConfigDeprecationWarning)
+            and "data.remove_unused_columns: true" in str(item.message)
+        )
         assert "ignored" in message
         assert "will refuse it" in message
 

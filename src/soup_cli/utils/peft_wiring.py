@@ -14,7 +14,10 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from soup_cli.utils.lisa import LisaPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -1300,18 +1303,9 @@ def apply_lisa_setup(model: Any, tcfg: Any, console: Any = None) -> bool:
     return True
 
 
-def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
-    """Attach :class:`LisaCallback` when ``training.lisa_enabled`` is set.
-
-    Returns ``True`` when a callback was attached, ``False`` otherwise. The
-    schema-level cross-validator (``_validate_lisa_compat``) already enforces
-    the ``_LISA_SUPPORTED_TASKS`` / transformers / text / quantization=none
-    gate and mutual exclusion, so this helper trusts the caller's task/backend
-    (v0.71.34 #267; ``pretrain`` added in #307).
-    """
-    if not getattr(tcfg, "lisa_enabled", False):
-        return False
-    from soup_cli.utils.lisa import LisaCallback, LisaPolicy
+def _configured_lisa_policy(tcfg: Any, *, attached: LisaPolicy | None = None) -> LisaPolicy:
+    """Build the live policy and validate an already attached callback's policy."""
+    from soup_cli.utils.lisa import LisaPolicy, LisaResumeError
 
     # Read schema fields directly (they are guaranteed to exist on
     # TrainingConfig) so a misnamed attr fails loudly — mirrors
@@ -1324,8 +1318,51 @@ def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
         seed=0,
         train_embeddings=bool(tcfg.lisa_train_embeddings),
     )
-    trainer.add_callback(LisaCallback(policy=policy))
+    if attached is not None and attached != policy:
+        raise LisaResumeError(
+            "attached callback policy does not match the current LISA policy. "
+            "Set up a new trainer after changing LISA settings."
+        )
+    return policy
+
+
+def attach_lisa_callback(trainer: Any, tcfg: Any) -> bool:
+    """Attach :class:`LisaCallback` when ``training.lisa_enabled`` is set.
+
+    Returns ``True`` when LISA is enabled and a callback is present. The
+    schema-level cross-validator (``_validate_lisa_compat``) already enforces
+    the ``_LISA_SUPPORTED_TASKS`` / transformers / text / quantization=none
+    gate and mutual exclusion, so this helper trusts the caller's task/backend
+    (v0.71.34 #267; ``pretrain`` added in #307).
+    """
+    if not getattr(tcfg, "lisa_enabled", False):
+        return False
+    from soup_cli.utils.lisa import LisaCallback
+
+    handler = getattr(trainer, "callback_handler", None)
+    for callback in getattr(handler, "callbacks", ()):
+        if isinstance(callback, LisaCallback):
+            _configured_lisa_policy(tcfg, attached=callback.policy)
+            return True
+
+    trainer.add_callback(LisaCallback(policy=_configured_lisa_policy(tcfg)))
     return True
+
+
+def prepare_lisa_checkpoint(trainer: Any, tcfg: Any, checkpoint_dir: str | None) -> None:
+    """Validate and stage only LISA's checkpoint state before Trainer runs."""
+    if not getattr(tcfg, "lisa_enabled", False):
+        return
+    from soup_cli.utils.lisa import LisaCallback
+
+    callbacks = [
+        cb for cb in trainer.callback_handler.callbacks if isinstance(cb, LisaCallback)
+    ]
+    if len(callbacks) != 1:
+        raise RuntimeError("LISA checkpoint preparation requires exactly one LISA callback")
+    (callback,) = callbacks
+    _configured_lisa_policy(tcfg, attached=callback.policy)
+    callback.prepare_checkpoint(trainer.model, checkpoint_dir)
 
 
 def attach_curriculum_callback(

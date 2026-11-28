@@ -11,6 +11,7 @@ Part D — riders (exit-code collision, stale pairwise docstrings, diagnose
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -307,10 +308,23 @@ class TestBundledScorers:
         assert broken == 0.0
 
     def test_score_format_json_suite(self):
-        from soup_cli.eval.gate_suites import score_bundled_suite
+        from soup_cli.eval.gate_suites import (
+            _shape_example,
+            load_suite_items,
+            score_bundled_suite,
+        )
 
-        good = score_bundled_suite("mini_format_json", lambda p: '{"ok": true}')
+        shaped = {
+            item["prompt"]: json.dumps(_shape_example(item["expect"]))
+            for item in load_suite_items("mini_format_json")
+        }
+        good = score_bundled_suite("mini_format_json", shaped.__getitem__)
         assert good == pytest.approx(1.0)
+        # #1192 — one fixed object for every prompt is valid JSON but not the
+        # shape each row asks for, so it no longer scores 1.0.
+        constant = score_bundled_suite("mini_format_json", lambda p: '{"ok": true}')
+        # Only "exactly one key 'ok'" accepts it; a weakened row moves this.
+        assert constant == 1 / 40
         broken = score_bundled_suite("mini_format_json", lambda p: "not json at all")
         assert broken == 0.0
         # A bare scalar is valid JSON but not the structured object asked for.
